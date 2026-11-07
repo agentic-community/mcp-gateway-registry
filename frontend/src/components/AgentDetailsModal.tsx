@@ -1,8 +1,8 @@
 import React from 'react';
-import { ClipboardDocumentIcon } from '@heroicons/react/24/outline';
 import DetailsModal from './DetailsModal';
 import ResourceBoundTokenButton from './ResourceBoundTokenButton';
 import { SafeLink } from './SafeLink';
+import { CopyButton, FieldReferenceGrid } from './modals';
 
 interface AgentLike {
   name: string;
@@ -60,18 +60,6 @@ const AgentDetailsModal: React.FC<AgentDetailsModalProps> = ({
 }) => {
   const dataToCopy = fullDetails || agent;
 
-  const handleCopy = async () => {
-    try {
-      if (onCopy) {
-        await onCopy(dataToCopy);
-      } else {
-        await navigator.clipboard.writeText(JSON.stringify(dataToCopy, null, 2));
-      }
-    } catch (error) {
-      console.error('Failed to copy agent JSON:', error);
-    }
-  };
-
   return (
     <DetailsModal
       title={`${agent.name} - Full Details (JSON)`}
@@ -81,9 +69,9 @@ const AgentDetailsModal: React.FC<AgentDetailsModalProps> = ({
       maxWidth="4xl"
     >
       <div className="space-y-4">
-        <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
-          <h4 className="font-medium text-blue-900 dark:text-blue-100 mb-2">Complete Agent Schema</h4>
-          <p className="text-sm text-blue-800 dark:text-blue-200">
+        <div className="bg-info-50 dark:bg-info-900/20 border border-info-200 dark:border-info-800 rounded-lg p-4">
+          <h4 className="font-medium text-info-900 dark:text-info-100 mb-2">Complete Agent Schema</h4>
+          <p className="text-sm text-info-800 dark:text-info-200">
             This is the complete A2A agent definition stored in the registry. It includes all metadata, skills,
             security schemes, and configuration details.
           </p>
@@ -101,14 +89,14 @@ const AgentDetailsModal: React.FC<AgentDetailsModalProps> = ({
         {fullDetails?.supported_protocol === 'a2a' && fullDetails?.url && (() => {
           const cardUrl = getAgentCardUrl(fullDetails.url);
           return cardUrl ? (
-            <div className="bg-cyan-50 dark:bg-cyan-900/20 border border-cyan-200 dark:border-cyan-800 rounded-lg p-3 mt-2">
-              <p className="text-sm text-cyan-800 dark:text-cyan-200">
+            <div className="bg-agent-50 dark:bg-agent-900/20 border border-agent-200 dark:border-agent-800 rounded-lg p-3 mt-2">
+              <p className="text-sm text-agent-800 dark:text-agent-200">
                 <span className="font-medium">A2A Agent Card:</span>{' '}
                 <SafeLink
                   href={cardUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-cyan-600 dark:text-cyan-400 hover:underline break-all"
+                  className="text-agent-600 dark:text-agent-400 hover:underline break-all"
                 >
                   {cardUrl}
                 </SafeLink>
@@ -119,67 +107,43 @@ const AgentDetailsModal: React.FC<AgentDetailsModalProps> = ({
 
         <div className="space-y-2">
           <div className="flex items-center justify-between">
-            <h4 className="font-medium text-gray-900 dark:text-white">Agent JSON Schema:</h4>
-            <button
-              onClick={handleCopy}
-              className="flex items-center gap-2 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors duration-200"
-            >
-              <ClipboardDocumentIcon className="h-4 w-4" />
-              Copy JSON
-            </button>
+            <h4 className="font-medium text-fg">Agent JSON Schema:</h4>
+            <CopyButton
+              getText={() => JSON.stringify(dataToCopy, null, 2)}
+              onCopy={onCopy ? () => onCopy(dataToCopy) : undefined}
+              label="Copy JSON"
+            />
           </div>
 
-          <pre className="p-4 bg-gray-50 dark:bg-gray-900 border dark:border-gray-700 rounded-lg overflow-x-auto text-xs text-gray-900 dark:text-gray-100 max-h-[30vh] overflow-y-auto">
+          <pre className="p-4 bg-surface-muted border border-line rounded-lg overflow-x-auto text-xs text-fg max-h-[30vh] overflow-y-auto">
             {JSON.stringify(dataToCopy, null, 2)}
           </pre>
         </div>
 
-        <div className="bg-gray-50 dark:bg-gray-900 border dark:border-gray-700 rounded-lg p-4">
-          <h4 className="font-medium text-gray-900 dark:text-white mb-3">Field Reference</h4>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-            <div>
-              <h5 className="font-medium text-gray-700 dark:text-gray-300 mb-2">Core Fields</h5>
-              <ul className="space-y-1 text-gray-600 dark:text-gray-400">
-                <li>
-                  <code className="bg-gray-200 dark:bg-gray-700 px-1 rounded">protocol_version</code> - A2A protocol
-                  version
-                </li>
-                <li>
-                  <code className="bg-gray-200 dark:bg-gray-700 px-1 rounded">name</code> - Agent display name
-                </li>
-                <li>
-                  <code className="bg-gray-200 dark:bg-gray-700 px-1 rounded">description</code> - Agent purpose
-                </li>
-                <li>
-                  <code className="bg-gray-200 dark:bg-gray-700 px-1 rounded">url</code> - Agent endpoint URL
-                </li>
-                <li>
-                  <code className="bg-gray-200 dark:bg-gray-700 px-1 rounded">path</code> - Registry path
-                </li>
-              </ul>
-            </div>
-            <div>
-              <h5 className="font-medium text-gray-700 dark:text-gray-300 mb-2">Metadata Fields</h5>
-              <ul className="space-y-1 text-gray-600 dark:text-gray-400">
-                <li>
-                  <code className="bg-gray-200 dark:bg-gray-700 px-1 rounded">skills</code> - Agent capabilities
-                </li>
-                <li>
-                  <code className="bg-gray-200 dark:bg-gray-700 px-1 rounded">security_schemes</code> - Auth methods
-                </li>
-                <li>
-                  <code className="bg-gray-200 dark:bg-gray-700 px-1 rounded">tags</code> - Categorization
-                </li>
-                <li>
-                  <code className="bg-gray-200 dark:bg-gray-700 px-1 rounded">trust_level</code> - Verification status
-                </li>
-                <li>
-                  <code className="bg-gray-200 dark:bg-gray-700 px-1 rounded">status</code> - Lifecycle status
-                </li>
-              </ul>
-            </div>
-          </div>
-        </div>
+        <FieldReferenceGrid
+          columns={[
+            {
+              heading: 'Core Fields',
+              fields: [
+                { name: 'protocol_version', description: 'A2A protocol version' },
+                { name: 'name', description: 'Agent display name' },
+                { name: 'description', description: 'Agent purpose' },
+                { name: 'url', description: 'Agent endpoint URL' },
+                { name: 'path', description: 'Registry path' },
+              ],
+            },
+            {
+              heading: 'Metadata Fields',
+              fields: [
+                { name: 'skills', description: 'Agent capabilities' },
+                { name: 'security_schemes', description: 'Auth methods' },
+                { name: 'tags', description: 'Categorization' },
+                { name: 'trust_level', description: 'Verification status' },
+                { name: 'status', description: 'Lifecycle status' },
+              ],
+            },
+          ]}
+        />
       </div>
     </DetailsModal>
   );

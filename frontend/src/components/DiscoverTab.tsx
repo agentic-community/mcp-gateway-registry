@@ -437,22 +437,19 @@ const DiscoverTab: React.FC<DiscoverTabProps> = ({
     <div className="flex flex-col h-full">
       {/* Header: title + search bar - always at top */}
       <div className="w-full max-w-3xl mx-auto px-4 pt-4 pb-2">
-        <h1 className="text-lg font-bold text-center mb-3 text-gray-800 dark:text-gray-100">
+        <h1 className="text-lg font-bold text-center mb-3 text-fg">
           Discover MCP Servers, Agents & Skills
         </h1>
 
         {/* Search Input */}
         <div className="relative">
           <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
-            <MagnifyingGlassIcon className="h-4 w-4 text-gray-400" />
+            <MagnifyingGlassIcon className="h-4 w-4 text-fg-subtle" />
           </div>
           <input
             type="text"
             placeholder="Search servers, agents, skills, or tools..."
-            className="input pl-10 pr-9 w-full py-2 text-sm rounded-lg
-              border border-gray-200 dark:border-gray-600
-              focus:border-indigo-500 dark:focus:border-indigo-400
-              shadow-sm hover:shadow-md transition-shadow"
+            className="input pl-10 pr-9 hover:shadow-md transition-shadow"
             value={searchTerm}
             onChange={(e) => {
               setSearchTerm(e.target.value);
@@ -472,7 +469,7 @@ const DiscoverTab: React.FC<DiscoverTabProps> = ({
               type="button"
               onClick={handleClearSearch}
               className="absolute inset-y-0 right-0 flex items-center pr-3
-                text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+                text-fg-subtle hover:text-fg"
             >
               <XMarkIcon className="h-4 w-4" />
             </button>
@@ -481,7 +478,7 @@ const DiscoverTab: React.FC<DiscoverTabProps> = ({
 
         {/* Summary counts + hint */}
         {!isSemanticActive && (
-          <p className="text-xs text-gray-500 dark:text-gray-500 mt-1.5 text-center italic">
+          <p className="text-xs text-fg-subtle mt-1.5 text-center italic">
             {_buildSummaryText(
               { servers: totalServers, virtual: totalVirtual, agents: totalAgents, skills: totalSkills, external: totalExternal },
               { servers: matchedServers, virtual: matchedVirtual, agents: matchedAgents, skills: matchedSkills, external: matchedExternal },
@@ -489,7 +486,7 @@ const DiscoverTab: React.FC<DiscoverTabProps> = ({
               featuredCustomSections
             )}
             {searchTerm && (
-              <span className="text-gray-600 dark:text-gray-600">
+              <span className="text-fg-muted">
                 {' '}&middot; press Enter for semantic search
               </span>
             )}
@@ -516,13 +513,13 @@ const DiscoverTab: React.FC<DiscoverTabProps> = ({
       ) : (
         /* Featured List Rows */
         <div className="relative flex-1 min-h-0">
-        <div className="w-full max-w-5xl mx-auto px-4 mt-2 h-full overflow-y-auto discover-scroll">
+        <div className="w-full max-w-5xl mx-auto px-4 pt-2 h-full overflow-y-auto discover-scroll">
           {loading ? (
-            <div className="text-center text-gray-500 dark:text-gray-400 py-8">
+            <div className="text-center text-fg-muted py-8">
               Loading featured items...
             </div>
           ) : totalFeatured === 0 ? (
-            <div className="text-center text-gray-500 dark:text-gray-400 py-8">
+            <div className="text-center text-fg-muted py-8">
               {searchTerm
                 ? `No items matching "${searchTerm}"`
                 : 'No items registered yet. Register your first MCP server, agent, or skill!'}
@@ -535,7 +532,7 @@ const DiscoverTab: React.FC<DiscoverTabProps> = ({
                   <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">
                     MCP Servers
                     {matchedServers > featuredServers.length && (
-                      <span className="ml-1.5 font-normal normal-case tracking-normal text-gray-500/70">
+                      <span className="ml-1.5 font-normal normal-case tracking-normal text-fg-subtle">
                         (showing {featuredServers.length} of {matchedServers})
                       </span>
                     )}
@@ -561,7 +558,7 @@ const DiscoverTab: React.FC<DiscoverTabProps> = ({
                   <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">
                     Virtual MCP Servers
                     {matchedVirtual > featuredVirtual.length && (
-                      <span className="ml-1.5 font-normal normal-case tracking-normal text-gray-500/70">
+                      <span className="ml-1.5 font-normal normal-case tracking-normal text-fg-subtle">
                         (showing {featuredVirtual.length} of {matchedVirtual})
                       </span>
                     )}
@@ -587,7 +584,7 @@ const DiscoverTab: React.FC<DiscoverTabProps> = ({
                   <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">
                     Agents
                     {matchedAgents > featuredAgents.length && (
-                      <span className="ml-1.5 font-normal normal-case tracking-normal text-gray-500/70">
+                      <span className="ml-1.5 font-normal normal-case tracking-normal text-fg-subtle">
                         (showing {featuredAgents.length} of {matchedAgents})
                       </span>
                     )}
@@ -613,7 +610,7 @@ const DiscoverTab: React.FC<DiscoverTabProps> = ({
                   <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">
                     Skills
                     {matchedSkills > featuredSkills.length && (
-                      <span className="ml-1.5 font-normal normal-case tracking-normal text-gray-500/70">
+                      <span className="ml-1.5 font-normal normal-case tracking-normal text-fg-subtle">
                         (showing {featuredSkills.length} of {matchedSkills})
                       </span>
                     )}
@@ -639,7 +636,7 @@ const DiscoverTab: React.FC<DiscoverTabProps> = ({
                   <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">
                     External Registry Servers
                     {matchedExtServers > featuredExtServers.length && (
-                      <span className="ml-1.5 font-normal normal-case tracking-normal text-gray-500/70">
+                      <span className="ml-1.5 font-normal normal-case tracking-normal text-fg-subtle">
                         (showing {featuredExtServers.length} of {matchedExtServers})
                       </span>
                     )}
@@ -665,7 +662,7 @@ const DiscoverTab: React.FC<DiscoverTabProps> = ({
                   <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">
                     External Registry Agents
                     {matchedExtAgents > featuredExtAgents.length && (
-                      <span className="ml-1.5 font-normal normal-case tracking-normal text-gray-500/70">
+                      <span className="ml-1.5 font-normal normal-case tracking-normal text-fg-subtle">
                         (showing {featuredExtAgents.length} of {matchedExtAgents})
                       </span>
                     )}
@@ -691,7 +688,7 @@ const DiscoverTab: React.FC<DiscoverTabProps> = ({
                   <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">
                     {section.displayName}
                     {section.matched > section.featured.length && (
-                      <span className="ml-1.5 font-normal normal-case tracking-normal text-gray-500/70">
+                      <span className="ml-1.5 font-normal normal-case tracking-normal text-fg-subtle">
                         (showing {section.featured.length} of {section.matched})
                       </span>
                     )}
@@ -721,7 +718,7 @@ const DiscoverTab: React.FC<DiscoverTabProps> = ({
         </div>
         {/* Fade gradient at bottom to hint more content */}
         <div className="absolute bottom-0 left-0 right-0 h-12
-          bg-gradient-to-t from-gray-900/80 to-transparent
+          bg-gradient-to-t from-canvas to-transparent
           pointer-events-none" />
         </div>
       )}

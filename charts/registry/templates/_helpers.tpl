@@ -17,7 +17,8 @@ Sections (in order below):
      valueFrom-sourced secrets (CLIENT_SECRET, M2M_CLIENT_SECRET). Also
      RUM_SNIPPET_B64 and RUM_ALLOWED_HOSTS (feature #1471), rendered from
      .Values.rumSnippetB64 / .Values.rumAllowedHosts only when non-empty;
-     token-bearing snippets come via extraEnvFrom.
+     token-bearing snippets come via extraEnvFrom. Also UI_BRANDING_DIR,
+     rendered from .Values.branding.mountPath only when branding.enabled.
   2. registry-app-log-config configmap
   3. registry-otel-config configmap
   4. registry-batch-config configmap

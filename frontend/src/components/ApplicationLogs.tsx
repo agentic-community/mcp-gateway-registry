@@ -50,11 +50,11 @@ interface ApplicationLogsProps {
 }
 
 const LEVEL_COLORS: Record<string, string> = {
-  DEBUG: 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300',
-  INFO: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300',
-  WARNING: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-300',
-  ERROR: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300',
-  CRITICAL: 'bg-red-200 text-red-900 dark:bg-red-900/50 dark:text-red-200',
+  DEBUG: 'bg-gray-100 text-gray-700 dark:bg-gray-900 dark:text-gray-300',
+  INFO: 'bg-info-100 text-info-700 dark:bg-info-900/30 dark:text-info-300',
+  WARNING: 'bg-warning-100 text-warning-700 dark:bg-warning-900/30 dark:text-warning-300',
+  ERROR: 'bg-danger-100 text-danger-700 dark:bg-danger-900/30 dark:text-danger-300',
+  CRITICAL: 'bg-danger-200 text-danger-900 dark:bg-danger-900/50 dark:text-danger-200',
 };
 
 const PAGE_SIZE = 50;
@@ -216,24 +216,24 @@ const ApplicationLogs: React.FC<ApplicationLogsProps> = ({ onShowToast }) => {
       {/* Header */}
       <div className="mb-6 flex items-center justify-between">
         <div>
-          <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100">
+          <h2 className="text-xl font-bold text-fg">
             Application Logs
           </h2>
-          <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
+          <p className="mt-1 text-sm text-fg-muted">
             View and download centralized application logs from all services.
           </p>
         </div>
         <div className="flex items-center gap-2">
           <button
             onClick={handleRefresh}
-            className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+            className="btn-secondary px-3"
             title="Refresh"
           >
             <ArrowPathIcon className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
           <button
             onClick={handleExport}
-            className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+            className="btn-secondary px-3"
             title="Export as JSONL"
           >
             <ArrowDownTrayIcon className="h-4 w-4" />
@@ -246,10 +246,10 @@ const ApplicationLogs: React.FC<ApplicationLogsProps> = ({ onShowToast }) => {
       <div className="mb-4">
         <button
           onClick={() => setShowFilters(!showFilters)}
-          className={`flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-lg border transition-colors ${
+          className={`flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-lg border shadow-sm transition-colors ${
             filterCount > 0
-              ? 'text-purple-700 dark:text-purple-300 bg-purple-50 dark:bg-purple-900/20 border-purple-300 dark:border-purple-700'
-              : 'text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-800'
+              ? 'text-accent-soft-fg bg-accent-soft border-purple-300 dark:border-purple-700'
+              : 'text-fg bg-surface border-line-strong hover:bg-surface-hover'
           }`}
         >
           <FunnelIcon className="h-4 w-4" />
@@ -259,17 +259,17 @@ const ApplicationLogs: React.FC<ApplicationLogsProps> = ({ onShowToast }) => {
 
       {/* Filter Panel */}
       {showFilters && (
-        <div className="mb-6 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+        <div className="mb-6 bg-surface-muted rounded-lg border border-line p-4">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {/* Service */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="block text-sm font-medium text-fg-muted mb-1">
                 Service
               </label>
               <select
                 value={filters.service}
                 onChange={(e) => setFilters({ ...filters, service: e.target.value })}
-                className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                className="input"
               >
                 <option value="">All Services</option>
                 {metadata?.services.map((s) => (
@@ -280,13 +280,13 @@ const ApplicationLogs: React.FC<ApplicationLogsProps> = ({ onShowToast }) => {
 
             {/* Level */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="block text-sm font-medium text-fg-muted mb-1">
                 Level
               </label>
               <select
                 value={filters.level}
                 onChange={(e) => setFilters({ ...filters, level: e.target.value })}
-                className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                className="input"
               >
                 <option value="">All Levels</option>
                 {metadata?.levels.map((l) => (
@@ -297,13 +297,13 @@ const ApplicationLogs: React.FC<ApplicationLogsProps> = ({ onShowToast }) => {
 
             {/* Hostname */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="block text-sm font-medium text-fg-muted mb-1">
                 Hostname / Pod
               </label>
               <select
                 value={filters.hostname}
                 onChange={(e) => setFilters({ ...filters, hostname: e.target.value })}
-                className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                className="input"
               >
                 <option value="">All Hosts</option>
                 {metadata?.hostnames.map((h) => (
@@ -314,7 +314,7 @@ const ApplicationLogs: React.FC<ApplicationLogsProps> = ({ onShowToast }) => {
 
             {/* Search */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="block text-sm font-medium text-fg-muted mb-1">
                 Search in message
               </label>
               <input
@@ -323,33 +323,33 @@ const ApplicationLogs: React.FC<ApplicationLogsProps> = ({ onShowToast }) => {
                 onChange={(e) => setFilters({ ...filters, search: e.target.value })}
                 onKeyDown={(e) => { if (e.key === 'Enter') handleApplyFilters(); }}
                 placeholder="e.g. timeout, connection refused"
-                className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                className="input"
               />
             </div>
 
             {/* Start time */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="block text-sm font-medium text-fg-muted mb-1">
                 From
               </label>
               <input
                 type="datetime-local"
                 value={filters.start}
                 onChange={(e) => setFilters({ ...filters, start: e.target.value })}
-                className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                className="input"
               />
             </div>
 
             {/* End time */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="block text-sm font-medium text-fg-muted mb-1">
                 To
               </label>
               <input
                 type="datetime-local"
                 value={filters.end}
                 onChange={(e) => setFilters({ ...filters, end: e.target.value })}
-                className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                className="input"
               />
             </div>
           </div>
@@ -358,14 +358,14 @@ const ApplicationLogs: React.FC<ApplicationLogsProps> = ({ onShowToast }) => {
           <div className="flex items-center gap-3 mt-4">
             <button
               onClick={handleApplyFilters}
-              className="px-4 py-2 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 transition-colors"
+              className="btn-primary"
             >
               Apply Filters
             </button>
             {filterCount > 0 && (
               <button
                 onClick={handleClearFilters}
-                className="flex items-center gap-1 px-3 py-2 text-sm font-medium text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 transition-colors"
+                className="btn-ghost px-3"
               >
                 <XMarkIcon className="h-4 w-4" />
                 Clear All
@@ -377,15 +377,15 @@ const ApplicationLogs: React.FC<ApplicationLogsProps> = ({ onShowToast }) => {
 
       {/* Error State */}
       {error && (
-        <div className="mb-6 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4 flex items-center gap-3">
-          <ExclamationTriangleIcon className="h-5 w-5 text-red-500 flex-shrink-0" />
-          <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
+        <div className="mb-6 bg-danger-50 dark:bg-danger-900/20 border border-danger-200 dark:border-danger-800 rounded-lg p-4 flex items-center gap-3">
+          <ExclamationTriangleIcon className="h-5 w-5 text-danger-500 flex-shrink-0" />
+          <p className="text-sm text-danger-700 dark:text-danger-300">{error}</p>
         </div>
       )}
 
       {/* Summary bar */}
       {!error && (
-        <div className="mb-4 flex items-center justify-between text-sm text-gray-600 dark:text-gray-400">
+        <div className="mb-4 flex items-center justify-between text-sm text-fg-muted">
           <span>
             {totalCount.toLocaleString()} log entries
             {filterCount > 0 && ' (filtered)'}
@@ -398,20 +398,20 @@ const ApplicationLogs: React.FC<ApplicationLogsProps> = ({ onShowToast }) => {
 
       {/* Log Table */}
       {!error && (
-        <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
+        <div className="bg-surface rounded-lg border border-line overflow-hidden">
           {loading && entries.length === 0 ? (
             <div className="flex justify-center items-center py-16">
               <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-purple-600"></div>
             </div>
           ) : entries.length === 0 ? (
-            <div className="text-center py-16 text-gray-500 dark:text-gray-400">
+            <div className="text-center py-16 text-fg-subtle">
               No log entries found.
             </div>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm" aria-label="Application log entries">
                 <thead>
-                  <tr className="table-header">
+                  <tr className="bg-surface-muted border-b border-line text-left text-xs font-medium uppercase tracking-wider text-fg-subtle [&>th]:px-4 [&>th]:py-2.5">
                     <th className="w-40">Timestamp</th>
                     <th className="w-24">Level</th>
                     <th className="w-28">Service</th>
@@ -419,12 +419,12 @@ const ApplicationLogs: React.FC<ApplicationLogsProps> = ({ onShowToast }) => {
                     <th>Message</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-100 dark:divide-gray-700/50">
+                <tbody className="divide-y divide-line">
                   {entries.map((entry, idx) => (
                     <React.Fragment key={idx}>
                       <tr
-                        className={`table-row cursor-pointer ${
-                          expandedRow === idx ? 'table-row-selected' : ''
+                        className={`cursor-pointer transition-colors ${
+                          expandedRow === idx ? 'bg-accent-soft' : 'hover:bg-surface-hover'
                         }`}
                         role="button"
                         tabIndex={0}
@@ -433,7 +433,7 @@ const ApplicationLogs: React.FC<ApplicationLogsProps> = ({ onShowToast }) => {
                         onClick={() => setExpandedRow(expandedRow === idx ? null : idx)}
                         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setExpandedRow(expandedRow === idx ? null : idx); } }}
                       >
-                        <td className="px-4 py-2.5 text-gray-600 dark:text-gray-300 font-mono text-xs whitespace-nowrap">
+                        <td className="px-4 py-2.5 text-fg-muted font-mono text-xs whitespace-nowrap">
                           {_formatTimestamp(entry.timestamp)}
                         </td>
                         <td className="px-4 py-2.5">
@@ -441,25 +441,25 @@ const ApplicationLogs: React.FC<ApplicationLogsProps> = ({ onShowToast }) => {
                             {entry.level}
                           </span>
                         </td>
-                        <td className="px-4 py-2.5 text-gray-700 dark:text-gray-300 font-mono text-xs">
+                        <td className="px-4 py-2.5 text-fg-muted font-mono text-xs">
                           {entry.service}
                         </td>
-                        <td className="px-4 py-2.5 text-gray-500 dark:text-gray-400 font-mono text-xs">
+                        <td className="px-4 py-2.5 text-fg-subtle font-mono text-xs">
                           {entry.filename}:{entry.lineno}
                         </td>
-                        <td className="px-4 py-2.5 text-gray-800 dark:text-gray-200 text-xs">
+                        <td className="px-4 py-2.5 text-fg text-xs">
                           {_truncateMessage(entry.message)}
                         </td>
                       </tr>
                       {expandedRow === idx && (
                         <tr>
-                          <td colSpan={5} className="px-4 py-3 bg-gray-50 dark:bg-gray-900">
+                          <td colSpan={5} className="px-4 py-3 bg-surface-muted">
                             <div className="space-y-2">
-                              <div className="flex gap-6 text-xs text-gray-500 dark:text-gray-400">
+                              <div className="flex gap-6 text-xs text-fg-subtle">
                                 <span><strong>Hostname:</strong> {entry.hostname}</span>
                                 <span><strong>Logger:</strong> {entry.logger}</span>
                               </div>
-                              <pre className="text-xs font-mono text-gray-700 dark:text-gray-300 whitespace-pre-wrap break-words bg-white dark:bg-gray-800 rounded p-3 border border-gray-200 dark:border-gray-700 max-h-64 overflow-y-auto">
+                              <pre className="text-xs font-mono text-fg-muted whitespace-pre-wrap break-words bg-surface rounded p-3 border border-line max-h-64 overflow-y-auto">
                                 {entry.message}
                               </pre>
                             </div>
@@ -475,27 +475,27 @@ const ApplicationLogs: React.FC<ApplicationLogsProps> = ({ onShowToast }) => {
 
           {/* Pagination */}
           {entries.length > 0 && (
-            <div className="flex items-center justify-between px-4 py-3 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900">
-              <div className="text-xs text-gray-500 dark:text-gray-400">
+            <div className="flex items-center justify-between px-4 py-3 border-t border-line bg-surface-muted">
+              <div className="text-xs text-fg-subtle">
                 Showing {offset + 1}-{Math.min(offset + entries.length, totalCount)} of {totalCount.toLocaleString()}
               </div>
               <div className="flex items-center gap-2">
                 <button
                   onClick={handlePrevPage}
                   disabled={offset === 0}
-                  className="p-1.5 rounded hover:bg-gray-200 dark:hover:bg-gray-800 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                  className="p-1.5 rounded text-fg-muted hover:bg-surface-hover hover:text-fg disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                 >
-                  <ChevronLeftIcon className="h-4 w-4 text-gray-600 dark:text-gray-400" />
+                  <ChevronLeftIcon className="h-4 w-4" />
                 </button>
-                <span className="text-xs text-gray-600 dark:text-gray-400">
+                <span className="text-xs text-fg-muted">
                   {currentPage} / {totalPages}
                 </span>
                 <button
                   onClick={handleNextPage}
                   disabled={!hasNext}
-                  className="p-1.5 rounded hover:bg-gray-200 dark:hover:bg-gray-800 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                  className="p-1.5 rounded text-fg-muted hover:bg-surface-hover hover:text-fg disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                 >
-                  <ChevronRightIcon className="h-4 w-4 text-gray-600 dark:text-gray-400" />
+                  <ChevronRightIcon className="h-4 w-4" />
                 </button>
               </div>
             </div>

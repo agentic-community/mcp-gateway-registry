@@ -736,6 +736,15 @@ variable "registry_rum_allowed_hosts" {
   default     = ""
 }
 
+# Base64 .tar.gz of the UI branding folder, rendered as UI_BRANDING_ARCHIVE_B64
+# on the registry container only. Validated (format and 48 KiB cap) at the root
+# module; see terraform/aws-ecs/variables.tf.
+variable "ui_branding_archive_b64" {
+  description = "Optional base64-encoded .tar.gz of the UI branding folder, extracted into /app/branding by the registry at startup. Empty disables it."
+  type        = string
+  default     = ""
+}
+
 # =============================================================================
 # CLOUDFRONT CONFIGURATION (CloudFront HTTPS Support feature)
 # =============================================================================

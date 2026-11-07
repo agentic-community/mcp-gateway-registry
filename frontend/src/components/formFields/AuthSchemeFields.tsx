@@ -1,6 +1,6 @@
 import React from 'react';
 import FormField from './FormField';
-import { fieldClass, FIELD_FOCUS } from './formClasses';
+import { CHECKBOX, FIELD } from './formClasses';
 
 export type AuthScheme = 'none' | 'bearer' | 'api_key' | 'oauth';
 
@@ -29,7 +29,6 @@ interface AuthSchemeFieldsProps {
   onHeaderNameChange: (value: string) => void;
   /** When true, the credential placeholder reflects "keep existing" (edit mode). */
   editing?: boolean;
-  accent?: keyof typeof FIELD_FOCUS;
   /**
    * True when this server uses On-Behalf-Of egress (egress_auth_mode ===
    * 'obo_exchange'). Backend discovery for such a server has no per-server
@@ -73,7 +72,6 @@ const AuthSchemeFields: React.FC<AuthSchemeFieldsProps> = ({
   onCredentialChange,
   onHeaderNameChange,
   editing = false,
-  accent = 'purple',
   oboDiscoveryActive = false,
   oboTargetAudience = '',
   showDiscoveryToggle = false,
@@ -95,7 +93,7 @@ const AuthSchemeFields: React.FC<AuthSchemeFieldsProps> = ({
           <select
             value={scheme}
             onChange={(e) => onSchemeChange(e.target.value as AuthScheme)}
-            className={fieldClass(accent)}
+            className={FIELD}
           >
             <option value="none">None</option>
             <option value="bearer">Bearer Token</option>
@@ -113,7 +111,7 @@ const AuthSchemeFields: React.FC<AuthSchemeFieldsProps> = ({
               type="password"
               value={credential}
               onChange={(e) => onCredentialChange(e.target.value)}
-              className={fieldClass(accent)}
+              className={FIELD}
               placeholder={
                 editing ? 'Leave blank to keep current credential' : ''
               }
@@ -127,7 +125,7 @@ const AuthSchemeFields: React.FC<AuthSchemeFieldsProps> = ({
               type="text"
               value={headerName}
               onChange={(e) => onHeaderNameChange(e.target.value)}
-              className={fieldClass(accent)}
+              className={FIELD}
               placeholder="X-API-Key"
             />
           </FormField>
@@ -140,7 +138,7 @@ const AuthSchemeFields: React.FC<AuthSchemeFieldsProps> = ({
                 type="checkbox"
                 checked={discoveryEnabled}
                 onChange={(e) => onDiscoveryEnabledChange?.(e.target.checked)}
-                className="mt-0.5 h-4 w-4 rounded border-gray-300 dark:border-gray-600"
+                className={`mt-0.5 ${CHECKBOX}`}
               />
               <span>
                 <span className="block text-sm font-medium text-gray-900 dark:text-white">
@@ -163,7 +161,7 @@ const AuthSchemeFields: React.FC<AuthSchemeFieldsProps> = ({
               interactive OAuth consent, and vault a token nothing ever reads.
             */}
             {discoveryEnabled && scheme !== 'none' && (
-              <p className="mt-2 rounded border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 p-2 text-xs text-amber-800 dark:text-amber-300">
+              <p className="mt-2 rounded border border-warning-300 dark:border-warning-700 bg-warning-50 dark:bg-warning-900/20 p-2 text-xs text-warning-800 dark:text-warning-300">
                 <span className="font-semibold">Not in effect.</span> The{' '}
                 <span className="font-mono">{scheme}</span> credential above is this
                 server&apos;s discovery credential and takes precedence. Set the
@@ -175,7 +173,7 @@ const AuthSchemeFields: React.FC<AuthSchemeFieldsProps> = ({
         )}
 
         {oboDiscoveryActive && scheme === 'none' && (
-          <div className="rounded-md border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20 p-3 text-xs text-blue-800 dark:text-blue-300">
+          <div className="rounded-md border border-info-200 dark:border-info-800 bg-info-50 dark:bg-info-900/20 p-3 text-xs text-info-800 dark:text-info-300">
             <p className="font-semibold mb-1">
               On-Behalf-Of server — discovery uses a gateway machine token
             </p>

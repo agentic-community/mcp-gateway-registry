@@ -4,7 +4,7 @@ import {
   ClipboardDocumentIcon,
   CheckIcon,
 } from '@heroicons/react/24/outline';
-import { AuditEvent } from './AuditLogTable';
+import type { AuditEvent } from '../types/audit';
 import { CopyButton } from './modals';
 
 interface AuditEventDetailProps {
@@ -55,35 +55,35 @@ const AuditEventDetail: React.FC<AuditEventDetailProps> = ({ event, onClose }) =
   };
 
   const getStatusColor = (statusCode: number): string => {
-    if (statusCode >= 200 && statusCode < 300) return 'text-green-600 dark:text-green-400';
-    if (statusCode >= 400 && statusCode < 500) return 'text-yellow-600 dark:text-yellow-400';
-    if (statusCode >= 500) return 'text-red-600 dark:text-red-400';
-    return 'text-gray-600 dark:text-gray-400';
+    if (statusCode >= 200 && statusCode < 300) return 'text-success-600 dark:text-success-400';
+    if (statusCode >= 400 && statusCode < 500) return 'text-warning-600 dark:text-warning-400';
+    if (statusCode >= 500) return 'text-danger-600 dark:text-danger-400';
+    return 'text-fg-muted';
   };
 
   const getMcpStatusColor = (status: string): string => {
     switch (status?.toLowerCase()) {
       case 'success':
-        return 'text-green-600 dark:text-green-400';
+        return 'text-success-600 dark:text-success-400';
       case 'error':
-        return 'text-red-600 dark:text-red-400';
+        return 'text-danger-600 dark:text-danger-400';
       case 'timeout':
-        return 'text-yellow-600 dark:text-yellow-400';
+        return 'text-warning-600 dark:text-warning-400';
       default:
-        return 'text-gray-600 dark:text-gray-400';
+        return 'text-fg-muted';
     }
   };
 
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
+    <div className="bg-surface rounded-lg shadow-lg border border-line overflow-hidden">
       {/* Header */}
-      <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 flex items-center justify-between gap-2">
+      <div className="px-4 py-3 border-b border-line bg-surface-muted flex items-center justify-between gap-2">
         <div className="flex items-center gap-3 min-w-0 flex-1">
-          <h3 className="text-sm font-medium text-gray-900 dark:text-gray-100 flex-shrink-0">
+          <h3 className="text-sm font-medium text-fg flex-shrink-0">
             Event Details
           </h3>
           <span
-            className="text-xs text-gray-500 dark:text-gray-400 font-mono truncate"
+            className="text-xs text-fg-subtle font-mono truncate"
             title={event.request_id}
           >
             {event.request_id}
@@ -92,12 +92,12 @@ const AuditEventDetail: React.FC<AuditEventDetailProps> = ({ event, onClose }) =
         <div className="flex items-center gap-2">
           <button
             onClick={handleCopy}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+            className="btn-secondary gap-1.5 px-2.5 py-1.5 text-xs"
             title="Copy JSON to clipboard"
           >
             {copied ? (
               <>
-                <CheckIcon className="h-4 w-4 text-green-500" />
+                <CheckIcon className="h-4 w-4 text-success-500" />
                 <span>Copied!</span>
               </>
             ) : (
@@ -109,7 +109,7 @@ const AuditEventDetail: React.FC<AuditEventDetailProps> = ({ event, onClose }) =
           </button>
           <button
             onClick={onClose}
-            className="p-1.5 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors"
+            className="btn-icon h-8 w-8"
             title="Close"
           >
             <XMarkIcon className="h-5 w-5" />
@@ -118,20 +118,20 @@ const AuditEventDetail: React.FC<AuditEventDetailProps> = ({ event, onClose }) =
       </div>
 
       {/* Summary */}
-      <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700 grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="px-4 py-3 border-b border-line grid grid-cols-2 md:grid-cols-4 gap-4">
         <div className="min-w-0">
-          <div className="text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">
+          <div className="text-xs text-fg-subtle uppercase tracking-wider mb-1">
             Timestamp
           </div>
-          <div className="text-sm text-gray-900 dark:text-gray-100 truncate">
+          <div className="text-sm text-fg truncate">
             {new Date(event.timestamp).toLocaleString()}
           </div>
         </div>
         <div className="min-w-0">
-          <div className="text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">
+          <div className="text-xs text-fg-subtle uppercase tracking-wider mb-1">
             User
           </div>
-          <div className="text-sm text-gray-900 dark:text-gray-100 flex items-center gap-1 min-w-0">
+          <div className="text-sm text-fg flex items-center gap-1 min-w-0">
             <span
               className="truncate"
               title={event.identity?.username || event.username || event.username_hash || '-'}
@@ -139,14 +139,14 @@ const AuditEventDetail: React.FC<AuditEventDetailProps> = ({ event, onClose }) =
               {event.identity?.username || event.username || event.username_hash || '-'}
             </span>
             {event.identity?.is_admin && (
-              <span className="px-1.5 py-0.5 text-xs font-medium bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300 rounded flex-shrink-0">
+              <span className="px-1.5 py-0.5 text-xs font-medium bg-accent-soft text-accent-soft-fg rounded flex-shrink-0">
                 Admin
               </span>
             )}
           </div>
         </div>
         <div className="min-w-0">
-          <div className="text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">
+          <div className="text-xs text-fg-subtle uppercase tracking-wider mb-1">
             Status
           </div>
           {isMcpEvent ? (
@@ -160,10 +160,10 @@ const AuditEventDetail: React.FC<AuditEventDetailProps> = ({ event, onClose }) =
           )}
         </div>
         <div className="min-w-0">
-          <div className="text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">
+          <div className="text-xs text-fg-subtle uppercase tracking-wider mb-1">
             Duration
           </div>
-          <div className="text-sm text-gray-900 dark:text-gray-100">
+          <div className="text-sm text-fg">
             {isMcpEvent
               ? `${(event.mcp_response?.duration_ms || 0).toFixed(2)} ms`
               : `${(event.response?.duration_ms || 0).toFixed(2)} ms`
@@ -175,8 +175,8 @@ const AuditEventDetail: React.FC<AuditEventDetailProps> = ({ event, onClose }) =
       {/* Durable / IdP identity claims (admin-only detail panel; omitted entirely
           when the token carried none) */}
       {identityClaims.length > 0 && (
-        <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-900/20">
-          <div className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
+        <div className="px-4 py-3 border-b border-line bg-surface-muted/50">
+          <div className="text-xs font-medium text-fg-subtle uppercase tracking-wider mb-2">
             Identity Claims
           </div>
           {/* These values run 36-73 chars while this panel is one third of the
@@ -192,7 +192,7 @@ const AuditEventDetail: React.FC<AuditEventDetailProps> = ({ event, onClose }) =
           <dl className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-1 gap-x-4 gap-y-3">
             {identityClaims.map(({ label, value, mono }) => (
               <div key={label} className="min-w-0">
-                <dt className="flex items-center justify-between gap-1 text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">
+                <dt className="flex items-center justify-between gap-1 text-xs text-fg-subtle uppercase tracking-wider mb-1">
                   <span>{label}</span>
                   <CopyButton
                     variant="subtle"
@@ -203,7 +203,7 @@ const AuditEventDetail: React.FC<AuditEventDetailProps> = ({ event, onClose }) =
                   />
                 </dt>
                 <dd
-                  className={`text-sm text-gray-900 dark:text-gray-100 break-all ${mono ? 'font-mono' : ''}`}
+                  className={`text-sm text-fg break-all ${mono ? 'font-mono' : ''}`}
                 >
                   {value}
                 </dd>
@@ -215,46 +215,46 @@ const AuditEventDetail: React.FC<AuditEventDetailProps> = ({ event, onClose }) =
 
       {/* MCP-specific summary row */}
       {isMcpEvent && (
-        <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700 grid grid-cols-2 md:grid-cols-4 gap-2 bg-blue-50/50 dark:bg-blue-900/10">
+        <div className="px-4 py-3 border-b border-line grid grid-cols-2 md:grid-cols-4 gap-2 bg-info-50/50 dark:bg-info-900/10">
           <div className="min-w-0 overflow-hidden">
-            <div className="text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1 truncate" title="MCP Server">
+            <div className="text-xs text-fg-subtle uppercase tracking-wider mb-1 truncate" title="MCP Server">
               Server
             </div>
             <div
-              className="text-sm text-gray-900 dark:text-gray-100 truncate"
+              className="text-sm text-fg truncate"
               title={event.mcp_server?.name || '-'}
             >
               {event.mcp_server?.name || '-'}
             </div>
           </div>
           <div className="min-w-0 overflow-hidden">
-            <div className="text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1 truncate" title="MCP Method">
+            <div className="text-xs text-fg-subtle uppercase tracking-wider mb-1 truncate" title="MCP Method">
               Method
             </div>
             <div
-              className="text-sm font-mono text-gray-900 dark:text-gray-100 truncate"
+              className="text-sm font-mono text-fg truncate"
               title={event.mcp_request?.method || '-'}
             >
               {event.mcp_request?.method || '-'}
             </div>
           </div>
           <div className="min-w-0 overflow-hidden">
-            <div className="text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1 truncate" title="Tool/Resource">
+            <div className="text-xs text-fg-subtle uppercase tracking-wider mb-1 truncate" title="Tool/Resource">
               Tool
             </div>
             <div
-              className="text-sm text-gray-900 dark:text-gray-100 truncate"
+              className="text-sm text-fg truncate"
               title={event.mcp_request?.tool_name || event.mcp_request?.resource_uri || '-'}
             >
               {event.mcp_request?.tool_name || event.mcp_request?.resource_uri || '-'}
             </div>
           </div>
           <div className="min-w-0 overflow-hidden">
-            <div className="text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1 truncate">
+            <div className="text-xs text-fg-subtle uppercase tracking-wider mb-1 truncate">
               Transport
             </div>
             <div
-              className="text-sm text-gray-900 dark:text-gray-100 truncate"
+              className="text-sm text-fg truncate"
               title={event.mcp_request?.transport || '-'}
             >
               {event.mcp_request?.transport || '-'}
@@ -265,7 +265,7 @@ const AuditEventDetail: React.FC<AuditEventDetailProps> = ({ event, onClose }) =
 
       {/* JSON Content */}
       <div className="p-4 max-h-[60vh] overflow-auto">
-        <pre className="text-xs font-mono text-gray-800 dark:text-gray-200 whitespace-pre-wrap break-words bg-gray-50 dark:bg-gray-900/50 p-4 rounded-lg border border-gray-200 dark:border-gray-700">
+        <pre className="text-xs font-mono text-fg-muted whitespace-pre-wrap break-words bg-surface-muted p-4 rounded-lg border border-line">
           {formatJson(event)}
         </pre>
       </div>

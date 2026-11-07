@@ -46,23 +46,31 @@ import { useEntityToggle } from '../hooks/useEntityToggle';
 import { filterEntities } from '../utils/entityFilters';
 import { upstreamHeaderRowError } from '../components/formFields';
 
-// Federated-registry header accents (local groups are always green/emerald).
+// Federated-registry header accents (local groups always use the success ramp).
 const SERVER_REGISTRY_ACCENT: RegistryAccent = {
   headerBg:
-    'bg-gradient-to-r from-cyan-50 to-blue-50 dark:from-cyan-900/20 dark:to-blue-900/20 hover:from-cyan-100 hover:to-blue-100 dark:hover:from-cyan-900/30 dark:hover:to-blue-900/30',
-  title: 'text-cyan-700 dark:text-cyan-300',
+    'bg-gradient-to-r from-info-50 to-info-50 dark:from-info-900/20 dark:to-info-900/20 hover:from-info-100 hover:to-info-100 dark:hover:from-info-900/30 dark:hover:to-info-900/30',
+  title: 'text-info-700 dark:text-info-300',
   resyncButton:
-    'text-cyan-600 dark:text-cyan-400 hover:text-cyan-800 dark:hover:text-cyan-200 hover:bg-cyan-100 dark:hover:bg-cyan-900/30',
+    'text-info-600 dark:text-info-400 hover:text-info-800 dark:hover:text-info-200 hover:bg-info-100 dark:hover:bg-info-900/30',
   border: 'border-gray-200 dark:border-gray-700',
 };
 const AGENT_REGISTRY_ACCENT: RegistryAccent = {
   headerBg:
-    'bg-gradient-to-r from-violet-50 to-purple-50 dark:from-violet-900/20 dark:to-purple-900/20 hover:from-violet-100 hover:to-purple-100 dark:hover:from-violet-900/30 dark:hover:to-purple-900/30',
-  title: 'text-violet-700 dark:text-violet-300',
+    'bg-gradient-to-r from-purple-50 to-purple-50 dark:from-purple-900/20 dark:to-purple-900/20 hover:from-purple-100 hover:to-purple-100 dark:hover:from-purple-900/30 dark:hover:to-purple-900/30',
+  title: 'text-purple-700 dark:text-purple-300',
   resyncButton:
-    'text-violet-600 dark:text-violet-400 hover:text-violet-800 dark:hover:text-violet-200 hover:bg-violet-100 dark:hover:bg-violet-900/30',
-  border: 'border-cyan-200 dark:border-cyan-700',
+    'text-purple-600 dark:text-purple-400 hover:text-purple-800 dark:hover:text-purple-200 hover:bg-purple-100 dark:hover:bg-purple-900/30',
+  border: 'border-agent-200 dark:border-agent-700',
 };
+
+// Dashboard view tabs share one brand accent so the active tab reads the same everywhere.
+const viewTabClass = (active: boolean) =>
+  `px-4 py-2 -mb-px text-sm font-medium whitespace-nowrap transition-colors border-b-2 ${
+    active
+      ? 'border-accent text-accent-text'
+      : 'border-transparent text-fg-muted hover:text-fg hover:border-line-strong'
+  }`;
 import { uuidFromPath } from '../hooks/useCustomEntities';
 import type {
   CustomEntityRecord,
@@ -179,8 +187,8 @@ const Toast: React.FC<ToastProps> = ({ message, type, onClose }) => {
     <div className="fixed top-4 right-4 z-50 animate-slide-in-top">
       <div className={`flex items-center p-4 rounded-lg shadow-lg border ${
         type === 'success'
-          ? 'bg-green-50 border-green-200 text-green-800 dark:bg-green-900/50 dark:border-green-700 dark:text-green-200'
-          : 'bg-red-50 border-red-200 text-red-800 dark:bg-red-900/50 dark:border-red-700 dark:text-red-200'
+          ? 'bg-success-50 border-success-200 text-success-800 dark:bg-success-900/50 dark:border-success-700 dark:text-success-200'
+          : 'bg-danger-50 border-danger-200 text-danger-800 dark:bg-danger-900/50 dark:border-danger-700 dark:text-danger-200'
       }`}>
         {type === 'success' ? (
           <CheckCircleIcon className="h-5 w-5 mr-3 flex-shrink-0" />
@@ -2380,8 +2388,8 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                         }}
                         className={`px-3 py-1.5 text-xs font-medium rounded-full transition-all hover:scale-105 ${
                           isLocal
-                            ? 'bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-300 dark:hover:bg-green-900/50 border border-green-200 dark:border-green-700'
-                            : 'bg-cyan-100 text-cyan-700 hover:bg-cyan-200 dark:bg-cyan-900/30 dark:text-cyan-300 dark:hover:bg-cyan-900/50 border border-cyan-200 dark:border-cyan-700'
+                            ? 'bg-success-100 text-success-700 hover:bg-success-200 dark:bg-success-900/30 dark:text-success-300 dark:hover:bg-success-900/50 border border-success-200 dark:border-success-700'
+                            : 'bg-info-100 text-info-700 hover:bg-info-200 dark:bg-info-900/30 dark:text-info-300 dark:hover:bg-info-900/50 border border-info-200 dark:border-info-700'
                         }`}
                       >
                         {displayName}
@@ -2439,9 +2447,9 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
             )}
 
             {filteredServers.length === 0 ? (
-              <div className="text-center py-12 bg-gray-50 dark:bg-gray-800 rounded-lg">
-                <div className="text-gray-400 text-lg mb-2">No servers found</div>
-                <p className="text-gray-500 dark:text-gray-300 text-sm">
+              <div className="text-center py-12 bg-surface-muted border border-line rounded-lg">
+                <div className="text-fg-subtle text-lg mb-2">No servers found</div>
+                <p className="text-fg-muted text-sm">
                   {selectedTags.length > 0
                     ? `No servers match the selected tag${selectedTags.length > 1 ? 's' : ''}`
                     : searchTerm || activeFilter !== 'all'
@@ -2451,9 +2459,9 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                 {!searchTerm && activeFilter === 'all' && selectedTags.length === 0 && (
                   <button
                     onClick={handleRegisterServer}
-                    className="mt-4 inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg text-white bg-blue-600 hover:bg-blue-700 transition-colors"
+                    className="btn-primary mt-4"
                   >
-                    <PlusIcon className="h-4 w-4 mr-2" />
+                    <PlusIcon className="h-4 w-4" />
                     Register Server
                   </button>
                 )}
@@ -2610,8 +2618,8 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                         }}
                         className={`px-3 py-1.5 text-xs font-medium rounded-full transition-all hover:scale-105 ${
                           isLocal
-                            ? 'bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-300 dark:hover:bg-green-900/50 border border-green-200 dark:border-green-700'
-                            : 'bg-violet-100 text-violet-700 hover:bg-violet-200 dark:bg-violet-900/30 dark:text-violet-300 dark:hover:bg-violet-900/50 border border-violet-200 dark:border-violet-700'
+                            ? 'bg-success-100 text-success-700 hover:bg-success-200 dark:bg-success-900/30 dark:text-success-300 dark:hover:bg-success-900/50 border border-success-200 dark:border-success-700'
+                            : 'bg-purple-100 text-purple-700 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-300 dark:hover:bg-purple-900/50 border border-purple-200 dark:border-purple-700'
                         }`}
                       >
                         {displayName}
@@ -2638,29 +2646,29 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
             )}
 
             {agentsError ? (
-              <div className="text-center py-12 bg-red-50 dark:bg-red-900/20 rounded-lg border border-red-200 dark:border-red-800">
-                <div className="text-red-500 text-lg mb-2">Failed to load agents</div>
-                <p className="text-red-600 dark:text-red-400 text-sm">{agentsError}</p>
+              <div className="text-center py-12 bg-danger-50 dark:bg-danger-900/20 rounded-lg border border-danger-200 dark:border-danger-800">
+                <div className="text-danger-500 text-lg mb-2">Failed to load agents</div>
+                <p className="text-danger-600 dark:text-danger-400 text-sm">{agentsError}</p>
               </div>
             ) : loading ? (
               <div className="flex items-center justify-center py-12">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-cyan-600"></div>
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-agent-600"></div>
               </div>
             ) : filteredAgents.length === 0 ? (
-              <div className="text-center py-12 bg-cyan-50 dark:bg-cyan-900/20 rounded-lg border border-cyan-200 dark:border-cyan-800">
+              <div className="text-center py-12 bg-agent-50 dark:bg-agent-900/20 rounded-lg border border-agent-200 dark:border-agent-800">
                 {!hasListAccess('list_agents') ? (
                   <>
-                    <div className="text-gray-400 text-lg mb-2">
+                    <div className="text-fg-subtle text-lg mb-2">
                       You don't have access to view agents
                     </div>
-                    <p className="text-gray-500 dark:text-gray-300 text-sm max-w-md mx-auto">
+                    <p className="text-fg-muted text-sm max-w-md mx-auto">
                       Agent discovery is managed by your registry administrator. Ask them to
                       grant your group the "list_agents" permission so agents appear here.{' '}
                       <a
                         href="https://github.com/agentic-community/mcp-gateway-registry/blob/main/docs/faq/granting-skill-and-agent-discovery-permissions.md"
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="text-cyan-600 dark:text-cyan-400 hover:underline"
+                        className="text-agent-600 dark:text-agent-400 hover:underline"
                       >
                         Learn more
                       </a>
@@ -2668,8 +2676,8 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                   </>
                 ) : (
                   <>
-                    <div className="text-gray-400 text-lg mb-2">No agents found</div>
-                    <p className="text-gray-500 dark:text-gray-300 text-sm">
+                    <div className="text-fg-subtle text-lg mb-2">No agents found</div>
+                    <p className="text-fg-muted text-sm">
                       {searchTerm || activeFilter !== 'all'
                         ? 'Press Enter in the search bar to search semantically'
                         : 'No agents are registered yet'}
@@ -2895,8 +2903,8 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         (viewFilter === 'virtual' && filteredVirtualServers.length === 0)) &&
         (searchTerm || activeFilter !== 'all' || selectedTags.length > 0) && (
           <div className="text-center py-16">
-            <div className="text-gray-400 text-xl mb-4">No items found</div>
-            <p className="text-gray-500 dark:text-gray-300 text-base max-w-md mx-auto">
+            <div className="text-fg-subtle text-xl mb-4">No items found</div>
+            <p className="text-fg-muted text-base max-w-md mx-auto">
               {selectedTags.length > 0
                 ? `No items match the selected tag${selectedTags.length > 1 ? 's' : ''}: ${selectedTags.join(', ')}`
                 : 'Press Enter in the search bar to search semantically'}
@@ -2910,12 +2918,12 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
   if (error && agentsError) {
     return (
       <div className="flex flex-col items-center justify-center h-64 space-y-4">
-        <div className="text-red-500 text-lg">Failed to load servers and agents</div>
-        <p className="text-gray-500 text-center">{error}</p>
-        <p className="text-gray-500 text-center">{agentsError}</p>
+        <div className="text-danger-500 text-lg">Failed to load servers and agents</div>
+        <p className="text-fg-muted text-center">{error}</p>
+        <p className="text-fg-muted text-center">{agentsError}</p>
         <button
           onClick={handleRefreshHealth}
-          className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
+          className="btn-primary"
         >
           Try Again
         </button>
@@ -2927,7 +2935,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-purple-600"></div>
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-accent"></div>
       </div>
     );
   }
@@ -2948,25 +2956,17 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         <div className="flex-shrink-0 space-y-4 pb-4">
           {/* View Filter Tabs - conditionally show based on registry mode */}
           {/* Calculate if multiple features are enabled to determine if "All" tab is needed */}
-          <div className="flex gap-2 border-b border-gray-200 dark:border-gray-700 overflow-x-auto">
+          <div className="flex gap-2 border-b border-line overflow-x-auto">
             <button
               onClick={() => handleChangeViewFilter('discover')}
-              className={`px-4 py-2 text-sm font-medium whitespace-nowrap transition-colors border-b-2 ${
-                viewFilter === 'discover'
-                  ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
-                  : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
-              }`}
+              className={viewTabClass(viewFilter === 'discover')}
             >
               Discover
             </button>
             {registryConfig?.features.mcp_servers !== false && hasListAccess('list_service') && (
               <button
                 onClick={() => handleChangeViewFilter('servers')}
-                className={`px-4 py-2 text-sm font-medium whitespace-nowrap transition-colors border-b-2 ${
-                  viewFilter === 'servers'
-                    ? 'border-blue-500 text-blue-600 dark:text-blue-400'
-                    : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
-                }`}
+                className={viewTabClass(viewFilter === 'servers')}
               >
                 MCP Servers
               </button>
@@ -2974,11 +2974,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
             {registryConfig?.features.virtual_servers !== false && (
               <button
                 onClick={() => handleChangeViewFilter('virtual')}
-                className={`px-4 py-2 text-sm font-medium whitespace-nowrap transition-colors border-b-2 ${
-                  viewFilter === 'virtual'
-                    ? 'border-teal-500 text-teal-600 dark:text-teal-400'
-                    : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
-                }`}
+                className={viewTabClass(viewFilter === 'virtual')}
               >
                 Virtual MCP Servers
               </button>
@@ -2986,11 +2982,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
             {registryConfig?.features.agents !== false && (
               <button
                 onClick={() => handleChangeViewFilter('agents')}
-                className={`px-4 py-2 text-sm font-medium whitespace-nowrap transition-colors border-b-2 ${
-                  viewFilter === 'agents'
-                    ? 'border-cyan-500 text-cyan-600 dark:text-cyan-400'
-                    : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
-                }`}
+                className={viewTabClass(viewFilter === 'agents')}
               >
                 Agents
               </button>
@@ -2998,11 +2990,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
             {registryConfig?.features.skills !== false && (
               <button
                 onClick={() => handleChangeViewFilter('skills')}
-                className={`px-4 py-2 text-sm font-medium whitespace-nowrap transition-colors border-b-2 ${
-                  viewFilter === 'skills'
-                    ? 'border-amber-500 text-amber-600 dark:text-amber-400'
-                    : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
-                }`}
+                className={viewTabClass(viewFilter === 'skills')}
               >
                 Agent Skills
               </button>
@@ -3018,11 +3006,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                   <button
                     key={ct.name}
                     onClick={() => handleChangeViewFilter(filter)}
-                    className={`px-4 py-2 text-sm font-medium whitespace-nowrap transition-colors border-b-2 ${
-                      viewFilter === filter
-                        ? 'border-purple-500 text-purple-600 dark:text-purple-400'
-                        : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
-                    }`}
+                    className={viewTabClass(viewFilter === filter)}
                   >
                     {ct.display_name}
                   </button>
@@ -3031,11 +3015,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
             {registryConfig?.features.federation !== false && (
               <button
                 onClick={() => handleChangeViewFilter('external')}
-                className={`px-4 py-2 text-sm font-medium whitespace-nowrap transition-colors border-b-2 ${
-                  viewFilter === 'external'
-                    ? 'border-green-500 text-green-600 dark:text-green-400'
-                    : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
-                }`}
+                className={viewTabClass(viewFilter === 'external')}
               >
                 External Registries
               </button>
@@ -3048,7 +3028,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
           <div className="flex gap-4 items-center">
             <div className="relative flex-1">
               <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
-                <MagnifyingGlassIcon className="h-5 w-5 text-gray-400" />
+                <MagnifyingGlassIcon className="h-5 w-5 text-fg-subtle" />
               </div>
               <input
                 type="text"
@@ -3067,7 +3047,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                 <button
                   type="button"
                   onClick={handleClearSearch}
-                  className="absolute inset-y-0 right-0 flex items-center pr-3 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+                  className="absolute inset-y-0 right-0 flex items-center pr-3 text-fg-subtle hover:text-fg"
                 >
                   <XMarkIcon className="h-4 w-4" />
                 </button>
@@ -3097,7 +3077,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
           {/* Results count and lifecycle filter chips */}
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <p className="text-sm text-gray-500 dark:text-gray-300">
+              <p className="text-sm text-fg-muted">
                 {semanticSectionVisible ? (
                   <>
                     Showing {semanticServers.length} servers, {semanticAgents.length} agents
@@ -3125,7 +3105,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                 )}
               </p>
             </div>
-            <p className="text-xs text-gray-400 dark:text-gray-500">
+            <p className="text-xs text-fg-subtle">
               Press Enter to run semantic search; typing filters locally.
             </p>
           </div>
@@ -3193,7 +3173,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                           Keyword search fallback
                         </h4>
                         {semanticError && (
-                          <span className="text-xs font-medium text-red-500">
+                          <span className="text-xs font-medium text-danger-500">
                             Showing local matches because semantic search is unavailable
                           </span>
                         )}
@@ -3277,24 +3257,24 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
 
       {/* Delete Skill Confirmation Modal */}
       {showDeleteSkillConfirm && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-sm">
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-surface-overlay border border-line shadow-xl rounded-lg p-6 w-full max-w-sm">
+            <h3 className="text-lg font-semibold text-fg mb-2">
               Delete Skill
             </h3>
-            <p className="text-gray-600 dark:text-gray-300 mb-4">
+            <p className="text-fg-muted mb-4">
               Are you sure you want to delete this skill? This action cannot be undone.
             </p>
             <div className="flex space-x-3">
               <button
                 onClick={() => handleDeleteSkill(showDeleteSkillConfirm)}
-                className="flex-1 px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-md transition-colors"
+                className="btn-danger flex-1"
               >
                 Delete
               </button>
               <button
                 onClick={() => setShowDeleteSkillConfirm(null)}
-                className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-800 rounded-md transition-colors"
+                className="btn-secondary flex-1"
               >
                 Cancel
               </button>
@@ -3311,15 +3291,15 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
           aria-modal="true"
           aria-label="Delete virtual server confirmation"
         >
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full mx-4 p-6">
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+          <div className="bg-surface-overlay border border-line rounded-lg shadow-xl max-w-md w-full mx-4 p-6">
+            <h3 className="text-lg font-semibold text-fg mb-2">
               Delete Virtual Server
             </h3>
-            <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+            <p className="text-sm text-fg-muted mb-4">
               This action is irreversible. The virtual server and all its tool
               mappings will be permanently removed.
             </p>
-            <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
+            <p className="text-sm text-fg-muted mb-3">
               Type <strong>{deleteVirtualServerTarget.server_name}</strong> to confirm:
             </p>
             <input
@@ -3328,8 +3308,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
               onChange={(e) => setDeleteVirtualServerTypedName(e.target.value)}
               placeholder={deleteVirtualServerTarget.server_name}
               disabled={deletingVirtualServer}
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg
-                         bg-white dark:bg-gray-900 text-gray-900 dark:text-white mb-4"
+              className="input mb-4"
               onKeyDown={(e) => {
                 if (e.key === 'Escape') {
                   setDeleteVirtualServerTarget(null);
@@ -3345,19 +3324,17 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                   setDeleteVirtualServerTypedName('');
                 }}
                 disabled={deletingVirtualServer}
-                className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200
-                           rounded-lg hover:bg-gray-300 dark:hover:bg-gray-800 disabled:opacity-50"
+                className="btn-secondary"
               >
                 Cancel
               </button>
               <button
                 onClick={confirmDeleteVirtualServer}
                 disabled={deleteVirtualServerTypedName !== deleteVirtualServerTarget.server_name || deletingVirtualServer}
-                className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700
-                           disabled:opacity-50 disabled:cursor-not-allowed flex items-center"
+                className="btn-danger"
               >
                 {deletingVirtualServer && (
-                  <ArrowPathIcon className="h-4 w-4 mr-2 animate-spin" />
+                  <ArrowPathIcon className="h-4 w-4 animate-spin" />
                 )}
                 Delete
               </button>
@@ -3374,11 +3351,11 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
           aria-modal="true"
           aria-label="Edit virtual server"
         >
-          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl max-w-4xl w-full mx-4 max-h-[90vh] overflow-auto">
+          <div className="bg-surface-overlay border border-line rounded-xl shadow-xl max-w-4xl w-full mx-4 max-h-[90vh] overflow-auto">
             {editingVirtualServerLoading ? (
               <div className="flex items-center justify-center py-16">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-teal-600"></div>
-                <span className="ml-3 text-gray-500 dark:text-gray-400">Loading virtual server...</span>
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-virtual-600"></div>
+                <span className="ml-3 text-fg-muted">Loading virtual server...</span>
               </div>
             ) : editingVirtualServer ? (
               <VirtualServerForm
@@ -3388,10 +3365,10 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
               />
             ) : (
               <div className="p-6 text-center">
-                <p className="text-gray-500 dark:text-gray-400">Failed to load virtual server</p>
+                <p className="text-fg-muted">Failed to load virtual server</p>
                 <button
                   onClick={handleCancelVirtualServerEdit}
-                  className="mt-4 px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-800"
+                  className="btn-secondary mt-4"
                 >
                   Close
                 </button>

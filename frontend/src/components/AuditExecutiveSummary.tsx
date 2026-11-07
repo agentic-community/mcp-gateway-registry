@@ -109,18 +109,18 @@ const HeroTile: React.FC<{
 }> = ({ icon, label, value, subLine, title }) => {
   return (
     <div
-      className="border border-gray-100 dark:border-gray-700 rounded-lg p-3"
+      className="rounded-lg border border-line bg-surface-muted p-3"
       title={title}
     >
       <div className="flex items-center gap-1.5 mb-1">
-        <span className="text-gray-400 dark:text-gray-500">{icon}</span>
-        <span className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+        <span className="text-fg-subtle">{icon}</span>
+        <span className="text-xs font-medium text-fg-subtle uppercase tracking-wider">
           {label}
         </span>
       </div>
-      <div className="text-2xl font-bold text-gray-900 dark:text-white">{value}</div>
+      <div className="text-2xl font-bold text-fg">{value}</div>
       {subLine ? (
-        <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">{subLine}</div>
+        <div className="text-xs text-fg-subtle mt-1">{subLine}</div>
       ) : null}
     </div>
   );
@@ -155,13 +155,13 @@ const ActiveCountColumn: React.FC<{
           : `${monthlyAbbr} hidden: audit retention is ${retentionDays}d (needs 30d).`
       }
     >
-      <div className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-0.5">
+      <div className="text-xs font-medium text-fg-subtle mb-0.5">
         {label}
       </div>
-      <div className="text-2xl font-bold text-gray-900 dark:text-white">
+      <div className="text-2xl font-bold text-fg">
         {weekly.toLocaleString()}
       </div>
-      <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+      <div className="text-xs text-fg-subtle mt-1">
         {dailyAbbr} {daily.toLocaleString()}
         {monthlyAvailable ? (
           <>
@@ -169,7 +169,7 @@ const ActiveCountColumn: React.FC<{
             &middot; {monthlyAbbr} {monthly.toLocaleString()}
           </>
         ) : (
-          <span className="text-gray-400 dark:text-gray-500 italic">
+          <span className="text-fg-subtle italic">
             {' '}
             &middot; {monthlyAbbr} needs 30d
           </span>
@@ -183,8 +183,8 @@ const ActiveCountColumn: React.FC<{
 const DeltaChip: React.FC<{ pct: number }> = ({ pct }) => {
   const isUp = pct >= 0;
   const colorClasses = isUp
-    ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
-    : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400';
+    ? 'bg-success-100 text-success-700 dark:bg-success-900/30 dark:text-success-400'
+    : 'bg-danger-100 text-danger-700 dark:bg-danger-900/30 dark:text-danger-400';
   const sign = isUp ? '+' : '';
 
   return (
@@ -207,7 +207,7 @@ const TrafficSplitBar: React.FC<{ split: TrafficSplit }> = ({ split }) => {
   const total = split.human_events + split.agent_events;
   if (total === 0) {
     return (
-      <span className="text-base font-medium text-gray-400 dark:text-gray-500 italic">
+      <span className="text-base font-medium text-fg-subtle italic">
         No governed traffic yet
       </span>
     );
@@ -215,14 +215,14 @@ const TrafficSplitBar: React.FC<{ split: TrafficSplit }> = ({ split }) => {
 
   return (
     <div>
-      <div className="text-2xl font-bold text-gray-900 dark:text-white">
+      <div className="text-2xl font-bold text-fg">
         {split.agent_pct}%
-        <span className="text-sm font-normal text-gray-400 dark:text-gray-500">
+        <span className="text-sm font-normal text-fg-subtle">
           {' '}
           of calls
         </span>
       </div>
-      <div className="flex h-2.5 rounded-full overflow-hidden bg-gray-100 dark:bg-gray-700 my-1.5">
+      <div className="flex h-2.5 rounded-full overflow-hidden bg-gray-200 dark:bg-gray-700 my-1.5">
         {split.agent_events > 0 ? (
           <div
             className="bg-purple-500"
@@ -232,13 +232,13 @@ const TrafficSplitBar: React.FC<{ split: TrafficSplit }> = ({ split }) => {
         ) : null}
         {split.human_events > 0 ? (
           <div
-            className="bg-blue-500"
+            className="bg-info-500"
             style={{ width: `${split.human_pct}%` }}
             title={`Human: ${split.human_events.toLocaleString()} (${split.human_pct}%)`}
           />
         ) : null}
       </div>
-      <div className="text-xs text-gray-500 dark:text-gray-400">
+      <div className="text-xs text-fg-subtle">
         {split.agent_pct}% of calls from agents &middot; {split.human_pct}% from humans
       </div>
     </div>
@@ -272,20 +272,20 @@ const AuditExecutiveSummary: React.FC = () => {
   }, [fetchSummary]);
 
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 mb-6">
+    <div className="card mb-6">
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3">
         <div className="flex items-center gap-2">
-          <ShieldCheckIcon className="h-5 w-5 text-gray-500 dark:text-gray-400" />
-          <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">
+          <ShieldCheckIcon className="h-5 w-5 text-fg-subtle" />
+          <h3 className="text-sm font-semibold text-fg">
             Executive Summary
           </h3>
-          <span className="text-xs text-gray-400 ml-2">Last {SUMMARY_DAYS} days</span>
+          <span className="text-xs text-fg-subtle ml-2">Last {SUMMARY_DAYS} days</span>
         </div>
         <button
           onClick={fetchSummary}
           disabled={loading}
-          className="p-1.5 text-gray-500 hover:text-blue-600 dark:text-gray-400 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded transition-colors disabled:opacity-50"
+          className="btn-icon h-8 w-8"
           title="Refresh executive summary"
         >
           <ArrowPathIcon className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
@@ -296,15 +296,15 @@ const AuditExecutiveSummary: React.FC = () => {
       <div className="px-4 pb-4">
         {loading && !data ? (
           <div className="flex items-center justify-center py-8">
-            <ArrowPathIcon className="h-6 w-6 text-gray-400 animate-spin" />
-            <span className="ml-2 text-sm text-gray-400">Loading executive summary...</span>
+            <ArrowPathIcon className="h-6 w-6 text-fg-subtle animate-spin" />
+            <span className="ml-2 text-sm text-fg-subtle">Loading executive summary...</span>
           </div>
         ) : error ? (
           <div className="text-center py-8">
-            <p className="text-sm text-red-500">{error}</p>
+            <p className="text-sm text-danger-600 dark:text-danger-400">{error}</p>
             <button
               onClick={fetchSummary}
-              className="mt-2 text-sm text-blue-500 hover:text-blue-600"
+              className="mt-2 text-sm font-medium text-accent-text hover:underline"
             >
               Retry
             </button>
@@ -313,7 +313,7 @@ const AuditExecutiveSummary: React.FC = () => {
           <>
             {/* Plain-English summary line so the tiles read as a story */}
             {_buildNarrative(data) ? (
-              <p className="text-sm text-gray-600 dark:text-gray-300 mb-4">
+              <p className="text-sm text-fg-muted mb-4">
                 {_buildNarrative(data)}
               </p>
             ) : null}
@@ -327,7 +327,7 @@ const AuditExecutiveSummary: React.FC = () => {
               value={
                 <span className="whitespace-nowrap">
                   {data.registered_assets.servers.toLocaleString()}
-                  <span className="text-sm font-normal text-gray-400 dark:text-gray-500">
+                  <span className="text-sm font-normal text-fg-subtle">
                     {' '}
                     servers
                   </span>
@@ -347,16 +347,16 @@ const AuditExecutiveSummary: React.FC = () => {
             {/* Tile 2: Weekly Active Users and Agents, side by side with a
                 divider. Headline number is weekly; daily and monthly sit below.
                 Monthly is gated on 30-day retention. */}
-            <div className="border border-gray-100 dark:border-gray-700 rounded-lg p-3">
+            <div className="rounded-lg border border-line bg-surface-muted p-3">
               <div className="flex items-center gap-1.5 mb-2">
-                <span className="text-gray-400 dark:text-gray-500">
+                <span className="text-fg-subtle">
                   <UsersIcon className="h-4 w-4" />
                 </span>
-                <span className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                <span className="text-xs font-medium text-fg-subtle uppercase tracking-wider">
                   Weekly Active
                 </span>
               </div>
-              <div className="grid grid-cols-2 gap-3 divide-x divide-gray-100 dark:divide-gray-700">
+              <div className="grid grid-cols-2 gap-3 divide-x divide-line">
                 <ActiveCountColumn
                   label="People"
                   weekly={data.active_users.wau}
@@ -404,7 +404,7 @@ const AuditExecutiveSummary: React.FC = () => {
                   ) : (
                     <>
                       {data.momentum.active_agents_current.toLocaleString()} active agents
-                      <span className="text-gray-400 dark:text-gray-500 italic">
+                      <span className="text-fg-subtle italic">
                         {' '}
                         &middot; no prior-week data
                       </span>
@@ -427,9 +427,9 @@ const AuditExecutiveSummary: React.FC = () => {
 
             {/* Legend: make the agent vs human definition explicit so no one
                 misreads the split. Any non-web-UI access counts as an agent. */}
-            <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-400 dark:text-gray-500 border-t border-gray-100 dark:border-gray-700 pt-3">
+            <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-fg-subtle border-t border-line pt-3">
               <span className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-blue-500" />
+                <span className="w-2.5 h-2.5 rounded-full bg-info-500" />
                 People = interactive web UI sessions
               </span>
               <span className="flex items-center gap-1.5">

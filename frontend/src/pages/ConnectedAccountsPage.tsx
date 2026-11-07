@@ -20,6 +20,7 @@ import {
   type AvailableEgressServer,
 } from '../utils/egressAuth';
 import { isSafeUrl } from '../utils/safeUrl';
+import { FIELD, LABEL } from '../components/formFields/formClasses';
 
 /**
  * Connected Accounts: the end-user surface for the per-user egress credential
@@ -157,43 +158,43 @@ const ConnectedAccountsPage: React.FC = () => {
       <button
         type="button"
         onClick={() => navigate('/')}
-        className="flex items-center space-x-1 mb-4 text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 focus:outline-none"
+        className="flex items-center space-x-1 mb-4 text-sm text-fg-muted hover:text-fg"
       >
         <ArrowLeftIcon className="h-4 w-4" />
         <span>Back to Dashboard</span>
       </button>
       <div className="flex items-center space-x-3 mb-2">
         <LinkIcon className="h-6 w-6 text-purple-600 dark:text-purple-400" />
-        <h1 className="text-2xl font-semibold text-gray-900 dark:text-white">Connected Accounts</h1>
+        <h1 className="text-2xl font-semibold text-fg">Connected Accounts</h1>
       </div>
-      <p className="text-sm text-gray-600 dark:text-gray-300 mb-6">
+      <p className="text-sm text-fg-muted mb-6">
         Link your third-party accounts (GitHub, Slack, Google, …) so MCP servers can act on your
         behalf. Connect an account here before using a server that requires it.
       </p>
 
       {/* Callback URL: must be registered as the redirect/callback URL in each
           third-party OAuth app (GitHub, Slack, Atlassian, …). Kept compact. */}
-      <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500 dark:text-gray-400 mb-6">
+      <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-fg-muted mb-6">
         <span>OAuth redirect/callback URL (register in each provider's OAuth app):</span>
-        <code className="break-all text-purple-700 dark:text-purple-300">{callbackUrl}</code>
+        <code className="break-all text-accent-text">{callbackUrl}</code>
         <button
           type="button"
           onClick={handleCopyCallback}
-          className="inline-flex items-center text-gray-400 hover:text-purple-600 dark:hover:text-purple-400 focus:outline-none"
+          className="inline-flex items-center rounded text-fg-subtle hover:text-accent-text"
           aria-label="Copy callback URL"
           title={copied ? 'Copied' : 'Copy'}
         >
           {copied ? (
-            <CheckIcon className="h-4 w-4 text-green-600 dark:text-green-400" />
+            <CheckIcon className="h-4 w-4 text-success-600 dark:text-success-400" />
           ) : (
             <ClipboardDocumentIcon className="h-4 w-4" />
           )}
         </button>
-        {copied && <span className="text-green-600 dark:text-green-400">Copied</span>}
+        {copied && <span className="text-success-600 dark:text-success-400">Copied</span>}
       </p>
 
       {error && (
-        <div className="flex items-center space-x-2 mb-4 p-3 rounded-lg bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300">
+        <div className="flex items-center space-x-2 mb-4 p-3 rounded-lg bg-danger-50 dark:bg-danger-900/30 text-danger-700 dark:text-danger-300">
           <ExclamationTriangleIcon className="h-5 w-5 flex-shrink-0" />
           <span className="text-sm">{error}</span>
         </div>
@@ -202,11 +203,11 @@ const ConnectedAccountsPage: React.FC = () => {
       {/* Connect a new account: pick from the egress-enabled servers the user
           can access (no need to know/type a raw server path). A `pat`-mode
           server shows a submit-token form instead of the OAuth Connect button. */}
-      <div className="mb-8 p-4 rounded-lg bg-gray-50 dark:bg-gray-800">
+      <div className="card mb-8 p-4">
         <div className="mb-3">
           <label
             htmlFor="egress-server"
-            className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+            className={LABEL}
           >
             Server requiring per-user authentication
           </label>
@@ -220,7 +221,7 @@ const ConnectedAccountsPage: React.FC = () => {
               setPatExpiresAt(null);
             }}
             disabled={available.length === 0}
-            className="w-full px-3 py-2 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 disabled:opacity-50"
+            className={FIELD}
           >
             <option value="">
               {available.length === 0
@@ -240,7 +241,7 @@ const ConnectedAccountsPage: React.FC = () => {
             <div>
               <label
                 htmlFor="egress-pat-secret"
-                className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+                className={LABEL}
               >
                 Personal access token / API key
               </label>
@@ -251,14 +252,14 @@ const ConnectedAccountsPage: React.FC = () => {
                 onChange={e => setPatSecret(e.target.value)}
                 autoComplete="off"
                 placeholder="Paste your token"
-                className="w-full px-3 py-2 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
+                className={FIELD}
               />
             </div>
             <div className="flex items-end gap-3">
               <div>
                 <label
                   htmlFor="egress-pat-ttl-value"
-                  className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+                  className={LABEL}
                 >
                   Valid for
                 </label>
@@ -268,13 +269,13 @@ const ConnectedAccountsPage: React.FC = () => {
                   min={1}
                   value={patTtlValue}
                   onChange={e => setPatTtlValue(parseInt(e.target.value, 10) || 0)}
-                  className="w-24 px-3 py-2 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  className={`${FIELD} w-24`}
                 />
               </div>
               <div>
                 <label
                   htmlFor="egress-pat-ttl-unit"
-                  className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+                  className={LABEL}
                 >
                   Unit
                 </label>
@@ -282,7 +283,7 @@ const ConnectedAccountsPage: React.FC = () => {
                   id="egress-pat-ttl-unit"
                   value={patTtlUnit}
                   onChange={e => setPatTtlUnit(e.target.value)}
-                  className="px-3 py-2 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  className={`${FIELD} w-auto`}
                 >
                   <option value="minutes">Minutes</option>
                   <option value="hours">Hours</option>
@@ -292,16 +293,16 @@ const ConnectedAccountsPage: React.FC = () => {
               <button
                 type="submit"
                 disabled={submittingPat || !patSecret.trim()}
-                className="flex items-center space-x-2 px-4 py-2 rounded-md bg-purple-600 text-white text-sm font-medium hover:bg-purple-700 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                className="btn-primary"
               >
                 <span>{submittingPat ? 'Submitting…' : 'Submit token'}</span>
               </button>
             </div>
-            <p className="text-xs text-gray-500 dark:text-gray-400">
+            <p className="text-xs text-fg-muted">
               The token is stored write-only and never shown again. Maximum lifetime is 30 days.
             </p>
             {patExpiresAt && (
-              <p className="text-xs text-green-600 dark:text-green-400">
+              <p className="text-xs text-success-600 dark:text-success-400">
                 Token stored. Expires at {patExpiresAt}.
               </p>
             )}
@@ -311,7 +312,7 @@ const ConnectedAccountsPage: React.FC = () => {
             <button
               type="submit"
               disabled={connecting || !serverPath.trim()}
-              className="flex items-center space-x-2 px-4 py-2 rounded-md bg-purple-600 text-white text-sm font-medium hover:bg-purple-700 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-purple-500"
+              className="btn-primary"
             >
               <ArrowTopRightOnSquareIcon className="h-4 w-4" />
               <span>{connecting ? 'Opening…' : 'Connect'}</span>
@@ -322,11 +323,11 @@ const ConnectedAccountsPage: React.FC = () => {
 
       {/* Existing connections */}
       {loading ? (
-        <p className="text-sm text-gray-500 dark:text-gray-400">Loading…</p>
+        <p className="text-sm text-fg-muted">Loading…</p>
       ) : connections.length === 0 ? (
-        <p className="text-sm text-gray-500 dark:text-gray-400">No connected accounts yet.</p>
+        <p className="text-sm text-fg-muted">No connected accounts yet.</p>
       ) : (
-        <ul className="divide-y divide-gray-200 dark:divide-gray-700 rounded-lg border border-gray-200 dark:border-gray-700">
+        <ul className="card divide-y divide-line">
           {connections.map(conn => (
             <li
               key={`${conn.provider}:${conn.server_path}`}
@@ -334,27 +335,27 @@ const ConnectedAccountsPage: React.FC = () => {
             >
               <div className="min-w-0 flex-1">
                 <div className="flex items-center space-x-2">
-                  <span className="font-medium text-gray-900 dark:text-white capitalize">
+                  <span className="font-medium text-fg capitalize">
                     {conn.provider}
                   </span>
-                  <span className="text-xs text-gray-500 dark:text-gray-400">
+                  <span className="text-xs text-fg-muted">
                     {conn.server_path}
                   </span>
                   {conn.status !== 'active' && (
-                    <span className="text-xs px-2 py-0.5 rounded-full bg-yellow-100 dark:bg-yellow-900/40 text-yellow-800 dark:text-yellow-300">
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-warning-100 dark:bg-warning-900/40 text-warning-800 dark:text-warning-300">
                       {conn.status}
                     </span>
                   )}
                 </div>
                 {conn.scopes.length > 0 && (
-                  <div className="text-xs text-gray-500 dark:text-gray-400 mt-1 break-words">
+                  <div className="text-xs text-fg-muted mt-1 break-words">
                     {conn.scopes.join(', ')}
                   </div>
                 )}
               </div>
               <button
                 onClick={() => handleDisconnect(conn)}
-                className="flex flex-shrink-0 items-center space-x-1 px-3 py-1.5 rounded-md text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 focus:outline-none focus:ring-2 focus:ring-red-500"
+                className="btn-base flex-shrink-0 px-3 py-1.5 text-danger-600 dark:text-danger-400 hover:bg-danger-50 hover:text-danger-700 dark:hover:bg-danger-500/10 dark:hover:text-danger-300"
                 aria-label={`Disconnect ${conn.provider} for ${conn.server_path}`}
               >
                 <TrashIcon className="h-4 w-4" />
