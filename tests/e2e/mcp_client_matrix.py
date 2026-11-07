@@ -15,8 +15,8 @@ route, which the gateway does not translate) is expected to fail. The script
 prints a table and exits non-zero if any cell differs from its expectation.
 
 The default routes need the MCP compatibility test upstreams from
-cli/examples/ (mcp-everything.json, pingmcp-modern.json, pingmcp-dual.json,
-virtual-server-mcp-compat.json) plus the built-in airegistry-tools server.
+cli/examples/ (mcp-everything.json, mcp-everything-legacy.json, pingmcp-modern.json,
+pingmcp-dual.json, virtual-server-mcp-compat.json) plus the built-in airegistry-tools server.
 
 Usage:
     # Local gateway, admin token at ./.token
