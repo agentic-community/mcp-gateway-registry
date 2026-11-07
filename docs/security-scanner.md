@@ -242,6 +242,10 @@ WARNING: Server failed security scan - Review required before use
 
 This workflow ensures that vulnerable servers never become accessible to AI agents without explicit administrator review and remediation.
 
+## Registrant Metadata
+
+The scans above assess an asset's tools, card or skill content. Registrant-supplied `metadata` is scanned separately, on every write, with the same mcp-scanner YARA rules; flagged keys are kept from model-facing reads and the search index without disabling the asset. See [Registrant Metadata Scanning](metadata-security.md).
+
 ## When the Scan Could Not Run at All
 
 The section above is about a scan that *found* something. A scan can also fail to produce a verdict: the endpoint refused the connection, the session timed out, the SKILL.md would not download. The scanner reports that as `scan_failed=true`, with `is_safe=false` and all four severity counts at zero, so on the numbers it looks identical to a clean pass that happened to be unsafe.

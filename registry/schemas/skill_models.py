@@ -206,6 +206,12 @@ class SkillCard(ProxyableMixin):
     metadata: SkillMetadata | None = Field(
         None, description="Additional metadata (author, version, etc.)"
     )
+    # Computed by the registry on every write (issue #1811); any client-supplied
+    # value is replaced by the repository. See registry/utils/metadata_security.py.
+    metadata_scan: dict[str, Any] | None = Field(
+        default=None,
+        description="Registry-computed YARA verdict for metadata; read-only",
+    )
 
     # Tool references
     allowed_tools: list[ToolReference] = Field(
@@ -360,6 +366,13 @@ class SkillInfo(BaseModel):
     author: str | None = None
     version: str | None = None
     metadata: SkillMetadata | None = None
+    metadata_security: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Operator-facing YARA verdict for the skill's full metadata (issue #1811): "
+            "status, flagged_keys and findings"
+        ),
+    )
     compatibility: str | None = None
     target_agents: list[str] = Field(default_factory=list)
     is_enabled: bool = True
