@@ -63,10 +63,10 @@ html.dark {
   --color-accent-text: 110 168 254;
 }
 
-/* A named theme from manifest.json: in both modes, light only, dark only. */
-html.acme-night { --primary-600: 79 70 229; }
-html.acme-night:not(.dark) { --color-canvas: 245 246 255; }
-html.acme-night.dark { --color-surface: 17 24 39; }
+/* A named theme from manifest.json (id "acme-night"): in both modes, light only, dark only. */
+html.theme-acme-night { --primary-600: 79 70 229; }
+html.theme-acme-night:not(.dark) { --color-canvas: 245 246 255; }
+html.theme-acme-night.dark { --color-surface: 17 24 39; }
 ```
 
 These variables are supported:
@@ -84,7 +84,7 @@ The project treats this list as a public contract: renaming a variable is a brea
 
 ### How the overrides apply
 
-The UI marks the active state with classes on the `<html>` element: `dark` in dark mode, the theme id when a named theme is active, and `high-contrast` when the user turns that on. `index.css` declares each variable once for light mode under `:root`. It declares a second value under `html.dark` for the variables that change in dark mode (the role variables in the table above), and a third set for high contrast.
+The UI marks the active state with classes on the `<html>` element: `dark` in dark mode, `theme-<theme-id>` when a named theme is active (for example `theme-acme-night` for the id `acme-night`; the prefix keeps an id such as `hidden` from matching one of the UI's own utility classes), and `high-contrast` when the user turns that on. `index.css` declares each variable once for light mode under `:root`. It declares a second value under `html.dark` for the variables that change in dark mode (the role variables in the table above), and a third set for high contrast.
 
 The registry loads `theme.css` after `index.css`. When two rules set the same variable, the browser uses the one with the more specific selector, and between equally specific selectors it uses the later one, which is yours. That gives these results:
 
@@ -92,11 +92,11 @@ The registry loads `theme.css` after `index.css`. When two rules set the same va
 |---|---|
 | `:root` | Light mode. Also dark mode for any variable `index.css` does not redefine under `html.dark`, which covers every color scale (`--primary-*`, `--gray-*` and the rest), the corner radii and the fonts. A role variable such as `--color-canvas` set here changes light mode only, because the default `html.dark` rule is more specific. |
 | `html.dark` | Dark mode, for every variable. |
-| `html.<theme-id>` | That theme in both modes. It outranks the default `html.dark` values too, so a role variable set here also replaces the dark-mode default. |
-| `html.<theme-id>:not(.dark)` | That theme in light mode only. |
-| `html.<theme-id>.dark` | That theme in dark mode only. |
+| `html.theme-<theme-id>` | That theme in both modes. It outranks the default `html.dark` values too, so a role variable set here also replaces the dark-mode default. |
+| `html.theme-<theme-id>:not(.dark)` | That theme in light mode only. |
+| `html.theme-<theme-id>.dark` | That theme in dark mode only. |
 
-Set a role variable for both modes explicitly: once under `:root` (or `html.<theme-id>:not(.dark)`) and once under `html.dark` (or `html.<theme-id>.dark`). Setting it in only one place is the most common reason an override seems to have no effect in the other mode.
+Set a role variable for both modes explicitly: once under `:root` (or `html.theme-<theme-id>:not(.dark)`) and once under `html.dark` (or `html.theme-<theme-id>.dark`). Setting it in only one place is the most common reason an override seems to have no effect in the other mode.
 
 ### High contrast
 
@@ -105,7 +105,7 @@ High contrast is a user setting that combines with any theme. `index.css` implem
 Two things follow from that:
 
 - If you replace the gray scale, high contrast still swaps in the default cool grays for those steps, so your neutrals change hue when a user turns it on. To keep your grays, add the same two selectors to `theme.css` with high-contrast values taken from your own scale: in light mode, each step two or three steps darker than normal; in dark mode, two steps lighter.
-- A named theme's `html.<theme-id>:not(.dark)` and `html.<theme-id>.dark` rules are as specific as the high-contrast rules and load later, so they win. If one of them sets `--color-fg-muted`, `--color-fg-subtle`, `--color-line`, `--color-line-strong` or the middle grays, that theme loses part of high contrast. Either leave those variables alone in the theme, or add `html.<theme-id>.high-contrast:not(.dark)` and `html.<theme-id>.high-contrast.dark` rules with stronger values.
+- A named theme's `html.theme-<theme-id>:not(.dark)` and `html.theme-<theme-id>.dark` rules are as specific as the high-contrast rules and load later, so they win. If one of them sets `--color-fg-muted`, `--color-fg-subtle`, `--color-line`, `--color-line-strong` or the middle grays, that theme loses part of high contrast. Either leave those variables alone in the theme, or add `html.theme-<theme-id>.high-contrast:not(.dark)` and `html.theme-<theme-id>.high-contrast.dark` rules with stronger values.
 
 ### Values that do not follow the color scales
 

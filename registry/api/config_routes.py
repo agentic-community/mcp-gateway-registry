@@ -503,6 +503,7 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
         "fields": [
             ("rum_snippet_b64", "RUM Snippet (base64)", True),
             ("rum_allowed_hosts", "RUM Allowed Hosts", False),
+            ("ui_branding_dir", "UI Branding Folder", False),
         ],
     },
     "gateway_generic_proxy": {

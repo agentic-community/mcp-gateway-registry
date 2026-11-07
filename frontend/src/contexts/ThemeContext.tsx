@@ -1,6 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState, ReactNode } from 'react';
 import { useBranding } from './BrandingContext';
-import { BrandTheme, ModeChoice } from '../branding/manifest';
+import { BrandTheme, ModeChoice, themeClass } from '../branding/manifest';
 
 /**
  * Light/dark mode. Drives Tailwind's `dark:` variants and the semantic color
@@ -167,18 +167,18 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
   }, [theme, themeColor]);
 
   useEffect(() => {
-    // `data-brand-theme` records which theme class is on <html> (the pre-paint
-    // script sets it too), so switching removes exactly that class and never
-    // touches classes other scripts may have added.
+    // `data-brand-theme` records which theme id is applied as a `theme-<id>`
+    // class on <html> (the pre-paint script sets it too), so switching removes
+    // exactly that class and never touches classes other scripts may have added.
     const root = document.documentElement;
     const applied = root.dataset.brandTheme;
     if (applied && applied !== themeName) {
-      root.classList.remove(applied);
+      root.classList.remove(themeClass(applied));
     }
     if (themeName === DEFAULT_THEME) {
       delete root.dataset.brandTheme;
     } else {
-      root.classList.add(themeName);
+      root.classList.add(themeClass(themeName));
       root.dataset.brandTheme = themeName;
     }
   }, [themeName]);

@@ -150,7 +150,9 @@ const TIMESTAMP_COLUMN: ColDef<AuditRow> = {
   suppressHeaderMenuButton: false,
   filterParams: { comparator: _compareDay },
   valueFormatter: _formatTimestamp,
-  // Search and CSV use the formatted value, which is what the user sees.
+  // Search matches the on-screen format; CSV export gets the raw ISO 8601 value
+  // (year and UTC offset included), see processCsvCell.
+  useValueFormatterForExport: false,
   getQuickFilterText: (params) => _formatTimestamp(params as ValueFormatterParams<AuditRow, string>),
   cellClass: 'tabular-nums',
 };

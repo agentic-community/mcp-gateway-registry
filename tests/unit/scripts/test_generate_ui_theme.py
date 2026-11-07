@@ -229,8 +229,8 @@ class TestCss:
     def test_theme_id_scopes_output(self, gen, capsys):
         assert gen.main(["--brand", "#0d6efd", "--theme-id", "acme"]) == 0
         css = capsys.readouterr().out
-        assert re.search(r"^html\.acme \{", css, flags=re.MULTILINE)
-        assert re.search(r"^html\.acme\.dark \{", css, flags=re.MULTILINE)
+        assert re.search(r"^html\.theme-acme \{", css, flags=re.MULTILINE)
+        assert re.search(r"^html\.theme-acme\.dark \{", css, flags=re.MULTILINE)
         assert ":root" not in css
         assert not re.search(r"^html\.dark \{", css, flags=re.MULTILINE)
 

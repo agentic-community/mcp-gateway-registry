@@ -490,10 +490,10 @@ Administrators can view audit logs in the Registry UI:
 
 1. Open **Settings** > **Audit** > **Audit Logs**.
 2. Pick a log stream: **Registry API**, **MCP Access** or **Token Mints**.
-3. Set server filters (time range, username, operation, resource, status). The grid loads a batch of matching events, 1,000 by default, and **Load more** fetches the next batch.
+3. Set server filters (time range, username, operation, resource, status). The grid loads a batch of matching events, 1,000 by default, newest first; choose **Oldest first** under **Load** to start from the other end of the range. **Load more** fetches the next batch in the same order.
 4. Type in the search box (or press `/`) to filter the loaded events across every column, including hidden ones such as request ID and client IP. Each column also has its own filter and sort, and the **Columns** menu shows or hides columns.
 5. Click a row to open the full event in a side panel.
-6. Use **Export view** to download the rows on screen as CSV, or the **JSONL** and **CSV** buttons to export every event that matches the server filters. Both CSV exports add a leading `'` to any text cell that starts with `=`, `+`, `-`, `@`, a tab or a carriage return (also after leading spaces), so a spreadsheet shows it as text instead of running it as a formula.
+6. Use **Export view** to download the rows on screen as CSV, or the **JSONL** and **CSV** buttons to export every event that matches the server filters. **Export view** writes times as raw ISO 8601 values with the UTC offset. Both CSV exports add a leading `'` to any text cell that starts with `=`, `+`, `-`, `@`, a tab or a carriage return (also after leading spaces), so a spreadsheet shows it as text instead of running it as a formula.
 
 ### API Access
 

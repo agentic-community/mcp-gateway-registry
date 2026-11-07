@@ -82,6 +82,10 @@ GAMUT_SEARCH_ITERATIONS: int = 32
 HEX_PATTERN: re.Pattern[str] = re.compile(r"^#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 THEME_ID_PATTERN: re.Pattern[str] = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
 RESERVED_THEME_IDS: frozenset[str] = frozenset({"default", "light", "dark", "high-contrast"})
+# A named theme becomes the class `theme-<id>` on <html> (see
+# frontend/src/branding/manifest.ts THEME_CLASS_PREFIX), so ids never collide
+# with Tailwind utilities.
+THEME_CLASS_PREFIX: str = "theme-"
 MAX_THEME_LABEL_LENGTH: int = 40
 
 THEME_CSS_NAME: str = "theme.css"
@@ -170,7 +174,7 @@ def validate_theme_id(
     """Check a theme id against the branding contract.
 
     Args:
-        theme_id: Candidate id for ``html.<id>`` scoping and ``manifest.themes[].id``.
+        theme_id: Candidate id for ``html.theme-<id>`` scoping and ``manifest.themes[].id``.
 
     Returns:
         The id, unchanged.
@@ -501,7 +505,8 @@ def _selectors(
     """Return the (light/shared, dark) selectors for the output scope."""
     if theme_id is None:
         return (":root", "html.dark")
-    return (f"html.{theme_id}", f"html.{theme_id}.dark")
+    theme_class = f"{THEME_CLASS_PREFIX}{theme_id}"
+    return (f"html.{theme_class}", f"html.{theme_class}.dark")
 
 
 def render_css(
@@ -706,7 +711,7 @@ def _parse_args(
         type=_theme_id_arg,
         default=None,
         help=(
-            "Scope output under html.<id> and html.<id>.dark (a named theme) instead of "
+            "Scope output under html.theme-<id> and html.theme-<id>.dark (a named theme) instead of "
             ":root and html.dark. Must match ^[a-z][a-z0-9-]{0,31}$ and not be "
             "default, light, dark or high-contrast."
         ),

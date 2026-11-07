@@ -64,10 +64,10 @@ The CSS variables in `src/index.css` are the public contract `theme.css` overrid
 Settings > Audit > Audit Logs shows events in an [AG Grid Community](https://www.ag-grid.com/react-data-grid/) table (`src/components/AuditLogTable.tsx`).
 
 - The filter bar above the grid sends stream, date range, user, operation, resource and status filters to `/api/audit/events`.
-- The grid then loads a batch of matching events (1,000 by default; 500 to 5,000 via "Load per batch") in parallel 500-event pages, newest first. "Load more" appends the next batch.
+- The grid then loads a batch of matching events (1,000 by default; 500 to 5,000 via "Per batch") in parallel 500-event pages. "Load" picks which end the server starts from, newest first (the default) or oldest first, and "Load more" appends the next batch in that order. Sorting a column only reorders the loaded events, so reaching the oldest events of a large range takes "Oldest first" rather than a column sort.
 - The search box filters the loaded events as you type, across every column including hidden ones (request ID, client IP, user agent). Press `/` to focus it.
 - Each column has a filter row and sorts on click. Columns resize, and you can show or hide them from the Columns menu.
-- "Export view" downloads the rows and columns on screen as CSV. The JSONL and CSV buttons at the top of the page export every event that matches the server filters.
+- "Export view" downloads the rows and columns on screen as CSV. Time cells export as the raw ISO 8601 value, with year and UTC offset, rather than the on-screen format. The JSONL and CSV buttons at the top of the page export every event that matches the server filters.
 - Clicking a row opens the event in a side panel; `Escape` closes it.
 
 The grid registers only the AG Grid modules it uses (`ModuleRegistry.registerModules` at the top of `AuditLogTable.tsx`). If you use a new grid feature, register its module there; development builds log a warning that names the missing module. Per-stream column definitions live in `src/components/audit/auditColumns.tsx`.
@@ -77,6 +77,10 @@ The grid is styled with AG Grid's static stylesheets (`ag-grid.css` and the Quar
 ## Code splitting
 
 `src/App.tsx` loads each page with `React.lazy`, and `SettingsPage.tsx` lazy-loads the audit page, so a visitor downloads AG Grid only when they open Audit Logs.
+
+The lazy pages work under a `ROOT_PATH` because `vite.config.ts` sets `experimental.renderBuiltUrl` to emit relative URLs in JS and CSS: a page chunk, its CSS and the fonts load from wherever the entry script came from. `index.html` keeps absolute `/static/` URLs, which `registry/main.py` rewrites under the prefix. Do not change `base` to `'./'`; that rewrite and deep links rely on absolute URLs in `index.html`.
+
+`src/components/RouteErrorBoundary.tsx` wraps the routes. If a page chunk fails to download, typically in a tab left open across an upgrade whose old chunk names no longer exist, it shows a reload prompt instead of a blank page.
 
 ## Project structure
 

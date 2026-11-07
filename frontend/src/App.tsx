@@ -6,6 +6,7 @@ import { ThemeProvider } from './contexts/ThemeContext';
 import Layout from './components/Layout';
 import ProtectedRoute from './components/ProtectedRoute';
 import PageFallback from './components/PageFallback';
+import RouteErrorBoundary from './components/RouteErrorBoundary';
 import { getBasename } from './utils/basePath';
 
 // Route-level code splitting: each page (and heavy dependencies such as the
@@ -25,6 +26,7 @@ function App() {
     <ThemeProvider>
       <AuthProvider>
         <Router basename={getBasename()}>
+          <RouteErrorBoundary>
           <Suspense fallback={<PageFallback fullScreen />}>
             <Routes>
               <Route path="/login" element={<Login />} />
@@ -67,6 +69,7 @@ function App() {
               } />
             </Routes>
           </Suspense>
+          </RouteErrorBoundary>
         </Router>
       </AuthProvider>
     </ThemeProvider>
