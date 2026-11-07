@@ -131,15 +131,25 @@ describe('ThemeContext', () => {
     const { result } = renderHook(() => useTheme(), { wrapper });
 
     act(() => result.current.setThemeName('acme'));
-    expect(root().classList.contains('acme')).toBe(true);
+    expect(root().classList.contains('theme-acme')).toBe(true);
     expect(localStorage.getItem('themeName')).toBe('acme');
 
     act(() => result.current.setThemeName('acme-night'));
-    expect(root().classList.contains('acme')).toBe(false);
-    expect(root().classList.contains('acme-night')).toBe(true);
+    expect(root().classList.contains('theme-acme')).toBe(false);
+    expect(root().classList.contains('theme-acme-night')).toBe(true);
 
     act(() => result.current.setThemeName('default'));
-    expect(root().classList.contains('acme-night')).toBe(false);
+    expect(root().classList.contains('theme-acme-night')).toBe(false);
+  });
+
+  it('prefixes the theme class so an id cannot match a utility class', () => {
+    mockManifest = { ...ACME, themes: [{ id: 'hidden', label: 'Hidden' }] };
+    const { result } = renderHook(() => useTheme(), { wrapper });
+
+    act(() => result.current.setThemeName('hidden'));
+
+    expect(root().classList.contains('theme-hidden')).toBe(true);
+    expect(root().classList.contains('hidden')).toBe(false);
   });
 
   it('ignores theme names the deployment does not offer', () => {
@@ -182,7 +192,7 @@ describe('ThemeContext', () => {
     const { result } = renderHook(() => useTheme(), { wrapper });
     act(() => result.current.setThemeName('acme'));
     act(() => result.current.setHighContrast(true));
-    expect(['dark', 'acme', 'high-contrast'].every((c) => root().classList.contains(c))).toBe(true);
+    expect(['dark', 'theme-acme', 'high-contrast'].every((c) => root().classList.contains(c))).toBe(true);
     expect(localStorage.getItem('contrast')).toBe('high');
   });
 

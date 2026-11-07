@@ -53,8 +53,9 @@ ModuleRegistry.registerModules([
   CellStyleModule,
   ColumnApiModule,
   RowApiModule,
-  // Readable warnings for misconfigured grid options, development builds only.
-  ...(import.meta.env.DEV ? [ValidationModule] : []),
+  // Readable warnings for misconfigured grid options outside production builds.
+  // Vite replaces process.env.NODE_ENV at build time; Jest cannot parse import.meta.
+  ...(process.env.NODE_ENV !== 'production' ? [ValidationModule] : []),
 ]);
 
 /** Server-side maximum for `limit` on /api/audit/events. */
@@ -63,6 +64,14 @@ const PAGE_LIMIT = 500;
 /** How many matching events to pull into the grid for instant client-side search. */
 const WINDOW_OPTIONS = [500, 1000, 2500, 5000];
 const DEFAULT_WINDOW = 1000;
+
+/**
+ * Which end of the matching events the server returns first. Client-side
+ * sorting only reorders what is loaded, so reaching the oldest events of a
+ * large range needs the server to start there.
+ */
+type LoadOrder = 'newest' | 'oldest';
+const SERVER_SORT_ORDER: Record<LoadOrder, string> = { newest: '-1', oldest: '1' };
 
 const ROW_SELECTION: RowSelectionOptions = {
   mode: 'singleRow',
@@ -92,12 +101,13 @@ interface FetchResult {
 
 
 /**
- * Fetch `count` matching events starting at `offset`, newest first. The first
+ * Fetch `count` matching events starting at `offset`, in `order`. The first
  * page reports the total, which bounds how many further pages (fetched in
  * parallel) are worth requesting.
  */
 async function _fetchEvents(
   filters: AuditFilters,
+  order: LoadOrder,
   offset: number,
   count: number,
   signal: AbortSignal,
@@ -107,7 +117,7 @@ async function _fetchEvents(
     const params = new URLSearchParams(base);
     params.set('limit', String(limit));
     params.set('offset', String(pageOffset));
-    params.set('sort_order', '-1');
+    params.set('sort_order', SERVER_SORT_ORDER[order]);
     const response = await axios.get<{ events?: AuditEvent[]; total?: number }>(
       `/api/audit/events?${params.toString()}`,
       { signal },
@@ -184,6 +194,7 @@ const AuditLogTable: React.FC<AuditLogTableProps> = ({
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [windowSize, setWindowSize] = useState(DEFAULT_WINDOW);
+  const [order, setOrder] = useState<LoadOrder>('newest');
   const [search, setSearch] = useState('');
   const deferredSearch = useDeferredValue(search);
   const [displayedCount, setDisplayedCount] = useState(0);
@@ -204,7 +215,7 @@ const AuditLogTable: React.FC<AuditLogTableProps> = ({
       setError(null);
 
       try {
-        const result = await _fetchEvents(filters, offset, windowSize, controller.signal);
+        const result = await _fetchEvents(filters, order, offset, windowSize, controller.signal);
         setRows((prev) => _appendRows(append ? prev : [], result.events));
         setTotal(result.total);
       } catch (err) {
@@ -219,15 +230,27 @@ const AuditLogTable: React.FC<AuditLogTableProps> = ({
         }
       }
     },
-    [filters, windowSize, rows.length],
+    [filters, order, windowSize, rows.length],
   );
 
-  // Reload from the top whenever the server-side filters or the window change.
+  // Reload from the top whenever the server-side filters, order or window change.
   useEffect(() => {
     void load(false);
-    // `load` changes with rows.length; only filter/window changes should refetch.
+    // `load` changes with rows.length; only filter/order/window changes should refetch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filters, windowSize]);
+  }, [filters, order, windowSize]);
+
+  // Keep the Time column's sort arrow on the loaded order.
+  const applyOrderSort = useCallback((api: GridApi<AuditRow>, nextOrder: LoadOrder) => {
+    api.applyColumnState({
+      state: [{ colId: 'timestamp', sort: nextOrder === 'oldest' ? 'asc' : 'desc' }],
+      defaultState: { sort: null },
+    });
+  }, []);
+
+  useEffect(() => {
+    if (gridApiRef.current) applyOrderSort(gridApiRef.current, order);
+  }, [order, applyOrderSort]);
 
   useEffect(() => () => abortRef.current?.abort(), []);
 
@@ -262,10 +285,11 @@ const AuditLogTable: React.FC<AuditLogTableProps> = ({
   const handleGridReady = useCallback(
     (event: GridReadyEvent<AuditRow>) => {
       gridApiRef.current = event.api;
+      applyOrderSort(event.api, order);
       setColumns(_readColumns(event.api));
       syncCounts();
     },
-    [syncCounts],
+    [syncCounts, applyOrderSort, order],
   );
 
   const handleRowClicked = useCallback(
@@ -296,6 +320,7 @@ const AuditLogTable: React.FC<AuditLogTableProps> = ({
     if (!api) return;
     api.setFilterModel(null);
     api.resetColumnState();
+    applyOrderSort(api, order);
   };
 
   const exportView = () => {
@@ -445,8 +470,20 @@ const AuditLogTable: React.FC<AuditLogTableProps> = ({
         </div>
 
         <div className="flex items-center gap-2">
+          <label htmlFor="audit-order" className="text-xs text-fg-subtle">
+            Load
+          </label>
+          <select
+            id="audit-order"
+            value={order}
+            onChange={(event) => setOrder(event.target.value as LoadOrder)}
+            className="input w-auto py-1 pr-8 text-xs"
+          >
+            <option value="newest">Newest first</option>
+            <option value="oldest">Oldest first</option>
+          </select>
           <label htmlFor="audit-window" className="text-xs text-fg-subtle">
-            Load per batch
+            Per batch
           </label>
           <select
             id="audit-window"

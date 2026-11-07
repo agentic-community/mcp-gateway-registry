@@ -60,7 +60,7 @@ describe('ThemeToggle', () => {
     renderToggle();
     choose('Acme');
 
-    expect(document.documentElement.classList.contains('acme')).toBe(true);
+    expect(document.documentElement.classList.contains('theme-acme')).toBe(true);
   });
 
   it('hides the mode choices when branding locks the mode', () => {

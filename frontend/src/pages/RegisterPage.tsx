@@ -1376,7 +1376,7 @@ const RegisterPage: React.FC = () => {
             onChange={(e) => setAgentForm(prev => ({ ...prev, path: e.target.value }))}
             placeholder="/my-agent"
           />
-          <p className="mt-1 text-xs text-fg-subtle">Follows the name until you edit it. Clear it to let the registry choose the path.</p>
+          <p className="mt-1 text-xs text-fg-subtle">Follows the name until you edit it, for example to avoid a duplicate path. Clear it to make it follow the name again.</p>
           {errors.path && <p className={errorClass}>{errors.path}</p>}
         </div>
 

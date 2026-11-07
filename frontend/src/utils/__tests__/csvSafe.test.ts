@@ -1,13 +1,16 @@
 import {
   ClientSideRowModelModule,
   CsvExportModule,
+  DateFilterModule,
   ModuleRegistry,
   createGrid,
 } from 'ag-grid-community';
 import type { ColDef } from 'ag-grid-community';
+import { AUDIT_COLUMNS } from '../../components/audit/auditColumns';
+import type { AuditRow } from '../../components/audit/auditColumns';
 import { csvSafe, processCsvCell } from '../csvSafe';
 
-ModuleRegistry.registerModules([ClientSideRowModelModule, CsvExportModule]);
+ModuleRegistry.registerModules([ClientSideRowModelModule, CsvExportModule, DateFilterModule]);
 
 describe('csvSafe', () => {
   it.each([
@@ -69,5 +72,20 @@ describe('processCsvCell', () => {
     const [line] = _exportCsv([{ user: 'alice', path: '/api/x', status: -1, duration: 12 }]);
 
     expect(line).toBe('"alice","/api/x","-1","12 ms"');
+  });
+
+  it("exports the audit Time column's raw ISO value, not the on-screen format", () => {
+    const [timestampColumn] = AUDIT_COLUMNS.registry_api;
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const api = createGrid(host, {
+      columnDefs: [timestampColumn],
+      rowData: [{ _rowId: '1', timestamp: '2026-11-07T10:30:12.123000+00:00' } as AuditRow],
+    });
+    const csv = api.getDataAsCsv({ processCellCallback: processCsvCell }) ?? '';
+    api.destroy();
+    host.remove();
+
+    expect(csv.split(/\r?\n/)[1]).toBe('"2026-11-07T10:30:12.123000+00:00"');
   });
 });

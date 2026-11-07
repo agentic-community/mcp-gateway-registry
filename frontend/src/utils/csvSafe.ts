@@ -28,12 +28,15 @@ export function csvSafe(text: string): string {
 
 /**
  * AG Grid `processCellCallback` for CSV export: the column's formatted text,
- * neutralized. Numbers are left alone, as on the server, so a negative number
+ * neutralized. A column with `useValueFormatterForExport: false` exports its
+ * raw value instead (AG Grid's own flag, which a custom callback otherwise
+ * bypasses). Numbers are left alone, as on the server, so a negative number
  * stays a number.
  */
 export function processCsvCell(params: ProcessCellForExportParams): string {
   const { value } = params;
   if (value == null) return '';
-  const text = String(params.formatValue(value) ?? '');
+  const formatted = params.column.getColDef().useValueFormatterForExport !== false;
+  const text = String((formatted ? params.formatValue(value) : value) ?? '');
   return typeof value === 'number' ? text : csvSafe(text);
 }

@@ -34,7 +34,7 @@
         var known = themes.some(function (t) { return t && t.id === saved; });
         var name = saved === 'default' ? null : known ? saved : brand.defaultTheme;
         if (typeof name === 'string' && /^[a-z][a-z0-9-]{0,31}$/.test(name) && name !== 'high-contrast') {
-          root.classList.add(name);
+          root.classList.add('theme-' + name);
           root.setAttribute('data-brand-theme', name);
         }
         if (contrast) {

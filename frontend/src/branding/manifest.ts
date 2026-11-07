@@ -39,7 +39,20 @@ const MAX_LABEL = 40;
 const MAX_ALT = 80;
 
 
-/** Whether `id` can name a branding theme (and so become a class on <html>). */
+/**
+ * Prefix of the class a branding theme puts on <html> (`theme-<id>`), so an id
+ * such as `hidden` or `flex` can never match a Tailwind utility. theme.css
+ * selects on it (`html.theme-<id>`), which makes it part of the public
+ * contract in docs/ui-branding.md; index.html and generate-ui-theme.py use it too.
+ */
+export const THEME_CLASS_PREFIX = 'theme-';
+
+/** The class a valid theme id puts on <html>. */
+export function themeClass(id: string): string {
+  return `${THEME_CLASS_PREFIX}${id}`;
+}
+
+/** Whether `id` can name a branding theme. */
 export function isValidThemeId(id: unknown): id is string {
   return typeof id === 'string' && THEME_ID.test(id) && !RESERVED_THEME_IDS.includes(id);
 }
