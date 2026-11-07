@@ -507,9 +507,17 @@ For what to check before upgrading and how to troubleshoot afterwards, see [What
 ## Testing against a live gateway
 
 - `tests/e2e/mcp_client_matrix.py` calls one tool per route with a handshake-era client and with the MCP SDK 2.x in legacy, auto and 2026-07-28 modes.
-- `tests/e2e/mcp_2026_gateway_checks.py` checks `server/discover`, header and body mismatch rejection, `cacheScope`, and the 401 and 403 challenges.
+- `tests/e2e/mcp_2026_gateway_checks.py` checks `server/discover`, header and body mismatch rejection, `cacheScope`, the fields on a `resources/read` the virtual router forwards from a handshake-only backend, the -32602 not-found code, and the 401 and 403 challenges.
 
-Both exit non-zero on an unexpected result. Register the upstream servers they use from `cli/examples/` (`mcp-everything.json`, `pingmcp-modern.json`, `pingmcp-dual.json`, `virtual-server-mcp-compat.json`).
+Both exit non-zero on an unexpected result. Register the upstream servers they use from `cli/examples/` (`mcp-everything.json`, `mcp-everything-legacy.json`, `pingmcp-modern.json`, `pingmcp-dual.json`, `virtual-server-mcp-compat.json`).
+
+`mcp-everything-legacy.json` points at the 2025.12.18 release of the reference server, which speaks only the session handshake and serves `test://static/resource/N` documents. On a local Docker Compose stack, start it on the gateway's network and add `mcp-everything-legacy` to `SSRF_ALLOWED_HOSTS` in `.env`, then recreate the registry container:
+
+```bash
+docker run -d --name mcp-everything-legacy --network mcp-gateway-registry_default \
+  -e PORT=3001 node:24-alpine \
+  npx -y @modelcontextprotocol/server-everything@2025.12.18 streamableHttp
+```
 
 ## Related documentation
 

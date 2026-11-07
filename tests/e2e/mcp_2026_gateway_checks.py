@@ -11,12 +11,17 @@ on the wire:
     mismatch-method      an Mcp-Method that disagrees with the body gets 400 -32020
     mismatch-virtual     the same check on a virtual route
     cache-scope          a per-user filtered tools/list is marked cacheScope private
+    forwarded-read       a resources/read the virtual router forwards from a
+                         handshake-only backend carries resultType, cacheScope
+                         private and ttlMs
+    not-found-virtual    an unknown tool on a virtual route gets -32602
     one-challenge-401    a request without a token gets exactly one WWW-Authenticate
     challenge-403        a request the scopes deny names resource_metadata and no
                          insufficient_scope (only with --restricted-token-file)
 
 The routes need the MCP compatibility test upstreams from cli/examples/
-(mcp-everything.json and virtual-server-mcp-compat.json). The script prints
+(mcp-everything.json, mcp-everything-legacy.json and
+virtual-server-mcp-compat.json). The script prints
 one line per check and exits non-zero if any check fails.
 
 Usage:
@@ -29,7 +34,8 @@ Usage:
     # Other routes and tools (a direct server and a virtual server with two tools each)
     uv run python tests/e2e/mcp_2026_gateway_checks.py --base https://gw.example.com \\
         --direct-route /pingmcp-dual/mcp --direct-tool echo --direct-other-tool inspect_request \\
-        --virtual-route /virtual/my-test/mcp --virtual-tool tool_a --virtual-other-tool tool_b
+        --virtual-route /virtual/my-test/mcp --virtual-tool tool_a --virtual-other-tool tool_b \\
+        --virtual-resource-uri file:///readme.md
 """
 
 import argparse
@@ -59,9 +65,14 @@ DIRECT_TOOL: str = "echo"
 VIRTUAL_TOOL: str = "pm_echo"
 DIRECT_OTHER_TOOL: str = "get-sum"
 VIRTUAL_OTHER_TOOL: str = "ping_echo"
+# A resource served by the handshake-only backend behind the virtual route
+# (mcp-everything-legacy, server-everything@2025.12.18).
+VIRTUAL_RESOURCE_URI: str = "test://static/resource/1"
+UNKNOWN_TOOL: str = "no_such_tool_for_gateway_checks"
 MODERN_PROTOCOL_VERSION: str = "2026-07-28"
 LEGACY_PROTOCOL_VERSION: str = "2025-06-18"
 HEADER_MISMATCH_CODE: int = -32020
+NOT_FOUND_CODE: int = -32602
 REQUEST_TIMEOUT_SECONDS: float = 30.0
 META: dict[str, Any] = {
     "io.modelcontextprotocol/protocolVersion": MODERN_PROTOCOL_VERSION,
@@ -170,6 +181,33 @@ def _check_cache_scope(
     return scope == "private", f"HTTP {response.status_code}, cacheScope={scope}"
 
 
+def _check_forwarded_read(
+    url: str,
+    token: str,
+    uri: str,
+) -> tuple[bool, str]:
+    response = _modern_post(url, token, "resources/read", {"uri": uri}, header_name=uri)
+    result = _last_jsonrpc_message(response.text).get("result", {})
+    fields = {k: result.get(k) for k in ("resultType", "cacheScope", "ttlMs")}
+    passed = (
+        result.get("resultType") == "complete"
+        and result.get("cacheScope") in ("private", "public")
+        and isinstance(result.get("ttlMs"), int)
+        and bool(result.get("contents"))
+    )
+    return passed, f"HTTP {response.status_code}, {fields}"
+
+
+def _check_not_found(
+    url: str,
+    token: str,
+) -> tuple[bool, str]:
+    params = {"name": UNKNOWN_TOOL, "arguments": {}}
+    response = _modern_post(url, token, "tools/call", params, header_name=UNKNOWN_TOOL)
+    code = _last_jsonrpc_message(response.text).get("error", {}).get("code")
+    return code == NOT_FOUND_CODE, f"HTTP {response.status_code}, code={code}"
+
+
 def _check_one_challenge(
     url: str,
 ) -> tuple[bool, str]:
@@ -211,6 +249,7 @@ def _build_checks(
     virtual = args.base.rstrip("/") + args.virtual_route
     d_tool, d_other = args.direct_tool, args.direct_other_tool
     v_tool, v_other = args.virtual_tool, args.virtual_other_tool
+    v_uri = args.virtual_resource_uri
     checks: list[tuple[str, Callable[[], tuple[bool, str]]]] = [
         ("discover-direct", lambda: _check_discover(direct, token)),
         ("discover-virtual", lambda: _check_discover(virtual, token)),
@@ -219,6 +258,8 @@ def _build_checks(
         ("mismatch-method", lambda: _check_mismatch(direct, token, d_tool, "tools/list", d_tool)),
         ("mismatch-virtual", lambda: _check_mismatch(virtual, token, v_tool, None, v_other)),
         ("cache-scope", lambda: _check_cache_scope(direct, token)),
+        ("forwarded-read", lambda: _check_forwarded_read(virtual, token, v_uri)),
+        ("not-found-virtual", lambda: _check_not_found(virtual, token)),
         ("one-challenge-401", lambda: _check_one_challenge(direct)),
     ]
     if restricted_token:
@@ -251,6 +292,11 @@ def _parse_args() -> argparse.Namespace:
         "--virtual-other-tool",
         default=VIRTUAL_OTHER_TOOL,
         help="A second tool name on the virtual route, used to build a header mismatch",
+    )
+    parser.add_argument(
+        "--virtual-resource-uri",
+        default=VIRTUAL_RESOURCE_URI,
+        help="A resource the virtual route serves from a handshake-only backend",
     )
     parser.add_argument(
         "--restricted-token-file",
