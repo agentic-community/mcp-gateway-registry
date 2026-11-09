@@ -214,17 +214,23 @@ class VirtualServerServiceError(VirtualServerRegistryError):
 
 
 class SkillContentFetchError(SkillRegistryError):
-    """Failed to fetch skill content from a remote URL."""
+    """Failed to fetch skill content from a remote URL.
+
+    ``upstream_status`` is the HTTP status the remote returned, or None when
+    the request never got a response (connection error, timeout).
+    """
 
     def __init__(
         self,
         url: str,
         reason: str,
         status_code: int = 502,
+        upstream_status: int | None = None,
     ):
         self.url = url
         self.reason = reason
         self.status_code = status_code
+        self.upstream_status = upstream_status
         super().__init__(f"Failed to fetch content from '{url}': {reason}")
 
 

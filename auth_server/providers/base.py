@@ -24,6 +24,37 @@ class IdTokenVerificationError(Exception):
     """
 
 
+def normalize_groups_claim(value: Any, *, source: str) -> list[str]:
+    """Validate a token's ``groups`` claim as a JSON array of strings.
+
+    Fail closed: accept ONLY a list whose every element is a string. An
+    absent or null claim is the normal machine-to-machine case and maps to an
+    empty list.
+
+    Args:
+        value: The raw claim value decoded from the already signature-verified
+            JWT (or an equivalent verified userinfo/id-token field).
+        source: Short label naming the claim/provider for the rejection log.
+
+    Returns:
+        The validated list of group names (possibly empty).
+
+    Raises:
+        ValueError: When the claim is present but is not a JSON array of
+            strings.
+    """
+    if value is None:
+        return []
+    if not isinstance(value, list) or not all(isinstance(group, str) for group in value):
+        logger.warning(
+            "Rejecting token: %s claim is not a JSON array of strings (got %s)",
+            source,
+            type(value).__name__,
+        )
+        raise ValueError(f"Invalid {source} claim: expected a JSON array of strings")
+    return value
+
+
 class AuthProvider(ABC):
     """Abstract base class for authentication providers."""
 
@@ -194,6 +225,36 @@ class AuthProvider(ABC):
         raise IdTokenVerificationError(
             f"{type(self).__name__} does not support verified id_token extraction"
         )
+
+    async def recover_bearer_groups(
+        self,
+        validation_result: dict[str, Any],
+        access_token: str,
+    ) -> list[str] | None:
+        """Return recovered groups, or None when this provider uses inline claims.
+
+        A confirmed empty membership is [], not None. Providers that need an
+        external lookup override this method and raise on lookup failure.
+
+        Args:
+            validation_result: The provider's verified token result.
+            access_token: The bearer token presented to the gateway.
+
+        Returns:
+            Recovered memberships, or None to leave the claims unchanged.
+        """
+        return None
+
+    def is_delegated_user(self, validation_result: dict[str, Any]) -> bool:
+        """Whether the verified result is a user token, not an M2M client.
+
+        Args:
+            validation_result: The provider's verified token result.
+
+        Returns:
+            False unless a provider implements delegated-user classification.
+        """
+        return False
 
     @abstractmethod
     def validate_token(self, token: str, **kwargs: Any) -> dict[str, Any]:

@@ -179,6 +179,32 @@ class TestDoRegister:
         assert result.status == 422
         assert result.error["code"] == "validation_error"
 
+    async def test_invalid_interface_returns_422(self):
+        # supported_interfaces is list[dict] at the request layer (unvalidated),
+        # so a malformed interface parses into the item but fails when
+        # _build_card_from_request constructs the AgentCard. _do_register must
+        # surface that as 422, not let it escape as a 500. Here a non-GRPC
+        # binding with a bare host:port (no scheme) fails interface validation.
+        item = _item(
+            {
+                "op": "register",
+                "card": {
+                    **REGISTER_CARD,
+                    "supported_interfaces": [
+                        {
+                            "url": "agent.example.net:443",
+                            "protocol_binding": "JSONRPC",
+                            "protocol_version": "1.0",
+                        }
+                    ],
+                },
+            }
+        )
+        with patch.object(proc.agent_service, "get_agent_info", AsyncMock(return_value=None)):
+            result = await proc._do_register(0, item, "alice")
+        assert result.status == 422
+        assert result.error["code"] == "validation_error"
+
     async def test_gate_denied_returns_403(self):
         item = _item({"op": "register", "card": REGISTER_CARD})
         with (
@@ -204,6 +230,69 @@ class TestDoRegister:
         assert result.status == 201
         fire.assert_called_once()
         assert fire.call_args.args[0] == "registration"
+
+    async def test_proxied_register_applies_reverse_proxy_split(self):
+        """A batch-registered a2a agent must go through the same reverse-proxy
+        split as the single-card path: in with-gateway mode the stored url
+        becomes the gateway address and the backend is preserved in
+        proxy_pass_url, so the read-time redaction (keyed on proxy_pass_url) can
+        later fire. Without the split, a batch agent would persist the backend as
+        its top-level url and never set proxy_pass_url."""
+        from registry.api import agent_routes
+        from registry.core.config import DeploymentMode
+
+        item = _item({"op": "register", "card": REGISTER_CARD})
+        register_mock = AsyncMock()
+        with (
+            patch.object(proc.agent_service, "get_agent_info", AsyncMock(return_value=None)),
+            patch.object(proc, "_validate", AsyncMock(return_value=(True, []))),
+            patch.object(proc, "_run_gate", AsyncMock(return_value=(True, ""))),
+            patch.object(proc.agent_service, "register_agent", register_mock),
+            patch.object(proc.agent_service, "is_agent_enabled", AsyncMock(return_value=True)),
+            patch.object(proc, "_fire_webhook"),
+            patch.object(agent_routes.settings, "a2a_reverse_proxy_enabled", True),
+            patch.object(agent_routes.settings, "deployment_mode", DeploymentMode.WITH_GATEWAY),
+            patch.object(agent_routes.settings, "registry_url", "https://gw.example.com"),
+        ):
+            result = await proc._do_register(0, item, "alice")
+        assert result.status == 201
+        stored = register_mock.call_args.args[0]
+        # Advertised url rewritten to the gateway; original backend kept internal.
+        assert stored.url.startswith("https://gw.example.com/agent/")
+        assert stored.url.endswith("/")
+        assert stored.proxy_pass_url == "https://example.com/new"
+
+    async def test_proxied_register_rejects_unroutable_declared_interface(self):
+        from registry.api import agent_routes
+        from registry.core.config import DeploymentMode
+
+        item = _item(
+            {
+                "op": "register",
+                "card": {
+                    **REGISTER_CARD,
+                    "supportedInterfaces": [
+                        {
+                            "url": "https://example.com/grpc",
+                            "protocolBinding": "GRPC",
+                            "protocolVersion": "1.0",
+                        }
+                    ],
+                },
+            }
+        )
+        register_mock = AsyncMock()
+        with (
+            patch.object(proc.agent_service, "get_agent_info", AsyncMock(return_value=None)),
+            patch.object(proc, "_validate", AsyncMock(return_value=(True, []))),
+            patch.object(proc, "_run_gate", AsyncMock(return_value=(True, ""))),
+            patch.object(proc.agent_service, "register_agent", register_mock),
+            patch.object(agent_routes.settings, "a2a_reverse_proxy_enabled", True),
+            patch.object(agent_routes.settings, "deployment_mode", DeploymentMode.WITH_GATEWAY),
+        ):
+            result = await proc._do_register(0, item, "alice")
+        assert result.status == 422
+        register_mock.assert_not_awaited()
 
 
 @pytest.mark.unit
@@ -396,6 +485,57 @@ class TestDoReplace:
         assert result.status == 200
         # Replace preserves server-managed registered_by from the existing card.
         assert captured["registered_by"] == "origowner"
+
+    async def test_proxied_replace_preserves_backend_for_gateway_echo(self):
+        from registry.api import agent_routes
+        from registry.core.config import DeploymentMode
+        from registry.schemas.agent_models import AgentInterface
+
+        gateway = "https://gw.example.com/agent/agents/existing/"
+        backend = "https://example.com/new"
+        existing = _existing()
+        existing.url = gateway
+        existing.proxy_pass_url = backend
+        existing.supported_interfaces = [
+            AgentInterface(url=backend, protocolBinding="JSONRPC", protocolVersion="1.0")
+        ]
+        item = _item(
+            {
+                "op": "replace",
+                "path": "/agents/existing",
+                "card": {
+                    **REGISTER_CARD,
+                    "url": gateway,
+                    "supportedInterfaces": [
+                        iface.model_dump() for iface in existing.supported_interfaces
+                    ],
+                },
+            }
+        )
+        captured = {}
+        with (
+            patch.object(
+                proc.agent_service, "get_agent_info", AsyncMock(side_effect=[existing, existing])
+            ),
+            patch.object(proc, "_validate", AsyncMock(return_value=(True, []))),
+            patch.object(proc, "_run_gate", AsyncMock(return_value=(True, ""))),
+            patch.object(
+                proc.agent_service,
+                "update_agent",
+                AsyncMock(side_effect=lambda p, d: captured.update(d)),
+            ),
+            patch.object(proc, "_fire_webhook"),
+            patch.object(agent_routes.settings, "a2a_reverse_proxy_enabled", True),
+            patch.object(agent_routes.settings, "deployment_mode", DeploymentMode.WITH_GATEWAY),
+            patch.object(agent_routes.settings, "registry_url", "https://gw.example.com"),
+        ):
+            result = await proc._do_replace(0, item, "alice")
+
+        assert result.status == 200
+        assert captured["proxy_pass_url"] == backend
+        assert captured["supported_interfaces"] == [
+            iface.model_dump() for iface in existing.supported_interfaces
+        ]
 
 
 @pytest.mark.unit

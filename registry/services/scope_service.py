@@ -40,6 +40,9 @@ STANDARD_METHODS: list[str] = [
     "tools/call",
     "resources/list",
     "resources/templates/list",
+    "resources/read",
+    "prompts/list",
+    "prompts/get",
 ]
 
 # PRIVILEGED_SCOPE_NAMES is imported from registry.auth.privileged_constants

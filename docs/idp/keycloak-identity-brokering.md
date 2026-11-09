@@ -107,7 +107,7 @@ sequenceDiagram
     Note over U,IDP: Subsequent requests use the session, no upstream round-trip
     U->>GW: GET /api/... (with session cookie)
     GW->>AS: auth_request /validate
-    AS-->>GW: 200 + X-Groups / scope headers
+    AS-->>GW: 200 + scope headers and signed registry token
     GW-->>U: Proxied response
 ```
 
@@ -394,7 +394,7 @@ They are read from **different fields** and populated by **different code paths*
 
 ### 3.4 Group filtering and token size
 
-The auth-server filters a user's groups down to the **scope-relevant** subset before storing them in the session (to keep the nginx `X-Groups` header small and reduce query fan-out). Two modes (see `auth_server/group_filter.py`):
+The auth-server filters a user's groups down to the **scope-relevant** subset before storing them in the session (to keep the `/validate` response headers small and reduce query fan-out). Two modes (see `auth_server/group_filter.py`):
 
 - **Design B (`ALLOWED_IDP_GROUPS` set):** explicit allowlist.
 - **Design C (default, allowlist empty):** keep only groups that some scope's `group_mappings` references.

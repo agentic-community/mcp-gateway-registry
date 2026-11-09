@@ -39,10 +39,10 @@ This document provides a comprehensive overview of the MCP Gateway & Registry so
 
 ## Intelligent Tool Discovery
 - **Hybrid Search**: Combined vector similarity with tokenized keyword matching for servers, tools, and agents
-- **Semantic Search**: HNSW vector search using sentence transformers or LiteLLM-supported providers
+- **Semantic Search**: HNSW vector search using sentence transformers or a remote embeddings API
 - **Unified Search**: Single endpoint searches across MCP servers, tools, and A2A agents
 - **Tag-Based Filtering**: Multi-tag filtering with AND logic for precise tool selection
-- **Flexible Embeddings**: Local sentence-transformers, OpenAI, Amazon Bedrock Titan, or any LiteLLM-supported provider
+- **Flexible Embeddings**: Local sentence-transformers, OpenAI or any OpenAI-compatible endpoint, Azure OpenAI, or Amazon Bedrock (Titan, Cohere)
 - **Performance Optimized**: Configurable result limits and caching for fast response times
 
 ## Developer Experience

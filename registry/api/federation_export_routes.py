@@ -582,8 +582,15 @@ async def export_agents(
     total_count = len(visible_agents)
     paginated_agents, has_more = _paginate(visible_agents, limit, offset)
 
-    # Convert to dict format (agents are AgentCard objects)
-    items = [_item_to_dict(agent) for agent in paginated_agents]
+    # Convert to dict format (agents are AgentCard objects). A peer must never
+    # receive the registrant's backend origin: strip_proxy_fields (inside
+    # _item_to_dict) does not cover proxy_pass_url or supported_interfaces, so
+    # apply the agent backend projection too. Unconditional here (not gated on
+    # caller mode): the export always crosses a trust boundary to a peer, and in
+    # registry-only mode there is no proxy_pass_url, so this is a no-op there.
+    from ..services.visibility import redact_agent_backend_fields
+
+    items = [redact_agent_backend_fields(_item_to_dict(agent)) for agent in paginated_agents]
 
     logger.info(
         f"Exporting {len(items)} agents to peer '{user_context['username']}' "

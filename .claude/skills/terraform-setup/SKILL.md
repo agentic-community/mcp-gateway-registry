@@ -297,7 +297,7 @@ Install instructions for missing tools (the README has full Ubuntu/Debian comman
 |-------|-----|
 | GIT_FAIL | `sudo apt-get install -y git` (Ubuntu) / `xcode-select --install` (macOS) |
 | TERRAFORM_FAIL | Install Terraform >= 1.5 — see README "Install Terraform (Ubuntu/Debian)" or https://www.terraform.io/downloads |
-| UV_FAIL | `curl -LsSf https://astral.sh/uv/install.sh \| sh` then `source $HOME/.local/bin/env` |
+| UV_FAIL | `sudo apt-get install -y pipx && pipx install uv==0.13.5 && pipx ensurepath` (Ubuntu) / `brew install uv` (macOS), then open a new shell |
 | JQ_FAIL | `sudo apt-get install -y jq` / `brew install jq` |
 | SSM_OPTIONAL | Only needed for `ecs-ssh.sh` / log following — see README "Install AWS Session Manager Plugin" |
 

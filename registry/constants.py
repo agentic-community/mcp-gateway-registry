@@ -18,6 +18,9 @@ class HealthStatus(str, Enum):
     UNHEALTHY_ENDPOINT_CHECK_FAILED = "unhealthy: endpoint check failed"
     UNHEALTHY_MISSING_PROXY_URL = "unhealthy: missing proxy URL"
     UNHEALTHY_URL_BLOCKED = "unhealthy: url blocked by SSRF guard"
+    # The guard fails closed when the host does not resolve (a stopped container,
+    # a typo, a DNS outage). Same result, but the cause is not the allowlist.
+    UNHEALTHY_HOST_NOT_RESOLVED = "unhealthy: host could not be resolved"
     CHECKING = "checking"
     UNKNOWN = "unknown"
     LOCAL = "local"
@@ -118,6 +121,20 @@ REGISTRY_CONSTANTS = RegistryConstants()
 
 # Maximum custom headers per server
 MAX_CUSTOM_HEADERS_PER_SERVER: int = 10
+
+# Number of EMBEDDINGS_EXTRA_HEADER_<N> slots the config layer reads (issue #1819).
+# Raising it means adding both the Settings fields and the matching entries on
+# all three deployment surfaces, so it is deliberately a code change, not a
+# config knob. Real deployments need one or two headers, so five leaves room.
+MAX_EMBEDDINGS_EXTRA_HEADERS: int = 5
+
+# Headers the embeddings client sets itself. An operator naming one of these in
+# an EMBEDDINGS_EXTRA_HEADER_<N> slot is rejected at config load: the managed
+# value would overwrite theirs at runtime, so accepting it would silently do
+# nothing.
+REGISTRY_MANAGED_EMBEDDINGS_HEADERS: frozenset[str] = frozenset(
+    {"authorization", "content-type", "accept"}
+)
 
 # Header names the registry and gateway own. Custom headers with a name
 # whose lowercased form appears here are rejected at registration time (and the

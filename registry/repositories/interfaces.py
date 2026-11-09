@@ -1416,8 +1416,12 @@ class SearchRepositoryBase(ABC):
         path: str,
         server_info: dict[str, Any],
         is_enabled: bool = False,
-    ) -> None:
-        """Index a server for search."""
+    ) -> bool:
+        """Index a server for search.
+
+        Returns:
+            True if the entry is stored with an embedding, False otherwise.
+        """
         pass
 
     @abstractmethod
@@ -1426,8 +1430,12 @@ class SearchRepositoryBase(ABC):
         path: str,
         agent_card: AgentCard,
         is_enabled: bool = False,
-    ) -> None:
-        """Index an agent for search."""
+    ) -> bool:
+        """Index an agent for search.
+
+        Returns:
+            True if the entry is stored with an embedding, False otherwise.
+        """
         pass
 
     @abstractmethod
@@ -1461,18 +1469,21 @@ class SearchRepositoryBase(ABC):
         path: str,
         skill: Any,
         is_enabled: bool = False,
-    ) -> None:
+    ) -> bool:
         """Index a skill for search.
 
-        Default implementation is a no-op. Override in implementations
-        that support skill indexing.
+        Default implementation is a no-op and returns False (nothing stored).
+        Override in implementations that support skill indexing.
 
         Args:
             path: Skill path (e.g., /skills/pdf-processing)
             skill: SkillCard object
             is_enabled: Whether skill is enabled
+
+        Returns:
+            True if the entry is stored with an embedding, False otherwise.
         """
-        return None
+        return False
 
     async def index_virtual_server(
         self,
@@ -1761,15 +1772,17 @@ class SkillRepositoryBase(ABC):
     async def list_by_paths(
         self,
         paths: list[str],
+        fields: list[str] | None = None,
     ) -> dict[str, dict[str, Any]]:
         """List skills whose _id is in the given set of paths.
 
         Returns raw documents (not ``SkillCard`` objects) for metadata
-        projection use cases where the full Pydantic parse is not needed
-        (Issue #1277).
+        projection and search-result enrichment, where the full Pydantic
+        parse is not needed (Issues #1277, #1952).
 
         Args:
             paths: Exact skill paths to fetch.
+            fields: Top-level fields to return. None returns the whole document.
 
         Returns:
             Dictionary mapping skill path to raw skill document for found paths.

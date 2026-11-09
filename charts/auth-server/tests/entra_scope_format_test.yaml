@@ -28,6 +28,8 @@ tests:
           path: data.ENTRA_SCOPE_FORMAT
       - notExists:
           path: data.ENTRA_APPLICATION_ID_URI
+      - notExists:
+          path: data.ENTRA_GRAPH_RESOURCE_URL
 
   - it: emits ENTRA_SCOPE_FORMAT when set to v1
     set:
@@ -78,4 +80,34 @@ tests:
       - equal:
           path: data.ENTRA_APPLICATION_ID_URI
           value: api://gw-uri
+          decodeBase64: true
+
+  - it: emits the native Graph resource separately from the Graph fetch proxy
+    set:
+      app:
+        secretKey: "test-key-not-for-prod" # pragma: allowlist secret
+      egressAuth:
+        markerSecret: "test-marker-not-for-prod" # pragma: allowlist secret
+      global:
+        authProvider:
+          type: entra
+        ingress:
+          routingMode: path
+          tls: false
+          paths:
+            registry: /registry
+      entra:
+        clientId: app-guid
+        clientSecret: s
+        tenantId: tenant-abc
+        graphBaseUrl: https://graph-proxy.example.test
+        graphResourceUrl: https://dod-graph.microsoft.us
+    asserts:
+      - equal:
+          path: data.ENTRA_GRAPH_BASE_URL
+          value: https://graph-proxy.example.test
+          decodeBase64: true
+      - equal:
+          path: data.ENTRA_GRAPH_RESOURCE_URL
+          value: https://dod-graph.microsoft.us
           decodeBase64: true

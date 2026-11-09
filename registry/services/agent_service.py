@@ -22,6 +22,7 @@ from ..schemas.proxy_mixin import (
     validate_and_pin_proxy_target,
 )
 from ..utils.url_guard import validate_agent_url
+from .visibility import gateway_routable_agent_interfaces
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +102,17 @@ class AgentService:
         # private/metadata targets unless the operator allowlisted them.
         if getattr(agent_card, "url", None):
             validate_agent_url(str(agent_card.url))
+        if (
+            agent_card.proxy_pass_url
+            and agent_card.supported_interfaces
+            and not gateway_routable_agent_interfaces(
+                agent_card.supported_interfaces, agent_card.proxy_pass_url
+            )
+        ):
+            raise ValueError(
+                "A2A gateway requires a declared JSONRPC or HTTP+JSON interface "
+                "at the registered backend URL"
+            )
 
         if await self._repo.get(path) is not None:
             logger.error(f"Agent registration failed: path '{path}' already exists")
@@ -262,6 +274,22 @@ class AgentService:
         except Exception as e:
             logger.error(f"Failed to validate updated agent: {e}")
             raise ValueError(f"Invalid agent update: {e}")
+
+        # Pull-card and internal updates bypass the route-level proxy split.
+        # A changed interface list or backend must still match the sole nginx
+        # route before it can replace an already proxied agent's card.
+        if (
+            merged_card.proxy_pass_url
+            and merged_card.supported_interfaces
+            and ({"supported_interfaces", "proxy_pass_url", "url"} & updates.keys())
+            and not gateway_routable_agent_interfaces(
+                merged_card.supported_interfaces, merged_card.proxy_pass_url
+            )
+        ):
+            raise ValueError(
+                "A2A gateway requires a declared JSONRPC or HTTP+JSON interface "
+                "at the registered backend URL"
+            )
 
         # Gateway-proxy SSRF layer 2 + transport guard on the MERGED card when this
         # update touches the proxy opt-in or target. Re-validates + re-pins (or

@@ -1,0 +1,12 @@
+{
+  "server_name": "pingmcp (modern era)",
+  "description": "pingmcp test server that speaks only MCP 2026-07-28 (no initialize, no sessions). Used for MCP protocol compatibility testing. Source: https://github.com/aarora79/pingmcp",
+  "path": "/pingmcp-modern/",
+  "proxy_pass_url": "http://pingmcp-modern:8100/",
+  "supported_transports": ["streamable-http"],
+  "auth_scheme": "none",
+  "tags": ["mcp", "testing", "protocol", "compatibility", "pingmcp"],
+  "license": "Apache-2.0",
+  "status": "active",
+  "visibility": "public"
+}

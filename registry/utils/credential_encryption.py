@@ -12,10 +12,16 @@ key from SECRET_KEY instead of requiring a separate environment variable.
 import base64
 import hashlib
 import logging
-import re
 from datetime import UTC, datetime
 
 from cryptography.fernet import Fernet, InvalidToken
+
+from .header_validation import (
+    MAX_HEADER_NAME_LENGTH,
+    MAX_HEADER_VALUE_LENGTH,
+    validate_header_name,
+    validate_header_value,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,39 +42,29 @@ CUSTOM_HEADERS_ENCRYPTED_FIELD: str = "custom_headers_encrypted"
 CUSTOM_HEADER_NAMES_FIELD: str = "custom_header_names"
 CUSTOM_HEADER_OVERRIDABLE_NAMES_FIELD: str = "custom_header_overridable_names"
 
-MAX_CUSTOM_HEADER_NAME_LENGTH: int = 256
-MAX_CUSTOM_HEADER_VALUE_LENGTH: int = 4096
-_RFC_TOKEN_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
+MAX_CUSTOM_HEADER_NAME_LENGTH: int = MAX_HEADER_NAME_LENGTH
+MAX_CUSTOM_HEADER_VALUE_LENGTH: int = MAX_HEADER_VALUE_LENGTH
 
 
 def validate_custom_header_name(name: object) -> str:
-    """Return a bounded RFC token header name or raise ``ValueError``."""
-    if not isinstance(name, str):
-        raise ValueError("custom_headers entry name must be a string")
-    if not name:
-        raise ValueError("custom_headers entry requires a non-empty name")
-    if len(name) > MAX_CUSTOM_HEADER_NAME_LENGTH:
-        raise ValueError(
-            f"custom_headers entry name exceeds {MAX_CUSTOM_HEADER_NAME_LENGTH} characters"
-        )
-    if not _RFC_TOKEN_RE.fullmatch(name):
-        raise ValueError("custom_headers entry name must be a valid RFC token string")
-    return name
+    """Return a bounded RFC token header name or raise ``ValueError``.
+
+    Thin wrapper over the shared validator in header_validation.py, kept so
+    existing callers and their error messages are unchanged.
+    """
+    return validate_header_name(name)
 
 
-def _validate_custom_header_value(value: object, *, allow_empty: bool = False) -> str:
-    """Return a bounded, control-free string header value."""
-    if not isinstance(value, str):
-        raise ValueError("custom_headers entry value must be a string")
-    if not value and not allow_empty:
-        raise ValueError("custom_headers entry requires a non-empty value")
-    if len(value) > MAX_CUSTOM_HEADER_VALUE_LENGTH:
-        raise ValueError(
-            f"custom_headers entry value exceeds {MAX_CUSTOM_HEADER_VALUE_LENGTH} characters"
-        )
-    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
-        raise ValueError("custom_headers entry value cannot contain control characters")
-    return value
+def _validate_custom_header_value(
+    value: object,
+    *,
+    allow_empty: bool = False,
+) -> str:
+    """Return a bounded, control-free string header value.
+
+    Thin wrapper over the shared validator in header_validation.py.
+    """
+    return validate_header_value(value, allow_empty=allow_empty)
 
 
 def _validate_custom_header_overridable(value: object) -> bool:

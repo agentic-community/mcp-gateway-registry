@@ -66,6 +66,34 @@ local SUPPORTED_PROTOCOL_VERSIONS = {
 }
 local LATEST_PROTOCOL_VERSION = "2025-11-25"
 
+-- MCP 2026-07-28 protocol constants. These mirror registry/common/mcp_protocol.py
+-- (nginx Lua cannot import Python); tests/unit/test_mcp_protocol_parity.py fails
+-- if the two copies disagree.
+local MODERN_PROTOCOL_VERSION = "2026-07-28"
+local META_PROTOCOL_VERSION_KEY = "io.modelcontextprotocol/protocolVersion"
+local META_CLIENT_INFO_KEY = "io.modelcontextprotocol/clientInfo"
+local META_CLIENT_CAPABILITIES_KEY = "io.modelcontextprotocol/clientCapabilities"
+local META_SERVER_INFO_KEY = "io.modelcontextprotocol/serverInfo"
+local JSONRPC_METHOD_NOT_FOUND = -32601
+local JSONRPC_INVALID_PARAMS = -32602
+local JSONRPC_HEADER_MISMATCH = -32020
+local JSONRPC_UNSUPPORTED_PROTOCOL_VERSION = -32022
+-- Versions advertised by server/discover and in -32022 errors, newest first.
+local ADVERTISED_PROTOCOL_VERSIONS = {
+    "2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05",
+}
+-- Methods whose 2026-07-28 result must carry ttlMs and cacheScope (CacheableResult).
+local CACHEABLE_RESULT_METHODS = {
+    ["tools/list"] = true,
+    ["prompts/list"] = true,
+    ["resources/list"] = true,
+    ["resources/templates/list"] = true,
+    ["resources/read"] = true,
+}
+-- ttlMs for a cacheable result the router forwards without one: the router
+-- cannot judge how long a backend's answer stays valid, so it says "do not reuse".
+local NO_REUSE_TTL_MS = 0
+
 
 -- Resolve the authenticated user identity for the current request.
 -- Used both when creating sessions (_handle_initialize) and when enforcing
@@ -158,6 +186,24 @@ local function _tag_empty_schema_arrays(node, depth)
 end
 
 
+-- JSON Schema keywords that hold reusable definitions (2020-12 and draft-07).
+local SCHEMA_DEFINITION_KEYS = { "$defs", "definitions" }
+
+
+-- True when a JSON Schema "type" list includes "object".
+local function _type_list_allows_object(schema_type)
+    if type(schema_type) ~= "table" then
+        return false
+    end
+    for _, value in ipairs(schema_type) do
+        if value == "object" then
+            return true
+        end
+    end
+    return false
+end
+
+
 -- Ensure inputSchema has "type": "object" as required by MCP spec
 local function _ensure_mcp_schema(schema)
     if not schema or type(schema) ~= "table" then
@@ -171,8 +217,23 @@ local function _ensure_mcp_schema(schema)
         schema.type = "object"
         return schema
     end
-    -- Non-object type: wrap it
-    return { type = "object", properties = { value = schema } }
+    -- A type list that allows an object (["object", "null"]) already describes
+    -- the arguments object. MCP 2026-07-28 requires the root type to be exactly
+    -- "object", so narrow it instead of nesting the arguments under "value".
+    if _type_list_allows_object(schema.type) then
+        schema.type = "object"
+        return schema
+    end
+    -- Non-object type: wrap it. "#/$defs/..." references resolve against the
+    -- document root, so the definitions move to the new root.
+    local wrapper = { type = "object", properties = { value = schema } }
+    for _, key in ipairs(SCHEMA_DEFINITION_KEYS) do
+        if schema[key] ~= nil then
+            wrapper[key] = schema[key]
+            schema[key] = nil
+        end
+    end
+    return wrapper
 end
 
 
@@ -273,6 +334,15 @@ end
 
 
 -- Outcomes of the backend-bound authorization subrequest.
+local BASE64_SENTINEL_PREFIX = "=?base64?"
+local BASE64_SENTINEL_SUFFIX = "?="
+-- Methods whose target name (params.name or params.uri) is mirrored in Mcp-Name.
+local MCP_NAME_SOURCE = {
+    ["tools/call"] = "name",
+    ["prompts/get"] = "name",
+    ["resources/read"] = "uri",
+}
+
 local AUTH_OK = "ok"
 local AUTH_DENIED = "denied"   -- the gateway refused the backing grant (401/403)
 local AUTH_FAILED = "failed"   -- the check itself failed: 429/5xx/timeout/no token
@@ -496,6 +566,33 @@ local function _invalidate_backend_session(client_session_id, backend_location, 
 end
 
 
+-- Optional fields of a backend tool that the virtual tools/list passes through
+-- unchanged. inputSchema and the name/description are handled separately.
+local PASSTHROUGH_TOOL_FIELDS = { "title", "annotations", "outputSchema", "icons", "execution", "_meta" }
+
+
+-- Copy the pass-through fields from one tool table to another. outputSchema
+-- gets the same empty-array tagging as inputSchema, so a [] keeps its type
+-- through cjson (including the per-user tools/list cache).
+local function _copy_tool_fields(from, to)
+    for _, field in ipairs(PASSTHROUGH_TOOL_FIELDS) do
+        local value = from[field]
+        if value ~= nil and value ~= cjson.null then
+            if field == "outputSchema" and type(value) == "table" then
+                _tag_empty_schema_arrays(value, 0)
+            end
+            to[field] = value
+        end
+    end
+    return to
+end
+
+
+-- A mapped tool without a valid backend identity cannot be safely displayed.
+-- The decision helper is defined later, before the router executes.
+local _blocked_backend_tools
+
+
 -- Collect unique backend locations from a mapping's tools array
 local function _collect_backend_locations(mapping)
     local locations = {}
@@ -525,6 +622,9 @@ local function _append_mapping_tools_for_backend(enriched_tools, mapping, backen
         if tool.backend_location == backend_location then
             enriched_tools[#enriched_tools + 1] = {
                 name = tool.name,
+                original_name = tool.original_name or tool.name,
+                backend_server_path = tool.backend_server_path,
+                block_server_path = tool.block_server_path,
                 description = tool.description or "",
                 inputSchema = _ensure_mcp_schema(tool.inputSchema),
                 required_scopes = tool.required_scopes,
@@ -555,7 +655,6 @@ local LIST_UNSUPPORTED = "unsupported"
 local LIST_FAILED = "failed"
 local LIST_UNVERIFIED = "unverified"
 local LIST_DENIED = "denied"
-local JSONRPC_METHOD_NOT_FOUND = -32601
 
 
 -- Classify a 200 JSON-RPC list response body. A JSON-RPC error is the
@@ -580,7 +679,296 @@ local function _classify_list_body(res, result_key, from_broker)
     if from_broker and _response_header(res, "X-Egress-Consent-Required") then
         return LIST_CONSENT
     end
-    return LIST_OK, data.result[result_key]
+    local next_cursor = data.result.nextCursor
+    if type(next_cursor) ~= "string" or next_cursor == "" then
+        next_cursor = nil
+    end
+    return LIST_OK, data.result[result_key], next_cursor
+end
+
+
+-- ---------------------------------------------------------------------------
+-- MCP 2026-07-28 backends
+--
+-- One server/discover probe per backend (cached) decides how the router talks
+-- to it. A backend that lists 2026-07-28 gets stateless 2026-07-28 requests:
+-- no initialize, no backend session, the protocol version in params._meta, and
+-- MCP-Protocol-Version / Mcp-Method / Mcp-Name (and Mcp-Param-*) set from the
+-- body the router actually sends. Every other backend keeps the initialize
+-- handshake. As on the legacy path, each request body is authorized at the
+-- backend-bound /validate before it is sent.
+-- ---------------------------------------------------------------------------
+local ERA_MODERN = "modern"
+local ERA_LEGACY = "legacy"
+-- How long a backend's era is trusted before it is probed again.
+local BACKEND_ERA_CACHE_TTL = 300
+-- How long a tool's x-mcp-header map, learned from tools/list, is reused.
+local X_MCP_HEADER_CACHE_TTL = 300
+local MAX_X_MCP_HEADER_DEPTH = 8
+local ROUTER_CLIENT_INFO = { name = "mcp-gateway-virtual-router", version = "1.0.0" }
+
+
+-- Build a 2026-07-28 _meta. A 2026-07-28 client's own _meta (its clientInfo,
+-- clientCapabilities, progressToken) is kept, so a backend can address it, for
+-- example with a multi round-trip input request the client declared support for.
+local function _modern_meta(existing)
+    local meta = {}
+    if type(existing) == "table" then
+        for key, value in pairs(existing) do
+            meta[key] = value
+        end
+    end
+    meta[META_PROTOCOL_VERSION_KEY] = MODERN_PROTOCOL_VERSION
+    if meta[META_CLIENT_INFO_KEY] == nil then
+        meta[META_CLIENT_INFO_KEY] = ROUTER_CLIENT_INFO
+    end
+    if meta[META_CLIENT_CAPABILITIES_KEY] == nil then
+        -- An empty table encodes as {}: no client capabilities declared.
+        meta[META_CLIENT_CAPABILITIES_KEY] = {}
+    end
+    return meta
+end
+
+
+-- Set (or, for a false value, clear) request headers that backend subrequests
+-- inherit. Returns the previous values for _restore_request_headers.
+local function _set_request_headers(values)
+    local current = ngx.req.get_headers()
+    local previous = {}
+    for name, value in pairs(values) do
+        previous[name] = current[name] or false
+        if value then
+            ngx.req.set_header(name, value)
+        else
+            ngx.req.clear_header(name)
+        end
+    end
+    return previous
+end
+
+
+local function _restore_request_headers(previous)
+    for name, value in pairs(previous) do
+        if value then
+            ngx.req.set_header(name, value)
+        else
+            ngx.req.clear_header(name)
+        end
+    end
+end
+
+
+-- Encode a value for Mcp-Name or Mcp-Param-*: strings as is, integers in
+-- decimal, booleans as true/false. A value that is not plain visible ASCII, has
+-- leading or trailing whitespace, or looks like the sentinel itself is sent as
+-- =?base64?...?=. Returns nil for a value that cannot be mirrored.
+local function _encode_mcp_header_value(value)
+    local text
+    if type(value) == "boolean" then
+        text = value and "true" or "false"
+    elseif type(value) == "number" then
+        if value ~= math.floor(value) then
+            return nil
+        end
+        text = string.format("%d", value)
+    elseif type(value) == "string" then
+        text = value
+    else
+        return nil
+    end
+    local looks_like_sentinel = text:sub(1, #BASE64_SENTINEL_PREFIX) == BASE64_SENTINEL_PREFIX
+        and text:sub(-#BASE64_SENTINEL_SUFFIX) == BASE64_SENTINEL_SUFFIX
+    if text:find("[^\32-\126]") or text:find("^%s") or text:find("%s$") or looks_like_sentinel then
+        return BASE64_SENTINEL_PREFIX .. ngx.encode_base64(text) .. BASE64_SENTINEL_SUFFIX
+    end
+    return text
+end
+
+
+-- Decide whether a backend speaks 2026-07-28, probing it once with
+-- server/discover. Only an answer that lists 2026-07-28 makes it modern. A
+-- probe the gateway could not authorize or deliver is not cached, so the next
+-- request decides again; until then the backend keeps the handshake path.
+local function _backend_era(backend_loc, backend_version)
+    -- backend_version may be cjson.null (a JSON null in the mapping file).
+    local version = type(backend_version) == "string" and backend_version or ""
+    local cache_key = "bera:" .. backend_loc .. ":" .. version
+    local cached = session_cache:get(cache_key)
+    if cached then
+        return cached
+    end
+    local probe = cjson.encode({
+        jsonrpc = "2.0",
+        id = "disc-" .. (ngx.var.request_id or "0"),
+        method = "server/discover",
+        params = { _meta = _modern_meta(nil) },
+    })
+    local previous = _set_request_headers({
+        ["MCP-Protocol-Version"] = MODERN_PROTOCOL_VERSION,
+        ["Mcp-Method"] = "server/discover",
+        ["Mcp-Name"] = false,
+        ["Mcp-Session-Id"] = false,
+    })
+    local auth = _authorize_backend(backend_loc, probe)
+    local res = nil
+    if auth == AUTH_OK then
+        res = ngx.location.capture(backend_loc, { method = ngx.HTTP_POST, body = probe })
+    end
+    _restore_request_headers(previous)
+    if auth ~= AUTH_OK or not res then
+        return ERA_LEGACY
+    end
+
+    local era = ERA_LEGACY
+    local ok, data = pcall(cjson.decode, _parse_sse_body(res.body) or "")
+    if res.status == 200 and ok and type(data) == "table" and type(data.result) == "table"
+        and type(data.result.supportedVersions) == "table" then
+        for _, version in ipairs(data.result.supportedVersions) do
+            if version == MODERN_PROTOCOL_VERSION then
+                era = ERA_MODERN
+            end
+        end
+    end
+    session_cache:set(cache_key, era, BACKEND_ERA_CACHE_TTL)
+    ngx.log(ngx.INFO, "Backend ", backend_loc, " protocol era: ", era)
+    return era
+end
+
+
+-- Send one request to a 2026-07-28 backend: add the 2026-07-28 _meta, set the
+-- mirrored headers from that exact body, authorize it, send it. No session.
+-- param_headers maps Mcp-Param-* header names to encoded values (tools/call).
+-- Returns (res, outcome, pre_consent) like _call_backend.
+local function _call_modern_backend(backend_loc, body, param_headers)
+    local ok, request = pcall(cjson.decode, body)
+    if not ok or type(request) ~= "table" then
+        return nil, AUTH_FAILED, false
+    end
+    local params = type(request.params) == "table" and request.params or {}
+    params._meta = _modern_meta(params._meta)
+    request.params = params
+    local modern_body = cjson.encode(request)
+
+    local headers = {
+        ["MCP-Protocol-Version"] = MODERN_PROTOCOL_VERSION,
+        ["Mcp-Method"] = request.method,
+        ["Mcp-Name"] = false,
+        ["Mcp-Session-Id"] = false,
+    }
+    local name_field = MCP_NAME_SOURCE[request.method]
+    if name_field and params[name_field] ~= nil then
+        headers["Mcp-Name"] = _encode_mcp_header_value(params[name_field]) or false
+    end
+    for name, value in pairs(param_headers or {}) do
+        headers[name] = value
+    end
+
+    local previous = _set_request_headers(headers)
+    local auth = _authorize_backend(backend_loc, modern_body)
+    local res = nil
+    if auth == AUTH_OK then
+        res = ngx.location.capture(backend_loc, { method = ngx.HTTP_POST, body = modern_body })
+    end
+    _restore_request_headers(previous)
+    for name, _ in pairs(param_headers or {}) do
+        ngx.req.clear_header(name)
+    end
+    if auth ~= AUTH_OK then
+        return nil, auth, false
+    end
+    return res, AUTH_OK, false
+end
+
+
+-- Find the x-mcp-header annotations in a tool's inputSchema. Only properties
+-- reachable through a chain of "properties" keys count. Returns a list of
+-- { header = "Mcp-Param-<name>", path = { key, ... } }, or (nil, reason) when an
+-- annotation breaks a 2026-07-28 rule, in which case the tool must be dropped.
+local function _x_mcp_header_entries(schema)
+    local entries, seen = {}, {}
+    local function walk(node, path, depth)
+        if depth > MAX_X_MCP_HEADER_DEPTH or type(node) ~= "table"
+            or type(node.properties) ~= "table" then
+            return true
+        end
+        for key, child in pairs(node.properties) do
+            if type(child) == "table" then
+                local child_path = { unpack(path) }
+                child_path[#child_path + 1] = key
+                local name = child["x-mcp-header"]
+                if name ~= nil then
+                    if type(name) ~= "string" or not name:match("^[%w!#%$%%&'%*%+%-%.%^_`|~]+$") then
+                        return false, "x-mcp-header is not a valid header token"
+                    end
+                    if child.type ~= "string" and child.type ~= "integer" and child.type ~= "boolean" then
+                        return false, "x-mcp-header on a non-primitive or number parameter"
+                    end
+                    if seen[name:lower()] then
+                        return false, "duplicate x-mcp-header " .. name
+                    end
+                    seen[name:lower()] = true
+                    entries[#entries + 1] = { header = "Mcp-Param-" .. name, path = child_path }
+                end
+                local ok, reason = walk(child, child_path, depth + 1)
+                if not ok then
+                    return false, reason
+                end
+            end
+        end
+        return true
+    end
+    local ok, reason = walk(schema, {}, 1)
+    if not ok then
+        return nil, reason
+    end
+    return entries
+end
+
+
+-- Mcp-Param-* headers for one call: the value at each annotated path, encoded.
+-- A missing or null argument sends no header, as the spec requires.
+local function _param_headers(entries, arguments)
+    local headers = {}
+    for _, entry in ipairs(entries or {}) do
+        local value = arguments
+        for _, key in ipairs(entry.path) do
+            value = type(value) == "table" and value[key] or nil
+        end
+        if value ~= nil and value ~= cjson.null then
+            local encoded = _encode_mcp_header_value(value)
+            if encoded then
+                headers[entry.header] = encoded
+            end
+        end
+    end
+    return headers
+end
+
+
+local function _x_mcp_cache_key(backend_loc, tool_name)
+    return "xmcp:" .. backend_loc .. ":" .. #tool_name .. ":" .. tool_name
+end
+
+
+-- Drop tools whose x-mcp-header annotations are invalid (the spec says a client
+-- MUST exclude them) and remember the rest so tools/call can mirror arguments.
+local function _absorb_modern_tool_list(backend_loc, tools)
+    local kept = {}
+    for _, tool in ipairs(tools) do
+        local name = type(tool) == "table" and tool.name
+        if type(name) == "string" then
+            local entries, reason = _x_mcp_header_entries(tool.inputSchema)
+            if entries then
+                session_cache:set(_x_mcp_cache_key(backend_loc, name), cjson.encode(entries),
+                    X_MCP_HEADER_CACHE_TTL)
+                kept[#kept + 1] = tool
+            else
+                ngx.log(ngx.WARN, "Dropping tool ", name, " from ", backend_loc, ": ", reason)
+            end
+        end
+    end
+    session_cache:set("xmcp_listed:" .. backend_loc, "1", X_MCP_HEADER_CACHE_TTL)
+    return kept
 end
 
 
@@ -601,7 +989,11 @@ end
 -- AUTH_DENIED (grant refused), AUTH_FAILED (the grant could not be checked), or
 -- SESSION_FAILED (the grant passed, the backend session could not be set up).
 local function _call_backend(backend_loc, body, client_session_id, server_id, backend_version,
-                             allow_pre_consent)
+                             allow_pre_consent, param_headers)
+    -- A backend that speaks 2026-07-28 gets a stateless request, no session.
+    if _backend_era(backend_loc, backend_version) == ERA_MODERN then
+        return _call_modern_backend(backend_loc, body, param_headers)
+    end
     -- Returns session_id, outcome, pre_consent, and whether an initialize ran
     -- (it authorized its own body, replacing the request's token).
     local function resolve()
@@ -685,15 +1077,19 @@ local function _call_backend(backend_loc, body, client_session_id, server_id, ba
 end
 
 
--- Fetch one backend's discovery list (tools/list, resources/list, prompts/list).
--- Returns an outcome (see above) and, for LIST_OK, the items.
-local function _fetch_backend_list(backend_loc, method_name, result_key, client_session_id,
-                                   server_id, allow_pre_consent)
+-- Most pages of one backend's list the router reads. A backend that keeps
+-- returning nextCursor beyond this is cut off, so it cannot hold discovery open.
+local MAX_LIST_PAGES = 50
+
+
+-- Fetch one page of a backend's discovery list. Returns (outcome, items, cursor).
+local function _fetch_backend_list_page(backend_loc, method_name, result_key, client_session_id,
+                                        server_id, allow_pre_consent, cursor)
     local req_body = cjson.encode({
         jsonrpc = "2.0",
         id = "dl-" .. (ngx.var.request_id or "0"),
         method = method_name,
-        params = {},
+        params = cursor and { cursor = cursor } or {},
     })
     ngx.req.clear_header("X-MCP-Server-Version")
     local res, auth = _call_backend(backend_loc, req_body, client_session_id, server_id, nil,
@@ -705,6 +1101,17 @@ local function _fetch_backend_list(backend_loc, method_name, result_key, client_
         return LIST_UNVERIFIED
     end
 
+    -- A 2026-07-28 backend answers a method it does not implement with HTTP 404
+    -- and -32601. That is "unsupported", the same as the 200 form legacy
+    -- servers use, not a backend failure.
+    if auth == AUTH_OK and res and res.status == 404 and not res.truncated then
+        local ok, data = pcall(cjson.decode, _parse_sse_body(res.body) or "")
+        if ok and type(data) == "table" and type(data.error) == "table"
+            and data.error.code == JSONRPC_METHOD_NOT_FOUND then
+            return LIST_UNSUPPORTED
+        end
+    end
+
     -- Only the gateway's grant check denies. A 401/403 here is the backend's own
     -- answer, e.g. a revoked upstream credential.
     if auth ~= AUTH_OK or not res or res.status ~= 200 or res.truncated then
@@ -712,11 +1119,48 @@ local function _fetch_backend_list(backend_loc, method_name, result_key, client_
             " status=", res and res.status or "nil")
         return LIST_FAILED
     end
-    local outcome, items = _classify_list_body(res, result_key, allow_pre_consent)
+    local outcome, items, next_cursor = _classify_list_body(res, result_key, allow_pre_consent)
     if outcome == LIST_FAILED then
         ngx.log(ngx.ERR, "Unusable ", method_name, " response from ", backend_loc)
     end
-    return outcome, items
+    return outcome, items, next_cursor
+end
+
+
+-- Fetch one backend's discovery list (tools/list, resources/list, prompts/list),
+-- following nextCursor across pages. Returns an outcome (see above) and, for
+-- LIST_OK, every item. A page that fails makes the whole fetch fail, so a
+-- partial list is never presented or cached as complete.
+local function _fetch_backend_list(backend_loc, method_name, result_key, client_session_id,
+                                   server_id, allow_pre_consent)
+    local all_items = {}
+    local cursor = nil
+    for page = 1, MAX_LIST_PAGES do
+        local outcome, items, next_cursor = _fetch_backend_list_page(backend_loc, method_name,
+            result_key, client_session_id, server_id, allow_pre_consent, cursor)
+        if outcome ~= LIST_OK then
+            if page > 1 and outcome ~= LIST_DENIED then
+                ngx.log(ngx.ERR, method_name, " page ", page, " failed for ", backend_loc)
+                return LIST_FAILED
+            end
+            return outcome, items
+        end
+        for _, item in ipairs(items) do
+            all_items[#all_items + 1] = item
+        end
+        if not next_cursor then
+            break
+        end
+        if page == MAX_LIST_PAGES then
+            ngx.log(ngx.WARN, method_name, " from ", backend_loc, " still had a cursor after ",
+                MAX_LIST_PAGES, " pages; keeping ", #all_items, " items")
+        end
+        cursor = next_cursor
+    end
+    if method_name == "tools/list" and _backend_era(backend_loc, nil) == ERA_MODERN then
+        all_items = _absorb_modern_tool_list(backend_loc, all_items)
+    end
+    return LIST_OK, all_items
 end
 
 
@@ -769,7 +1213,51 @@ end
 
 
 -- Handle tools/list method - proxy to backends for full metadata, with cache
-local function _handle_tools_list(request_id, mapping, user_scopes_str, client_session_id, server_id)
+-- Add the fields a 2026-07-28 result must carry, keeping any the result has:
+-- resultType "complete", and for a cacheable method cacheScope "private" (what
+-- the router returns is per user) and ttlMs. The one place the router applies
+-- these rules, for the lists it builds and the results it forwards.
+-- Mirrors shape_result() in registry/common/mcp_protocol.py.
+local function _shape_modern_result(result, method, ttl_ms)
+    if result.resultType == nil then
+        result.resultType = "complete"
+    end
+    if CACHEABLE_RESULT_METHODS[method] then
+        if result.cacheScope == nil then
+            result.cacheScope = "private"
+        end
+        if result.ttlMs == nil then
+            result.ttlMs = ttl_ms
+        end
+    end
+    return result
+end
+
+
+-- 2026-07-28 reports an unknown tool, resource or prompt as invalid params
+-- (-32602); earlier clients keep the router's existing -32601.
+local function _not_found_code()
+    if ngx.ctx.vr_modern_client then
+        return JSONRPC_INVALID_PARAMS
+    end
+    return JSONRPC_METHOD_NOT_FOUND
+end
+
+
+-- The result object for a list the router builds. For a 2026-07-28 client it
+-- also carries resultType and the cache hints: the list is filtered per user
+-- (scopes, egress consent, blocked tools), so no shared cache may store it.
+local function _list_result(method, result_key, items, modern)
+    local result = { [result_key] = _as_json_array(items) }
+    if modern then
+        _shape_modern_result(result, method, ENRICHED_CACHE_TTL * 1000)
+    end
+    return result
+end
+
+
+local function _handle_tools_list(request_id, mapping, user_scopes_str, client_session_id, server_id,
+                                  modern)
     -- Egress discovery depends on individual credentials and must be fresh.
     local has_egress_backend = next(_egress_locations(mapping)) ~= nil
 
@@ -777,11 +1265,16 @@ local function _handle_tools_list(request_id, mapping, user_scopes_str, client_s
         return _jsonrpc_error(request_id, -32603, "Access denied: missing required server scopes")
     end
 
-    -- Build a set of allowed tools from the mapping (display_name -> mapping entry)
+    -- Each upstream can export a tool with the same original name. Only its
+    -- own mapping may contribute to this virtual server's discovery results.
     local allowed_tools = {}
     if mapping.tools then
         for _, tool in ipairs(mapping.tools) do
-            allowed_tools[tool.original_name or tool.name] = tool
+            local loc = tool.backend_location
+            if loc then
+                allowed_tools[loc] = allowed_tools[loc] or {}
+                allowed_tools[loc][tool.original_name or tool.name] = tool
+            end
         end
     end
 
@@ -835,7 +1328,8 @@ local function _handle_tools_list(request_id, mapping, user_scopes_str, client_s
                     cacheable = false
                 end
                 for _, bt in ipairs(result.items) do
-                    local mapping_entry = allowed_tools[bt.name]
+                    local mapping_entry = allowed_tools[result.location]
+                        and allowed_tools[result.location][bt.name]
                     if mapping_entry then
                         -- Use the mapping's display name (alias) instead of original name
                         local display_name = mapping_entry.name
@@ -844,12 +1338,15 @@ local function _handle_tools_list(request_id, mapping, user_scopes_str, client_s
                         if not desc or desc == "" then
                             desc = bt.description or ""
                         end
-                        enriched_tools[#enriched_tools + 1] = {
+                        enriched_tools[#enriched_tools + 1] = _copy_tool_fields(bt, {
                             name = display_name,
+                            original_name = mapping_entry.original_name or mapping_entry.name,
+                            backend_server_path = mapping_entry.backend_server_path,
+                            block_server_path = mapping_entry.block_server_path,
                             description = desc,
                             inputSchema = _ensure_mcp_schema(bt.inputSchema or bt.input_schema),
                             required_scopes = mapping_entry.required_scopes,
-                        }
+                        })
                     end
                 end
             elseif result.outcome == LIST_CONSENT then
@@ -900,20 +1397,35 @@ local function _handle_tools_list(request_id, mapping, user_scopes_str, client_s
             end
         end
     end
-
-    -- Scope filter: filter cached tools by user's scopes at request time
+    -- Discovery metadata may be cached, but each backing server's block state
+    -- is fetched once per response. An unreadable state is an error, not an
+    -- apparently successful empty catalog.
+    local blocked_by_path = {}
     local tools = setmetatable({}, empty_array_mt)
     for _, tool in ipairs(enriched_tools) do
         if _has_scopes(user_scopes_str, tool.required_scopes) then
-            tools[#tools + 1] = {
-                name = tool.name,
-                description = tool.description or "",
-                inputSchema = _ensure_mcp_schema(tool.inputSchema),
-            }
+            local path = tool.block_server_path or
+                (type(tool.backend_version) ~= "string" and tool.backend_server_path)
+            if not path then
+                return _jsonrpc_error(request_id, -32603, "Backend tool block state unavailable")
+            end
+            if not blocked_by_path[path] then
+                blocked_by_path[path] = _blocked_backend_tools(path)
+                if not blocked_by_path[path] then
+                    return _jsonrpc_error(request_id, -32603, "Backend tool block state unavailable")
+                end
+            end
+            if not blocked_by_path[path][tool.original_name] then
+                tools[#tools + 1] = _copy_tool_fields(tool, {
+                    name = tool.name,
+                    description = tool.description or "",
+                    inputSchema = _ensure_mcp_schema(tool.inputSchema),
+                })
+            end
         end
     end
 
-    return _jsonrpc_result(request_id, { tools = _as_json_array(tools) })
+    return _jsonrpc_result(request_id, _list_result("tools/list", "tools", tools, modern))
 end
 
 
@@ -1011,9 +1523,57 @@ end
 
 -- Proxy a single request to a specific backend with session management and stale retry.
 -- Returns the response body directly. Used for tools/call, resources/read, prompts/get.
+-- A cjson instance that decodes JSON arrays with the array metatable, so a
+-- re-encoded backend result keeps [] as [] (plain cjson writes an empty table
+-- as {}). Used only to add the 2026-07-28 fields to forwarded results.
+local cjson_keep_arrays = cjson.new()
+cjson_keep_arrays.decode_array_with_array_mt(true)
+
+
+-- Add the 2026-07-28 result fields to one JSON-RPC message, if it is a result
+-- that lacks one. Returns the message text unchanged when nothing applies.
+local function _add_modern_result_fields(text, method)
+    local ok, message = pcall(cjson_keep_arrays.decode, text)
+    if not ok or type(message) ~= "table" or type(message.result) ~= "table" then
+        return text
+    end
+    local result = message.result
+    local had_all = result.resultType ~= nil
+        and (not CACHEABLE_RESULT_METHODS[method]
+            or (result.cacheScope ~= nil and result.ttlMs ~= nil))
+    if had_all then
+        return text
+    end
+    _shape_modern_result(result, method, NO_REUSE_TTL_MS)
+    return cjson_keep_arrays.encode(message)
+end
+
+
+-- MCP 2026-07-28 requires resultType on every result, and ttlMs and cacheScope
+-- on cacheable ones; the SDK rejects a result without them. A handshake-era
+-- backend never sends them, so add them when the client spoke 2026-07-28.
+-- Handles a JSON body and SSE "data:" lines.
+local function _with_modern_result_fields(body, method)
+    if type(body) ~= "string" or body == "" then
+        return body
+    end
+    if body:sub(1, 1) == "{" then
+        return _add_modern_result_fields(body, method)
+    end
+    local lines = {}
+    for line in (body .. "\n"):gmatch("(.-)\n") do
+        if line:sub(1, 6) == "data: " then
+            line = "data: " .. _add_modern_result_fields(line:sub(7), method)
+        end
+        lines[#lines + 1] = line
+    end
+    return table.concat(lines, "\n")
+end
+
+
 local function _proxy_to_backend(request_id, method_name, proxied_params,
                                   backend_location, client_session_id, server_id,
-                                  backend_version, label, allow_pre_consent)
+                                  backend_version, label, allow_pre_consent, param_headers)
     local proxied_body = cjson.encode({
         jsonrpc = "2.0",
         id = request_id,
@@ -1029,7 +1589,7 @@ local function _proxy_to_backend(request_id, method_name, proxied_params,
     end
 
     local res, outcome = _call_backend(backend_location, proxied_body, client_session_id,
-        server_id, backend_version, allow_pre_consent)
+        server_id, backend_version, allow_pre_consent, param_headers)
     if outcome == AUTH_DENIED then
         ngx.status = 403
         ngx.say(_jsonrpc_error(request_id, -32603, "Backend access denied"))
@@ -1057,7 +1617,11 @@ local function _proxy_to_backend(request_id, method_name, proxied_params,
     else
         ngx.header["Content-Type"] = "application/json"
     end
-    ngx.print(res.body)
+    if ngx.ctx.vr_modern_client then
+        ngx.print(_with_modern_result_fields(res.body, method_name))
+    else
+        ngx.print(res.body)
+    end
 end
 
 
@@ -1070,10 +1634,17 @@ end
 -- Uses L1 cache to avoid repeated DB lookups; the cache key includes both the
 -- user and the virtual server path so a cached "valid" result can never
 -- authorize a different user or a different virtual server.
--- Returns true if valid AND owned by the caller for this server, false otherwise.
+-- Returns (ok, err): ok is true if valid AND owned by the caller for this
+-- server. Otherwise ok is false and err is one of:
+--   "not_found": the registry answered 404. No live session has this ID for
+--       this user and virtual server (never minted, expired after the idle
+--       TTL, owned by another user, or minted for another virtual server).
+--       Also returned for an empty ID, which route() already rejects with 400.
+--   "unavailable": the check itself failed (no response, or any status other
+--       than 200 or 404), so the state of the session is unknown.
 local function _validate_client_session(client_session_id, user_id, virtual_server_path)
     if not client_session_id or client_session_id == "" then
-        return false
+        return false, "not_found"
     end
 
     -- L1: fast path check (cache valid sessions for SESSION_CACHE_TTL).
@@ -1106,8 +1677,13 @@ local function _validate_client_session(client_session_id, user_id, virtual_serv
         session_cache:set(cache_key, "1", SESSION_CACHE_TTL)
         return true
     end
+    if res and res.status == 404 then
+        return false, "not_found"
+    end
 
-    return false
+    ngx.log(ngx.ERR, "Client session validation failed for path=", virtual_server_path,
+        " status=", res and res.status or "nil")
+    return false, "unavailable"
 end
 
 
@@ -1128,18 +1704,12 @@ end
 --   "create_failed"   -- the client session could not be created; route()
 --       emits an error instead of a misleading 200 with no Mcp-Session-Id
 --       (which would make the client 400 on its very next request).
-local function _handle_initialize(request_id, server_id, params)
-    local user_id = _auth_user_id()
-    if not user_id then
-        ngx.log(ngx.WARN, "initialize rejected: no authenticated user for server=", server_id)
-        return nil, "unauthenticated"
-    end
-    local virtual_path = "/virtual/" .. server_id
-
-    -- Create client session in MongoDB via internal API
+-- Create a client session owned by user_id for this virtual server, via the
+-- registry's internal API. Returns the server-minted vs-<hex> ID, or nil.
+local function _create_client_session(server_id, user_id)
     local body = cjson.encode({
         user_id = user_id,
-        virtual_server_path = virtual_path,
+        virtual_server_path = "/virtual/" .. server_id,
     })
     local res = ngx.location.capture("/_internal/sessions/client", {
         method = ngx.HTTP_POST,
@@ -1149,17 +1719,30 @@ local function _handle_initialize(request_id, server_id, params)
     local client_session_id = nil
     if res and res.status == 201 then
         local ok, data = pcall(cjson.decode, res.body)
-        if ok then
+        if ok and type(data) == "table" and type(data.client_session_id) == "string" then
             client_session_id = data.client_session_id
         end
+    end
+    if not client_session_id then
+        ngx.log(ngx.ERR, "Failed to create client session for server=", server_id,
+            " status=", res and res.status or "nil")
+    end
+    return client_session_id
+end
+
+
+local function _handle_initialize(request_id, server_id, params)
+    local user_id = _auth_user_id()
+    if not user_id then
+        ngx.log(ngx.WARN, "initialize rejected: no authenticated user for server=", server_id)
+        return nil, "unauthenticated"
     end
 
     -- Fail loudly if the session could not be created: returning a successful
     -- initialize with no Mcp-Session-Id just defers the failure to the client's
     -- next request (which 400s on the missing session).
+    local client_session_id = _create_client_session(server_id, user_id)
     if not client_session_id then
-        ngx.log(ngx.ERR, "Failed to create client session for server=", server_id,
-            " status=", res and res.status or "nil")
         return nil, "create_failed"
     end
 
@@ -1186,9 +1769,59 @@ local function _handle_initialize(request_id, server_id, params)
     }
     return _jsonrpc_result(request_id, result)
 end
+_blocked_backend_tools = function(server_path)
+    -- The registry validates this exact active server on every request. A
+    -- version-pinned mapping keeps its versioned dispatch path separately.
+    if type(server_path) ~= "string" or server_path:sub(1, 1) ~= "/" then
+        return nil
+    end
+    local uri = "/_internal/sessions/tool-block?server_path=" .. ngx.escape_uri(server_path)
+    local res = ngx.location.capture(uri, { method = ngx.HTTP_GET })
+    if not res or res.status ~= 200 then
+        return nil
+    end
+    local ok, body = pcall(cjson.decode, res.body or "")
+    if not ok or type(body) ~= "table" or type(body.blocked_tools) ~= "table" then
+        return nil
+    end
+    local blocked = {}
+    for _, name in ipairs(body.blocked_tools) do
+        if type(name) ~= "string" then
+            return nil
+        end
+        blocked[name] = true
+    end
+    return blocked
+end
 
 
 -- Handle tools/call method - proxy to the correct backend with session management
+-- Mcp-Param-* headers for a tools/call to a 2026-07-28 backend, from the
+-- x-mcp-header annotations in that backend's tools/list. The list is fetched
+-- once when it has not been seen recently. Returns nil for any other backend.
+local function _modern_param_headers(backend_loc, tool_name, arguments, client_session_id,
+                                     server_id, allow_pre_consent)
+    if _backend_era(backend_loc, nil) ~= ERA_MODERN then
+        return nil
+    end
+    local cached = session_cache:get(_x_mcp_cache_key(backend_loc, tool_name))
+    if not cached and session_cache:get("xmcp_listed:" .. backend_loc) ~= "1" then
+        local version = ngx.req.get_headers()["X-MCP-Server-Version"]
+        _fetch_backend_list(backend_loc, "tools/list", "tools", client_session_id, server_id,
+            allow_pre_consent)
+        if version then
+            ngx.req.set_header("X-MCP-Server-Version", version)
+        end
+        cached = session_cache:get(_x_mcp_cache_key(backend_loc, tool_name))
+    end
+    local ok, entries = pcall(cjson.decode, cached or "[]")
+    if not ok or type(entries) ~= "table" then
+        return nil
+    end
+    return _param_headers(entries, arguments)
+end
+
+
 local function _handle_tools_call(request_id, mapping, params, user_scopes_str, client_session_id, server_id)
     -- Enforce server-level required_scopes before processing
     if not _has_scopes(user_scopes_str, mapping.required_scopes) then
@@ -1208,7 +1841,7 @@ local function _handle_tools_call(request_id, mapping, params, user_scopes_str, 
     local tool_info = mapping.tool_backend_map and mapping.tool_backend_map[tool_name]
     if not tool_info then
         ngx.status = 200
-        ngx.say(_jsonrpc_error(request_id, -32601, "Tool not found: " .. tool_name))
+        ngx.say(_jsonrpc_error(request_id, _not_found_code(), "Tool not found: " .. tool_name))
         return
     end
 
@@ -1238,6 +1871,29 @@ local function _handle_tools_call(request_id, mapping, params, user_scopes_str, 
         ngx.say(_jsonrpc_error(request_id, -32603, "No backend location for tool: " .. tool_name))
         return
     end
+    -- The alias's scope entry and backend dispatch entry must describe the same
+    -- selected backend. Never authorize one location/path then dispatch another.
+    local mapped_version = type(mapped_tool.backend_version) == "string"
+        and mapped_tool.backend_version or ""
+    local dispatched_version = type(tool_info.backend_version) == "string"
+        and tool_info.backend_version or ""
+    if mapped_tool.backend_location ~= backend_location
+        or mapped_tool.backend_server_path ~= tool_info.backend_server_path
+        or mapped_tool.block_server_path ~= tool_info.block_server_path
+        or (mapped_tool.original_name or tool_name) ~= original_name
+        or mapped_version ~= dispatched_version then
+        ngx.status = 200
+        ngx.say(_jsonrpc_error(request_id, -32603, "Inconsistent backend mapping for tool"))
+        return
+    end
+    local block_path = tool_info.block_server_path
+        or (type(tool_info.backend_version) ~= "string" and tool_info.backend_server_path)
+    local blocked = block_path and _blocked_backend_tools(block_path)
+    if not blocked or blocked[original_name] then
+        ngx.status = 200
+        ngx.say(_jsonrpc_error(request_id, -32603, "Access denied: backend tool blocked or unavailable"))
+        return
+    end
 
     -- Build the proxied params with original tool name
     local proxied_params = {}
@@ -1248,12 +1904,16 @@ local function _handle_tools_call(request_id, mapping, params, user_scopes_str, 
     end
     proxied_params.name = original_name
 
+    local is_egress = mapped_tool.egress_auth_mode and mapped_tool.egress_auth_mode ~= "none"
+    local param_headers = _modern_param_headers(backend_location, original_name,
+        proxied_params.arguments, client_session_id, server_id, is_egress)
+
     -- Proxy to backend with session management
     _proxy_to_backend(
         request_id, "tools/call", proxied_params,
         backend_location, client_session_id, server_id,
         tool_info.backend_version, "tool:" .. tool_name,
-        mapped_tool.egress_auth_mode and mapped_tool.egress_auth_mode ~= "none"
+        is_egress, param_headers
     )
 end
 
@@ -1272,7 +1932,7 @@ local function _handle_resources_read(request_id, params, mapping, client_sessio
         mapping, client_session_id, server_id)
     if problem == "missing" then
         ngx.status = 200
-        ngx.say(_jsonrpc_error(request_id, -32601, "Resource not found: " .. uri))
+        ngx.say(_jsonrpc_error(request_id, _not_found_code(), "Resource not found: " .. uri))
         return
     end
     if not backend_loc then
@@ -1304,7 +1964,7 @@ local function _handle_prompts_get(request_id, params, mapping, client_session_i
         mapping, client_session_id, server_id)
     if problem == "missing" then
         ngx.status = 200
-        ngx.say(_jsonrpc_error(request_id, -32601, "Prompt not found: " .. name))
+        ngx.say(_jsonrpc_error(request_id, _not_found_code(), "Prompt not found: " .. name))
         return
     end
     if not backend_loc then
@@ -1323,6 +1983,175 @@ end
 
 
 -- Main entry point
+-- ---------------------------------------------------------------------------
+-- MCP 2026-07-28 clients
+--
+-- A 2026-07-28 client sends no initialize and no Mcp-Session-Id. Every request
+-- carries its protocol version in params._meta, mirrored in the
+-- MCP-Protocol-Version header, and Mcp-Method / Mcp-Name mirror the body.
+-- The router validates those headers (a server that processes the body MUST),
+-- answers server/discover itself, and serves the rest through a client session
+-- it creates on the caller's behalf. That session is owned by the authenticated
+-- user and scoped to this virtual server, exactly like one minted by
+-- initialize, so backend sessions, grants and egress consent work unchanged.
+-- Requests without the 2026-07-28 markers keep the handshake-era path.
+-- Spec: https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http
+-- ---------------------------------------------------------------------------
+-- The registry expires an idle client session after 1 hour; reuse the cached
+-- one for half of that and re-validate it before every use anyway.
+local MODERN_SESSION_CACHE_TTL = 1800
+
+
+-- A request is 2026-07-28 when its _meta or its header names that era.
+local function _is_modern_request(params)
+    local meta = type(params) == "table" and params._meta
+    if type(meta) == "table" and type(meta[META_PROTOCOL_VERSION_KEY]) == "string" then
+        return true
+    end
+    local header = ngx.var.http_mcp_protocol_version
+    return type(header) == "string" and header:sub(1, 5) == "2026-"
+end
+
+
+-- Undo the =?base64?...?= sentinel encoding of an Mcp-Name header value.
+local function _decode_mcp_header_value(value)
+    if type(value) ~= "string" then
+        return value
+    end
+    local prefix_len, suffix_len = #BASE64_SENTINEL_PREFIX, #BASE64_SENTINEL_SUFFIX
+    if #value <= prefix_len + suffix_len
+        or value:sub(1, prefix_len) ~= BASE64_SENTINEL_PREFIX
+        or value:sub(-suffix_len) ~= BASE64_SENTINEL_SUFFIX then
+        return value
+    end
+    return ngx.decode_base64(value:sub(prefix_len + 1, -suffix_len - 1)) or value
+end
+
+
+-- Write a 2026-07-28 protocol error with an HTTP status and optional data.
+local function _modern_error(status, request_id, code, message, data)
+    ngx.status = status
+    ngx.header["Content-Type"] = "application/json"
+    local err = { code = code, message = message }
+    if data then
+        err.data = data
+    end
+    ngx.say(cjson.encode({ jsonrpc = "2.0", id = request_id or cjson.null, error = err }))
+end
+
+
+-- Validate the version and the mirrored headers of a 2026-07-28 request.
+-- Writes the error response and returns false when the request must stop.
+local function _validate_modern_request(request_id, method, params)
+    local header_version = ngx.var.http_mcp_protocol_version
+    local meta = type(params) == "table" and params._meta
+    local body_version = type(meta) == "table" and meta[META_PROTOCOL_VERSION_KEY] or nil
+
+    if method == "initialize" then
+        _modern_error(400, request_id, JSONRPC_HEADER_MISMATCH,
+            "Header mismatch: initialize (the legacy handshake) was sent with 2026-07-28 metadata")
+        return false
+    end
+    if type(header_version) ~= "string" or header_version == "" then
+        _modern_error(400, request_id, JSONRPC_HEADER_MISMATCH,
+            "Header mismatch: missing MCP-Protocol-Version header")
+        return false
+    end
+    if type(body_version) ~= "string" then
+        _modern_error(400, request_id, JSONRPC_HEADER_MISMATCH,
+            "Header mismatch: params._meta lacks " .. META_PROTOCOL_VERSION_KEY)
+        return false
+    end
+    if header_version ~= body_version then
+        _modern_error(400, request_id, JSONRPC_HEADER_MISMATCH,
+            "Header mismatch: MCP-Protocol-Version does not match params._meta")
+        return false
+    end
+    if body_version ~= MODERN_PROTOCOL_VERSION then
+        _modern_error(400, request_id, JSONRPC_UNSUPPORTED_PROTOCOL_VERSION,
+            "Unsupported protocol version: " .. body_version,
+            { supported = ADVERTISED_PROTOCOL_VERSIONS, requested = body_version })
+        return false
+    end
+    if ngx.var.http_mcp_method ~= method then
+        _modern_error(400, request_id, JSONRPC_HEADER_MISMATCH,
+            "Header mismatch: Mcp-Method does not match the body method")
+        return false
+    end
+    local name_field = MCP_NAME_SOURCE[method]
+    if name_field then
+        local body_name = type(params) == "table" and params[name_field] or nil
+        if _decode_mcp_header_value(ngx.var.http_mcp_name) ~= body_name then
+            _modern_error(400, request_id, JSONRPC_HEADER_MISMATCH,
+                "Header mismatch: Mcp-Name does not match params." .. name_field)
+            return false
+        end
+    end
+    return true
+end
+
+
+-- The 2026-07-28 headers describe the client's request to the router. A
+-- backend subrequest carries a different body (the router's own initialize,
+-- an alias rewritten to the original tool name, a list with empty params), so
+-- the client's copies must not reach it.
+local function _clear_client_mcp_headers()
+    ngx.req.clear_header("MCP-Protocol-Version")
+    ngx.req.clear_header("Mcp-Method")
+    ngx.req.clear_header("Mcp-Name")
+    for name, _ in pairs(ngx.req.get_headers()) do
+        if type(name) == "string" and name:lower():sub(1, 10) == "mcp-param-" then
+            ngx.req.clear_header(name)
+        end
+    end
+end
+
+
+-- Answer server/discover for this virtual server.
+local function _handle_discover(request_id)
+    return _jsonrpc_result(request_id, {
+        resultType = "complete",
+        supportedVersions = ADVERTISED_PROTOCOL_VERSIONS,
+        -- An empty Lua table encodes as a JSON object ({}), which is what an
+        -- advertised capability with no sub-options is.
+        capabilities = {
+            tools = { listChanged = false },
+            resources = {},
+            prompts = {},
+        },
+        _meta = {
+            [META_SERVER_INFO_KEY] = { name = "mcp-gateway-virtual-server", version = "1.0.0" },
+        },
+    })
+end
+
+
+-- Return the client session the router uses for a 2026-07-28 caller, creating
+-- one when none is cached or the cached one has expired. Returns (id, err) with
+-- err "unavailable" when the registry cannot be reached.
+local function _modern_client_session(server_id, user_id)
+    local virtual_path = "/virtual/" .. server_id
+    local cache_key = "modern_csess:" .. #user_id .. ":" .. user_id .. ":" .. virtual_path
+    local cached = session_cache:get(cache_key)
+    if cached then
+        local ok, err = _validate_client_session(cached, user_id, virtual_path)
+        if ok then
+            return cached
+        end
+        if err == "unavailable" then
+            return nil, "unavailable"
+        end
+        session_cache:delete(cache_key)
+    end
+    local client_session_id = _create_client_session(server_id, user_id)
+    if not client_session_id then
+        return nil, "unavailable"
+    end
+    session_cache:set(cache_key, client_session_id, MODERN_SESSION_CACHE_TTL)
+    return client_session_id
+end
+
+
 function _M.route()
     -- Per MCP Streamable HTTP 2025-11-25 spec, the client MUST include Accept header
     -- listing both application/json and text/event-stream. Set this on the request so
@@ -1415,6 +2244,25 @@ function _M.route()
         return
     end
 
+    -- MCP 2026-07-28: validate the mirrored headers, then drop the client's
+    -- copies so no backend subrequest inherits them (see _clear_client_mcp_headers).
+    local modern = _is_modern_request(params)
+    ngx.ctx.vr_modern_client = modern
+    if modern then
+        if not _validate_modern_request(request_id, method, params) then
+            return
+        end
+        _clear_client_mcp_headers()
+        -- 2026-07-28 has no sessions: ignore any Mcp-Session-Id the client sent.
+        ngx.req.clear_header("Mcp-Session-Id")
+        if method == "server/discover" then
+            ngx.status = 200
+            ngx.header["Content-Type"] = "application/json"
+            ngx.say(_handle_discover(request_id))
+            return
+        end
+    end
+
     -- Handle initialize: generate a client session and return capabilities.
     -- A session must be owned by a concrete user; refuse to mint one for a
     -- request with no authenticated identity, and surface a session-creation
@@ -1438,8 +2286,9 @@ function _M.route()
         return
     end
 
-    -- Handle ping: simple echo (no mapping needed)
-    if method == "ping" then
+    -- Handle ping: simple echo (no mapping needed). 2026-07-28 removed ping, so a
+    -- modern request falls through to "method not found" below.
+    if method == "ping" and not modern then
         ngx.status = 200
         ngx.header["Content-Type"] = "application/json"
         ngx.say(_jsonrpc_result(request_id, {}))
@@ -1464,6 +2313,19 @@ function _M.route()
         return
     end
 
+    -- A 2026-07-28 client has no session. Use the one the router keeps for this
+    -- user on this virtual server; it passes the same owner and server checks.
+    if modern then
+        local session_err
+        client_session_id, session_err = _modern_client_session(server_id, auth_user)
+        if not client_session_id then
+            ngx.log(ngx.ERR, "No client session for 2026-07-28 caller on server=", server_id,
+                " err=", session_err)
+            _modern_error(503, request_id, -32603, "Session store unavailable. Please retry.")
+            return
+        end
+    end
+
     -- Reject any session ID that is not in the server-minted format before it
     -- reaches an internal subrequest. The ID is attacker-controlled (it comes
     -- straight from the Mcp-Session-Id header) and is interpolated into the
@@ -1481,18 +2343,31 @@ function _M.route()
         return
     end
 
-    -- Validate client session: per MCP spec, servers that require a session ID
-    -- SHOULD respond with 400 Bad Request to requests without a valid Mcp-Session-Id.
+    -- Validate client session. Per MCP Streamable HTTP 2025-03-26 to 2025-11-25
+    -- (Session Management), 400 is for a request without an Mcp-Session-Id
+    -- (handled above) and a terminated session MUST get 404 Not Found, which
+    -- tells the client to start a new session. The registry expires idle client
+    -- sessions, so an unknown well-formed ID gets 404.
     -- Initialize and ping are exempt; notifications already handled above with 202.
     -- The session must also belong to the authenticated caller AND have been
     -- minted for this virtual server -- presenting another user's session ID,
     -- or replaying a session from a different virtual server, is rejected here
-    -- before any session context is loaded or routed.
-    if not _validate_client_session(client_session_id, auth_user, "/virtual/" .. server_id) then
-        ngx.status = 400
+    -- before any session context is loaded or routed, with the same 404 so the
+    -- reply does not reveal that the session exists for someone else.
+    -- A failed check gets 503 so clients retry instead of re-initializing.
+    local session_ok, session_err = _validate_client_session(client_session_id, auth_user,
+        "/virtual/" .. server_id)
+    if not session_ok then
         ngx.header["Content-Type"] = "application/json"
+        if session_err == "unavailable" then
+            ngx.status = 503
+            ngx.say(_jsonrpc_error(request_id, -32603,
+                "Session validation unavailable. Please retry."))
+            return
+        end
+        ngx.status = 404
         ngx.say(_jsonrpc_error(request_id, -32600,
-            "Missing or invalid Mcp-Session-Id. Send an initialize request first."))
+            "Session not found or expired. Send a new initialize request."))
         return
     end
 
@@ -1513,7 +2388,8 @@ function _M.route()
 
     if method == "tools/list" then
         ngx.status = 200
-        ngx.say(_handle_tools_list(request_id, mapping, user_scopes_str, client_session_id, server_id))
+        ngx.say(_handle_tools_list(request_id, mapping, user_scopes_str, client_session_id, server_id,
+            modern))
 
     elseif method == "tools/call" then
         _handle_tools_call(request_id, mapping, params, user_scopes_str, client_session_id, server_id)
@@ -1534,7 +2410,25 @@ function _M.route()
             return
         end
         ngx.status = 200
-        ngx.say(_jsonrpc_result(request_id, { resources = _as_json_array(resources) }))
+        ngx.say(_jsonrpc_result(request_id, _list_result("resources/list", "resources", resources, modern)))
+
+    elseif method == "resources/templates/list" then
+        -- Enforce server-level required_scopes
+        if not _has_scopes(user_scopes_str, mapping.required_scopes) then
+            ngx.status = 200
+            ngx.say(_jsonrpc_error(request_id, -32603, "Access denied: missing required server scopes"))
+            return
+        end
+        local templates, _, denied = _proxy_list_to_backends("resources/templates/list",
+            "resourceTemplates", mapping, client_session_id, server_id)
+        if not templates then
+            ngx.status = denied and 403 or 502
+            ngx.say(_jsonrpc_error(request_id, -32603,
+                denied and "Backend access denied" or "Backend discovery failed"))
+            return
+        end
+        ngx.status = 200
+        ngx.say(_jsonrpc_result(request_id, _list_result("resources/templates/list", "resourceTemplates", templates, modern)))
 
     elseif method == "resources/read" then
         -- Enforce server-level required_scopes
@@ -1561,7 +2455,7 @@ function _M.route()
             return
         end
         ngx.status = 200
-        ngx.say(_jsonrpc_result(request_id, { prompts = _as_json_array(prompts) }))
+        ngx.say(_jsonrpc_result(request_id, _list_result("prompts/list", "prompts", prompts, modern)))
 
     elseif method == "prompts/get" then
         -- Enforce server-level required_scopes
@@ -1573,7 +2467,9 @@ function _M.route()
         _handle_prompts_get(request_id, params, mapping, client_session_id, server_id)
 
     else
-        ngx.status = 200
+        -- 2026-07-28 answers an unknown method with HTTP 404, which a dual-era
+        -- client reads as "modern server, method missing", not "legacy server".
+        ngx.status = modern and 404 or 200
         ngx.say(_jsonrpc_error(request_id, -32601, "Method not found: " .. tostring(method)))
     end
 end
@@ -1585,6 +2481,8 @@ if _G._VR_TEST then
     _M._fetch_backend_list = _fetch_backend_list
     _M._proxy_list_to_backends = _proxy_list_to_backends
     _M._get_mapping = _get_mapping
+    _M._ensure_mcp_schema = _ensure_mcp_schema
+    _M._with_modern_result_fields = _with_modern_result_fields
     _M._handle_resources_read = _handle_resources_read
     _M._append_mapping_tools_for_backend = _append_mapping_tools_for_backend
     _M._handle_tools_list = _handle_tools_list
@@ -1592,6 +2490,16 @@ if _G._VR_TEST then
     _M._get_backend_session = _get_backend_session
     _M._proxy_to_backend = _proxy_to_backend
     _M._forward_identity_headers = _forward_identity_headers
+    _M._is_modern_request = _is_modern_request
+    _M._decode_mcp_header_value = _decode_mcp_header_value
+    _M._validate_modern_request = _validate_modern_request
+    _M._clear_client_mcp_headers = _clear_client_mcp_headers
+    _M._modern_client_session = _modern_client_session
+    _M._backend_era = _backend_era
+    _M._encode_mcp_header_value = _encode_mcp_header_value
+    _M._x_mcp_header_entries = _x_mcp_header_entries
+    _M._param_headers = _param_headers
+    _M._call_backend = _call_backend
     return _M
 end
 

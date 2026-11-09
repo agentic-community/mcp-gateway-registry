@@ -11,6 +11,7 @@ version = "0.1.0"
 description = "Authentication server for validating JWT tokens against Amazon Cognito"
 requires-python = ">=3.14"
 dependencies = [
+    "certifi>=2026.10.19",
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.34.0",
     "pydantic>=2.0.0",
@@ -52,3 +53,5 @@ dev = [
 [tool.uv]
 # Local-only project - never resolve from PyPI
 package = false
+# Bumping certifi exclusion date to bypass 7-day window due to eMudhra certificate compromise
+exclude-newer-package = { certifi = "2026-10-22T00:00:00Z" }

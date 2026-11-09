@@ -41,19 +41,19 @@ variable "task_execution_role_arn" {
 variable "registry_image_uri" {
   description = "Container image URI for registry service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/registry:1.32.1"
+  default     = "public.ecr.aws/p3v1o3c6/registry:1.36.0"
 }
 
 variable "auth_server_image_uri" {
   description = "Container image URI for auth server service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/auth-server:1.32.1"
+  default     = "public.ecr.aws/p3v1o3c6/auth-server:1.36.0"
 }
 
 variable "mcpgw_image_uri" {
   description = "Container image URI for mcpgw service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/mcpgw:1.32.1"
+  default     = "public.ecr.aws/p3v1o3c6/mcpgw:1.36.0"
 }
 
 variable "enable_demo_servers" {
@@ -393,6 +393,50 @@ variable "embeddings_response_format" {
   description = "Response shape of the litellm embeddings endpoint. 'openai' (default) = standard envelope; 'raw_array' = endpoint returns a bare [[float]] array."
   type        = string
   default     = ""
+}
+
+variable "embeddings_request_timeout_seconds" {
+  description = "Timeout in seconds for each remote embeddings request (litellm provider only)."
+  type        = number
+  default     = 30
+
+  validation {
+    condition     = var.embeddings_request_timeout_seconds >= 1 && var.embeddings_request_timeout_seconds <= 600
+    error_message = "embeddings_request_timeout_seconds must be between 1 and 600."
+  }
+}
+
+variable "embeddings_max_retries" {
+  description = "Retries for transient remote embeddings failures (HTTP 429, 5xx, connection errors)."
+  type        = number
+  default     = 2
+
+  validation {
+    condition     = var.embeddings_max_retries >= 0 && var.embeddings_max_retries <= 10
+    error_message = "embeddings_max_retries must be between 0 and 10."
+  }
+}
+
+variable "embeddings_retry_max_input_chars" {
+  description = "Trim target in characters for the one retry after a failed embedding call. null uses the per-model default (2048 for Cohere on Amazon Bedrock, 28000 otherwise)."
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.embeddings_retry_max_input_chars == null ? true : (var.embeddings_retry_max_input_chars >= 256 && var.embeddings_retry_max_input_chars <= 200000)
+    error_message = "embeddings_retry_max_input_chars must be null or between 256 and 200000."
+  }
+}
+
+variable "embeddings_extra_headers" {
+  description = "Extra HTTP headers sent on every embeddings request (litellm provider only), as a map of header name to value. Expanded into the EMBEDDINGS_EXTRA_HEADER_1..5 env vars. Stored in clear text: never put a credential here."
+  type        = map(string)
+  default     = {}
+
+  validation {
+    condition     = length(var.embeddings_extra_headers) <= 5
+    error_message = "embeddings_extra_headers supports at most 5 entries (EMBEDDINGS_EXTRA_HEADER_1..5)."
+  }
 }
 
 
@@ -761,6 +805,35 @@ variable "entra_graph_base_url" {
   description = "Microsoft Graph base URL override. Leave empty on standard deployments — auto-inferred from entra_login_base_url."
   type        = string
   default     = ""
+}
+
+variable "entra_graph_resource_url" {
+  description = "Native Microsoft Graph OAuth resource URL. Leave empty for known Entra clouds; set to the official Graph resource for the target cloud when entra_login_base_url uses a custom proxy. This is not the Graph fetch proxy URL."
+  type        = string
+  default     = ""
+}
+
+variable "entra_browser_user_read_enabled" {
+  description = "Request Microsoft Graph User.Read on Entra browser login. Graph lookup also requires entra_group_recovery_enabled."
+  type        = bool
+  default     = false
+}
+
+variable "entra_group_recovery_enabled" {
+  description = "Enable Microsoft Graph recovery for Entra group overage (eligible bearer tokens and browser sessions consented to User.Read)."
+  type        = bool
+  default     = true
+}
+
+variable "entra_group_cache_ttl_seconds" {
+  description = "Positive Microsoft Graph group-result cache lifetime in seconds."
+  type        = number
+  default     = 300
+
+  validation {
+    condition     = var.entra_group_cache_ttl_seconds >= 30 && var.entra_group_cache_ttl_seconds <= 3600 && floor(var.entra_group_cache_ttl_seconds) == var.entra_group_cache_ttl_seconds
+    error_message = "entra_group_cache_ttl_seconds must be a whole number between 30 and 3600."
+  }
 }
 
 variable "entra_scope_format" {
@@ -2012,6 +2085,29 @@ variable "egress_obo_allowed_audiences" {
   default     = ""
 }
 
+variable "egress_obo_cache_enabled" {
+  description = <<-EOT
+    Opt-in: cache exchanged OBO tokens in the per-user SecretStore so repeated
+    calls by the same principal to the same audience reuse a still-valid token
+    instead of re-exchanging. Default off preserves the stateless per-request
+    exchange.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "egress_obo_cache_max_ttl_seconds" {
+  description = "Hard cap (seconds) on the OBO cache reuse window, applied below the token's real expiry. Bounds revocation/conditional-access re-evaluation latency on cache hits."
+  type        = number
+  default     = 300
+}
+
+variable "egress_obo_cache_expiry_skew_seconds" {
+  description = "Never reuse a cached OBO token within this many seconds of its expiry. Must be < EGRESS_OBO_CACHE_MAX_TTL_SECONDS."
+  type        = number
+  default     = 30
+}
+
 variable "egress_oauth_trusted_idp_hosts" {
   description = <<-EOT
     Optional comma-separated hostnames of operator-controlled OAuth/OIDC identity
@@ -2036,10 +2132,15 @@ variable "egress_registry_internal_url" {
 }
 
 variable "egress_nginx_marker_secret" {
-  description = "Optional override for the nginx marker secret shared by registry + auth-server. Empty auto-generates a strong value (stored in Secrets Manager). The marker is required unconditionally -- both services refuse to start without it."
+  description = "Optional override for the nginx marker secret shared by registry + auth-server. Empty auto-generates a strong value (stored in Secrets Manager). The marker is required unconditionally; both services refuse to start without it. It must contain only printable ASCII characters other than '$' (no spaces), because the registry renders it into the nginx config and nginx sends it as a header."
   type        = string
   default     = ""
   sensitive   = true
+
+  validation {
+    condition     = var.egress_nginx_marker_secret == "" || can(regex("^[!-#%-~]+$", var.egress_nginx_marker_secret))
+    error_message = "egress_nginx_marker_secret must contain only printable ASCII characters other than '$' (no spaces): the registry renders it into the nginx config and nginx sends it as a header."
+  }
 }
 
 variable "egress_secrets_manager_kms_key_id" {
@@ -2055,7 +2156,7 @@ variable "egress_secrets_manager_path_prefix" {
 }
 
 variable "egress_credential_encryption_key" {
-  description = "Optional AES-256-GCM key (registry-only) used to encrypt per-user egress credentials at rest before they reach Secrets Manager / OpenBao. Empty disables encryption (legacy plaintext); existing deployments keep working unchanged. Never auto-generated."
+  description = "Optional AES-256-GCM key used to encrypt per-user egress credentials at rest before they reach Secrets Manager / OpenBao. Injected into the registry task, and also into the auth-server task when egress_obo_cache_enabled is true (encrypts cached OBO tokens). Empty disables encryption (legacy plaintext); existing deployments keep working unchanged. Never auto-generated."
   type        = string
   default     = ""
   sensitive   = true

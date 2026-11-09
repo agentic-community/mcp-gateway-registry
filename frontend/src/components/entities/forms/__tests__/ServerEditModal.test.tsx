@@ -41,6 +41,7 @@ const baseForm: ServerEditForm = {
   egress_custom_token_url: '',
   egress_custom_token_auth_style: '',
   egress_custom_resource: '',
+  egress_expected_issuer: '',
   egress_target_audience: '',
   oauth_discovery_enabled: false,
   oauth_discovery_provider: '',
@@ -52,6 +53,7 @@ const baseForm: ServerEditForm = {
   oauth_discovery_custom_scope_separator: '',
   oauth_discovery_custom_token_auth_style: '',
   oauth_discovery_custom_resource: '',
+  oauth_discovery_expected_issuer: '',
 };
 
 // Harness that owns the form state so controlled-input edits are observable.

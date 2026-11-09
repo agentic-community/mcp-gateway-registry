@@ -619,14 +619,14 @@ async def management_list_groups(
 
     iam = get_iam_manager()
 
+    # An IdP failure (missing permission, outage) must not hide the groups the
+    # registry tracks itself, so continue with an empty IdP list. The merge
+    # below then returns every scope document as a local-only group.
     try:
         raw_groups = await iam.list_groups()
     except Exception as exc:
-        logger.error("Failed to list IAM groups: %s", exc)
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Unable to list IAM groups",
-        ) from exc
+        logger.warning("Failed to list IAM groups from the IdP: %s", exc)
+        raw_groups = []
 
     # Cross-reference with MongoDB scope documents.
     # scope_service.list_groups() also eagerly backfills any legacy docs

@@ -7,6 +7,7 @@ truncated mid-write file.
 
 import os
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -84,6 +85,23 @@ class TestAtomicWrite:
         assert not target.parent.exists()
         _atomic_write_text(target, "content")
         assert target.read_text() == "content"
+
+    @pytest.mark.parametrize(
+        ("record_metric", "expected_calls"),
+        [(True, 1), (False, 0)],
+    )
+    def test_record_metric_controls_config_write_counter(
+        self,
+        tmp_path: Path,
+        record_metric: bool,
+        expected_calls: int,
+    ) -> None:
+        """Mapping files pass record_metric=False so the counter stays config-only."""
+        target = tmp_path / "mapping.json"
+        with patch("registry.core.nginx_service.NGINX_CONFIG_WRITES") as counter:
+            _atomic_write_text(target, "{}", record_metric=record_metric)
+        assert counter.labels.call_count == expected_calls
+        assert target.read_text() == "{}"
 
 
 class TestCleanupStaleTempFiles:

@@ -1,4 +1,4 @@
-name: Lua Router Tests
+name: Lua Tests
 
 on:
   push:
@@ -33,12 +33,28 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Syntax check virtual_router.lua
-        run: /usr/local/openresty/luajit/bin/luajit -bl docker/lua/virtual_router.lua /dev/null
-
-      - name: Run Lua router unit tests
+      - name: Check Lua syntax and run all unit tests
+        shell: sh
         env:
           # Point LuaJIT at OpenResty's bundled lua-cjson.
           LUA_CPATH: "/usr/local/openresty/lualib/?.so;;"
           LUA_PATH: "/usr/local/openresty/lualib/?.lua;;"
-        run: /usr/local/openresty/luajit/bin/luajit tests/lua/test_virtual_router.lua
+        run: |
+          set -eu
+          found_source=false
+          for source in docker/lua/*.lua; do
+            [ -f "$source" ] || continue
+            found_source=true
+            echo "Syntax: $source"
+            /usr/local/openresty/luajit/bin/luajit -b "$source" /dev/null
+          done
+          [ "$found_source" = true ] || { echo 'No Lua source files found'; exit 1; }
+
+          found_test=false
+          for test_file in tests/lua/test_*.lua; do
+            [ -f "$test_file" ] || continue
+            found_test=true
+            echo "Test: $test_file"
+            /usr/local/openresty/luajit/bin/luajit "$test_file"
+          done
+          [ "$found_test" = true ] || { echo 'No Lua tests found'; exit 1; }

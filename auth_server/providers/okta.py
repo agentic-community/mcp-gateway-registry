@@ -10,7 +10,7 @@ from urllib.parse import urlencode
 import jwt
 import requests
 
-from .base import AuthProvider
+from .base import AuthProvider, normalize_groups_claim
 
 # Constants for self-signed token validation
 JWT_ISSUER = os.environ.get("JWT_ISSUER", "mcp-auth-server")
@@ -203,12 +203,9 @@ class OktaProvider(AuthProvider):
 
             logger.debug(f"Token validation successful for user: {claims.get('sub', 'unknown')}")
 
-            # Extract and validate groups claim (must be list of strings)
-            groups = claims.get("groups", [])
-            if not isinstance(groups, list):
-                groups = [groups] if groups else []
-            if not all(isinstance(g, str) for g in groups):
-                raise ValueError("Invalid groups claim format: must contain only strings")
+            # Extract and strictly validate the groups claim: it must be a JSON
+            # array of strings
+            groups = normalize_groups_claim(claims.get("groups"), source="okta groups")
 
             # Extract scopes - Okta uses 'scp' for scopes in access tokens
             scope_claim = claims.get("scp") or claims.get("scope", "")
@@ -314,9 +311,7 @@ class OktaProvider(AuthProvider):
                     scopes = scope_value
 
             # Extract groups from claims
-            groups = claims.get("groups", [])
-            if isinstance(groups, str):
-                groups = [groups]
+            groups = normalize_groups_claim(claims.get("groups"), source="okta self-signed groups")
 
             logger.info(
                 f"Successfully validated self-signed token for user: {claims.get('sub')}, "

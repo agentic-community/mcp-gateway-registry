@@ -41,10 +41,10 @@ node --version  # Should show v20.x.x
 
 **Install Python and UV:**
 ```bash
-sudo apt-get install -y python3.14 python3.14-venv python3-pip
+sudo apt-get install -y python3.14 python3.14-venv python3-pip pipx
 
 # Install UV package manager
-curl -LsSf https://astral.sh/uv/install.sh | sh
+pipx install uv==0.13.5
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
 source ~/.bashrc
 uv --version

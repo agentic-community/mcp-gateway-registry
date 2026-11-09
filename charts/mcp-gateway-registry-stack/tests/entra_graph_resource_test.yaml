@@ -1,0 +1,59 @@
+suite: stack Entra Graph OAuth resource
+release:
+  name: test
+  namespace: default
+templates:
+  - templates/oauth-provider-secret.yaml
+tests:
+  - it: omits native Graph resource when unset
+    set:
+      global:
+        authProvider:
+          type: entra
+    asserts:
+      - notExists:
+          path: data.ENTRA_GRAPH_RESOURCE_URL
+
+  - it: shares the native Graph resource independently of the fetch proxy
+    set:
+      global:
+        authProvider:
+          type: entra
+      auth-server:
+        entra:
+          graphBaseUrl: https://graph-proxy.example.test
+          graphResourceUrl: https://dod-graph.microsoft.us
+    asserts:
+      - equal:
+          path: data.ENTRA_GRAPH_BASE_URL
+          value: https://graph-proxy.example.test
+          decodeBase64: true
+      - equal:
+          path: data.ENTRA_GRAPH_RESOURCE_URL
+          value: https://dod-graph.microsoft.us
+          decodeBase64: true
+
+  - it: does not leak auth-only group controls into the shared provider secret
+    set:
+      global:
+        authProvider:
+          type: entra
+    asserts:
+      - notExists:
+          path: data.ENTRA_GROUP_RECOVERY_ENABLED
+      - notExists:
+          path: data.ENTRA_BROWSER_USER_READ_ENABLED
+      - notExists:
+          path: data.ENTRA_GROUP_CACHE_TTL_SECONDS
+
+  - it: keeps explicit browser opt-in out of the shared provider secret
+    set:
+      global:
+        authProvider:
+          type: entra
+      auth-server:
+        entra:
+          browserUserReadEnabled: true
+    asserts:
+      - notExists:
+          path: data.ENTRA_BROWSER_USER_READ_ENABLED

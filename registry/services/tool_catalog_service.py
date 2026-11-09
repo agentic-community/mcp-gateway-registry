@@ -15,6 +15,7 @@ from ..auth.tool_filter import filter_tools_for_user
 from ..repositories.factory import get_server_repository
 from ..repositories.interfaces import ServerRepositoryBase
 from ..schemas.virtual_server_models import ToolCatalogEntry
+from ..utils.tool_schema import stored_input_schema
 from .visibility import user_can_access_server_from_doc
 
 # Configure logging
@@ -146,7 +147,7 @@ class ToolCatalogService:
                         server_path=path,
                         server_name=server_name,
                         description=tool.get("description", ""),
-                        input_schema=tool.get("inputSchema", {}),
+                        input_schema=stored_input_schema(tool),
                         available_versions=available_versions,
                     )
                 )

@@ -169,7 +169,6 @@ class TestGenerateAgentLocationBlocks:
 
         assert 'proxy_set_header X-Authorization "";' in card_block
         assert 'proxy_set_header Cookie "";' in card_block
-        assert "body_filter_by_lua_file /etc/nginx/lua/agent_card_rewrite.lua;" in card_block
 
     @pytest.mark.asyncio
     async def test_block_enforces_auth_request(self, patched_agent_service):
@@ -629,30 +628,6 @@ class TestCreateAgentLocationBlock:
                 "Evil",
             )
 
-    def test_card_location_rewrites_card_urls(self):
-        """The agent-card location runs the card-rewrite body filter."""
-        service = NginxConfigService()
-
-        block = service._create_agent_location_block(
-            "flight-booking-agent",
-            "https://flight-booking.dev.example.com",
-            "Flight Booking Agent",
-        )
-
-        assert "body_filter_by_lua_file /etc/nginx/lua/agent_card_rewrite.lua;" in block
-
-    def test_card_location_clears_content_length(self):
-        """Content-Length is cleared so the rewritten card body is not truncated."""
-        service = NginxConfigService()
-
-        block = service._create_agent_location_block(
-            "flight-booking-agent",
-            "https://flight-booking.dev.example.com",
-            "Flight Booking Agent",
-        )
-
-        assert "ngx.header.content_length = nil" in block
-
     def test_jsonrpc_block_forwards_scopes_to_backend(self):
         """Validated scopes are captured from /validate and forwarded to the agent."""
         service = NginxConfigService()
@@ -698,9 +673,15 @@ class TestCreateAgentLocationBlock:
             "Flight Booking Agent",
         )
 
-        # Gateway credential + session cookie stripped on both blocks (card + RPC).
+        # Internal card fetch and RPC both strip gateway credentials/cookies.
         assert block.count('proxy_set_header X-Authorization "";') == 2
         assert block.count('proxy_set_header Cookie "";') == 2
+        # The internal card fetch never forwards client-supplied identity as
+        # if it came from /validate; the invocation route sets validated values.
+        for name in ("X-User", "X-Username", "X-Scopes", "X-Auth-Method"):
+            assert f'proxy_set_header {name} "";' in block
+            assert f"proxy_set_header {name} $auth_" in block
+
         # The target-agent Authorization is forwarded end-to-end: the block must
         # neither clear it nor rewrite it to the gateway's own credential.
         assert 'proxy_set_header Authorization "";' not in block

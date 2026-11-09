@@ -33,6 +33,13 @@ _META_KEY = "_egress"
 _SCHEMA_VERSION = 1
 _HASH_ALGORITHM = "sha256-v1"
 _STALE_READ_RETRIES = 3
+# Write verification re-reads a secret right after PutSecretValue/CreateSecret.
+# GetSecretValue (AWSCURRENT) can briefly return the previous version, or not
+# find a just-created secret, although the write succeeded (#1875). Re-read with
+# a short backoff (0.1 + 0.2 + 0.4 + 0.8 + 1.6 = 3.1s of sleeps at most) before
+# declaring the write failed.
+_READ_BACK_ATTEMPTS = 6
+_READ_BACK_BACKOFF_BASE = 0.1
 
 
 class _StaleShardError(SecretStoreError):
@@ -208,6 +215,34 @@ class SecretsManagerStore(SecretStoreBase):
         async with self._request_limit:
             return await asyncio.to_thread(fn, *args)
 
+    async def _read_back(self, name: str, expected: dict) -> dict | None:
+        """Read a just-written secret until it shows the written document.
+
+        Readers use AWSCURRENT, so this is what write verification reads. Right
+        after a write it can still return the previous version, or raise for a
+        secret that was just created; retry with a short backoff. Returns the
+        last document read (the caller compares it) or re-raises the last error.
+        """
+        written = None
+        for attempt in range(_READ_BACK_ATTEMPTS):
+            if attempt:
+                await asyncio.sleep(_READ_BACK_BACKOFF_BASE * (2 ** (attempt - 1)))
+            try:
+                written = await self._call(self._get_document, name, True)
+            except SecretStoreError:
+                if attempt + 1 >= _READ_BACK_ATTEMPTS:
+                    raise
+                continue
+            if written == expected:
+                if attempt:
+                    logger.info(
+                        "Secrets Manager write verification read a stale version; "
+                        "settled after %d re-reads",
+                        attempt,
+                    )
+                break
+        return written
+
     # -- document decoding --------------------------------------------------- #
 
     def _decode_shard(
@@ -376,7 +411,7 @@ class SecretsManagerStore(SecretStoreBase):
         # keeps rolling upgrades and all current one-secret values compatible.
         if self._payload_size(entries) <= self._target_bytes:
             await self._call(self._put_document, root_name, entries)
-            written = await self._call(self._get_document, root_name, True)
+            written = await self._read_back(root_name, entries)
             if written != entries:
                 raise SecretStoreError("Secrets Manager inline write verification failed")
             await self._cleanup_generation(root_name, old_meta)
@@ -397,7 +432,10 @@ class SecretsManagerStore(SecretStoreBase):
                 )
             )
             checks = await asyncio.gather(
-                *(self._call(self._get_document, name, True) for name in shard_names)
+                *(
+                    self._read_back(name, document)
+                    for name, document in zip(shard_names, shard_documents, strict=True)
+                )
             )
             if checks != shard_documents:
                 raise SecretStoreError("Secrets Manager overflow shard verification failed")
@@ -423,7 +461,7 @@ class SecretsManagerStore(SecretStoreBase):
         # Manifest-last is the commit point: readers see either the complete old
         # layout or a fully written and verified new generation.
         await self._call(self._put_document, root_name, manifest)
-        written_manifest = await self._call(self._get_document, root_name, True)
+        written_manifest = await self._read_back(root_name, manifest)
         if written_manifest != manifest:
             raise SecretStoreError("Secrets Manager overflow manifest verification failed")
         await self._cleanup_generation(root_name, old_meta)

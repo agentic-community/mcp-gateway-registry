@@ -339,7 +339,7 @@ async def search_and_scope(
             hit.get("tags") or [],
             [],
             hit.get("version"),
-            hit.get("last_checked_time"),
+            hit.get("updated_at"),
             publisher,
             _public_record_url(base_url, "skills", path),
             _namespace_for("skill"),

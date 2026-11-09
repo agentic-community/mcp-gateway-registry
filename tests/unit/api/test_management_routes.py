@@ -788,17 +788,29 @@ class TestManagementListGroups:
         assert "Administrator permissions" in response.json()["detail"]
 
     def test_list_groups_iam_error(self, test_client_admin):
-        """Test error handling when IAM manager fails."""
+        """An IdP failure still returns the groups tracked in scope documents."""
         # Arrange
         client, mock_iam = test_client_admin
         mock_iam.list_groups.side_effect = Exception("Keycloak unavailable")
 
         # Act
-        response = client.get("/api/management/iam/groups")
+        with patch(
+            "registry.api.management_routes.scope_service.list_groups",
+            new_callable=AsyncMock,
+            return_value={
+                "registry-admins": {"is_idp_managed": True},
+                "local-group": {"is_idp_managed": False, "description": "Local"},
+            },
+        ):
+            response = client.get("/api/management/iam/groups")
 
         # Assert
-        assert response.status_code == 502
-        assert "Unable to list IAM groups" in response.json()["detail"]
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 2
+        assert [group["name"] for group in data["groups"]] == ["local-group", "registry-admins"]
+        assert data["groups"][0]["attributes"] == {"description": ["Local"]}
+        assert data["groups"][1]["is_idp_managed"] is True
 
 
 # =============================================================================

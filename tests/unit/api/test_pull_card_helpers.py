@@ -136,6 +136,65 @@ class TestComputeCardDiff:
         # A field the remote does not send is not compared.
         assert _compute_card_diff(_agent(), {"name": "agent"}) == []
 
+    def test_629_supported_interfaces_camelcase_remote_no_change(self):
+        # _normalize_remote_card_keys only snake-cases top-level keys, so a
+        # remote card's interface entries still carry camelCase
+        # protocolBinding/protocolVersion. An otherwise-equivalent interface
+        # must normalize to the same shape and report no diff.
+        agent = _agent(
+            supported_interfaces=[
+                {
+                    "url": "https://agent.example.net/a2a",
+                    "protocol_binding": "JSONRPC",
+                    "protocol_version": "1.0",
+                }
+            ]
+        )
+        remote = {
+            "supported_interfaces": [
+                {
+                    "url": "https://agent.example.net/a2a",
+                    "protocolBinding": "JSONRPC",
+                    "protocolVersion": "1.0",
+                }
+            ]
+        }
+        assert _compute_card_diff(agent, remote) == []
+
+    def test_630_supported_interfaces_reordered_is_a_change(self):
+        # Order is a meaningful preference signal in A2A 1.0 (first entry =
+        # preferred), so a reordered interface list is a real change, not a
+        # no-op; the comparison stays order-sensitive with no sorting.
+        ifaces = [
+            {
+                "url": "https://a.example.net/a2a",
+                "protocol_binding": "JSONRPC",
+                "protocol_version": "1.0",
+            },
+            {
+                "url": "https://b.example.net/a2a",
+                "protocol_binding": "HTTP+JSON",
+                "protocol_version": "1.0",
+            },
+        ]
+        agent = _agent(supported_interfaces=ifaces)
+        remote = {
+            "supported_interfaces": [
+                {
+                    "url": "https://b.example.net/a2a",
+                    "protocolBinding": "HTTP+JSON",
+                    "protocolVersion": "1.0",
+                },
+                {
+                    "url": "https://a.example.net/a2a",
+                    "protocolBinding": "JSONRPC",
+                    "protocolVersion": "1.0",
+                },
+            ]
+        }
+        changes = _compute_card_diff(agent, remote)
+        assert [c.field for c in changes] == ["supported_interfaces"]
+
 
 # ---------------------------------------------------------------------------
 # 6.3 _build_safe_card_updates (S5)

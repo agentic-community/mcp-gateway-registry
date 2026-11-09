@@ -16,6 +16,7 @@ export interface DiscoveryIdentityValues {
   oauth_discovery_custom_scope_separator: string;
   oauth_discovery_custom_token_auth_style: string;
   oauth_discovery_custom_resource: string;
+  oauth_discovery_expected_issuer: string;
 }
 
 interface Props {
@@ -174,6 +175,16 @@ const DiscoveryIdentityFields: React.FC<Props> = ({ values, onChange, editing, f
               </div>
             </>
           )}
+          <div>
+            <label className={LABEL}>Expected issuer (RFC 9207, optional)</label>
+            <input
+              type="text"
+              value={values.oauth_discovery_expected_issuer}
+              onChange={(e) => onChange({ oauth_discovery_expected_issuer: e.target.value })}
+              placeholder="https://idp.example"
+              className={FIELD}
+            />
+          </div>
         </>
       )}
       {footer}

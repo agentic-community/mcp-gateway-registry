@@ -75,18 +75,80 @@ After creating the app registration, note the following values (you'll need them
 
 ### Step 5: Add API Permissions
 
-To get user email and group information, you need to configure API permissions:
+The Entra browser login requests `openid`, `email`, and `profile` by default. Set `ENTRA_BROWSER_USER_READ_ENABLED=true`
+in Docker or Terraform, or `auth-server.entra.browserUserReadEnabled: true` in Helm, to append exactly `User.Read` to
+the login request. The callback records the requested scopes in the signed login state and uses Graph when claims are
+missing or overage-marked, provided group recovery is enabled. The default avoids a new consent requirement; without
+`User.Read`, missing claims yield no group-derived scopes. Microsoft lists delegated `User.Read` as the least-privileged
+permission for [
+`/me/transitiveMemberOf`](https://learn.microsoft.com/en-us/graph/api/user-list-transitivememberof?view=graph-rest-1.0).
+Delegated `GroupMember.Read.All` is not needed.
 
 1. Click **API permissions** in the left menu
-2. Click **Add a permission**
-3. Select **Microsoft Graph**
-4. Select **Delegated permissions**
-5. Search for and add the following permissions:
-   - `User.Read` (should already be present)
-   - `email` - Read user's email address
-   - `profile` - Read user's basic profile
-   - `GroupMember.Read.All` - Read groups user belongs to
-6. Click **Add permissions**
+2. Click **Add a permission** and select **Microsoft Graph**
+3. Select **Delegated permissions**
+4. Add `User.Read` (it may already appear in the app registration)
+5. Click **Add permissions**
+
+Before adding `User.Read` to the login scopes, confirm that users can grant it or grant tenant-wide administrator
+consent. Otherwise Entra can refuse a login before the callback runs, including one with inline group claims.
+
+The callback calls Graph as the signed-in user with an access token issued for the Microsoft Graph resource (
+`https://graph.microsoft.com` in the public cloud), not an ID token or a token for the registry. Entra access tokens may
+identify Graph in their `aud` claim by its application ID (`00000003-0000-0000-c000-000000000000`). Sovereign clouds use
+their corresponding Graph resource. No **Application permissions** are needed for this login lookup.
+
+For user-delegated bearer access to the registry, `/validate` starts with an
+access token for the registry. When group claims are missing or show overage,
+it exchanges that token on behalf of the user for a Graph-audience token with
+delegated `User.Read`. It then calls `/me/transitiveMemberOf`. The login
+callback's Graph token cannot replace this exchange for a bearer request.
+Neither lookup uses Graph **Application permissions**. Entra M2M `roles`
+tokens do not use the on-behalf-of exchange.
+
+`ENTRA_GRAPH_BASE_URL` selects the HTTPS Graph fetch endpoint. Leave it unset for a recognized Entra login cloud to use
+that cloud's Graph host. To use a private reverse proxy, set it to the proxy's HTTPS origin. The guarded transport pins
+DNS answers and blocks metadata and link-local addresses. Only the configured proxy hostname may resolve to a private
+address; Microsoft Graph hostnames must remain public. The proxy must present a certificate the auth server trusts and
+forward to the selected cloud's Graph service.
+
+`ENTRA_GRAPH_RESOURCE_URL` selects the native Microsoft Graph OAuth audience and its delegated `User.Read` scope. It
+does not route network traffic through that hostname. The auth server infers this resource for public, US Government,
+and China login origins. An unrecognized HTTPS `ENTRA_LOGIN_BASE_URL` proxy always needs `ENTRA_GRAPH_BASE_URL` for the
+Graph fetch endpoint. It also needs an official `ENTRA_GRAPH_RESOURCE_URL` when group recovery or the browser
+`User.Read` request is enabled. With both off, the auth server requests no Graph audience. Only
+`https://graph.microsoft.com`, `https://graph.microsoft.us`, `https://dod-graph.microsoft.us`, and
+`https://microsoftgraph.chinacloudapi.cn` are valid resources. The configured resource must match a known login cloud;
+`login.microsoftonline.us` also accepts the DoD resource.
+
+With a proxy, the auth server rewrites Graph pagination links only from the configured native resource to the configured
+fetch endpoint. Links to other clouds, hosts, or paths fail without forwarding the token. A login proxy must forward OBO
+exchanges to the same Entra cloud that issued the incoming token. The auth server cannot prove which cloud an arbitrary
+proxy serves, so the operator must supply the correct native resource and trusted proxy routing.
+
+Entra browser code exchange sends the client secret through the HTTPS-only credentialed OAuth URL guard. If the login
+proxy resolves to a private IP, add its exact hostname to `EGRESS_OAUTH_TRUSTED_IDP_HOSTS`; this opt-in does not apply
+to Graph's fetch proxy. Leave the list empty for public login hosts.
+
+#### Consent for the login lookup
+
+Consent to delegated `User.Read` depends on your tenant's **User consent for applications** policy. If that policy
+permits users to consent to this app and permission, each user can approve the sign-in prompt. Otherwise, ask a tenant
+administrator to grant consent under **App registrations** > your app > **API permissions** > **Grant admin consent
+for [Your Tenant]**. Check **Enterprise apps** > **Consent and permissions** > **User consent settings** in
+the [Microsoft Entra admin center](https://entra.microsoft.com) to see the tenant policy. If the app requires users to
+be assigned to it, an administrator must consent even when user consent is allowed.
+See [Microsoft's user consent settings](https://learn.microsoft.com/en-us/entra/identity/enterprise-apps/configure-user-consent).
+
+The bearer on-behalf-of exchange needs consent for this app to access Graph
+as the user. Consent to `User.Read` during browser login alone does not
+guarantee that Entra has granted the consent needed for the exchange. Check
+the app registration's delegated Graph permission and the tenant's consent
+policy for the bearer flow. Depending on that policy, a tenant administrator
+may need to grant consent to the app.
+
+The IAM management UI and API use a separate server-side client credentials flow. Their **Application permissions**
+still require administrator consent. Granting delegated `User.Read` for login does not grant those IAM permissions.
 
 #### Application Permissions (Required for IAM Management)
 
@@ -109,11 +171,6 @@ If you plan to use the IAM management UI (Settings -> Users/Groups) or the IAM A
    - `Application.ReadWrite.All` - Create and manage M2M service principal accounts
 
 5. Click **Add permissions**
-
-**CRITICAL**: Click **Grant admin consent for [Your Tenant]**
-   - This step is required for **both** Delegated and Application permissions to work
-   - You need admin privileges to grant consent
-   - Without admin consent for Application permissions, the IAM management features will return `403 Forbidden` errors
 
 ### Step 6: Configure Optional Claims
 
@@ -294,6 +351,117 @@ group_mappings:
 
 Replace the group Object IDs with your actual group IDs from Azure Portal, then seed the JSON scope files in `scripts/` (or apply the change via the scope management API).
 
+### Group membership at sign-in
+
+The Entra callback uses verified inline `groups` or `roles` claims. If that login requested delegated `User.Read` and
+the ID token marks group overage with `hasgroups` or `_claim_names.groups`, or supplies neither `groups` nor `roles`,
+the callback calls Microsoft Graph `/me/transitiveMemberOf` with the signed-in user's Graph access token. Graph returns
+direct and nested group IDs for scope mappings.
+See [Microsoft's transitive membership API](https://learn.microsoft.com/en-us/graph/api/user-list-transitivememberof?view=graph-rest-1.0).
+
+The callback requires a signed Entra ID token and verifies its nonce before reading group claims. It rejects a token
+response without an ID token instead of calling Graph userinfo with an unverified bearer assertion.
+
+Without a signed `User.Read` request, the callback does not call Graph. It uses verified inline claims when there is no
+overage marker. On overage, it discards unreliable inline groups and keeps only verified app roles.
+`ENTRA_GROUP_RECOVERY_ENABLED=false` applies the same rule even after a `User.Read` request. A missing group claim
+remains empty.
+
+When recovery runs, the callback preserves verified app roles alongside Graph group IDs and ignores inline group IDs
+marked unreliable by overage, even when Graph confirms no memberships.
+
+The Graph lookup cache keeps successful results for `ENTRA_GROUP_CACHE_TTL_SECONDS` (default 300, allowed 30 to 3600)
+per auth-server process. It holds at most 512 entries keyed by the Graph fetch URL, native Graph resource, verified
+tenant ID (`tid`), and user object ID (`oid`); without both IDs, the callback does not cache the result. Graph failures
+never become successful empty memberships. A failed lookup refuses login with HTTP 503 and creates no session; a
+confirmed empty membership list creates a session without group-derived scopes unless verified app roles grant access.
+
+A confirmed Graph result, including zero groups, takes precedence over `IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS` local
+user-group mappings. The session store records this Graph provenance so later session-cookie validations cannot restore
+a removed Entra group. If Graph did not run, the configured local fallback retains its existing behavior.
+
+When the session mints a user token, the auth server copies Graph-result provenance from the resolved session into its
+signed token. A later `/validate` request keeps a confirmed empty membership authoritative instead of restoring groups
+from local fallback. Tokens minted without a resolved session cannot assert that provenance.
+
+The first Graph request asks for up to 999 memberships, Graph's maximum page size. The auth server follows subsequent
+`@odata.nextLink` pages without changing their query. If a configured Graph proxy receives a continuation link on the
+selected native Graph resource, the auth server rewrites it to the proxy before sending the bearer token. Links to other
+hosts or paths fail. Results above 100 pages or 1,000 distinct groups fail rather than granting scopes from a partial
+list.
+
+Group-based access in an existing login session reflects the membership snapshot taken at sign-in. Removing someone from
+a group may leave their current session authorized until they sign in again or the session expires. A new login can
+reuse group IDs until the configured positive cache TTL expires.
+
+### Group membership for user-delegated bearer tokens
+
+For a verified Entra user-delegated registry access token with `scp`, `tid`,
+and `oid`, `/validate` recovers missing `groups` claims and overage markers
+(`hasgroups` or `_claim_names.groups`). It exchanges the incoming token on
+behalf of the user for a Graph-audience `User.Read` token and fetches direct
+and nested group IDs from `/me/transitiveMemberOf`. Entra M2M tokens that use
+`roles` do not trigger this recovery. The auth server filters recovered IDs
+with `filter_session_groups` before scope mapping and before minting the registry token.
+
+Bearer recovery is enabled by default. Even a verified token with direct `scp` access needs a working Graph OBO exchange
+when its group claims are absent; a consent or Graph outage returns 503 before direct-scope authorization. Grant
+delegated Graph `User.Read` consent for the gateway's OBO exchange before rollout. Set
+`ENTRA_GROUP_RECOVERY_ENABLED=false` to keep direct-scope bearer requests independent of Graph, at the cost of missing
+group-derived scopes for users with absent or overage claims.
+
+`ENTRA_GROUP_RECOVERY_ENABLED` defaults to `true`. Set it to `false` to stop Graph calls from browser and bearer
+recovery. Inline verified groups remain usable when there is no overage marker. For a delegated bearer with missing
+claims, validation has no group-derived scopes; when overage is marked, it discards unreliable inline groups but keeps
+verified app roles. This may restore a 403 for users who need Graph memberships.
+
+Entra reads bearer scopes from signed `scp` or, for older tokens, signed `scope`. Both classify a delegated user token,
+so neither can inherit M2M client-group mappings. A token with no groups is authorized by its signed direct scopes.
+When the user has inline or Graph-recovered groups, registry scopes come only from the group mappings, and the token's
+`scp` values do not add to them. An app registration defines `scp` names and users grant them by consent, so they must
+not stand in for the group membership an administrator controls. A successful Graph result, including zero groups,
+takes precedence over local `idp_user_groups` fallback.
+
+The scope-derived group mapping set has a 30-second per-process cache. Changes to the registry's group-to-scope mappings
+can take up to 30 seconds to affect recovered bearer groups; lookup errors or absent mappings deny validation rather
+than forwarding unfiltered groups. An explicit `ALLOWED_IDP_GROUPS` allowlist takes precedence.
+
+If the filtered group list still exceeds 8 KiB as JSON (`GRAPH_GROUP_MAX_BYTES`, about 200 GUIDs, the same number Entra
+places inline), `/validate` refuses the request, and so does browser login. The cap refuses a runaway membership instead
+of truncating its grants; registry API requests carry the groups in the signed `X-Internal-Token-Registry`, well inside
+the 64 KiB nginx buffer for the `/validate` response. Map only the groups that grant scopes, or set `ALLOWED_IDP_GROUPS`
+to the exact IDs the gateway needs.
+
+Tokens that carry `groups` inline (no overage marker) pass to the registry unfiltered, because group-restricted
+visibility matches `allowed_groups` against them. The registry token encodes them once. An Entra access token carries at
+most 200 inline groups, which needs about 11 KiB of the 64 KiB buffer.
+
+For one Entra user, a group that grants visibility through `allowed_groups` but maps to no scope works on a bearer token
+that carries its groups inline. The same group is dropped when the token has an overage marker, because the auth server
+filters Graph-recovered groups to the scope-mapped set, and in the browser, because login keeps only the scope-mapped
+groups. Map such a group to a scope with no `server_access` and no `ui_permissions` (or, when `ALLOWED_IDP_GROUPS` is
+set, list it there), which keeps the group without granting any access. The size bound for other identity providers is in
+[the JWT bearer session flow design](design/session-flow-jwt-bearer.md#42-where-the-groups-come-from).
+
+Successful lookups stay in a per-process cache for `ENTRA_GROUP_CACHE_TTL_SECONDS` (default 300 seconds, allowed 30 to
+3600), with at most 512 entries keyed by Graph fetch URL, native Graph resource, and verified `(tid, oid)`. Concurrent
+requests with the same exact bearer token share one in-flight OBO exchange; different tokens run their own exchanges
+before they can use a successful membership result. A failed consent or configuration exchange, or a Graph 403, is
+cached as a denial for 30 seconds per exact incoming token and identity; a new token can retry at once. Transient
+failures and Graph 401 responses are retried on the next request. Denials never become empty successful memberships, are
+not stored with the token bytes, and occupy at most 512 process-local entries. The OBO exchange and all Graph pages
+share an eight-second deadline before nginx's ten-second `/validate` timeout.
+
+Each bearer token's successful Graph exchange has a bounded process-local proof entry. The entry expires with the
+positive membership result and never overrides a denial for that token. A browser lookup can fill the membership cache,
+but it cannot authorize a bearer token's first OBO exchange.
+
+Graph, consent, pagination, and mapping failures produce a 503 on `/validate`. nginx returns a public 503 only when that
+internal response has the auth-server's Graph-outage marker; unrelated auth failures remain 500 and no denied request
+reaches the backend. The auth-server log records a finite reason label such as `timeout`, `consent`, `pagination`, or
+`transport` without recording group IDs or tokens. Group removals can take up to the configured positive cache TTL to
+reach a bearer request. Existing browser sessions reflect the sign-in snapshot until sign-in or expiry.
+
 ### Understanding Scope Mappings
 
 - **mcp-registry-admin**: Full administrative access to the registry
@@ -437,21 +605,14 @@ The IAM management features (listing users, creating users/groups, managing M2M 
 5. Wait 5-10 minutes for Azure AD to propagate changes
 6. Restart the registry service
 
-### Issue: Missing email and groups claims
+### Issue: Missing email or group claims
 
-**Symptoms:**
-```
-Raw user info from entra: {'sub': '...', 'name': 'User Name', 'family_name': '...', 'given_name': '...'}
-Mapped user info: {'username': None, 'email': None, 'groups': []}
-```
-
-**Solution:**
-1. Verify you completed [Step 5: Add API Permissions](#step-5-add-api-permissions)
-2. Ensure you clicked **Grant admin consent**
-3. Complete [Step 6: Configure Optional Claims](#step-6-configure-optional-claims)
-4. Complete [Step 7: Configure Group Claims](#step-7-configure-group-claims)
-5. Wait 5-10 minutes for Azure AD to propagate changes
-6. Clear browser cookies and try logging in again
+If the email claim is absent, check [optional claims](#step-6-configure-optional-claims). For group-based scopes, the
+callback uses verified inline `groups` or `roles`. For overage or missing claims, add `User.Read` to the Entra login
+scopes and confirm delegated consent before expecting Graph recovery.
+Check [group membership at sign-in](#group-membership-at-sign-in) and the signed-in token's Graph audience. Configure
+group claims in [Step 7](#step-7-configure-group-claims) if you want inline group IDs. A Graph lookup failure denies
+login; a confirmed empty result yields no group-derived scopes.
 
 ### Issue: Token validation fails with "Invalid issuer"
 
@@ -494,16 +655,21 @@ AADSTS50011: The redirect URI 'http://localhost/auth/callback' does not match th
 3. Add any missing redirect URIs
 4. Ensure `AUTH_SERVER_EXTERNAL_URL` in `.env` matches the base URL
 
-### Issue: "Groups overage" claim
+### Issue: Group overage or missing group claims
 
-**Symptoms:**
-Groups claim contains `_claim_names` and `_claim_sources` instead of group IDs
+Entra may include `hasgroups` or `_claim_names.groups` instead of inline group IDs when a token exceeds its group limit.
+A browser login that requests `User.Read` fetches direct and nested memberships through `/me/transitiveMemberOf` for
+overage or missing claims. Without that requested scope, login uses inline claims only when there is no overage marker.
+It drops overage-marked inline groups and makes no Graph request. Check consent and token audience
+in [Step 5](#step-5-add-api-permissions). Graph failures deny the opted-in login; they are not empty membership results.
+See [group membership at sign-in](#group-membership-at-sign-in) for cache and session behavior.
 
-**Solution:**
-This occurs when a user is a member of more than 200 groups. You need to:
-
-1. Modify the auth provider to fetch groups via Microsoft Graph API
-2. See the alternative implementation in `docs/ENTRA-ID-APP-CONFIGURATION.md` Step 5
+For user-delegated bearer requests, `/validate` also recovers missing or
+overage group claims using an on-behalf-of Graph `User.Read` token. If it
+returns 503, check that the registry token has a delegated `scp` claim and
+verified `tid` and `oid`, that Graph consent covers the on-behalf-of exchange,
+and that Graph is reachable. The browser login consent prompt alone may not
+cover this exchange. The request is not forwarded when recovery fails.
 
 ### Issue: Client secret expired
 
@@ -521,15 +687,18 @@ AADSTS7000215: Invalid client secret provided
    docker-compose restart auth-server
    ```
 
-### Issue: Cannot grant admin consent
+### Issue: Cannot grant consent
 
-**Symptoms:**
-You don't see the "Grant admin consent" button or get an error when clicking it
+For login, check whether your
+tenant's [user consent policy](https://learn.microsoft.com/en-us/entra/identity/enterprise-apps/configure-user-consent)
+allows the signed-in user to consent to delegated `User.Read`. If it does not, ask a tenant administrator to grant
+consent to the app. Administrator consent is required for the separate IAM **Application permissions** listed
+in [Step 5](#application-permissions-required-for-iam-management).
 
-**Solution:**
-1. You need Global Administrator, Application Administrator, or Cloud Application Administrator role
-2. Contact your Azure AD administrator to grant the permissions
-3. Alternatively, users can consent individually (not recommended for production)
+The user-delegated bearer on-behalf-of exchange to Graph also needs consent.
+Browser login with `User.Read` does not guarantee that consent for this
+exchange exists. Check your tenant's policy and ask an administrator to
+grant consent if the policy requires it.
 
 ---
 

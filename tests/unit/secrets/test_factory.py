@@ -90,3 +90,105 @@ class TestSecretStoreFactory:
         monkeypatch.setattr(factory.settings, "openbao_addr", "")
         with pytest.raises(ValueError, match="OPENBAO_ADDR"):
             factory.get_secret_store()
+
+
+class _FakeAuthMethod:
+    """Records the keyword arguments of each login call."""
+
+    def __init__(
+        self,
+        name: str,
+        calls: list[tuple[str, dict]],
+    ) -> None:
+        self._name = name
+        self._calls = calls
+
+    def login(self, **kwargs) -> None:  # noqa: D102
+        self._calls.append((self._name, kwargs))
+
+
+class _FakeHvacClient:
+    """hvac.Client stand-in exposing only the auth methods the factory uses."""
+
+    instances: list["_FakeHvacClient"] = []
+
+    def __init__(self, **kwargs) -> None:
+        self.calls: list[tuple[str, dict]] = []
+        self.token = None
+        self.auth = type(
+            "_Auth",
+            (),
+            {
+                "kubernetes": _FakeAuthMethod("kubernetes", self.calls),
+                "approle": _FakeAuthMethod("approle", self.calls),
+            },
+        )()
+        _FakeHvacClient.instances.append(self)
+
+
+@pytest.fixture
+def _openbao_login(monkeypatch, tmp_path):
+    """Build the real openbao backend against a fake hvac client and store."""
+    import sys
+    import types
+
+    from registry.secrets.openbao import store as openbao_store
+
+    _FakeHvacClient.instances = []
+    monkeypatch.setitem(sys.modules, "hvac", types.SimpleNamespace(Client=_FakeHvacClient))
+    monkeypatch.setattr(openbao_store, "OpenBaoStore", lambda **kwargs: _FakeStore())
+    monkeypatch.setattr(factory, "_build_credential_codec", lambda: None)
+    monkeypatch.setattr(factory.settings, "openbao_addr", "https://vault.example.com:8200")
+    monkeypatch.setattr(factory.settings, "openbao_namespace", "")
+    monkeypatch.setattr(factory.settings, "openbao_role", "registry")
+    monkeypatch.setenv("OPENBAO_ROLE_ID", "role-id")
+    monkeypatch.setenv("OPENBAO_SECRET_ID", "secret-id")
+
+    sa_token = tmp_path / "token"
+    sa_token.write_text("sa-jwt")
+    real_open = open
+
+    def _open(path, *args, **kwargs):
+        if path == "/var/run/secrets/kubernetes.io/serviceaccount/token":
+            return real_open(sa_token, *args, **kwargs)
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", _open)
+
+    def _login_calls(
+        method: str,
+        auth_mount: str,
+    ) -> list[tuple[str, dict]]:
+        monkeypatch.setattr(factory.settings, "openbao_auth_method", method)
+        monkeypatch.setattr(factory.settings, "openbao_auth_mount", auth_mount)
+        factory._build_openbao()
+        return _FakeHvacClient.instances[-1].calls
+
+    return _login_calls
+
+
+@pytest.mark.unit
+class TestOpenBaoAuthMount:
+    def test_kubernetes_default_mount_unchanged(self, _openbao_login):
+        """No OPENBAO_AUTH_MOUNT: hvac keeps its default auth/kubernetes path."""
+        calls = _openbao_login("kubernetes", "")
+        assert calls == [("kubernetes", {"role": "registry", "jwt": "sa-jwt"})]
+
+    def test_kubernetes_custom_mount(self, _openbao_login):
+        calls = _openbao_login("kubernetes", "k8s-prod")
+        assert calls == [
+            ("kubernetes", {"role": "registry", "jwt": "sa-jwt", "mount_point": "k8s-prod"})
+        ]
+
+    def test_approle_custom_mount(self, _openbao_login):
+        calls = _openbao_login("approle", "approle-gateway")
+        assert calls == [
+            (
+                "approle",
+                {"role_id": "role-id", "secret_id": "secret-id", "mount_point": "approle-gateway"},
+            )
+        ]
+
+    def test_mount_slashes_stripped(self, _openbao_login):
+        calls = _openbao_login("kubernetes", " /k8s-prod/ ")
+        assert calls[0][1]["mount_point"] == "k8s-prod"

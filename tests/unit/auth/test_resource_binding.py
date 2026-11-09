@@ -156,8 +156,9 @@ class TestClassifyRequestUrl:
             ("/api/agents/code-reviewer", (ResourceType.AGENT, "code-reviewer")),
             ("/api/agents/code-reviewer/health", (ResourceType.AGENT, "code-reviewer")),
             # Skills (under /api/skills/)
-            ("/api/skills/python-linter", (ResourceType.SKILL, "python-linter")),
-            ("/api/skills/python-linter/rate", (ResourceType.SKILL, "python-linter")),
+            ("/api/skills/python-linter", (ResourceType.SKILL, "skills/python-linter")),
+            ("/api/skills/python-linter/rate", (ResourceType.SKILL, "skills/python-linter")),
+            ("/api/skills/python-linter/content", (ResourceType.SKILL, "skills/python-linter")),
             # Virtual servers (under /virtual/)
             ("/virtual/my-agg", (ResourceType.VIRTUAL_SERVER, "virtual/my-agg")),
             ("/virtual/my-agg/mcp", (ResourceType.VIRTUAL_SERVER, "virtual/my-agg")),
@@ -395,6 +396,17 @@ class TestValidateUserCanBindResource:
             },
         )
         assert result is True
+
+    @pytest.mark.asyncio
+    async def test_server_path_grant_allows_exact_binding_only(self) -> None:
+        context = {"is_admin": False, "accessible_servers": ["/journey-mcp"]}
+        own = await resource_binding.validate_user_can_bind_resource(
+            resource_type="server", resource_id="/journey-mcp", user_context=context
+        )
+        other = await resource_binding.validate_user_can_bind_resource(
+            resource_type="server", resource_id="/other-mcp", user_context=context
+        )
+        assert own is True and other is False
 
     @pytest.mark.asyncio
     async def test_server_deny_when_not_in_accessible(self) -> None:

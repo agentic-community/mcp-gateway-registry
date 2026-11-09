@@ -222,3 +222,7 @@ class OAuthState(BaseModel):
     # request_state reuses this model); the callback refuses such a blob.
     approved_upstreams: list[str] = Field(default_factory=list)
     token_url: str = ""
+    # RFC 9207: the issuer the server's config named when consent BEGAN. The
+    # callback compares the reply's iss with this snapshot, never with the live
+    # config. None (not configured, or an older blob) skips the check.
+    expected_issuer: str | None = None

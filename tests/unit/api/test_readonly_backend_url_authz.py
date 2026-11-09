@@ -362,6 +362,117 @@ class TestBackendUrlRedactionHelpers:
         assert "proxyPassUrl" not in camel
         assert camel["url"] == "https://gw/agent/x/"
 
+    def test_redact_agent_projects_proxied_interfaces_to_gateway(self):
+        """A reverse-proxied agent's supported_interfaces hold backend urls the
+        top-level rewrite does not reach, so a redacted read projects every
+        gateway-servable (HTTP) binding onto the gateway url, omits GRPC, and
+        never exposes the backend."""
+        from registry.services.visibility import redact_agent_backend_fields
+
+        gateway = "https://gateway.example.com/agent/flight-booking-agent/"
+        card = {
+            "name": "Flight Booking Agent",
+            "url": gateway,
+            "proxy_pass_url": "https://flight-backend.internal:9000/a2a",
+            "supported_interfaces": [
+                {
+                    "url": "https://flight-backend.internal:9000/a2a/",
+                    "protocol_binding": "JSONRPC",
+                    "protocol_version": "1.0",
+                },
+                {
+                    "url": "https://flight-backend.internal:9000/a2a",
+                    "protocol_binding": "HTTP+JSON",
+                    "protocol_version": "1.0",
+                },
+                {"url": "https://flight-backend.internal:9000/grpc", "protocol_binding": "GRPC"},
+            ],
+        }
+        redact_agent_backend_fields(card)
+        assert "proxy_pass_url" not in card
+        assert card["url"] == gateway
+        # Both HTTP bindings projected onto the gateway url; GRPC omitted.
+        assert card["supported_interfaces"] == [
+            {"url": gateway, "protocol_binding": "JSONRPC", "protocol_version": "1.0"},
+            {"url": gateway, "protocol_binding": "HTTP+JSON", "protocol_version": "1.0"},
+        ]
+        assert "flight-backend.internal" not in str(card)
+
+    def test_redact_agent_omits_different_path_and_custom_binding(self):
+        from registry.services.visibility import redact_agent_backend_fields
+
+        gateway = "https://gateway.example.com/agent/a/"
+        card = {
+            "url": gateway,
+            "proxy_pass_url": "https://backend.example.com/a2a",
+            "supportedInterfaces": [
+                {
+                    "url": "https://backend.example.com/rest",
+                    "protocolBinding": "HTTP+JSON",
+                    "protocolVersion": "1.0",
+                },
+                {
+                    "url": "https://backend.example.com/a2a",
+                    "protocolBinding": "https://example.com/custom",
+                    "protocolVersion": "1.0",
+                },
+                {
+                    "url": "https://backend.example.com/a2a",
+                    "protocolBinding": "JSONRPC",
+                    "protocolVersion": "1.0",
+                    "tenant": "team-a",
+                    "note": "https://backend.example.com/secret",
+                },
+            ],
+        }
+        redact_agent_backend_fields(card)
+        assert card["supportedInterfaces"] == [
+            {
+                "url": gateway,
+                "protocolBinding": "JSONRPC",
+                "protocolVersion": "1.0",
+                "tenant": "team-a",
+            }
+        ]
+        assert "backend.example.com" not in str(card)
+
+    def test_redact_agent_drops_all_interfaces_when_only_unservable(self):
+        """If a proxied agent declared only gateway-unservable interfaces (GRPC/WS),
+        the gateway's HTTP proxy_pass cannot front any of them, so the projection
+        emits an empty list rather than fabricating a dead JSONRPC endpoint."""
+        from registry.services.visibility import redact_agent_backend_fields
+
+        gateway = "https://gateway.example.com/agent/g/"
+        card = {
+            "name": "Grpc Agent",
+            "url": gateway,
+            "proxy_pass_url": "https://g-backend.internal:9000/grpc",
+            "supported_interfaces": [
+                {"url": "https://g-backend.internal:9000/grpc", "protocol_binding": "GRPC"},
+                {"url": "wss://g-backend.internal:9000/ws", "protocol_binding": "org.example.ws"},
+            ],
+        }
+        redact_agent_backend_fields(card)
+        assert card["supported_interfaces"] == []
+        assert "g-backend.internal" not in str(card)
+
+    def test_redact_agent_keeps_supported_interfaces_when_not_proxied(self):
+        """A non-proxied agent has no proxy_pass_url; its supported_interfaces
+        are its real public address and must stay visible."""
+        from registry.services.visibility import redact_agent_backend_fields
+
+        card = {
+            "name": "Public Agent",
+            "url": "https://public.example.com/a2a",
+            "supported_interfaces": [
+                {"url": "https://public.example.com/a2a", "protocol_binding": "JSONRPC"},
+            ],
+        }
+        redact_agent_backend_fields(card)
+        assert card["supported_interfaces"] == [
+            {"url": "https://public.example.com/a2a", "protocol_binding": "JSONRPC"},
+        ]
+
     def test_redact_proxy_target_for_non_admin_dict_and_model(self):
         """proxy_target_url is stripped for a non-admin; is_proxied/client_url stay."""
         from types import SimpleNamespace

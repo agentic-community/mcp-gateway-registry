@@ -12,6 +12,7 @@ from ..utils.credential_encryption import (
     _migrate_auth_type_to_auth_scheme,
     strip_credentials_from_dict,
 )
+from ..utils.path_utils import make_version_id
 from ..utils.url_guard import (
     proxy_profile_for_entity_target,
     validate_proxy_pass_url,
@@ -20,6 +21,10 @@ from ..utils.url_guard import (
 )
 
 logger = logging.getLogger(__name__)
+
+# MCP 2026-07-28 deprecates HTTP+SSE with a twelve-month window, so the gateway
+# keeps routing it until at least this date.
+SSE_TRANSPORT_REMOVAL_EARLIEST: str = "2027-07-28"
 
 
 def _validate_endpoint_fields(
@@ -48,6 +53,27 @@ def _validate_endpoint_fields(
             reject_nginx_metacharacters=True,
             resolve=False,
         )
+
+
+def _warn_if_sse_only(
+    server_info: dict[str, Any],
+) -> None:
+    """Log a warning for a server registered with only the HTTP+SSE transport.
+
+    MCP 2026-07-28 deprecates HTTP+SSE. The gateway still routes it; this gives
+    operators notice before support is removed (no earlier than
+    SSE_TRANSPORT_REMOVAL_EARLIEST).
+    """
+    transports = server_info.get("supported_transports") or []
+    if list(transports) != ["sse"]:
+        return
+    logger.warning(
+        "Server %s registers only the deprecated HTTP+SSE transport. MCP 2026-07-28 "
+        "deprecates it; gateway support may be removed no earlier than %s. Move the "
+        "server to streamable-http.",
+        server_info.get("path"),
+        SSE_TRANSPORT_REMOVAL_EARLIEST,
+    )
 
 
 class ServerService:
@@ -106,6 +132,7 @@ class ServerService:
         """
         path = server_info.get("path")
         new_version = server_info.get("version")
+        _warn_if_sse_only(server_info)
 
         # Fail-closed URL validation on every registration path (dashboard/API,
         # internal register, CLI, federation import) before anything is
@@ -145,6 +172,7 @@ class ServerService:
                         path=path,
                         version=new_version,
                         proxy_pass_url=server_info.get("proxy_pass_url"),
+                        mcp_endpoint=server_info.get("mcp_endpoint"),
                         status=server_info.get("status", "stable"),
                         is_default=False,
                     )
@@ -981,6 +1009,7 @@ class ServerService:
         proxy_pass_url: str,
         status: str = "stable",
         is_default: bool = False,
+        mcp_endpoint: str | None = None,
     ) -> bool:
         """
         Add a new version to an existing server.
@@ -1024,7 +1053,7 @@ class ServerService:
             await self._repo.update(path, active_server)
 
         # Check if version already exists
-        new_version_id = f"{path}:{version}"
+        new_version_id = make_version_id(path, version)
         existing_inactive = await self._repo.get(new_version_id)
         if existing_inactive:
             raise ValueError(f"Version {version} already exists for server {path}")
@@ -1039,6 +1068,7 @@ class ServerService:
             "server_name": active_server.get("server_name"),
             "version": version,
             "proxy_pass_url": proxy_pass_url,
+            "mcp_endpoint": mcp_endpoint,
             "status": status,
             "is_active": False,
             "version_group": version_group,
@@ -1101,7 +1131,7 @@ class ServerService:
             raise ValueError(f"Server {path} has no versions to remove")
 
         # Find and remove the inactive version document
-        version_id = f"{path}:{version}"
+        version_id = make_version_id(path, version)
         inactive_version = await self._repo.get(version_id)
         if not inactive_version:
             raise ValueError(f"Version {version} not found for server {path}")
@@ -1163,7 +1193,7 @@ class ServerService:
             raise ValueError(f"Server {path} has no other versions configured")
 
         # Find target inactive version
-        target_version_id = f"{path}:{version}"
+        target_version_id = make_version_id(path, version)
         target_inactive = await self._repo.get(target_version_id)
         if not target_inactive:
             # List available versions

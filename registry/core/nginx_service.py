@@ -14,12 +14,20 @@ from urllib.parse import urlparse
 
 import httpx
 
+from registry.auth.proxied_token import _api_auth_request_enabled
 from registry.auth.resource_binding import INVALID_VERSION_SENTINEL
 from registry.common.log_redaction import redact_url
-from registry.constants import REGISTRY_CONSTANTS, DeploymentType, HealthStatus
+from registry.constants import (
+    REGISTRY_CONSTANTS,
+    RESERVED_CUSTOM_HEADER_NAMES,
+    DeploymentType,
+    HealthStatus,
+)
 from registry.egress_auth.upstream_binding import registered_versions, selected_upstream
 from registry.exceptions import UrlValidationError
 from registry.schemas.proxy_mixin import _assert_egress_allowed, build_proxy_client_path
+from registry.utils.path_utils import make_version_id
+from registry.utils.tool_schema import stored_input_schema
 from registry.utils.url_guard import validate_proxy_pass_url, validate_server_path
 
 from .config import settings
@@ -74,6 +82,9 @@ def _virtual_config_generation(
 # currently has so an operator's chmod isn't silently reverted.
 DEFAULT_NGINX_CONFIG_MODE: int = 0o644
 
+# JSON Schema keywords that hold reusable definitions (2020-12 and draft-07).
+SCHEMA_DEFINITION_KEYS: tuple[str, ...] = ("$defs", "definitions")
+
 # Route prefix under which enabled A2A agents are reverse-proxied through the
 # gateway. An agent registered at path "/flight-booking-agent" is
 # reachable at "{ROOT_PATH}/agent/flight-booking-agent/".
@@ -126,6 +137,40 @@ _NGINX_AGENT_URL_SAFE = re.compile(
 )
 
 
+# Directory virtual_router.lua reads the per-virtual-server mapping JSON from.
+VIRTUAL_MAPPINGS_DIR: Path = Path("/etc/nginx/lua/virtual_mappings")
+
+
+# Request headers the /_vs_backend location must not relay to a
+# registrant-controlled backend. The set is derived from the canonical
+# RESERVED_CUSTOM_HEADER_NAMES denylist, so a header added there is stripped
+# here too. Two groups are carved out:
+#   - framing headers that nginx manages or the location sets itself
+#     (Host, Accept, Content-Type); clearing them would break the request.
+#   - X-User / X-Username, which the location re-sets from the values
+#     virtual_router.lua copied from the validated identity.
+# Everything else (ingress credentials, the gateway's signed internal tokens,
+# internal routing/identity headers, client-IP/forwarding headers) is cleared.
+_VS_BACKEND_FRAMING_HEADERS: frozenset[str] = frozenset(
+    {
+        "content-type",
+        "content-length",
+        "accept",
+        "host",
+        "connection",
+        "keep-alive",
+        "te",
+        "trailer",
+        "transfer-encoding",
+        "upgrade",
+    }
+)
+_VS_BACKEND_RESET_IDENTITY_HEADERS: frozenset[str] = frozenset({"x-user", "x-username"})
+_VS_BACKEND_STRIPPED_HEADERS: frozenset[str] = (
+    RESERVED_CUSTOM_HEADER_NAMES - _VS_BACKEND_FRAMING_HEADERS - _VS_BACKEND_RESET_IDENTITY_HEADERS
+)
+
+
 # Headroom added on top of the auth-server mcp-proxy hop's own upstream timeout
 # (MCP_PROXY_TIMEOUT) when deriving nginx's proxy_read_timeout for the
 # /mcp-proxy/ location blocks. nginx must outlive the inner hop so a
@@ -135,6 +180,35 @@ _NGINX_AGENT_URL_SAFE = re.compile(
 # blocks, so behavior is unchanged unless MCP_PROXY_TIMEOUT is raised.
 # Credit: derivation approach contributed by @go-faustino (PR #1321).
 MCP_PROXY_NGINX_READ_TIMEOUT_BUFFER_SECONDS: int = 30
+
+
+# Largest MCP request body nginx accepts, and how much of it nginx keeps in memory.
+# capture_body.lua copies the body into the X-Body header for /validate. A body
+# larger than client_body_buffer_size is written to a temp file, Lua cannot read it,
+# and /validate refuses it (413), which auth_request turns into a bare 500. nginx's
+# default buffer is far below its default 1m maximum, so any tools/call with more
+# than about 10 KB of arguments failed. Keeping the buffer equal to the maximum
+# means every accepted body can be authorized. 1m is nginx's default
+# client_max_body_size, so the largest accepted body does not change.
+# docker/auth-entrypoint.sh sizes uvicorn's header limit to fit an X-Body this big.
+MCP_MAX_REQUEST_BODY_SIZE: str = "1m"
+_MCP_BODY_CAPTURE_SIZE_DIRECTIVES: str = (
+    f"        client_max_body_size {MCP_MAX_REQUEST_BODY_SIZE};\n"
+    f"        client_body_buffer_size {MCP_MAX_REQUEST_BODY_SIZE};"
+)
+
+
+# DNS resolver for nginx upstreams that resolve at request time (bare hostnames
+# such as docker-compose service names, and agent routes). NGINX_DNS_RESOLVER
+# wins when set. Otherwise nginx uses the container's own nameservers from
+# /etc/resolv.conf: Docker's embedded DNS (127.0.0.11) on Compose, the VPC
+# resolver on ECS, kube-dns on Kubernetes. Public DNS is the last resort,
+# because it cannot resolve any of those private names.
+NGINX_DNS_RESOLVER_ENV: str = "NGINX_DNS_RESOLVER"
+FALLBACK_NGINX_DNS_RESOLVER: str = "8.8.8.8 8.8.4.4"
+RESOLV_CONF_PATH: str = "/etc/resolv.conf"
+# glibc reads at most three nameserver lines, so nginx gets the same set.
+MAX_RESOLV_CONF_NAMESERVERS: int = 3
 
 
 # Minimum sane prefix length for a TRUSTED_REAL_IP_CIDRS entry. A prefix shorter
@@ -373,6 +447,81 @@ def _resolve_mcp_proxy_read_timeout_seconds() -> int:
     return int(math.ceil(upstream)) + MCP_PROXY_NGINX_READ_TIMEOUT_BUFFER_SECONDS
 
 
+def _read_resolv_conf_nameservers(
+    path: str,
+) -> list[str]:
+    """Read nameserver addresses from a resolv.conf file, formatted for nginx.
+
+    Every value ends up inside the nginx config, so only literal IP addresses
+    are kept: anything that does not parse as one is skipped. IPv6 addresses
+    are wrapped in brackets, which nginx's resolver directive requires.
+    Link-local IPv6 entries with a zone id (fe80::1%eth0) are skipped, because
+    nginx cannot use them.
+
+    Args:
+        path: Path to the resolv.conf file.
+
+    Returns:
+        Up to MAX_RESOLV_CONF_NAMESERVERS addresses, in file order. Empty when
+        the file is missing, unreadable, or lists no usable nameserver.
+    """
+    try:
+        lines = Path(path).read_text().splitlines()
+    except OSError as e:
+        logger.debug(f"Cannot read {path} for nginx resolver: {e}")
+        return []
+
+    nameservers: list[str] = []
+    for line in lines:
+        fields = line.split()
+        if len(fields) < 2 or fields[0] != "nameserver":
+            continue
+        try:
+            address = ipaddress.ip_address(fields[1])
+        except ValueError:
+            logger.debug(f"Skipping non-IP nameserver entry in {path}: {fields[1]!r}")
+            continue
+        if address.version == 6:
+            if address.scope_id:
+                logger.debug(f"Skipping zone-scoped IPv6 nameserver in {path}: {fields[1]!r}")
+                continue
+            nameservers.append(f"[{address.compressed}]")
+        else:
+            nameservers.append(address.compressed)
+        if len(nameservers) == MAX_RESOLV_CONF_NAMESERVERS:
+            break
+    return nameservers
+
+
+def _get_nginx_dns_resolver() -> str:
+    """Return the address list for nginx ``resolver`` directives.
+
+    Order of precedence:
+        1. NGINX_DNS_RESOLVER, when set to a non-blank value.
+        2. The nameservers in /etc/resolv.conf, so nginx resolves names the same
+           way the container itself does.
+        3. FALLBACK_NGINX_DNS_RESOLVER (public DNS), with a warning, because it
+           cannot resolve private names such as docker-compose service names.
+
+    Returns:
+        A space-separated address list, for example "127.0.0.11".
+    """
+    configured = os.environ.get(NGINX_DNS_RESOLVER_ENV, "").strip()
+    if configured:
+        return configured
+
+    nameservers = _read_resolv_conf_nameservers(RESOLV_CONF_PATH)
+    if nameservers:
+        return " ".join(nameservers)
+
+    logger.warning(
+        f"No {NGINX_DNS_RESOLVER_ENV} set and no usable nameserver in "
+        f"{RESOLV_CONF_PATH}; nginx falls back to public DNS "
+        f"({FALLBACK_NGINX_DNS_RESOLVER}), which cannot resolve private hostnames"
+    )
+    return FALLBACK_NGINX_DNS_RESOLVER
+
+
 def _render_real_ip_config() -> str:
     """Render nginx realip directives from the ``TRUSTED_REAL_IP_CIDRS`` env var.
 
@@ -471,9 +620,62 @@ def _render_real_ip_config() -> str:
     return "\n".join(lines)
 
 
+def _vs_backend_header_clears(
+    indent: str = "        ",
+) -> str:
+    """Return the nginx directives that clear every stripped header.
+
+    Args:
+        indent: Leading whitespace for each directive inside the location block.
+
+    Returns:
+        One ``proxy_set_header <Name> "";`` line per header in
+        ``_VS_BACKEND_STRIPPED_HEADERS``, sorted so the rendered config is stable.
+    """
+    lines = []
+    for name in sorted(_VS_BACKEND_STRIPPED_HEADERS):
+        canonical = "-".join(part.capitalize() for part in name.split("-"))
+        lines.append(f'{indent}proxy_set_header {canonical} "";')
+    return "\n".join(lines)
+
+
+def _virtual_backend_is_routable(
+    active: dict[str, Any],
+    base_path: str,
+) -> bool:
+    """Return True when a virtual server may route to this backend.
+
+    Applies the same gate as the direct route: the server must be enabled and
+    healthy. A security scan that fails disables the server, so this also drops
+    quarantined backends. Without it, a virtual server would keep routing to a
+    backend whose direct route has been removed.
+
+    Args:
+        active: The backend's active server document.
+        base_path: The active server path, used when the document has no path.
+
+    Returns:
+        True only when the backend is enabled and its health status is healthy.
+    """
+    if not active.get("is_enabled", False):
+        return False
+    health_key = active.get("path") or base_path
+    return HealthStatus.is_healthy(_server_health_status(health_key))
+
+
+def _server_health_status(
+    server_path: str,
+) -> str:
+    """Return the cached health status for a server path, UNKNOWN if never checked."""
+    from ..health.service import health_service
+
+    return health_service.server_health_status.get(server_path, HealthStatus.UNKNOWN)
+
+
 def _atomic_write_text(
     path: Path,
     content: str,
+    record_metric: bool = True,
 ) -> None:
     """Write content to path atomically (issue #1044).
 
@@ -495,6 +697,9 @@ def _atomic_write_text(
     Args:
         path: Destination path.
         content: Text content to write.
+        record_metric: Count this write in ``NGINX_CONFIG_WRITES``. Pass False
+            for files that are not the nginx config, such as the virtual-server
+            mapping files, so the metric keeps counting config writes only.
 
     Raises:
         OSError: If the temp file cannot be created, written, or replaced.
@@ -522,9 +727,11 @@ def _atomic_write_text(
         tmp.close()
         os.chmod(tmp_path, target_mode)
         os.replace(tmp_path, path)
-        NGINX_CONFIG_WRITES.labels(status="success").inc()
+        if record_metric:
+            NGINX_CONFIG_WRITES.labels(status="success").inc()
     except Exception:
-        NGINX_CONFIG_WRITES.labels(status="failure").inc()
+        if record_metric:
+            NGINX_CONFIG_WRITES.labels(status="failure").inc()
         try:
             tmp.close()
         except Exception:  # nosec B110 - best-effort cleanup of temp file on write failure
@@ -574,6 +781,99 @@ _LAST_GOOD_SUFFIX: str = ".last-good"
 # only mode or local dev), so the caller promotes the candidate without a test
 # rather than rejecting a legitimate render it cannot validate.
 _NGINX_TEST_NO_BINARY: str = "__nginx_binary_missing__"
+
+
+# Placeholders that only a raw, unrendered template contains. The registry
+# entrypoint waits for these same six to disappear before it starts nginx
+# (docker/registry-entrypoint.sh), so keep the two lists in sync. An unrendered
+# marker secret makes the auth server refuse every internal-token mint, which
+# 401s every registry API request.
+_UNRENDERED_TEMPLATE_MARKERS: tuple[str, ...] = (
+    "{{ADDITIONAL_SERVER_NAMES}}",
+    "{{ANTHROPIC_API_VERSION}}",
+    "{{LOCATION_BLOCKS}}",
+    "{{VIRTUAL_SERVER_BLOCKS}}",
+    "{{MCP_RESOURCE_METADATA_URL}}",
+    "{{NGINX_MARKER_SECRET}}",
+)
+
+
+# Brackets the `auth_request /validate;` line of every registry `/api/` location in
+# both nginx templates. NGINX_DISABLE_API_AUTH_REQUEST drops the bracketed lines;
+# the marker lines themselves are always removed from the rendered config.
+_API_AUTH_REQUEST_REGION_RE = re.compile(
+    r"^[ \t]*# \{\{API_AUTH_REQUEST_START\}\}[ \t]*\n"
+    r".*?"
+    r"^[ \t]*# \{\{API_AUTH_REQUEST_END\}\}[ \t]*\n",
+    re.MULTILINE | re.DOTALL,
+)
+_API_AUTH_REQUEST_MARKER_LINE_RE = re.compile(
+    r"^[ \t]*# \{\{API_AUTH_REQUEST_(?:START|END)\}\}[ \t]*\n",
+    re.MULTILINE,
+)
+
+
+def _apply_api_auth_request_markers(
+    template_content: str,
+    auth_request_enabled: bool,
+) -> str:
+    """Keep or drop the `/api/` auth_request lines marked in the nginx template.
+
+    The template is the only copy of the `/api/` location. When
+    ``auth_request_enabled`` is False (NGINX_DISABLE_API_AUTH_REQUEST set), the
+    lines between the ``{{API_AUTH_REQUEST_START}}`` and
+    ``{{API_AUTH_REQUEST_END}}`` markers are removed, so nginx stops running
+    ``/validate`` for ``/api/`` while every other directive in the location
+    (rate limits, header clears, error pages) stays as the template wrote it.
+
+    Args:
+        template_content: Raw nginx template text.
+        auth_request_enabled: Whether `/api/` keeps ``auth_request /validate``.
+
+    Returns:
+        The template text with the marker lines removed, and with the marked
+        region removed too when ``auth_request_enabled`` is False.
+    """
+    if not auth_request_enabled:
+        template_content, removed = _API_AUTH_REQUEST_REGION_RE.subn("", template_content)
+        if removed:
+            logger.warning(
+                "NGINX_DISABLE_API_AUTH_REQUEST enabled: bypassing auth_request for /api/"
+            )
+        else:
+            logger.warning(
+                "NGINX_DISABLE_API_AUTH_REQUEST enabled but the nginx template has no "
+                "{{API_AUTH_REQUEST_START}}/{{API_AUTH_REQUEST_END}} markers; "
+                "/api/ keeps auth_request"
+            )
+    return _API_AUTH_REQUEST_MARKER_LINE_RE.sub("", template_content)
+
+
+def _is_unrendered_template(
+    path: Path,
+) -> bool:
+    """Return True if the file at ``path`` is a raw template, not a rendered config.
+
+    The entrypoint copies the raw template into the live config path before the
+    registry renders it for the first time. That copy is not a config nginx can
+    load, so it must never be restored as the last-known-good config.
+
+    Args:
+        path: The live nginx config path.
+
+    Returns:
+        True if the file contains any unrendered template marker. False if it
+        contains none, or if it cannot be read (the backup step then reports
+        the read error).
+    """
+    try:
+        content = path.read_text()
+    except OSError:
+        return False
+    for marker in _UNRENDERED_TEMPLATE_MARKERS:
+        if marker in content:
+            return True
+    return False
 
 
 def _run_nginx_config_test() -> tuple[bool, str]:
@@ -684,6 +984,16 @@ def _write_and_validate_config(
     had_previous = path.exists()
     backup_path = path.with_name(path.name + _LAST_GOOD_SUFFIX)
 
+    # A raw template left by the entrypoint is not a last-good config. Treat it
+    # as no prior config, so a rejected first render removes the file instead
+    # of restoring a template nginx fails to parse (Issue #1575).
+    if had_previous and _is_unrendered_template(path):
+        logger.info(
+            "Live nginx config %s is an unrendered template; it will not be kept as last-good",
+            path,
+        )
+        had_previous = False
+
     # Back up the current live config so we can restore it on rejection.
     if had_previous:
         try:
@@ -739,6 +1049,22 @@ def _write_and_validate_config(
     raise RuntimeError(f"nginx config rejected by nginx -t: {message.strip()}")
 
 
+def _wrap_non_object_schema(
+    input_schema: dict[str, Any],
+) -> dict[str, Any]:
+    """Nest a non-object schema under properties.value, keeping its definitions.
+
+    References such as "#/$defs/Item" resolve against the document root. The
+    definitions therefore move to the new root, or the references would break.
+    """
+    inner = dict(input_schema)
+    wrapper: dict[str, Any] = {"type": "object", "properties": {"value": inner}}
+    for key in SCHEMA_DEFINITION_KEYS:
+        if key in inner:
+            wrapper[key] = inner.pop(key)
+    return wrapper
+
+
 def _ensure_mcp_compliant_schema(input_schema: dict[str, Any]) -> dict[str, Any]:
     """Ensure inputSchema conforms to MCP spec by adding 'type': 'object' if missing.
 
@@ -758,13 +1084,22 @@ def _ensure_mcp_compliant_schema(input_schema: dict[str, Any]) -> dict[str, Any]
     if input_schema.get("type") == "object":
         return input_schema
 
+    # A type list that allows an object (for example ["object", "null"]) already
+    # describes the arguments object. MCP 2026-07-28 requires the root type to
+    # be exactly "object", so narrow it instead of nesting the arguments.
+    root_type = input_schema.get("type")
+    if isinstance(root_type, list) and "object" in root_type:
+        schema_copy = input_schema.copy()
+        schema_copy["type"] = "object"
+        return schema_copy
+
     # If schema has "type" but it's not "object", wrap it
     if "type" in input_schema:
         logger.warning(
             f"Tool inputSchema has non-object type '{input_schema.get('type')}'. "
             "Wrapping in object schema to comply with MCP spec."
         )
-        return {"type": "object", "properties": {"value": input_schema}}
+        return _wrap_non_object_schema(input_schema)
 
     # If no "type" field but has "properties", add "type": "object"
     if "properties" in input_schema or "additionalProperties" in input_schema:
@@ -1051,106 +1386,13 @@ class NginxConfigService:
             #
             # Set NGINX_DISABLE_API_AUTH_REQUEST=true to bypass `auth_request` for `/api/` and rely
             # on FastAPI's own auth (session cookie or bearer token validation inside the app).
-            import os
-
-            if os.environ.get("NGINX_DISABLE_API_AUTH_REQUEST", "false").lower() in (
-                "1",
-                "true",
-                "yes",
-                "on",
-            ):
-                protected_api_block = """    # Protected API endpoints - require authentication
-    location {{ROOT_PATH}}/api/ {
-        # Mark this as a registry-API request (rewrite phase) so the shared
-        # /validate subrequest forwards X-Registry-Api-Auth and /validate mints
-        # the registry-UI internal token. Set inside the location (NOT a
-        # server-scope default), which the auth_request subrequest would clobber.
-        set $registry_api_auth "1";
-
-        # Authenticate request via auth server (validates JWT Bearer tokens)
-        auth_request /validate;
-
-        # Capture auth server response headers
-        auth_request_set $auth_user $upstream_http_x_user;
-        auth_request_set $auth_username $upstream_http_x_username;
-        auth_request_set $auth_client_id $upstream_http_x_client_id;
-        auth_request_set $auth_scopes $upstream_http_x_scopes;
-        auth_request_set $auth_method $upstream_http_x_auth_method;
-        # Capture the /validate-minted registry-UI token (binds verified identity).
-        # The registry verifies this instead of trusting the forgeable X-* headers.
-        auth_request_set $auth_internal_token_registry $upstream_http_x_internal_token_registry;
-
-        # Proxy to FastAPI service
-        proxy_pass http://127.0.0.1:7860/api/;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-
-        # Forward validated auth context to FastAPI
-        proxy_set_header X-User $auth_user;
-        proxy_set_header X-Username $auth_username;
-        proxy_set_header X-Client-Id $auth_client_id;
-        proxy_set_header X-Scopes $auth_scopes;
-        proxy_set_header X-Auth-Method $auth_method;
-        # The internal token the registry verifies (it ignores the X-* headers above).
-        proxy_set_header X-Internal-Token-Registry $auth_internal_token_registry;
-
-        # Pass through original Authorization header
-        proxy_set_header Authorization $http_authorization;
-
-        # Pass all request headers
-        proxy_pass_request_headers on;
-
-        # Timeouts
-        proxy_connect_timeout 10s;
-        proxy_send_timeout 30s;
-        proxy_read_timeout 30s;
-    }"""
-
-                unprotected_api_block = """    # API endpoints - FastAPI handles authentication (session cookie / bearer)
-    location {{ROOT_PATH}}/api/ {
-        # Inbound rate limits still apply even though auth_request is bypassed:
-        # /api/ is the highest-volume surface and must stay bounded at the edge,
-        # and the registration endpoints keep their stricter per-source cap (the
-        # register zone key is empty for non-registration URIs, so it is a no-op
-        # for the rest of /api/).
-        limit_req zone=mcp_gateway_edge burst=100 nodelay;
-        limit_req zone=mcp_gateway_register burst=10 nodelay;
-        limit_conn mcp_gateway_conn 100;
-
-        # Proxy to FastAPI service
-        proxy_pass http://127.0.0.1:7860/api/;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-
-        # Pass through original Authorization header (if present)
-        proxy_set_header Authorization $http_authorization;
-
-        # Pass all request headers and cookies
-        proxy_pass_request_headers on;
-
-        # Timeouts
-        proxy_connect_timeout 10s;
-        proxy_send_timeout 30s;
-        proxy_read_timeout 30s;
-    }"""
-
-                if protected_api_block in template_content:
-                    template_content = template_content.replace(
-                        protected_api_block, unprotected_api_block
-                    )
-                    logger.warning(
-                        "NGINX_DISABLE_API_AUTH_REQUEST enabled: bypassing auth_request for /api/"
-                    )
-                else:
-                    logger.warning(
-                        "NGINX_DISABLE_API_AUTH_REQUEST enabled but could not find /api/ auth_request block in template"
-                    )
+            # The template stays the only copy of the `/api/` location: it marks the
+            # auth_request lines, and the flag only decides whether they are kept.
+            # Read through the registry-side helper so nginx and the registry
+            # always agree on whether the flag is set.
+            template_content = _apply_api_auth_request_markers(
+                template_content, _api_auth_request_enabled()
+            )
 
             # Generate location blocks for enabled and healthy servers with transport support
             # In registry-only mode, skip MCP server location blocks (use empty list)
@@ -1310,12 +1552,15 @@ class NginxConfigService:
                 "{{ADDITIONAL_SERVER_NAMES}}", additional_server_names
             )
             config_content = config_content.replace("{{ANTHROPIC_API_VERSION}}", api_version)
-            # egress marker: force-set on the /validate subrequest so a direct
-            # :8888 caller cannot supply it. Empty default leaves the header empty
-            # (marker disabled), matching auth_server's empty-secret pass-through.
+            # Marker secret: force-set on every /validate subrequest so the auth
+            # server mints internal tokens only for requests that came through
+            # nginx. Read from the same Settings object that refuses to start
+            # without it (and that the generated /_vs_auth_* blocks use), so a
+            # value supplied only through .env cannot render as an empty marker,
+            # which would make the auth server refuse every mint.
             config_content = config_content.replace(
                 "{{NGINX_MARKER_SECRET}}",
-                os.environ.get("AUTH_SERVER_NGINX_MARKER_SECRET", ""),
+                self._sanitize_for_nginx_set(settings.auth_server_nginx_marker_secret),
             )
             config_content = config_content.replace("{{KEYCLOAK_SCHEME}}", keycloak_scheme)
             config_content = config_content.replace("{{KEYCLOAK_HOST}}", keycloak_host)
@@ -1758,6 +2003,11 @@ class NginxConfigService:
                 encoded.append("".join(f".{byte:02x}" for byte in char.encode()))
         return "".join(encoded)
 
+    def _virtual_backend_location(self, path: str, version: str | None = None) -> str:
+        """Give each selected version document an injective internal route."""
+        backend_key = make_version_id(path, version) if version else path
+        return f"/_vs_backend{self._encode_path_for_location(backend_key)}"
+
     @staticmethod
     def _is_host_resolvable_at_startup(
         hostname: str,
@@ -1925,10 +2175,15 @@ class NginxConfigService:
         # config can name internal locations this config no longer has.
         set $vs_config_generation "{VS_CONFIG_GENERATION_PLACEHOLDER}";
         auth_request /validate;
+        auth_request_set $auth_subrequest_status $upstream_status;
+        auth_request_set $auth_entra_outage_marker $upstream_http_x_entra_group_lookup_unavailable;
+        error_page 500 = @auth_internal_error;
+        error_page 502 = @upstream_unavailable_jsonrpc;
         auth_request_set $auth_scopes $upstream_http_x_scopes;
         auth_request_set $auth_user $upstream_http_x_user;
         auth_request_set $auth_username $upstream_http_x_username;
         auth_request_set $auth_method $upstream_http_x_auth_method;
+{_MCP_BODY_CAPTURE_SIZE_DIRECTIVES}
         rewrite_by_lua_file /etc/nginx/lua/capture_body.lua;
         content_by_lua_file /etc/nginx/lua/virtual_router.lua;
 
@@ -2069,6 +2324,10 @@ class NginxConfigService:
     location {{{{ROOT_PATH}}}}{location_path} {{
         client_max_body_size {body_size};
         auth_request /validate;
+        auth_request_set $auth_subrequest_status $upstream_status;
+        auth_request_set $auth_entra_outage_marker $upstream_http_x_entra_group_lookup_unavailable;
+        error_page 500 = @auth_internal_error;
+        error_page 502 = @upstream_unavailable;
         auth_request_set $auth_internal_token_generic $upstream_http_x_internal_token_generic;
         auth_request_set $auth_user $upstream_http_x_user;
         auth_request_set $auth_scopes $upstream_http_x_scopes;
@@ -2242,51 +2501,66 @@ class NginxConfigService:
         self,
         backend_path: str,
         server_repo: Any,
-    ) -> dict | None:
-        """The backend's server document if it gets internal virtual locations, else None.
+        backend_version: str | None = None,
+    ) -> tuple[dict, str, str, str] | None:
+        """Return the linked safe version, active egress mode, signed id and base path.
 
-        The single definition used by BOTH the location generator and the Lua
-        mapping writer, so a mapping file never names an internal location that
-        was not rendered (a capture of it would fall through to the catch-all and
-        look like a grant refusal). Rejects invalid paths, unknown servers, a
-        missing or unsafe ``proxy_pass_url``/endpoint, and an unknown egress mode.
+        Both location and mapping generation use this gate; a mapped backend
+        cannot refer to an absent route or to a version the vend would reject.
         """
-        from registry.services.server_service import _validate_endpoint_fields
-
         try:
             validate_server_path(backend_path)
+            if backend_version:
+                validate_server_path(f"{backend_path}:{backend_version}")
         except UrlValidationError:
             logger.warning("Skipping invalid virtual backend path %r", backend_path)
             return None
-        server_info = await server_repo.get(backend_path)
-        if not server_info:
-            logger.warning(f"Backend server not found for virtual server mapping: {backend_path}")
+
+        requested = await server_repo.get(backend_path)
+        if not requested:
+            logger.warning("Backend server not found for virtual server mapping: %s", backend_path)
             return None
-        proxy_pass_url = server_info.get("proxy_pass_url", "")
-        if not proxy_pass_url:
-            logger.warning(f"No proxy_pass_url for backend server: {backend_path}")
-            return None
-        # Reject legacy malformed backend URLs before interpolating them into a
-        # signed upstream claim or a proxy_pass directive.
+        base_path = requested.get("active_version_id") or backend_path
         try:
-            validate_proxy_pass_url(proxy_pass_url, server_path=backend_path)
-            _validate_endpoint_fields(
-                server_info,
-                server_path=backend_path,
-                registered_target_url=proxy_pass_url,
-            )
+            validate_server_path(base_path)
         except UrlValidationError:
-            logger.warning("Skipping unsafe virtual backend URL for %s", backend_path)
+            logger.warning("Skipping invalid active path for virtual backend %s", backend_path)
             return None
-        if server_info.get("egress_auth_mode", "none") not in (
-            "none",
-            "pat",
-            "oauth_user",
-            "obo_exchange",
-        ):
+        active = await server_repo.get(base_path) if base_path != backend_path else requested
+        if not active:
+            logger.warning("Active server not found for virtual backend %s", backend_path)
+            return None
+        if not _virtual_backend_is_routable(active, base_path):
+            logger.warning("Skipping disabled or unhealthy virtual backend %s", backend_path)
+            return None
+        egress_mode = active.get("egress_auth_mode", "none")
+        if egress_mode not in ("none", "pat", "oauth_user", "obo_exchange"):
             logger.warning("Invalid egress auth mode for virtual backend %s", backend_path)
             return None
-        return server_info
+
+        requested_version = backend_version or (
+            requested.get("version") if base_path != backend_path else None
+        )
+        if (
+            base_path != backend_path
+            and backend_version
+            and backend_version != requested.get("version")
+        ):
+            logger.warning("Conflicting virtual backend version for %s", backend_path)
+            return None
+        selected, version_id = active, ""
+        if requested_version:
+            routes = await self._resolve_version_routes(base_path, active)
+            route = next((r for r in routes if r.label == requested_version), None)
+            if route is None or base_path != backend_path and route.version_id != backend_path:
+                logger.warning("Skipping unavailable virtual backend version %s", backend_path)
+                return None
+            selected, version_id = route.server, route.version_id
+
+        if self._version_upstream(base_path, _VersionRoute("", version_id, selected), True) is None:
+            logger.warning("Skipping unsafe virtual backend endpoint for %s", backend_path)
+            return None
+        return selected, egress_mode, version_id, base_path
 
     async def _generate_virtual_backend_locations(
         self,
@@ -2305,21 +2579,32 @@ class NginxConfigService:
 
             server_repo = get_server_repository()
 
-            # Collect unique backend server paths
-            backend_paths = set()
-            for vs in virtual_servers:
-                for tm in vs.tool_mappings:
-                    backend_paths.add(tm.backend_server_path)
+            # A pinned mapping must reach its own version document's backend,
+            # not the active server's internal proxy location.
+            backend_keys = {
+                (tm.backend_server_path, tm.backend_version)
+                for vs in virtual_servers
+                for tm in vs.tool_mappings
+            }
 
-            if not backend_paths:
+            if not backend_keys:
                 return ""
 
             location_blocks = []
-            for backend_path in sorted(backend_paths):
-                server_info = await self._renderable_virtual_backend(backend_path, server_repo)
-                if server_info is None:
+            rendered_locations: set[str] = set()
+            for backend_path, backend_version in sorted(
+                backend_keys, key=lambda item: (item[0], item[1] or "")
+            ):
+                location_path = self._virtual_backend_location(backend_path, backend_version)
+                if location_path in rendered_locations:
                     continue
-                encoded = self._encode_path_for_location(backend_path)
+                renderable = await self._renderable_virtual_backend(
+                    backend_path, server_repo, backend_version
+                )
+                if renderable is None:
+                    continue
+                rendered_locations.add(location_path)
+                server_info, egress_mode, version_id, base_path = renderable
                 proxy_pass_url = server_info["proxy_pass_url"]
                 # Determine upstream host from proxy_pass_url
                 parsed_url = urlparse(proxy_pass_url)
@@ -2328,36 +2613,39 @@ class NginxConfigService:
                 # The same function the vend uses to approve the signed upstream, so
                 # the routed URL and the approved URL cannot drift.
                 mcp_proxy_url = selected_upstream(server_info, True)
-                version_routes = await self._resolve_version_routes(backend_path, server_info)
-                if server_info.get("egress_auth_mode", "none") == "none":
-                    # A plain backend dispatches to its active endpoint whatever the
-                    # pin (see the dispatch location below), so its authorization
-                    # binds the active version too and never fails on a stale pin.
-                    version_selection = self._version_selection_directives(
-                        backend_path, version_routes[:1], virtual=True, enforce_pins=False
+                # The common egress identity strips a terminal slash; a direct
+                # nginx proxy_pass needs the URI slash to replace the capture URI.
+                plain_proxy_url = mcp_proxy_url
+                if not urlparse(mcp_proxy_url).path:
+                    plain_proxy_url += "/"
+                if backend_version or version_id:
+                    # The mapping owns one exact version: never let a client header
+                    # change the signed destination chosen for this location.
+                    version_selection = (
+                        f'        set $backend_url "{self._sanitize_for_nginx_set(mcp_proxy_url)}";\n'
+                        f'        set $resolved_version "{self._sanitize_for_nginx_set(version_id)}";'
                     )
                 else:
+                    version_routes = await self._resolve_version_routes(base_path, server_info)
                     version_selection = self._version_selection_directives(
-                        backend_path, version_routes, virtual=True, enforce_pins=True
+                        base_path,
+                        version_routes if egress_mode != "none" else version_routes[:1],
+                        virtual=True,
+                        enforce_pins=egress_mode != "none",
                     )
 
-                # Use regular internal location (not named @) so proxy_pass
-                # can include a URI path for the MCP endpoint
-                location_path = f"/_vs_backend{encoded}"
+                # Pair each backend with an exact internal /validate capture.
                 # ngx.location.capture does not run auth_request on the captured
                 # location. Lua explicitly captures this sibling first, passing
                 # the rewritten JSON-RPC body in X-Body and using its signed
                 # response token for the backend hop.
-                auth_location = f"/_vs_auth{encoded}"
-                safe_backend_path = self._sanitize_for_nginx_set(backend_path.rstrip("/"))
+                auth_location = location_path.replace("/_vs_backend", "/_vs_auth", 1)
+                safe_backend_path = self._sanitize_for_nginx_set(base_path.rstrip("/"))
                 auth_server_target = settings.auth_server_url.rstrip("/")
                 safe_auth_url = f"{auth_server_target}/validate"
-                safe_proxy_target = f"{auth_server_target}/mcp-proxy/{backend_path.strip('/')}/"
-                egress_mode = server_info.get("egress_auth_mode", "none")
-
-                # Bind the same selected URL into both the signed token and the
-                # actual outbound destination: the version is chosen here, from
-                # this backend's own versions, never by a global $uri-keyed map.
+                safe_proxy_target = f"{auth_server_target}/mcp-proxy/{base_path.strip('/')}/"
+                # A version-specific location signs its selected registered URL;
+                # only the active base path authorizes the backend's scope and vend.
                 auth_block = f"""
     location = {auth_location} {{
         internal;
@@ -2367,6 +2655,21 @@ class NginxConfigService:
         proxy_read_timeout 10s;
         proxy_send_timeout 10s;
         proxy_http_version 1.1;
+        # This location proxies straight to the auth server's /validate; it never
+        # passes through the template's shared `location = /validate` block, so
+        # it repeats that block's header buffers here (issue #1939). The response
+        # carries the scope-bearing X-Internal-Token minted for the backend
+        # (X-Resolved-Upstream is set below) but no registry token, because
+        # X-Registry-Api-Auth is cleared below, so it never carries the groups.
+        proxy_buffer_size 64k;
+        proxy_buffers 2 64k;
+        proxy_busy_buffers_size 64k;
+        # The Lua router treats any non-200, or a 200 without a signed
+        # X-Internal-Token, as a failed backend authorization. In an
+        # ngx.location.capture the error_page below did not rewrite the status
+        # (an oversized auth response reached Lua as 502); it is kept to stop a
+        # server-level error_page such as /502.html from answering here.
+        error_page 500 502 504 = @auth_subrequest_failed;
         proxy_set_header Host $host;
         proxy_set_header X-Original-URL $scheme://$host{{{{ROOT_PATH}}}}{safe_backend_path}/mcp;
         # The parent URI is the only source of a virtual-resource token's
@@ -2443,30 +2746,25 @@ class NginxConfigService:
                     backend_hostname
                 )
 
-                # Defense-in-depth: escape the backend URL and Host header before
-                # interpolating them into proxy_pass / set / proxy_set_header
-                # directives, matching the escaping applied to the versioned
-                # backend map. Registration-time validation already rejects URLs
-                # with nginx metacharacters; escaping here means legacy data
-                # persisted before validation still cannot break out of the
-                # directive context.
-                safe_mcp_proxy_url = self._sanitize_for_nginx_set(mcp_proxy_url)
+                # Registration and endpoint validation reject nginx metacharacters;
+                # sanitize again before interpolating a persisted URL or Host.
+                safe_mcp_proxy_url = self._sanitize_for_nginx_set(plain_proxy_url)
                 safe_upstream_host = self._sanitize_for_nginx_set(upstream_host)
 
-                # Plain backends dispatch to the active endpoint (pins are honoured
-                # on egress-brokered backends, whose dispatch uses the signed
-                # upstream). A literal proxy_pass keeps load-time resolution
-                # through the system resolver for private dotted hostnames.
                 if host_is_resolvable_at_startup:
                     proxy_directive = f"proxy_pass {safe_mcp_proxy_url};"
                 else:
-                    dns_resolver = os.environ.get("NGINX_DNS_RESOLVER", "8.8.8.8 8.8.4.4")
+                    # Nginx variables are server-scoped: keep versions disjoint.
+                    backend_var = (
+                        "$vs_backend_" + hashlib.sha256(location_path.encode()).hexdigest()[:16]
+                    )
+                    dns_resolver = _get_nginx_dns_resolver()
                     dns_resolver_timeout = os.environ.get("NGINX_DNS_RESOLVER_TIMEOUT", "5")
                     proxy_directive = (
                         f"resolver {dns_resolver} valid=10s;\n"
                         f"        resolver_timeout {dns_resolver_timeout}s;\n"
-                        f'        set $vs_backend_url "{safe_mcp_proxy_url}";\n'
-                        "        proxy_pass $vs_backend_url;"
+                        f'        set {backend_var} "{safe_mcp_proxy_url}";\n'
+                        f"        proxy_pass {backend_var};"
                     )
 
                 block = f"""
@@ -2477,23 +2775,13 @@ class NginxConfigService:
         proxy_ssl_server_name on;
         proxy_set_header Host {safe_upstream_host};
         # SECURITY: this location proxies directly to a registrant-controlled
-        # (not fully trusted) MCP backend. Never relay the caller's registry
-        # credential here -- clearing Authorization AND Cookie prevents a
-        # malicious registered upstream from capturing and replaying the
-        # caller's gateway bearer token or registry session cookie against the
-        # registry API. This location is reached via a Lua subrequest that
-        # inherits the parent request's headers, so Cookie must be explicitly
-        # cleared or the user's session cookie would be forwarded verbatim.
-        # The gateway authenticates the upstream via its own mechanism, not by
-        # forwarding the caller's credential.
-        proxy_set_header Authorization "";
-        proxy_set_header Cookie "";
-        proxy_set_header X-Authorization "";
-        proxy_set_header X-Internal-Token "";
-        proxy_set_header X-Internal-Token-Generic "";
-        proxy_set_header X-Internal-Token-Registry "";
-        proxy_set_header X-Body "";
-        proxy_set_header X-Body-Uninspectable "";
+        # (not fully trusted) MCP backend. It is reached via a Lua subrequest
+        # that inherits the parent request's headers, so every reserved header
+        # is cleared explicitly: the caller's credentials (Authorization,
+        # X-Authorization, Proxy-Authorization, Cookie), the gateway's signed
+        # internal tokens, and the internal routing/identity headers. The list
+        # comes from RESERVED_CUSTOM_HEADER_NAMES (_VS_BACKEND_STRIPPED_HEADERS).
+{_vs_backend_header_clears()}
         # Forward the validated caller identity so backends can attribute
         # write operations to the authenticated user.  These are set as
         # request headers by virtual_router.lua (ngx.req.set_header) before
@@ -2536,7 +2824,7 @@ class NginxConfigService:
 
             server_repo = get_server_repository()
 
-            mappings_dir = Path("/etc/nginx/lua/virtual_mappings")
+            mappings_dir = VIRTUAL_MAPPINGS_DIR
             mappings_dir.mkdir(parents=True, exist_ok=True)
 
             for vs in virtual_servers:
@@ -2553,10 +2841,10 @@ class NginxConfigService:
                 for tm in vs.tool_mappings:
                     # Only backends that get internal locations may appear in a
                     # mapping: the same check the location generator applies.
-                    server_info = await self._renderable_virtual_backend(
-                        tm.backend_server_path, server_repo
+                    renderable = await self._renderable_virtual_backend(
+                        tm.backend_server_path, server_repo, tm.backend_version
                     )
-                    if server_info is None:
+                    if renderable is None:
                         logger.warning(
                             "Omitting tool %r of %s: backend %s has no internal location",
                             tm.tool_name,
@@ -2564,24 +2852,11 @@ class NginxConfigService:
                             tm.backend_server_path,
                         )
                         continue
-                    # Only credentialed backends honor pins (plain ones dispatch to
-                    # the active endpoint), so only their stale pins break calls.
-                    if tm.backend_version and server_info.get("egress_auth_mode", "none") != "none":
-                        routes = await self._resolve_version_routes(
-                            tm.backend_server_path, server_info
-                        )
-                        known = {route.label for route in routes} | set(_ACTIVE_VERSION_SELECTORS)
-                        if tm.backend_version not in known:
-                            # Calls to it fail closed (no credential is minted); say why.
-                            logger.warning(
-                                "Tool %r of %s pins version %r, which %s does not have",
-                                tm.tool_name,
-                                vs.path,
-                                tm.backend_version,
-                                tm.backend_server_path,
-                            )
-                    encoded_backend = self._encode_path_for_location(tm.backend_server_path)
-                    backend_location = f"/_vs_backend{encoded_backend}"
+                    server_info, egress_mode, version_id, base_path = renderable
+                    backend_key = version_id or base_path
+                    backend_location = self._virtual_backend_location(
+                        tm.backend_server_path, tm.backend_version
+                    )
                     tool_display_name = tm.alias if tm.alias else tm.tool_name
                     description = tm.description_override or ""
                     input_schema: dict[str, Any] = {}
@@ -2589,7 +2864,7 @@ class NginxConfigService:
                     for st in server_info.get("tool_list", []):
                         if st.get("name") == tm.tool_name:
                             description = tm.description_override or st.get("description", "")
-                            input_schema = st.get("inputSchema", st.get("input_schema", {}))
+                            input_schema = stored_input_schema(st)
                             break
 
                     input_schema = _ensure_mcp_compliant_schema(input_schema)
@@ -2604,14 +2879,18 @@ class NginxConfigService:
                             "description": description,
                             "inputSchema": input_schema,
                             "backend_location": backend_location,
+                            "backend_server_path": backend_key,
+                            "block_server_path": base_path,
                             "backend_version": tm.backend_version,
-                            "egress_auth_mode": server_info.get("egress_auth_mode", "none"),
+                            "egress_auth_mode": egress_mode,
                             "required_scopes": required_scopes,
                         }
                     )
 
                     tool_backend_map[tool_display_name] = {
                         "backend_location": backend_location,
+                        "backend_server_path": backend_key,
+                        "block_server_path": base_path,
                         "original_name": tm.tool_name,
                         "backend_version": tm.backend_version,
                     }
@@ -2623,9 +2902,13 @@ class NginxConfigService:
                     "tool_backend_map": tool_backend_map,
                 }
 
+                # Atomic, so virtual_router.lua never reads a half-written file.
                 mapping_path = mappings_dir / f"{server_id}.json"
-                with open(mapping_path, "w") as f:
-                    json.dump(mapping_data, f, indent=2, default=str)
+                _atomic_write_text(
+                    mapping_path,
+                    json.dumps(mapping_data, indent=2, default=str),
+                    record_metric=False,
+                )
 
                 logger.debug(f"Wrote virtual server mapping: {mapping_path}")
 
@@ -2767,13 +3050,11 @@ class NginxConfigService:
     ) -> str:
         """Create nginx location blocks for a single A2A agent.
 
-        Emits two prefix locations under ``{ROOT_PATH}/agent/{agent_path}/``:
-          1. The agent card (``.well-known/agent-card.json``) for discovery.
-          2. The JSON-RPC endpoint for ``message/send`` / ``message/stream``.
-
-        Both are protected by the ``/validate`` auth subrequest (the same hop
-        used for MCP servers) and proxy straight to the agent backend. A2A is
-        JSON-RPC over HTTP, so no protocol translation is required.
+        Emits an authorized card discovery location, an internal-only card
+        upstream location, and an authorized JSON-RPC/HTTP+JSON endpoint under
+        ``{ROOT_PATH}/agent/{agent_path}/``. The card handler reads the live
+        card before sending response headers; it returns 502 if no declared
+        interface matches the registered backend route.
 
         Args:
             agent_path: Agent path without surrounding slashes
@@ -2782,7 +3063,7 @@ class NginxConfigService:
             agent_name: Human-readable agent name (used in a comment only).
 
         Returns:
-            Nginx configuration string with the two location blocks.
+            Nginx configuration string with the three location blocks.
 
         Raises:
             ValueError: If ``agent_path`` or ``backend_url`` contains characters
@@ -2802,7 +3083,7 @@ class NginxConfigService:
         else:
             host_header = "$host"
 
-        dns_resolver = os.environ.get("NGINX_DNS_RESOLVER", "8.8.8.8 8.8.4.4")
+        dns_resolver = _get_nginx_dns_resolver()
         dns_resolver_timeout = os.environ.get("NGINX_DNS_RESOLVER_TIMEOUT", "5")
         safe_name = self._sanitize_for_nginx_comment(agent_name)
         route = f"{AGENT_ROUTE_PREFIX}/{agent_path}"
@@ -2816,6 +3097,11 @@ class NginxConfigService:
         # two must agree or the health check calls an agent healthy while its
         # gateway card route fails (issue #1724).
         card_origin = f"{parsed_url.scheme}://{upstream_host}"
+        card_internal_uri = f"{{{{ROOT_PATH}}}}{route}/_agent_card_upstream"
+        safe_backend_url = self._sanitize_for_nginx_set(backend_url)
+        # nginx's location body filter cannot replace a successful upstream
+        # status after headers are sent. Read the card in the content phase so
+        # an unroutable remote declaration produces a genuine 502 instead.
 
         return f"""
     # A2A agent card (discovery): {safe_name}
@@ -2825,28 +3111,39 @@ class NginxConfigService:
         resolver {dns_resolver} valid=10s;
         resolver_timeout {dns_resolver_timeout}s;
         auth_request /validate;
+        auth_request_set $auth_subrequest_status $upstream_status;
+        auth_request_set $auth_entra_outage_marker $upstream_http_x_entra_group_lookup_unavailable;
+        error_page 500 = @auth_internal_error;
+        error_page 502 = @upstream_unavailable;
         auth_request_set $auth_scopes $upstream_http_x_scopes;
+        set $agent_backend_url "{safe_backend_url}";
+        set $agent_card_upstream "{card_internal_uri}";
+        content_by_lua_file /etc/nginx/lua/agent_card_rewrite.lua;
+        error_page 401 = @auth_error;
+        error_page 403 = @forbidden_error;
+    }}
+
+    # Accessible only from the authenticated discovery handler above. Explicitly
+    # strip gateway credentials again: internal subrequests inherit client headers.
+    location = {card_internal_uri} {{
+        internal;
+        resolver {dns_resolver} valid=10s;
+        resolver_timeout {dns_resolver_timeout}s;
         proxy_pass {card_origin}/.well-known/agent-card.json;
         proxy_http_version 1.1;
         proxy_ssl_server_name on;
         proxy_set_header Host {host_header};
-        # SECURITY (A2A egress trust model): X-Authorization carries the caller's
-        # gateway credential -- it is validated at /validate and MUST NOT reach
-        # this registrant-controlled backend, or a malicious agent could replay
-        # it against the registry (the B1 / #1391 class of bug). Strip it and the
-        # session Cookie. The standard Authorization header is left intact: per
-        # the A2A spec, credentials are obtained out-of-band by the calling agent
-        # and passed end-to-end in Authorization for the target agent to
-        # authenticate -- the gateway is not a credential broker here.
         proxy_set_header X-Authorization "";
         proxy_set_header Cookie "";
-        # Rewrite the card's endpoint URLs from the backend to this gateway so
-        # clients send JSON-RPC back through the proxy. Body size changes, so
-        # Content-Length must be cleared before the rewrite runs.
-        header_filter_by_lua_block {{ ngx.header.content_length = nil }}
-        body_filter_by_lua_file /etc/nginx/lua/agent_card_rewrite.lua;
-        error_page 401 = @auth_error;
-        error_page 403 = @forbidden_error;
+        proxy_set_header Accept-Encoding "";
+        # Card fetches do not consume caller identity. Clear spoofable copies
+        # instead of forwarding headers that an agent could mistake for
+        # validated gateway assertions.
+        proxy_set_header X-User "";
+        proxy_set_header X-Username "";
+        proxy_set_header X-Scopes "";
+        proxy_set_header X-Auth-Method "";
+        proxy_pass_request_headers on;
     }}
 
     # A2A agent JSON-RPC endpoint: {safe_name}
@@ -2854,6 +3151,10 @@ class NginxConfigService:
         resolver {dns_resolver} valid=10s;
         resolver_timeout {dns_resolver_timeout}s;
         auth_request /validate;
+        auth_request_set $auth_subrequest_status $upstream_status;
+        auth_request_set $auth_entra_outage_marker $upstream_http_x_entra_group_lookup_unavailable;
+        error_page 500 = @auth_internal_error;
+        error_page 502 = @upstream_unavailable_jsonrpc;
         auth_request_set $auth_user $upstream_http_x_user;
         auth_request_set $auth_username $upstream_http_x_username;
         auth_request_set $auth_scopes $upstream_http_x_scopes;
@@ -2872,6 +3173,7 @@ class NginxConfigService:
         # Capture the JSON-RPC body (rewrite phase) so emit_metrics can record
         # the A2A method; per-agent invoke is enforced by the auth server via
         # the /validate subrequest above.
+{_MCP_BODY_CAPTURE_SIZE_DIRECTIVES}
         rewrite_by_lua_file /etc/nginx/lua/capture_body.lua;
         log_by_lua_file /etc/nginx/lua/emit_metrics.lua;
 
@@ -3124,12 +3426,10 @@ class NginxConfigService:
         limit_req zone=mcp_gateway_edge burst=100 nodelay;
         limit_conn mcp_gateway_conn 100;
 
-        # DNS resolver for dynamic proxy_pass upstreams.
-        # Default: 8.8.8.8 8.8.4.4 (public DNS).
-        # Override with NGINX_DNS_RESOLVER env var for environments where
-        # backend servers use internal hostnames (e.g., Kubernetes
-        # cluster-local names like *.svc.cluster.local need kube-dns).
-        resolver {os.environ.get("NGINX_DNS_RESOLVER", "8.8.8.8 8.8.4.4")} valid=10s;
+        # DNS resolver for dynamic proxy_pass upstreams: NGINX_DNS_RESOLVER,
+        # else the container's /etc/resolv.conf nameservers, else public DNS.
+        # See _get_nginx_dns_resolver.
+        resolver {_get_nginx_dns_resolver()} valid=10s;
         resolver_timeout {os.environ.get("NGINX_DNS_RESOLVER_TIMEOUT", "5")}s;
 
         # Upstream timeouts for the browser -> nginx -> auth-server mcp_proxy
@@ -3150,6 +3450,10 @@ class NginxConfigService:
 
         # Authenticate request - pass entire request to auth server
         auth_request /validate;
+        auth_request_set $auth_subrequest_status $upstream_status;
+        auth_request_set $auth_entra_outage_marker $upstream_http_x_entra_group_lookup_unavailable;
+        error_page 500 = @auth_internal_error;
+        error_page 502 = @upstream_unavailable_jsonrpc;
 
         # Capture auth server response headers for forwarding
         auth_request_set $auth_user $upstream_http_x_user;
@@ -3212,8 +3516,9 @@ class NginxConfigService:
 
         # Transport-specific settings
         if transport_type == "sse":
-            transport_settings = """
+            transport_settings = f"""
         # Capture request body for auth validation using Lua
+{_MCP_BODY_CAPTURE_SIZE_DIRECTIVES}
         rewrite_by_lua_file /etc/nginx/lua/capture_body.lua;
         log_by_lua_file /etc/nginx/lua/emit_metrics.lua;
 
@@ -3227,8 +3532,9 @@ class NginxConfigService:
         chunked_transfer_encoding off;"""
 
         elif transport_type == "streamable-http":
-            transport_settings = """
+            transport_settings = f"""
         # Capture request body for auth validation using Lua
+{_MCP_BODY_CAPTURE_SIZE_DIRECTIVES}
         rewrite_by_lua_file /etc/nginx/lua/capture_body.lua;
         log_by_lua_file /etc/nginx/lua/emit_metrics.lua;
 
@@ -3239,8 +3545,9 @@ class NginxConfigService:
         proxy_set_header Accept $http_accept;"""
 
         else:  # direct
-            transport_settings = """
+            transport_settings = f"""
         # Capture request body for auth validation using Lua
+{_MCP_BODY_CAPTURE_SIZE_DIRECTIVES}
         rewrite_by_lua_file /etc/nginx/lua/capture_body.lua;
         log_by_lua_file /etc/nginx/lua/emit_metrics.lua;
 
@@ -3373,11 +3680,17 @@ class NginxReloadScheduler:
                     return
 
                 new_hash = hashlib.sha256(config_text.encode()).hexdigest()
+
+                # Write the virtual server Lua mappings on every flush, before the
+                # hash check. The Lua router re-reads them at request time, so a
+                # mapping change needs no nginx reload. Changing a virtual server's
+                # tools on backends it already uses leaves the nginx config
+                # identical, so tying the mappings to a config change left the
+                # router serving the old tool list.
+                await nginx_service._commit_virtual_server_mappings()
+
                 if new_hash == self._last_config_hash:
                     return
-
-                # Config changed: write virtual server Lua mappings, then nginx config
-                await nginx_service._commit_virtual_server_mappings()
 
                 async with nginx_service.reload_lock:
                     # Validate the candidate in-tree before it can persist as

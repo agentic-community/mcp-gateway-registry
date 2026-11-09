@@ -238,6 +238,7 @@ class CustomEntityService:
             allowed_groups=request.allowed_groups,
             tags=request.tags,
             attributes=cleaned,
+            is_enabled=request.is_enabled,
             # Gateway-proxy opt-in (validated on the request model; carried through).
             is_proxied=request.is_proxied,
             proxy_target_url=request.proxy_target_url,
@@ -300,6 +301,8 @@ class CustomEntityService:
             updates["allowed_groups"] = request.allowed_groups
         if request.tags is not None:
             updates["tags"] = request.tags
+        if request.is_enabled is not None:
+            updates["is_enabled"] = request.is_enabled
         if request.is_proxied is not None:
             updates["is_proxied"] = request.is_proxied
         if request.proxy_target_url is not None:

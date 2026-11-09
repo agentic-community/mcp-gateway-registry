@@ -342,6 +342,8 @@ def mock_cognito_provider():
         Mock Cognito provider
     """
     provider = MagicMock()
+    provider.recover_bearer_groups = AsyncMock(return_value=None)
+    provider.is_delegated_user = MagicMock(return_value=False)
     provider.validate_token = MagicMock(
         return_value={
             "valid": True,
@@ -380,6 +382,8 @@ def mock_keycloak_provider():
         Mock Keycloak provider
     """
     provider = MagicMock()
+    provider.recover_bearer_groups = AsyncMock(return_value=None)
+    provider.is_delegated_user = MagicMock(return_value=False)
     provider.validate_token = MagicMock(
         return_value={
             "valid": True,
@@ -445,6 +449,8 @@ def mock_auth0_provider():
         Mock Auth0 provider
     """
     provider = MagicMock()
+    provider.recover_bearer_groups = AsyncMock(return_value=None)
+    provider.is_delegated_user = MagicMock(return_value=False)
     provider.validate_token = MagicMock(
         return_value={
             "valid": True,
@@ -482,6 +488,8 @@ def mock_entra_provider():
         Mock Entra ID provider
     """
     provider = MagicMock()
+    provider.recover_bearer_groups = AsyncMock(return_value=None)
+    provider.is_delegated_user = MagicMock(return_value=False)
     provider.validate_token = MagicMock(
         return_value={
             "valid": True,
@@ -692,6 +700,8 @@ def mock_okta_provider():
         Mock Okta provider
     """
     provider = MagicMock()
+    provider.recover_bearer_groups = AsyncMock(return_value=None)
+    provider.is_delegated_user = MagicMock(return_value=False)
     provider.validate_token = MagicMock(
         return_value={
             "valid": True,

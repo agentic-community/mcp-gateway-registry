@@ -79,6 +79,14 @@ URL_VALIDATION_TIMEOUT: int = 10
 # server that keeps echoing the x-next-page header cannot loop indefinitely.
 MAX_GITLAB_TREE_PAGES: int = 100
 
+# Statuses meaning the server does not support HEAD on this URL. The health
+# check retries these with a GET whose body it never reads.
+HEAD_UNSUPPORTED_STATUSES: frozenset[int] = frozenset({405, 501})
+
+# Upstream statuses that mean SKILL.md is gone rather than briefly unreachable.
+# Only these, or a blocked URL, are stored as unhealthy (issue #1952).
+SKILL_MD_GONE_STATUSES: frozenset[int] = frozenset({404, 410})
+
 
 def _is_safe_url(
     url: str,
@@ -833,6 +841,45 @@ async def _parse_skill_md_content(
         raise SkillUrlValidationError(url, str(e)) from e
 
 
+async def _probe_skill_md(
+    client: httpx.AsyncClient,
+    url: str,
+    headers: dict[str, str],
+) -> tuple[int, str | None]:
+    """Request SKILL.md headers, falling back to GET when HEAD is unsupported.
+
+    Some servers answer HEAD on a GET-only route with 405 (FastAPI does), which
+    would mark a reachable SKILL.md unhealthy. The GET is streamed and its body
+    never read. Both the status and the redirect check are taken while the
+    response is open, so callers never handle a closed response.
+
+    Args:
+        client: Guarded HTTP client.
+        url: Fetch URL with any auth query parameters applied.
+        headers: Request headers.
+
+    Returns:
+        Tuple of (final HTTP status, first unsafe redirect hop or None).
+    """
+    response = await client.head(
+        url,
+        headers=headers,
+        follow_redirects=True,
+        timeout=URL_VALIDATION_TIMEOUT,
+    )
+    unsafe_hop = _unsafe_redirect_target(response)
+    if unsafe_hop is not None or response.status_code not in HEAD_UNSUPPORTED_STATUSES:
+        return response.status_code, unsafe_hop
+    async with client.stream(
+        "GET",
+        url,
+        headers=headers,
+        follow_redirects=True,
+        timeout=URL_VALIDATION_TIMEOUT,
+    ) as get_response:
+        return get_response.status_code, _unsafe_redirect_target(get_response)
+
+
 async def _check_skill_health(
     url: str,
     auth_scheme: str = "none",
@@ -848,7 +895,10 @@ async def _check_skill_health(
         auth_header_name: Custom header name
 
     Returns:
-        Dict with health status
+        Dict with ``healthy``, ``status_code``, ``error``, ``response_time_ms``
+        and ``conclusive``. ``conclusive`` is False for a failure that may pass
+        on its own (rate limit, 5xx, timeout); the caller reports it but should
+        not store it, since a caller can provoke one by repeating the check.
     """
     import time
 
@@ -861,6 +911,7 @@ async def _check_skill_health(
             "status_code": None,
             "error": "URL failed SSRF validation",
             "response_time_ms": 0,
+            "conclusive": True,
         }
 
     # Build auth headers for private repos
@@ -879,15 +930,9 @@ async def _check_skill_health(
                 allow_global_credentials=(auth_scheme == "global_credentials"),
             )
             merged_headers = {**github_headers, **fetch_headers}
-            response = await client.head(
-                fetch_url,
-                headers=merged_headers,
-                follow_redirects=True,
-                timeout=URL_VALIDATION_TIMEOUT,
-            )
+            status_code, unsafe_hop = await _probe_skill_md(client, fetch_url, merged_headers)
 
-            # SSRF protection: validate every hop of a real redirect chain
-            unsafe_hop = _unsafe_redirect_target(response)
+            # SSRF protection: every hop of a real redirect chain was validated
             if unsafe_hop is not None:
                 logger.warning(
                     f"SSRF protection: Blocked redirect from {redact_url(url)} to unsafe URL {redact_url(unsafe_hop)}"
@@ -898,15 +943,17 @@ async def _check_skill_health(
                     "status_code": None,
                     "error": f"Redirect to unsafe URL blocked: {unsafe_hop}",
                     "response_time_ms": round(response_time_ms, 2),
+                    "conclusive": True,
                 }
 
             response_time_ms = (time.perf_counter() - start_time) * 1000
 
             return {
-                "healthy": response.status_code < 400,
-                "status_code": response.status_code,
-                "error": None if response.status_code < 400 else f"HTTP {response.status_code}",
+                "healthy": status_code < 400,
+                "status_code": status_code,
+                "error": None if status_code < 400 else f"HTTP {status_code}",
                 "response_time_ms": round(response_time_ms, 2),
+                "conclusive": status_code < 400 or status_code in SKILL_MD_GONE_STATUSES,
             }
 
     except UrlValidationError as e:
@@ -919,6 +966,7 @@ async def _check_skill_health(
             "status_code": None,
             "error": "URL failed SSRF validation",
             "response_time_ms": round(response_time_ms, 2),
+            "conclusive": True,
         }
     except httpx.RequestError as e:
         # Log detailed exception on the server, but return a generic message to the client
@@ -929,6 +977,7 @@ async def _check_skill_health(
             "status_code": None,
             "error": "Unexpected error during health check",
             "response_time_ms": round(response_time_ms, 2),
+            "conclusive": False,
         }
 
 
@@ -1025,6 +1074,35 @@ def _decrypt_skill_auth(
     return auth_scheme, credential, getattr(skill, "auth_header_name", None)
 
 
+async def _build_skill_fetch_request(
+    url: str,
+    skill: SkillCard,
+) -> tuple[str, dict[str, str]]:
+    """Build the fetch URL and auth headers for a request made for a skill.
+
+    ``global_credentials`` skills get the shared GitHub headers; every other
+    scheme uses only the skill's own credential.
+
+    Returns (fetch_url, headers) tuple.
+    """
+    auth_scheme, credential, auth_header_name = _decrypt_skill_auth(skill)
+    fetch_url, fetch_headers = _build_fetch_headers(
+        url,
+        auth_scheme,
+        credential,
+        auth_header_name,
+    )
+
+    if auth_scheme == "global_credentials":
+        github_headers = await _github_auth.get_auth_headers(
+            fetch_url, allow_global_credentials=True
+        )
+        return fetch_url, github_headers
+
+    # none / bearer / api_key: use only the caller-supplied credential.
+    return fetch_url, fetch_headers
+
+
 async def _fetch_authenticated_content(
     url: str,
     skill: SkillCard,
@@ -1051,23 +1129,7 @@ async def _fetch_authenticated_content(
     if not _is_safe_url(url):
         raise SkillContentSSRFError(url)
 
-    auth_scheme, credential, auth_header_name = _decrypt_skill_auth(skill)
-    fetch_url, fetch_headers = _build_fetch_headers(
-        url,
-        auth_scheme,
-        credential,
-        auth_header_name,
-    )
-
-    if auth_scheme == "none":
-        merged_headers = fetch_headers
-    elif auth_scheme == "global_credentials":
-        merged_headers = await _github_auth.get_auth_headers(
-            fetch_url, allow_global_credentials=True
-        )
-    else:
-        # bearer / api_key: use only the caller-supplied credential.
-        merged_headers = fetch_headers
+    fetch_url, merged_headers = await _build_skill_fetch_request(url, skill)
 
     try:
         async with guarded_async_client() as client:
@@ -1086,6 +1148,7 @@ async def _fetch_authenticated_content(
                 raise SkillContentFetchError(
                     url,
                     f"HTTP {response.status_code}",
+                    upstream_status=response.status_code,
                 )
 
             if max_size and len(response.content) > max_size:
@@ -1514,6 +1577,8 @@ class SkillService:
                 rating_details=s.rating_details,
                 health_status=s.health_status,
                 last_checked_time=s.last_checked_time,
+                created_at=s.created_at,
+                updated_at=s.updated_at,
                 status=s.status,
                 # Gateway-proxy opt-in: carry through so listings show the badge
                 # and the edit modal populates (proxy_client_url is server-derived).
@@ -1756,14 +1821,21 @@ class SkillService:
     ) -> dict[str, Any]:
         """Check skill health by performing HEAD request to SKILL.md URL.
 
+        Returns the full probe result, but stores only a conclusive one:
+        reachable, gone (404/410), or blocked by the SSRF guard. A transient
+        failure leaves the stored status as it was.
+
+        A skill with inline SKILL.md content (AgentCore federation) is healthy
+        without a network call: the content route serves it from the database,
+        and its ``skill_md_url`` points at that route, which answers an
+        unauthenticated HEAD with 405 (issue #1952).
+
         Args:
             path: Skill path
 
         Returns:
             Dict with health status
         """
-        from datetime import UTC, datetime
-
         normalized = normalize_skill_path(path)
         repo = self._get_repo()
         skill = await repo.get(normalized)
@@ -1776,30 +1848,63 @@ class SkillService:
                 "response_time_ms": 0,
             }
 
-        # Use raw URL for health check (more reliable, returns actual content)
-        url = skill.skill_md_raw_url or skill.skill_md_url
-        result = await _check_skill_health(
-            str(url),
-            auth_scheme=getattr(skill, "auth_scheme", "none"),
-            auth_credential_encrypted=getattr(skill, "auth_credential_encrypted", None),
-            auth_header_name=getattr(skill, "auth_header_name", None),
-        )
+        if skill.skill_md_content:
+            result: dict[str, Any] = {
+                "healthy": True,
+                "status_code": None,
+                "error": None,
+                "response_time_ms": 0,
+                "conclusive": True,
+            }
+        else:
+            # Use raw URL for health check (more reliable, returns actual content)
+            url = skill.skill_md_raw_url or skill.skill_md_url
+            result = await _check_skill_health(
+                str(url),
+                auth_scheme=getattr(skill, "auth_scheme", "none"),
+                auth_credential_encrypted=getattr(skill, "auth_credential_encrypted", None),
+                auth_header_name=getattr(skill, "auth_header_name", None),
+            )
 
-        # Persist health status to database
-        health_status = "healthy" if result.get("healthy") else "unhealthy"
-        checked_time = datetime.now(UTC)
+        # Any caller with view access can run this check, so a failure that may
+        # be transient is reported but not stored: otherwise repeating the check
+        # until the forge rate-limits the registry would hide the skill.
+        if result["conclusive"]:
+            await self.record_skill_health(normalized, healthy=bool(result["healthy"]))
+        else:
+            logger.info(
+                "Not storing transient health failure for skill %s: %s",
+                normalized,
+                result["error"],
+            )
+        return result
 
-        await repo.update(
-            normalized,
+    async def record_skill_health(
+        self,
+        path: str,
+        healthy: bool,
+    ) -> None:
+        """Persist a health result and the time it was observed.
+
+        Called by the health check and by the content route, which observes
+        SKILL.md reachability on every fetch.
+
+        Args:
+            path: Normalized skill path.
+            healthy: Whether SKILL.md was reachable.
+
+        Raises:
+            SkillServiceError: If the repository update fails.
+        """
+        health_status = "healthy" if healthy else "unhealthy"
+        await self._get_repo().update(
+            path,
             {
                 "health_status": health_status,
-                "last_checked_time": checked_time.isoformat(),
+                "last_checked_time": datetime.now(UTC).isoformat(),
             },
         )
-
-        logger.info(f"Updated health status for skill {normalized}: {health_status}")
-
-        return result
+        logger.info(f"Updated health status for skill {path}: {health_status}")
 
     async def update_rating(
         self,

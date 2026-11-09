@@ -4,7 +4,7 @@
   "server_access": [
     {
       "server": "*",
-      "methods": ["initialize", "notifications/initialized", "ping", "tools/list", "tools/call", "resources/list", "resources/templates/list", "GET", "POST", "PUT", "DELETE"],
+      "methods": ["initialize", "notifications/initialized", "ping", "tools/list", "tools/call", "resources/list", "resources/templates/list", "resources/read", "prompts/list", "prompts/get", "GET", "POST", "PUT", "DELETE"],
       "tools": "*"
     },
     {

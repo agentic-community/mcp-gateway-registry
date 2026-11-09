@@ -35,8 +35,13 @@ module "mcp_gateway" {
   # Internal auth-server URL (override for Cloud Map / Service Connect FQDNs)
   auth_server_url = var.auth_server_url
 
-  # ALB logging
-  alb_logs_bucket = aws_s3_bucket.alb_logs.id
+  # Make ALB logging wait for the bucket policy while keeping unrelated data
+  # source reads available during planning.
+  # Older state has no wait triggers, so refresh-only runs need the bucket fallback.
+  alb_logs_bucket = try(
+    time_sleep.wait_for_bucket_policy.triggers.alb_logs_bucket,
+    aws_s3_bucket.alb_logs.id,
+  )
 
   # ECS configuration
   ecs_cluster_arn         = module.ecs_cluster.arn
@@ -103,19 +108,23 @@ module "mcp_gateway" {
   alarm_email       = var.alarm_email
 
   # Embeddings configuration
-  embeddings_provider            = var.embeddings_provider
-  embeddings_model_name          = var.embeddings_model_name
-  embeddings_model_dimensions    = var.embeddings_model_dimensions
-  embeddings_aws_region          = var.embeddings_aws_region
-  embeddings_api_key             = var.embeddings_api_key
-  embeddings_auth_mode           = var.embeddings_auth_mode
-  embeddings_idp_token_endpoint  = var.embeddings_idp_token_endpoint
-  embeddings_idp_client_id       = var.embeddings_idp_client_id
-  embeddings_idp_client_secret   = var.embeddings_idp_client_secret
-  embeddings_idp_scope           = var.embeddings_idp_scope
-  embeddings_idp_timeout_seconds = var.embeddings_idp_timeout_seconds
-  embeddings_idp_allow_insecure  = var.embeddings_idp_allow_insecure
-  embeddings_response_format     = var.embeddings_response_format
+  embeddings_provider                = var.embeddings_provider
+  embeddings_model_name              = var.embeddings_model_name
+  embeddings_model_dimensions        = var.embeddings_model_dimensions
+  embeddings_aws_region              = var.embeddings_aws_region
+  embeddings_api_key                 = var.embeddings_api_key
+  embeddings_auth_mode               = var.embeddings_auth_mode
+  embeddings_idp_token_endpoint      = var.embeddings_idp_token_endpoint
+  embeddings_idp_client_id           = var.embeddings_idp_client_id
+  embeddings_idp_client_secret       = var.embeddings_idp_client_secret
+  embeddings_idp_scope               = var.embeddings_idp_scope
+  embeddings_idp_timeout_seconds     = var.embeddings_idp_timeout_seconds
+  embeddings_idp_allow_insecure      = var.embeddings_idp_allow_insecure
+  embeddings_response_format         = var.embeddings_response_format
+  embeddings_request_timeout_seconds = var.embeddings_request_timeout_seconds
+  embeddings_max_retries             = var.embeddings_max_retries
+  embeddings_retry_max_input_chars   = var.embeddings_retry_max_input_chars
+  embeddings_extra_headers           = var.embeddings_extra_headers
 
   # Registration deduplication
   dedup_registration_hint_enabled = var.dedup_registration_hint_enabled
@@ -192,6 +201,10 @@ module "mcp_gateway" {
   entra_client_secret                       = var.entra_client_secret
   entra_login_base_url                      = var.entra_login_base_url
   entra_graph_base_url                      = var.entra_graph_base_url
+  entra_graph_resource_url                  = var.entra_graph_resource_url
+  entra_browser_user_read_enabled           = var.entra_browser_user_read_enabled
+  entra_group_recovery_enabled              = var.entra_group_recovery_enabled
+  entra_group_cache_ttl_seconds             = var.entra_group_cache_ttl_seconds
   entra_scope_format                        = var.entra_scope_format
   entra_application_id_uri                  = var.entra_application_id_uri
   idp_group_filter_prefix                   = var.idp_group_filter_prefix
@@ -447,22 +460,25 @@ module "mcp_gateway" {
 
   # Per-user egress credential vault (third-party OBO). secrets-manager backend
   # on ECS; IAM grants are added in the module when enabled.
-  egress_auth_enabled                = var.egress_auth_enabled
-  egress_secret_store_backend        = var.egress_secret_store_backend
-  egress_oauth_callback_base_url     = var.egress_oauth_callback_base_url
-  egress_token_refresh_skew_seconds  = var.egress_token_refresh_skew_seconds
-  egress_state_ttl_seconds           = var.egress_state_ttl_seconds
+  egress_auth_enabled                       = var.egress_auth_enabled
+  egress_secret_store_backend               = var.egress_secret_store_backend
+  egress_oauth_callback_base_url            = var.egress_oauth_callback_base_url
+  egress_token_refresh_skew_seconds         = var.egress_token_refresh_skew_seconds
+  egress_state_ttl_seconds                  = var.egress_state_ttl_seconds
   egress_http_pool_max_connections          = var.egress_http_pool_max_connections
   egress_http_pool_max_keepalive            = var.egress_http_pool_max_keepalive
   egress_http_pool_keepalive_expiry_seconds = var.egress_http_pool_keepalive_expiry_seconds
   egress_http_pool_connect_retries          = var.egress_http_pool_connect_retries
-  egress_obo_allowed_audiences       = var.egress_obo_allowed_audiences
-  egress_oauth_trusted_idp_hosts     = var.egress_oauth_trusted_idp_hosts
-  egress_registry_internal_url       = var.egress_registry_internal_url
-  egress_nginx_marker_secret         = var.egress_nginx_marker_secret
-  egress_secrets_manager_kms_key_id  = var.egress_secrets_manager_kms_key_id
-  egress_secrets_manager_path_prefix = var.egress_secrets_manager_path_prefix
-  egress_credential_encryption_key   = var.egress_credential_encryption_key
+  egress_obo_allowed_audiences              = var.egress_obo_allowed_audiences
+  egress_obo_cache_enabled                  = var.egress_obo_cache_enabled
+  egress_obo_cache_max_ttl_seconds          = var.egress_obo_cache_max_ttl_seconds
+  egress_obo_cache_expiry_skew_seconds      = var.egress_obo_cache_expiry_skew_seconds
+  egress_oauth_trusted_idp_hosts            = var.egress_oauth_trusted_idp_hosts
+  egress_registry_internal_url              = var.egress_registry_internal_url
+  egress_nginx_marker_secret                = var.egress_nginx_marker_secret
+  egress_secrets_manager_kms_key_id         = var.egress_secrets_manager_kms_key_id
+  egress_secrets_manager_path_prefix        = var.egress_secrets_manager_path_prefix
+  egress_credential_encryption_key          = var.egress_credential_encryption_key
 
   # Wait for S3 bucket policy to propagate (30s delay)
   # This prevents "Access Denied" errors when ALB tests write permissions
@@ -500,12 +516,14 @@ resource "terraform_data" "mongodb_backend_uri_required" {
 # CloudFront Configuration Warnings
 # =============================================================================
 
-# Warning for dual ingress configuration (both CloudFront and custom domain)
+# Print Mode 3 access information for CloudFront with a custom domain.
+# Use the domain as the trigger to rerun the notice when its URL changes
+# and avoid replacing this resource on unchanged plans.
 resource "null_resource" "dual_ingress_warning" {
   count = var.enable_cloudfront && var.enable_route53_dns ? 1 : 0
 
   triggers = {
-    always_run = timestamp()
+    root_domain = local.root_domain
   }
 
   provisioner "local-exec" {

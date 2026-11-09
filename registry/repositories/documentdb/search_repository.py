@@ -10,6 +10,8 @@ from motor.motor_asyncio import AsyncIOMotorCollection
 
 from ...core.config import embedding_config, settings
 from ...schemas.agent_models import AgentCard
+from ...utils.embedding_text import EmbeddingText
+from ...utils.embeddings_provider import default_retry_max_input_chars
 from ...utils.metadata import flatten_metadata_to_text
 from ...utils.vector import cosine_similarity
 from ..interfaces import SearchRepositoryBase
@@ -67,6 +69,37 @@ _STOPWORDS: set[str] = {
     "set",
     "put",
 }
+
+
+# Reported for a path whose entry was stored without a vector. The entry is still
+# found by keyword search; the registry log has the provider's error for the path.
+REINDEX_NO_EMBEDDING_ERROR: str = (
+    "Stored without an embedding: the embeddings provider rejected or failed the "
+    "request. The entry is still found by keyword search; see the registry log for "
+    "the provider's error."
+)
+
+
+# Matches an embeddings-collection record that actually has a vector. A record whose
+# embedding call failed is stored with an empty list (still found by keyword search),
+# so the record existing is not enough. $nin with None also excludes a missing field.
+HAS_VECTOR_FILTER: dict[str, Any] = {"embedding": {"$nin": [None, []]}}
+
+
+def _reindex_detail(
+    path: str,
+    entity_type: str,
+    embedded: bool,
+) -> dict[str, Any]:
+    """Build one reindex result, failing a path that was stored without a vector."""
+    if embedded:
+        return {"path": path, "entity_type": entity_type, "status": "success"}
+    return {
+        "path": path,
+        "entity_type": entity_type,
+        "status": "failed",
+        "error": REINDEX_NO_EMBEDDING_ERROR,
+    }
 
 
 def _tokenize_query(query: str) -> list[str]:
@@ -159,6 +192,48 @@ def _format_custom_result(
         "is_enabled": doc.get("is_enabled", False),
         "relevance_score": relevance_score,
         "match_context": doc.get("description"),
+    }
+
+
+def _format_skill_result(
+    doc: dict[str, Any],
+    relevance_score: float,
+) -> dict[str, Any]:
+    """Format a skill search hit into its result entry.
+
+    Shared by every search path (vector, client-side, lexical) so the skill
+    fields cannot drift between them. Health is deliberately absent: the
+    search route reads it from the skills collection, the single store a
+    health check writes to (issue #1952).
+
+    Args:
+        doc: Search-index document for the skill.
+        relevance_score: Score assigned by the calling search path.
+
+    Returns:
+        Skill result entry consumed by the semantic search route and by ARD
+        search, which publishes ``updated_at`` as the catalog entry's
+        last-modified time without a per-hit database read.
+    """
+    metadata = doc.get("metadata") or {}
+    return {
+        "entity_type": "skill",
+        "path": doc.get("path"),
+        "skill_name": doc.get("name"),
+        "description": doc.get("description"),
+        "tags": doc.get("tags", []),
+        "skill_md_url": metadata.get("skill_md_url"),
+        "skill_md_raw_url": metadata.get("skill_md_raw_url"),
+        "version": metadata.get("version"),
+        "author": metadata.get("author"),
+        "visibility": doc.get("visibility", "public"),
+        "allowed_groups": doc.get("allowed_groups", []),
+        "owner": doc.get("owner"),
+        "is_enabled": doc.get("is_enabled", False),
+        "status": doc.get("status", "active"),
+        "relevance_score": relevance_score,
+        "match_context": doc.get("description"),
+        "updated_at": doc.get("indexed_at"),
     }
 
 
@@ -837,6 +912,9 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                 embedding_dimension=settings.embeddings_model_dimensions,
                 token_provider=token_provider,
                 response_format=settings.embeddings_response_format,
+                extra_headers=settings.embeddings_extra_headers,
+                request_timeout_seconds=settings.embeddings_request_timeout_seconds,
+                max_retries=settings.embeddings_max_retries,
             )
         return self._embedding_model
 
@@ -890,6 +968,60 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             if latch_unavailable:
                 self._embedding_unavailable = True
             return None
+
+    def _retry_max_input_chars(self) -> int:
+        """Return the trim target for a retry: the setting, or the model's default."""
+        if settings.embeddings_retry_max_input_chars:
+            return settings.embeddings_retry_max_input_chars
+        return default_retry_max_input_chars(settings.embeddings_model_name)
+
+    async def _embed_with_trim_retry(
+        self,
+        embedding_text: EmbeddingText,
+        context: str,
+    ) -> list[float]:
+        """Embed the full text, and retry once trimmed if it fails and is over the target.
+
+        The first attempt always sends the full text, so every entry that embeds
+        today is unchanged. Only a failed attempt on text longer than the trim
+        target is retried, once, with the text trimmed (issue #1917). A failure on
+        shorter text is not retried: length cannot be the cause. This needs no
+        provider-specific error parsing.
+
+        Args:
+            embedding_text: The entry's text, as parts.
+            context: Label for log lines, for example "server 'github'".
+
+        Returns:
+            The vector, or an empty list if both attempts failed (the caller stores
+            the entry without a vector, so keyword search still finds it).
+        """
+        full_text = embedding_text.full()
+        # latch_unavailable=False: indexing failures should not poison
+        # the latch for later docs in the same batch.
+        vectors = await self._embed_texts([full_text], context=context, latch_unavailable=False)
+        if vectors:
+            return vectors[0]
+
+        max_chars = self._retry_max_input_chars()
+        if len(full_text) <= max_chars:
+            return []
+
+        trimmed_text = embedding_text.trimmed(max_chars)
+        logger.warning(
+            "Embedding failed for %s with %d characters; retrying once trimmed to %d "
+            "characters (EMBEDDINGS_RETRY_MAX_INPUT_CHARS target %d)",
+            context,
+            len(full_text),
+            len(trimmed_text),
+            max_chars,
+        )
+        vectors = await self._embed_texts(
+            [trimmed_text],
+            context=f"{context} (trimmed retry)",
+            latch_unavailable=False,
+        )
+        return vectors[0] if vectors else []
 
     async def initialize(self) -> None:
         """Initialize the search service and create vector index."""
@@ -948,41 +1080,45 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         server_info: dict[str, Any],
         is_enabled: bool = False,
         skip_if_unchanged: bool = False,
-    ) -> None:
+    ) -> bool:
         """Index a server for search.
 
         Args:
             skip_if_unchanged: When True (used during startup), skip embedding
                 generation if the existing document has the same content hash.
                 This avoids redundant embedding API calls on every boot.
+
+        Returns:
+            True if the entry is stored with an embedding. False if the embedding
+            call failed (the entry is stored without a vector, so it is still found
+            by keyword search) or the write failed. Callers that only index can
+            ignore this; reindex_paths uses it to report failures honestly.
         """
         import hashlib
 
         collection = await self._get_collection()
 
-        text_parts = [
-            server_info.get("server_name", ""),
-            server_info.get("description", ""),
-        ]
+        embedding_text = EmbeddingText(
+            head=[server_info.get("server_name", ""), server_info.get("description", "")]
+        )
 
         # Coerce null to empty: a server updated via PUT can carry an explicit
         # tags/tool_list of None, and dict.get(key, default) returns None (not
         # the default) when the key is present-but-None.
         tags = server_info.get("tags") or []
         if tags:
-            text_parts.append("Tags: " + ", ".join(tags))
+            embedding_text.head.append("Tags: " + ", ".join(tags))
 
         for tool in server_info.get("tool_list") or []:
-            text_parts.append(tool.get("name", ""))
-            text_parts.append(tool.get("description", ""))
+            embedding_text.items.append((tool.get("name") or "", tool.get("description") or ""))
 
         # Include custom metadata key-value pairs in embedding text
         metadata = server_info.get("metadata", {})
         if isinstance(metadata, dict) and metadata:
             for key, value in metadata.items():
-                text_parts.append(f"{key}: {value}")
+                embedding_text.tail.append(f"{key}: {value}")
 
-        text_for_embedding = " ".join(filter(None, text_parts))
+        text_for_embedding = embedding_text.full()
         content_hash = hashlib.sha256(text_for_embedding.encode()).hexdigest()[:16]
 
         # Skip re-embedding if content hasn't changed (startup optimization)
@@ -999,19 +1135,15 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                 # Content unchanged and embedding exists; just update is_enabled if needed
                 if existing.get("is_enabled") != is_enabled:
                     await collection.update_one({"_id": path}, {"$set": {"is_enabled": is_enabled}})
-                return
+                return True
 
         # Flatten metadata into a searchable text field for keyword matching
         metadata_text = flatten_metadata_to_text(metadata)
 
-        # latch_unavailable=False: indexing failures should not poison
-        # the latch for later docs in the same batch.
-        vectors = await self._embed_texts(
-            [text_for_embedding],
+        embedding = await self._embed_with_trim_retry(
+            embedding_text,
             context=f"server {server_info.get('server_name', path)!r}",
-            latch_unavailable=False,
         )
-        embedding = vectors[0] if vectors else []
 
         doc = {
             "_id": path,
@@ -1043,8 +1175,10 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         try:
             await collection.replace_one({"_id": path}, doc, upsert=True)
             logger.info(f"Indexed server '{server_info.get('server_name')}' for search")
+            return bool(embedding)
         except Exception as e:
             logger.error(f"Failed to index server in search: {e}", exc_info=True)
+            return False
 
     async def index_agent(
         self,
@@ -1052,33 +1186,35 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         agent_card: AgentCard,
         is_enabled: bool = False,
         skip_if_unchanged: bool = False,
-    ) -> None:
-        """Index an agent for search."""
+    ) -> bool:
+        """Index an agent for search.
+
+        Returns:
+            True if the entry is stored with an embedding. False if the embedding
+            call failed (the entry is stored without a vector, so it is still found
+            by keyword search) or the write failed. Callers that only index can
+            ignore this; reindex_paths uses it to report failures honestly.
+        """
         import hashlib
 
         collection = await self._get_collection()
 
-        text_parts = [
-            agent_card.name,
-            agent_card.description or "",
-        ]
+        embedding_text = EmbeddingText(head=[agent_card.name, agent_card.description or ""])
 
         tags = agent_card.tags or []
         if tags:
-            text_parts.append("Tags: " + ", ".join(tags))
+            embedding_text.head.append("Tags: " + ", ".join(tags))
 
         # Include capability keys (feature flags like "streaming")
         if agent_card.capabilities:
-            text_parts.append("Capabilities: " + ", ".join(agent_card.capabilities))
+            embedding_text.head.append("Capabilities: " + ", ".join(agent_card.capabilities))
 
         # Include skill names and descriptions for better semantic search
         if agent_card.skills:
             for skill in agent_card.skills:
-                text_parts.append(skill.name)
-                if skill.description:
-                    text_parts.append(skill.description)
+                embedding_text.items.append((skill.name or "", skill.description or ""))
 
-        text_for_embedding = " ".join(filter(None, text_parts))
+        text_for_embedding = embedding_text.full()
         content_hash = hashlib.sha256(text_for_embedding.encode()).hexdigest()[:16]
 
         if skip_if_unchanged:
@@ -1093,14 +1229,12 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             ):
                 if existing.get("is_enabled") != is_enabled:
                     await collection.update_one({"_id": path}, {"$set": {"is_enabled": is_enabled}})
-                return
+                return True
 
-        vectors = await self._embed_texts(
-            [text_for_embedding],
+        embedding = await self._embed_with_trim_retry(
+            embedding_text,
             context=f"agent {agent_card.name!r}",
-            latch_unavailable=False,
         )
-        embedding = vectors[0] if vectors else []
 
         # Flatten agent metadata for keyword search
         agent_metadata = getattr(agent_card, "metadata", None) or {}
@@ -1128,8 +1262,10 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         try:
             await collection.replace_one({"_id": path}, doc, upsert=True)
             logger.info(f"Indexed agent '{agent_card.name}' for search")
+            return bool(embedding)
         except Exception as e:
             logger.error(f"Failed to index agent in search: {e}", exc_info=True)
+            return False
 
     async def index_skill(
         self,
@@ -1137,7 +1273,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         skill: Any,
         is_enabled: bool = False,
         skip_if_unchanged: bool = False,
-    ) -> None:
+    ) -> bool:
         """Index a skill for semantic search.
 
         Args:
@@ -1145,6 +1281,12 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             skill: SkillCard object
             is_enabled: Whether skill is enabled
             skip_if_unchanged: Skip embedding if content hash matches existing doc
+
+        Returns:
+            True if the entry is stored with an embedding. False if the embedding
+            call failed (the entry is stored without a vector, so it is still found
+            by keyword search) or the write failed. Callers that only index can
+            ignore this; reindex_paths uses it to report failures honestly.
         """
         import hashlib
 
@@ -1173,7 +1315,9 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             if extra_text:
                 text_parts.append(extra_text)
 
-        text_for_embedding = " ".join(filter(None, text_parts))
+        # No per-item descriptions: a retry trims by a hard cut at a word boundary.
+        embedding_text = EmbeddingText(head=text_parts)
+        text_for_embedding = embedding_text.full()
         content_hash = hashlib.sha256(text_for_embedding.encode()).hexdigest()[:16]
 
         if skip_if_unchanged:
@@ -1188,14 +1332,12 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             ):
                 if existing.get("is_enabled") != is_enabled:
                     await collection.update_one({"_id": path}, {"$set": {"is_enabled": is_enabled}})
-                return
+                return True
 
-        vectors = await self._embed_texts(
-            [text_for_embedding],
+        embedding = await self._embed_with_trim_retry(
+            embedding_text,
             context=f"skill {skill.name!r}",
-            latch_unavailable=False,
         )
-        embedding = vectors[0] if vectors else []
 
         # Handle visibility enum
         visibility_value = skill.visibility
@@ -1229,10 +1371,6 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             "visibility": visibility_value,
             "allowed_groups": skill.allowed_groups or [],
             "owner": skill.owner,
-            "health_status": skill.health_status,
-            "last_checked_time": skill.last_checked_time.isoformat()
-            if skill.last_checked_time
-            else None,
             "status": getattr(skill, "status", "active"),
             "text_for_embedding": text_for_embedding,
             "content_hash": content_hash,
@@ -1254,8 +1392,10 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         try:
             await collection.replace_one({"_id": path}, search_doc, upsert=True)
             logger.info(f"Indexed skill for search: {path}")
+            return bool(embedding)
         except Exception as e:
             logger.error(f"Failed to index skill in search: {e}", exc_info=True)
+            return False
 
     async def index_custom_entity(
         self,
@@ -1286,7 +1426,9 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                 text_parts.append(", ".join(val) if isinstance(val, list) else str(val))
         if record.tags:
             text_parts.append("Tags: " + ", ".join(record.tags))
-        text_for_embedding = " ".join(p for p in text_parts if p)
+        # No per-item descriptions: a retry trims by a hard cut at a word boundary.
+        embedding_text = EmbeddingText(head=text_parts)
+        text_for_embedding = embedding_text.full()
         content_hash = hashlib.sha256(text_for_embedding.encode()).hexdigest()[:16]
 
         # Non-semantic fields -> metadata_text (keyword-search boost).
@@ -1302,12 +1444,10 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                     metadata_parts.append(f"{f.name}: {val}")
         metadata_text = " | ".join(metadata_parts) if metadata_parts else ""
 
-        vectors = await self._embed_texts(
-            [text_for_embedding],
+        embedding = await self._embed_with_trim_retry(
+            embedding_text,
             context=f"custom {record.entity_type}",
-            latch_unavailable=False,
         )
-        embedding = vectors[0] if vectors else []
 
         search_doc = {
             "_id": record.path,
@@ -1405,14 +1545,13 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                 backend_tool_descriptions[backend_path] = {}
 
         # Compose text for embedding
-        text_parts = [
-            virtual_server.server_name,
-            virtual_server.description or "",
-        ]
+        embedding_text = EmbeddingText(
+            head=[virtual_server.server_name, virtual_server.description or ""]
+        )
 
         # Add tags
         if virtual_server.tags:
-            text_parts.append(f"Tags: {', '.join(virtual_server.tags)}")
+            embedding_text.head.append(f"Tags: {', '.join(virtual_server.tags)}")
 
         # Build tools array and collect text for embedding
         tools = []
@@ -1429,8 +1568,10 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                 description = backend_tools.get(mapping.tool_name, "")
 
             # Add description to embedding text
+            # Names go in the trailing "Tools:" list, so the item carries only
+            # the description.
             if description:
-                text_parts.append(description)
+                embedding_text.items.append(("", description))
 
             tools.append(
                 {
@@ -1441,16 +1582,14 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             )
 
         if tool_names:
-            text_parts.append(f"Tools: {', '.join(tool_names)}")
+            embedding_text.tail.append(f"Tools: {', '.join(tool_names)}")
 
-        text_for_embedding = " ".join(filter(None, text_parts))
+        text_for_embedding = embedding_text.full()
 
-        vectors = await self._embed_texts(
-            [text_for_embedding],
+        embedding = await self._embed_with_trim_retry(
+            embedding_text,
             context=f"virtual server {virtual_server.server_name!r}",
-            latch_unavailable=False,
         )
-        embedding = vectors[0] if vectors else []
 
         # Flatten virtual server metadata for keyword search
         vs_metadata_parts = []
@@ -1581,7 +1720,9 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         """Find documents in source collections that have no embedding indexed.
 
         Compares _id values across mcp_servers, mcp_agents, and agent_skills
-        collections against the embeddings collection.
+        collections against the embeddings collection. A record stored with an
+        empty vector (its embedding call failed) counts as missing, so a reindex
+        driven by this list retries it.
 
         Returns:
             Dictionary with missing list, counts, and summary.
@@ -1595,7 +1736,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         ]
 
         embeddings_collection = await self._get_collection()
-        indexed_cursor = embeddings_collection.find({}, {"_id": 1})
+        indexed_cursor = embeddings_collection.find(HAS_VECTOR_FILTER, {"_id": 1})
         indexed_docs = await indexed_cursor.to_list(length=None)
         indexed_ids = {doc["_id"] for doc in indexed_docs}
 
@@ -1773,7 +1914,8 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             paths: List of document paths to re-index (max 100).
 
         Returns:
-            Dictionary with success/failed counts and per-path details.
+            Dictionary with success/failed counts and per-path details. A path whose
+            entry was stored without an embedding counts as failed.
         """
         db = await get_documentdb_client()
 
@@ -1787,35 +1929,23 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             try:
                 server_doc = await servers_col.find_one({"_id": path})
                 if server_doc:
-                    await self.index_server(
+                    embedded = await self.index_server(
                         path,
                         server_doc,
                         is_enabled=server_doc.get("is_enabled", True),
                     )
-                    details.append(
-                        {
-                            "path": path,
-                            "entity_type": "mcp_server",
-                            "status": "success",
-                        }
-                    )
+                    details.append(_reindex_detail(path, "mcp_server", embedded))
                     continue
 
                 agent_doc = await agents_col.find_one({"_id": path})
                 if agent_doc:
                     agent_card = AgentCard(**agent_doc)
-                    await self.index_agent(
+                    embedded = await self.index_agent(
                         path,
                         agent_card,
                         is_enabled=agent_doc.get("is_enabled", True),
                     )
-                    details.append(
-                        {
-                            "path": path,
-                            "entity_type": "a2a_agent",
-                            "status": "success",
-                        }
-                    )
+                    details.append(_reindex_detail(path, "a2a_agent", embedded))
                     continue
 
                 skill_doc = await skills_col.find_one({"_id": path})
@@ -1823,18 +1953,12 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                     from ...schemas.skill_models import SkillCard
 
                     skill_card = SkillCard(**skill_doc)
-                    await self.index_skill(
+                    embedded = await self.index_skill(
                         path,
                         skill_card,
                         is_enabled=skill_doc.get("is_enabled", True),
                     )
-                    details.append(
-                        {
-                            "path": path,
-                            "entity_type": "skill",
-                            "status": "success",
-                        }
-                    )
+                    details.append(_reindex_detail(path, "skill", embedded))
                     continue
 
                 details.append(
@@ -1934,8 +2058,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                     "visibility": 1,
                     "owner": 1,
                     "allowed_groups": 1,
-                    "health_status": 1,
-                    "last_checked_time": 1,
+                    "indexed_at": 1,
                     "embedding": 1,
                 },
             )
@@ -2150,24 +2273,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                     grouped_results["tools"].append(result_entry)
 
                 elif entity_type == "skill":
-                    metadata = doc.get("metadata", {})
-                    result_entry = {
-                        "entity_type": "skill",
-                        "path": doc.get("path"),
-                        "skill_name": doc.get("name"),
-                        "description": doc.get("description"),
-                        "tags": doc.get("tags", []),
-                        "skill_md_url": metadata.get("skill_md_url"),
-                        "version": metadata.get("version"),
-                        "author": metadata.get("author"),
-                        "visibility": doc.get("visibility", "public"),
-                        "owner": doc.get("owner"),
-                        "is_enabled": doc.get("is_enabled", False),
-                        "status": doc.get("status", "active"),
-                        "relevance_score": relevance_score,
-                        "match_context": doc.get("description"),
-                    }
-                    grouped_results["skills"].append(result_entry)
+                    grouped_results["skills"].append(_format_skill_result(doc, relevance_score))
 
                 elif entity_type == "virtual_server":
                     metadata = doc.get("metadata", {})
@@ -2433,24 +2539,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                 grouped_results["tools"].append(result_entry)
 
             elif entity_type == "skill":
-                metadata = doc.get("metadata", {})
-                result_entry = {
-                    "entity_type": "skill",
-                    "path": doc.get("path"),
-                    "skill_name": doc.get("name"),
-                    "description": doc.get("description"),
-                    "tags": doc.get("tags", []),
-                    "skill_md_url": metadata.get("skill_md_url"),
-                    "version": metadata.get("version"),
-                    "author": metadata.get("author"),
-                    "visibility": doc.get("visibility", "public"),
-                    "owner": doc.get("owner"),
-                    "is_enabled": doc.get("is_enabled", False),
-                    "status": doc.get("status", "active"),
-                    "relevance_score": relevance_score,
-                    "match_context": doc.get("description"),
-                }
-                grouped_results["skills"].append(result_entry)
+                grouped_results["skills"].append(_format_skill_result(doc, relevance_score))
 
             elif entity_type == "virtual_server":
                 metadata = doc.get("metadata", {})
@@ -2921,24 +3010,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                     grouped_results["tools"].append(result_entry)
 
                 elif entity_type == "skill":
-                    metadata = doc.get("metadata", {})
-                    result_entry = {
-                        "entity_type": "skill",
-                        "path": doc.get("path"),
-                        "skill_name": doc.get("name"),
-                        "description": doc.get("description"),
-                        "tags": doc.get("tags", []),
-                        "skill_md_url": metadata.get("skill_md_url"),
-                        "version": metadata.get("version"),
-                        "author": metadata.get("author"),
-                        "visibility": doc.get("visibility", "public"),
-                        "owner": doc.get("owner"),
-                        "is_enabled": doc.get("is_enabled", False),
-                        "status": doc.get("status", "active"),
-                        "relevance_score": relevance_score,
-                        "match_context": doc.get("description"),
-                    }
-                    grouped_results["skills"].append(result_entry)
+                    grouped_results["skills"].append(_format_skill_result(doc, relevance_score))
 
                 elif entity_type == "virtual_server":
                     metadata = doc.get("metadata", {})

@@ -246,6 +246,71 @@ class TestConsentAndCallback:
         with pytest.raises(service.EgressAuthError):
             await svc.handle_callback("c", _extract_state(url), repointed, "alice", "oauth2")
 
+    async def _consent_with_issuer(self, svc, egress_oauth, expected_issuer):
+        cfg = {**egress_oauth, "expected_issuer": expected_issuer}
+        url = await svc.build_consent_url(
+            "oauth2", "alice", "Iv1.testclient", "s", "/github-mcp", cfg, server=SERVER
+        )
+        return cfg, _extract_state(url)
+
+    async def test_reply_from_the_expected_issuer_is_accepted(self, svc, egress_oauth, monkeypatch):
+        _stub_exchange(monkeypatch)
+        cfg, state = await self._consent_with_issuer(svc, egress_oauth, "https://github.com")
+
+        conn = await svc.handle_callback(
+            "c", state, cfg, "alice", "oauth2", response_issuer="https://github.com"
+        )
+
+        assert conn.provider == "github"
+
+    async def test_reply_naming_another_issuer_is_refused(self, svc, egress_oauth, monkeypatch):
+        """RFC 9207: a code from a different authorization server is never exchanged."""
+        exchanged = []
+
+        async def fake_post(cfg, data, headers):
+            exchanged.append(data)
+            return {"access_token": "at", "token_type": "Bearer"}
+
+        monkeypatch.setattr(oauth_engine, "_post_token", fake_post)
+        cfg, state = await self._consent_with_issuer(svc, egress_oauth, "https://github.com")
+
+        with pytest.raises(service.EgressAuthError, match="issuer mismatch"):
+            await svc.handle_callback(
+                "c", state, cfg, "alice", "oauth2", response_issuer="https://attacker.example"
+            )
+
+        assert exchanged == []
+
+    @pytest.mark.parametrize(
+        ("expected", "reply"),
+        [
+            ("https://github.com", None),  # provider does not send iss
+            (None, "https://anything.example"),  # no issuer configured: unchanged
+            (None, None),
+        ],
+    )
+    async def test_missing_issuer_on_either_side_keeps_todays_behavior(
+        self, svc, egress_oauth, monkeypatch, expected, reply
+    ):
+        _stub_exchange(monkeypatch)
+        cfg, state = await self._consent_with_issuer(svc, egress_oauth, expected)
+
+        conn = await svc.handle_callback("c", state, cfg, "alice", "oauth2", response_issuer=reply)
+
+        assert conn.provider == "github"
+
+    async def test_issuer_is_snapshot_when_consent_begins(self, svc, egress_oauth, monkeypatch):
+        """Changing the configured issuer mid-consent does not change what is checked."""
+        _stub_exchange(monkeypatch)
+        _, state = await self._consent_with_issuer(svc, egress_oauth, "https://github.com")
+        changed = {**egress_oauth, "expected_issuer": "https://attacker.example"}
+
+        conn = await svc.handle_callback(
+            "c", state, changed, "alice", "oauth2", response_issuer="https://github.com"
+        )
+
+        assert conn.provider == "github"
+
     async def test_cross_purpose_consents_coexist(self, svc, egress_oauth, monkeypatch):
         """A discovery consent and the same admin's own egress consent must BOTH stand.
 

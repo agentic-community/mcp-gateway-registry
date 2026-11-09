@@ -376,14 +376,15 @@ def classify_request_url(
         for prefix, resource_type in _PREFIX_TO_TYPE:
             if prefix.startswith("/api/") and path.startswith(prefix):
                 resource_id = path[len(prefix) :]
-                # Strip sub-paths like /toggle, /rate, /health — we want the
-                # top-level resource slug only. Agents and skills don't have
-                # nested MCP transport segments, so splitting on "/" and
-                # taking the first component is correct.
-                resource_id = resource_id.split("/", 1)[0]
-                resource_id = resource_id.rstrip("/")
+                # Strip sub-paths like /rate and /content. A skill is stored
+                # under /skills/<slug>, whereas its API route omits that
+                # prefix; preserve it so the classified ID matches mint-time
+                # normalization of the actual skill path.
+                resource_id = resource_id.split("/", 1)[0].rstrip("/")
                 if not resource_id:
                     return None
+                if resource_type is ResourceType.SKILL:
+                    resource_id = f"skills/{resource_id}"
                 return (resource_type, resource_id)
         # Any other /api/* path (tokens, admin, search, health, etc.) is
         # not a classifiable resource.
@@ -501,7 +502,10 @@ async def validate_user_can_bind_resource(
         accessible = user_context.get("accessible_servers") or []
         if _WILDCARD_ACCESS & set(accessible):
             return True
-        return normalized_id in accessible
+        return any(
+            isinstance(grant, str) and normalize_resource_id(grant) == normalized_id
+            for grant in accessible
+        )
 
     if rtype is ResourceType.VIRTUAL_SERVER:
         ui_permissions = user_context.get("ui_permissions") or {}

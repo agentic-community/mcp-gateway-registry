@@ -1,22 +1,13 @@
 import path from "node:path";
 
 import {
-  DEFAULT_IMPORT_LIST,
-  IMPORT_ANTHROPIC_SCRIPT,
   REGISTRY_CLI_WRAPPER,
-  SERVICE_MANAGEMENT_SCRIPT,
   TEST_ANTHROPIC_SCRIPT,
   USER_MANAGEMENT_SCRIPT
 } from "../paths.js";
 import type {ScriptCommand, ScriptTask, TaskCategory, TaskContext} from "./types.js";
 
 const trim = (value: string | undefined): string => value?.trim() ?? "";
-
-const buildBashCommand = (scriptPath: string, args: string[], env?: Record<string, string>): ScriptCommand => ({
-  command: "bash",
-  args: [scriptPath, ...args],
-  env
-});
 
 const buildUvPythonCommand = (scriptPath: string, args: string[], env?: Record<string, string>): ScriptCommand => ({
   command: "uv",
@@ -54,11 +45,6 @@ const buildRegistryCommand = (args: string[], context: TaskContext): ScriptComma
     env: process.env as Record<string, string>
   };
 };
-
-const computeGatewayEnv = (context: TaskContext): Record<string, string> => ({
-  ...process.env,
-  GATEWAY_URL: context.gatewayBaseUrl
-});
 
 const serviceTasks: ScriptTask[] = [
   {
@@ -198,55 +184,22 @@ const serviceTasks: ScriptTask[] = [
 
 const importTasks: ScriptTask[] = [
   {
-    key: "import-anthropic-dry",
-    label: "Anthropic import (dry run)",
-    description: "Preview the servers that would be imported from the Anthropic registry.",
+    key: "import-anthropic",
+    label: "Anthropic import",
+    description: "Add a server from the Anthropic MCP registry to federation and sync it into the registry.",
     fields: [
       {
-        name: "importList",
-        label: "Import list file",
-        placeholder: DEFAULT_IMPORT_LIST,
-        optional: true,
-        defaultValue: DEFAULT_IMPORT_LIST
+        name: "serverName",
+        label: "Anthropic server name",
+        placeholder: "io.github.org/server-name"
       }
     ],
     build(values, context) {
-      const importList = trim(values.importList);
-      const args = ["--dry-run"];
-      if (importList) {
-        args.push("--import-list", importList);
+      const serverName = trim(values.serverName);
+      if (!serverName) {
+        throw new Error("Anthropic server name is required.");
       }
-      return buildBashCommand(
-        IMPORT_ANTHROPIC_SCRIPT,
-        args,
-        computeGatewayEnv(context)
-      );
-    }
-  },
-  {
-    key: "import-anthropic-apply",
-    label: "Anthropic import (apply)",
-    description: "Fetch and register servers from the Anthropic MCP registry.",
-    fields: [
-      {
-        name: "importList",
-        label: "Import list file",
-        placeholder: DEFAULT_IMPORT_LIST,
-        optional: true,
-        defaultValue: DEFAULT_IMPORT_LIST
-      }
-    ],
-    build(values, context) {
-      const importList = trim(values.importList);
-      const args: string[] = [];
-      if (importList) {
-        args.push("--import-list", importList);
-      }
-      return buildBashCommand(
-        IMPORT_ANTHROPIC_SCRIPT,
-        args,
-        computeGatewayEnv(context)
-      );
+      return buildRegistryCommand(["anthropic", "import", serverName], context);
     }
   }
 ];

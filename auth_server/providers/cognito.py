@@ -8,7 +8,7 @@ from urllib.parse import urlencode
 import jwt
 import requests
 
-from .base import AuthProvider
+from .base import AuthProvider, normalize_groups_claim
 
 logging.basicConfig(
     level=logging.INFO,
@@ -203,12 +203,14 @@ class CognitoProvider(AuthProvider):
                 f"Token validation successful for user: {claims.get('username', 'unknown')}"
             )
 
-            # Extract user info from claims
+            # Extract user info from claims. The groups claim is strictly
+            # validated (fail closed on a non-array claim).
+            groups = normalize_groups_claim(claims.get("cognito:groups"), source="cognito groups")
             return {
                 "valid": True,
                 "username": claims.get("username", claims.get("sub")),
                 "email": claims.get("email"),
-                "groups": claims.get("cognito:groups", []),
+                "groups": groups,
                 "scopes": claims.get("scope", "").split() if claims.get("scope") else [],
                 "client_id": claims.get("client_id", self.client_id),
                 "method": "cognito",

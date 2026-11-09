@@ -27,7 +27,7 @@ There are two distinct objects, and the order matters:
 1. **Custom TYPE (the schema).** An admin defines a type once, programmatically,
    via `POST /api/custom-types`. A type has a URL-safe `name` (immutable), an
    optional `display_name` for the tab, and a list of typed `fields`. **There is
-   no UI for creating a type** — it is an admin, API-only operation.
+   no UI for creating a type**: it is an admin, API-only operation.
 2. **Records (instances of the type).** Once the type exists, records can be
    created either **programmatically** (`POST /api/custom/{type}`) **or through
    the UI** (the dynamically-rendered tab has a Create form). Any authenticated
@@ -155,8 +155,21 @@ uv run python api/registry_management.py --registry-url http://localhost --token
 
 The record envelope is uniform across all types: `name`, `description`,
 `visibility` (`public` / `private` / `group-restricted`), `allowed_groups`,
-`tags`, plus the per-type `attributes` validated against the descriptor. The
-`owner` is always derived from the caller, never the request body.
+`tags`, `is_enabled`, plus the per-type `attributes` validated against the
+descriptor. The `owner` is always derived from the caller, never the request body.
+
+`is_enabled` defaults to `true`. Custom types have no toggle endpoint, so a record
+is switched off by sending `"is_enabled": false` on create or on
+`PUT /api/custom/{type}/{uuid}`. A disabled record is left out of semantic search;
+the list and get endpoints still return it, with `is_enabled: false`, so callers
+can still read it by its path.
+
+Disabling a **proxied** record also withdraws its gateway route: the generated
+`location /gateway/{type}/{uuid}/` block is dropped on the next nginx render, and a
+request to that URL falls through to the catch-all instead of reaching the upstream.
+Re-enabling the record restores the route. Note that the fall-through answers `200`
+with the SPA, so check the response content type rather than the status code when
+confirming which side served a request.
 
 ### Through the UI
 

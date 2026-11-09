@@ -143,3 +143,42 @@ class TestShouldFilterToolsList:
             "content_type": "text/event-stream",
         }
         assert not _should_filter_tools_list(**{**base, **kwargs})
+
+
+class TestFilteredListIsPrivate:
+    """A per-user filtered list must not tell shared caches they may store it."""
+
+    async def test_public_cache_scope_becomes_private_after_filtering(self):
+        payload = _tools_payload("list_services", "healthcheck")
+        payload["result"].update({"cacheScope": "public", "ttlMs": 60000})
+
+        with patch(
+            "auth_server.server.filter_tools_list_response",
+            new=AsyncMock(return_value=[{"name": "list_services"}]),
+        ):
+            out = await _filter_sse_tools_list_body(_sse(payload), SERVER, SCOPES)
+
+        data = json.loads([ln for ln in out.split("\n") if ln.startswith("data: ")][0][6:])
+        assert data["result"]["cacheScope"] == "private"
+        assert data["result"]["ttlMs"] == 60000
+
+    async def test_legacy_result_gains_no_cache_scope(self):
+        with patch(
+            "auth_server.server.filter_tools_list_response",
+            new=AsyncMock(return_value=[{"name": "a"}]),
+        ):
+            out = await _filter_sse_tools_list_body(_sse(_tools_payload("a")), SERVER, SCOPES)
+
+        data = json.loads([ln for ln in out.split("\n") if ln.startswith("data: ")][0][6:])
+        assert "cacheScope" not in data["result"]
+
+    def test_helper_only_rewrites_an_existing_cache_scope(self):
+        from auth_server.server import _mark_filtered_list_private
+
+        modern = {"tools": [], "cacheScope": "public"}
+        legacy = {"tools": []}
+        _mark_filtered_list_private(modern)
+        _mark_filtered_list_private(legacy)
+
+        assert modern["cacheScope"] == "private"
+        assert "cacheScope" not in legacy

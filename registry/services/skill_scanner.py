@@ -18,6 +18,9 @@ from pathlib import Path
 from ..core.config import settings
 from ..repositories.factory import get_skill_security_scan_repository
 from ..schemas.skill_security import SkillSecurityScanConfig, SkillSecurityScanResult
+from .scanner_llm_analyzer import (
+    ensure_llm_analyzer_available,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +98,7 @@ class SkillScannerService:
         logger.info(f"Starting skill security scan for {skill_path} with analyzers: {analyzers}")
 
         try:
+            ensure_llm_analyzer_available(analyzers, "SKILL_SECURITY_ANALYZERS")
             raw_output = await asyncio.to_thread(
                 self._run_skill_scanner,
                 skill_path=skill_path,

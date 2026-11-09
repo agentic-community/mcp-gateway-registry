@@ -21,6 +21,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from cloud_labels import cloud_label  # noqa: E402
 from tufte_style import apply_tufte_style, tufte_axes  # noqa: E402
 
 logging.basicConfig(
@@ -126,7 +127,7 @@ def _compute_distributions(
         dimensions["Cloud Detection Method"] = Counter()
 
     for row in instances:
-        cloud = row.get("cloud", "unknown") or "unknown"
+        cloud = cloud_label(row)
         dimensions["Cloud Provider"][cloud] += 1
 
         compute = row.get("compute", "unknown") or "unknown"

@@ -1,0 +1,12 @@
+{
+  "server_name": "MCP Everything Reference Server (2025 release)",
+  "description": "The MCP reference test server pinned to @modelcontextprotocol/server-everything@2025.12.18, which speaks only the session handshake and serves test resources. Lets a virtual server forward handshake-era resources to 2026-07-28 clients, for MCP protocol compatibility testing.",
+  "path": "/everything-legacy/",
+  "proxy_pass_url": "http://mcp-everything-legacy:3001/",
+  "supported_transports": ["streamable-http"],
+  "auth_scheme": "none",
+  "tags": ["mcp", "reference", "testing", "protocol", "compatibility"],
+  "license": "MIT",
+  "status": "active",
+  "visibility": "public"
+}

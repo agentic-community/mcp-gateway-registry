@@ -268,6 +268,11 @@ def build_cimd_document() -> dict:
         "response_types": ["code"],
         "token_endpoint_auth_method": "none",
         "scope": scope,
+        # MCP 2026-07-28 asks clients to state application_type. The registry
+        # redirects to its own HTTPS callback, which is a web client; "web" is
+        # also the value an authorization server assumes when it is absent.
+        # Appended so the earlier fields keep their byte-stable order.
+        "application_type": "web",
     }
     if (settings.cimd_logo_uri or "").strip():
         document["logo_uri"] = settings.cimd_logo_uri.strip()

@@ -179,6 +179,27 @@ class TestPatchAgent:
         expected_ms = int(datetime(2026, 2, 2, tzinfo=UTC).timestamp() * 1000)
         assert r.headers["ETag"] == f'W/"{expected_ms}"'
 
+    def test_patch_success_does_not_disclose_proxied_backend(self, client):
+        agent = _agent()
+        agent.url = "https://gw.example.com/agent/agents/existing/"
+        agent.proxy_pass_url = "https://backend.example.com/a2a"
+        with (
+            patch("registry.api.agent_routes.agent_service") as svc,
+            patch("registry.utils.agent_validator.agent_validator") as validator,
+            patch(
+                "registry.api.agent_routes.check_registration_gate",
+                AsyncMock(return_value=MagicMock(allowed=True)),
+            ),
+            patch("registry.api.agent_routes.send_registration_webhook", AsyncMock()),
+        ):
+            svc.get_agent_info = AsyncMock(side_effect=[agent, agent])
+            svc.update_agent = AsyncMock()
+            validator.validate_agent_card = AsyncMock(return_value=MagicMock(is_valid=True))
+            response = client.patch("/agents/existing", json={"description": "updated"})
+
+        assert response.status_code == 200
+        assert "backend.example.com" not in str(response.json())
+
     def test_patch_if_match_match_succeeds(self, client):
         ts = datetime(2026, 1, 1, tzinfo=UTC)
         agent = _agent(updated_at=ts)

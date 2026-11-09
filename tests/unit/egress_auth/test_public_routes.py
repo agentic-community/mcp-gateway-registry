@@ -125,6 +125,51 @@ class TestConfigure:
         )
         assert r.status_code == 400
 
+    def _configure_with_issuer(self, client, monkeypatch, issuer):
+        monkeypatch.setattr(routes, "encrypt_credential", lambda s: "ENC")
+        server = _server(egress_oauth=None, egress_auth_mode="none")
+        c = client(ADMIN, server=server)
+        r = c.post(
+            "/api/servers/github-mcp/egress-auth",
+            json={
+                "egress_auth_mode": "oauth_user",
+                "egress_provider": "github",
+                "client_id": "Iv1.x",
+                "client_secret": "ghs_secret",
+                "expected_issuer": issuer,
+            },
+        )
+        return r, server
+
+    def test_configure_stores_and_shows_expected_issuer(self, client, monkeypatch):
+        r, server = self._configure_with_issuer(client, monkeypatch, " https://github.com ")
+
+        assert r.status_code == 200
+        assert r.json()["expected_issuer"] == "https://github.com"
+        assert server["egress_oauth"]["expected_issuer"] == "https://github.com"
+
+    def test_configure_blank_expected_issuer_is_not_set(self, client, monkeypatch):
+        r, server = self._configure_with_issuer(client, monkeypatch, "")
+
+        assert r.status_code == 200
+        assert server["egress_oauth"]["expected_issuer"] is None
+
+    @pytest.mark.parametrize(
+        "issuer",
+        [
+            "http://github.com",
+            "https://github.com/?x=1",
+            "https://github.com/#frag",
+            "github.com",
+            "https://" + "a" * 2100 + ".example",
+        ],
+    )
+    def test_configure_rejects_invalid_expected_issuer(self, client, monkeypatch, issuer):
+        r, _ = self._configure_with_issuer(client, monkeypatch, issuer)
+
+        assert r.status_code == 400
+        assert "expected_issuer" in r.json()["detail"]
+
     def test_feature_disabled_404(self, client):
         c = client(ADMIN, server=_server(), enabled=False)
         r = c.post("/api/servers/github-mcp/egress-auth", json={"egress_auth_mode": "none"})
@@ -243,6 +288,35 @@ class TestCallback:
         assert r.status_code == 200
         assert "Connected github" in r.text
         assert svc.handle_callback.await_count == 1
+        state_codec.reset_cipher_for_tests()
+
+    @pytest.mark.parametrize(
+        ("params", "expected"), [({"iss": "https://github.com"}, "https://github.com"), ({}, None)]
+    )
+    def test_callback_passes_the_reply_issuer(self, client, monkeypatch, params, expected):
+        monkeypatch.setenv("SECRET_KEY", "test-secret-key-for-testing-only-do-not-use")
+        from registry.egress_auth import state_codec
+        from registry.egress_auth.schemas import EgressConnection, OAuthState
+
+        state_codec.reset_cipher_for_tests()
+        blob = state_codec.encode_state(
+            OAuthState(
+                user_id="alice",
+                auth_method="oauth2",
+                provider="github",
+                server_path="/github-mcp",
+                nonce="n1",
+                issued_at="2026-06-19T00:00:00+00:00",
+            )
+        )
+        svc = AsyncMock()
+        svc.handle_callback = AsyncMock(
+            return_value=EgressConnection(provider="github", server_path="/github-mcp")
+        )
+        c = client(USER, server=_server(), svc=svc)
+        c.get("/api/oauth2/egress/callback", params={"code": "c", "state": blob, **params})
+
+        assert svc.handle_callback.call_args.kwargs["response_issuer"] == expected
         state_codec.reset_cipher_for_tests()
 
     def test_callback_store_write_failure_returns_503_not_success(self, client, monkeypatch):

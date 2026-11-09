@@ -9,9 +9,11 @@ shared helper directly so all three call sites are covered by its contract.
 
 from unittest.mock import PropertyMock, patch
 
+import pytest
+
 from registry.api.agent_routes import _apply_a2a_reverse_proxy_split
 from registry.core.config import settings
-from registry.schemas.agent_models import AgentCard
+from registry.schemas.agent_models import AgentCard, AgentInterface
 
 
 def _make_card(
@@ -118,3 +120,80 @@ class TestApplyA2aReverseProxySplit:
 
         assert card.proxy_pass_url == "http://new-backend:9001"
         assert str(card.url) == "https://gw.example.com/agent/flight-booking/"
+
+    def test_rejects_only_unroutable_interfaces_before_rewriting(self):
+        card = _make_card("https://backend.example.com/a2a")
+        card.supported_interfaces = [
+            AgentInterface(
+                url="https://backend.example.com/grpc",
+                protocolBinding="GRPC",
+                protocolVersion="1.0",
+            )
+        ]
+        with (
+            patch.object(
+                type(settings),
+                "a2a_reverse_proxy_effective",
+                new_callable=PropertyMock,
+                return_value=True,
+            ),
+            patch.object(settings, "registry_url", "https://gw.example.com"),
+        ):
+            with pytest.raises(ValueError, match="declared JSONRPC or HTTP\\+JSON"):
+                _apply_a2a_reverse_proxy_split(card, "/flight-booking")
+        assert card.proxy_pass_url is None
+        assert card.url == "https://backend.example.com/a2a"
+
+    def test_rejects_different_backend_path_on_update(self):
+        card = _make_card(
+            "https://gw.example.com/agent/flight-booking/",
+            proxy_pass_url="https://backend.example.com/a2a",
+        )
+        card.supported_interfaces = [
+            AgentInterface(
+                url="https://backend.example.com/rest",
+                protocolBinding="HTTP+JSON",
+                protocolVersion="1.0",
+            )
+        ]
+        with (
+            patch.object(
+                type(settings),
+                "a2a_reverse_proxy_effective",
+                new_callable=PropertyMock,
+                return_value=True,
+            ),
+            patch.object(settings, "registry_url", "https://gw.example.com"),
+        ):
+            with pytest.raises(ValueError, match="registered backend URL"):
+                _apply_a2a_reverse_proxy_split(card, "/flight-booking")
+
+    def test_preserves_multiple_bindings_at_same_backend_path(self):
+        card = _make_card("https://backend.example.com/a2a")
+        card.supported_interfaces = [
+            AgentInterface(
+                url="https://backend.example.com/a2a/",
+                protocolBinding="JSONRPC",
+                protocolVersion="1.0",
+            ),
+            AgentInterface(
+                url="https://backend.example.com/a2a",
+                protocolBinding="HTTP+JSON",
+                protocolVersion="1.0",
+            ),
+            AgentInterface(
+                url="grpc.example.com:443", protocolBinding="GRPC", protocolVersion="1.0"
+            ),
+        ]
+        with (
+            patch.object(
+                type(settings),
+                "a2a_reverse_proxy_effective",
+                new_callable=PropertyMock,
+                return_value=True,
+            ),
+            patch.object(settings, "registry_url", "https://gw.example.com"),
+        ):
+            _apply_a2a_reverse_proxy_split(card, "/flight-booking")
+        assert card.proxy_pass_url == "https://backend.example.com/a2a"
+        assert len(card.supported_interfaces) == 3

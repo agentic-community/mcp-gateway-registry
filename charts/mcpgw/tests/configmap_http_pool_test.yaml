@@ -1,0 +1,80 @@
+suite: mcpgw egress HTTP pool config
+templates:
+  - templates/configmap-http-pool.yaml
+tests:
+  - it: renders on a default install with the registry-matching defaults
+    asserts:
+      # Unlike the registry/auth-server egress configmaps this is not gated on
+      # egressAuth.enabled: the knobs must be reachable on a default install.
+      - isKind:
+          of: ConfigMap
+      - equal:
+          path: metadata.name
+          value: mcpgw-http-pool-config
+      - equal:
+          path: data.EGRESS_HTTP_POOL_MAX_CONNECTIONS
+          value: "100"
+      - equal:
+          path: data.EGRESS_HTTP_POOL_MAX_KEEPALIVE
+          value: "20"
+      - equal:
+          path: data.EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS
+          value: "30"
+      - equal:
+          path: data.EGRESS_HTTP_POOL_CONNECT_RETRIES
+          value: "1"
+
+  - it: honours overridden pool knobs
+    set:
+      app:
+        httpPoolMaxConnections: "250"
+        httpPoolMaxKeepalive: "50"
+        httpPoolKeepaliveExpirySeconds: "15"
+        httpPoolConnectRetries: "3"
+    asserts:
+      - equal:
+          path: data.EGRESS_HTTP_POOL_MAX_CONNECTIONS
+          value: "250"
+      - equal:
+          path: data.EGRESS_HTTP_POOL_MAX_KEEPALIVE
+          value: "50"
+      - equal:
+          path: data.EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS
+          value: "15"
+      - equal:
+          path: data.EGRESS_HTTP_POOL_CONNECT_RETRIES
+          value: "3"
+
+  - it: renders a numeric zero instead of replacing it with the default
+    # The documented runtime rollback lever (MAX_KEEPALIVE=0 / KEEPALIVE_EXPIRY=0).
+    # Sprig's `default` treats 0 as empty, so `--set app.httpPoolMaxKeepalive=0`
+    # or an unquoted 0 in a values file used to render "20" / "30" and silently
+    # leave keep-alive reuse on.
+    set:
+      app:
+        httpPoolMaxKeepalive: 0
+        httpPoolKeepaliveExpirySeconds: 0
+        httpPoolConnectRetries: 0
+    asserts:
+      - equal:
+          path: data.EGRESS_HTTP_POOL_MAX_KEEPALIVE
+          value: "0"
+      - equal:
+          path: data.EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS
+          value: "0"
+      - equal:
+          path: data.EGRESS_HTTP_POOL_CONNECT_RETRIES
+          value: "0"
+
+  - it: falls back to the default only when a knob is unset
+    set:
+      app:
+        httpPoolMaxKeepalive: null
+        httpPoolKeepaliveExpirySeconds: ""
+    asserts:
+      - equal:
+          path: data.EGRESS_HTTP_POOL_MAX_KEEPALIVE
+          value: "20"
+      - equal:
+          path: data.EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS
+          value: "30"

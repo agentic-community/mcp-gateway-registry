@@ -1,10 +1,28 @@
 # Global configuration
 global:
+  # Secret generation switch shared with the umbrella chart. true (default)
+  # generates unresolved secret values randomly and preserves them across
+  # `helm upgrade` via `lookup`. Set false for ArgoCD and other
+  # `helm template` based tools, which render without cluster access: there the
+  # lookup is always empty, so a generated value would differ on every sync.
+  # With generation off, an unresolved value is a render-time error naming the
+  # value to set.
+  generateSecrets: true
   image:
     # Container registry (host + optional namespace). Shared default across subcharts.
     registry: public.ecr.aws/p3v1o3c6
-    tag: 1.32.1
+    tag: 1.36.0
     pullPolicy: IfNotPresent
+  # Defaults below cover both standalone (`helm template charts/auth-server`)
+  # and umbrella deploys; the umbrella overrides what it needs from
+  # charts/mcp-gateway-registry-stack/values.yaml. Most operators should
+  # deploy via the umbrella. Without these, templates/secret.yaml nil-derefs
+  # on global.ingress and the chart cannot be linted or rendered on its own.
+  ingress:
+    tls: false
+    routingMode: subdomain
+    paths:
+      registry: /registry
 # Per-service image configuration
 # Any field left empty falls back to the corresponding global.image.* value.
 image:
@@ -188,8 +206,12 @@ entra:
   clientSecretExistingSecret: "" # If set, read ENTRA_CLIENT_SECRET from this K8s secret instead of clientSecret
   clientSecretExistingSecretKey: "ENTRA_CLIENT_SECRET" # Key within the existing secret
   tenantId: ""
-  loginBaseUrl: "" # Custom Entra login base URL for sovereign/national clouds (default: https://login.microsoftonline.com)
-  graphBaseUrl: "" # Optional override for Microsoft Graph base URL. Leave unset on standard deployments — auto-inferred from loginBaseUrl. Set only for proxied or air-gapped deployments.
+  loginBaseUrl: "" # Custom Entra login base URL for sovereign/national clouds (default: https://login.microsoftonline.com). A custom proxy also needs graphBaseUrl.
+  graphBaseUrl: "" # Optional on known Entra clouds; required for a custom login proxy. Network fetch URL, not the native OAuth resource.
+  graphResourceUrl: "" # Native Microsoft Graph OAuth resource. A custom login proxy needs it if groupRecoveryEnabled or browserUserReadEnabled is true; login.microsoftonline.us infers US Gov; set DoD explicitly.
+  browserUserReadEnabled: false # Request User.Read on browser login. Default false keeps OIDC-only login; Graph lookup also requires groupRecoveryEnabled.
+  groupRecoveryEnabled: true # Recover overage groups via Graph for eligible bearer tokens and browser sessions consented to User.Read. False disables Graph recovery.
+  groupCacheTtlSeconds: 300 # Positive Graph group-result cache lifetime (30..3600 seconds); removals can remain cached until expiration.
   scopeFormat: "" # Entra PRM scope form: "v1" (api://<app-id>/<scope>) or "v2" (bare, default). Set "v1" only if your app exposes v1-style api:// scopes (issue #990).
   applicationIdUri: "" # Application ID URI (e.g. api://<app-id>). Used as the v1 scope prefix and accepted as a token audience. Defaults to api://<clientId>.
 # Okta integration (used when authProvider.type = "okta")
@@ -273,11 +295,55 @@ egressAuth:
   httpPoolMaxKeepalive: "20"
   httpPoolKeepaliveExpirySeconds: "30"
   httpPoolConnectRetries: "1"
+  # Opt-in exchanged-OBO-token cache. Enabling this makes the
+  # AUTH-SERVER a SecretStore client for the first time (the cache lives in the
+  # per-user SecretStore), so the secret-store backend config below MUST be set
+  # to match the registry chart. Default off preserves the stateless per-request
+  # exchange. MUST match registry.egressAuth.oboCache*.
+  oboCacheEnabled: "false"
+  # Hard cap (seconds) on the OBO cache reuse window, applied below the token's
+  # real expiry. Bounds revocation / conditional-access re-evaluation latency on
+  # cache hits.
+  oboCacheMaxTtlSeconds: "300"
+  # Never reuse a cached OBO token within this many seconds of its expiry. Must be
+  # < oboCacheMaxTtlSeconds.
+  oboCacheExpirySkewSeconds: "30"
+  # Application-layer AES-256-GCM key for cached OBO tokens. Used only when
+  # oboCacheEnabled is "true" (rendered into the chart env secret as
+  # EGRESS_CREDENTIAL_ENCRYPTION_KEY). Should match
+  # registry.egressAuth.credentialEncryptionKey. Empty disables application-layer
+  # encryption of cached OBO tokens (they are stored as plaintext in the
+  # secret store).
+  credentialEncryptionKey: ""
   # nginx marker secret. REQUIRED for standalone deployment (chart render fails
-  # if empty) -- it guards all mcp-proxy token minting and the app requires it
-  # at startup. Set a strong random value, identical to the registry's. In the
-  # stack it is auto-generated + shared, so leave empty there.
+  # if empty). It guards all internal-token minting (registry API, mcp-proxy,
+  # generic proxy), so a mismatch with the registry 401s every registry API
+  # request, and the app requires it at startup. Set a strong random value of
+  # printable ASCII other than '$' (no spaces), identical to the registry's. In
+  # the stack it is auto-generated + shared, so leave empty there.
   markerSecret: ""
+  # Secret-store backend config. Only consumed when
+  # oboCacheEnabled=true, which turns the auth-server into a SecretStore client;
+  # otherwise the auth-server never touches the secret store. These MUST match the
+  # registry chart's egressAuth secret-store settings so both pods read/write the
+  # same per-user store.
+  # Secret store for per-user tokens: openbao | secrets-manager.
+  secretStoreBackend: "openbao" # pragma: allowlist secret
+  secretsManager:
+    kmsKeyId: "" # Optional CMK; empty uses the AWS-managed key.
+    pathPrefix: "mcp/egress"
+  openbao:
+    addr: "" # e.g. http://openbao.default.svc:8200
+    namespace: "" # Enterprise namespaces only.
+    kvMount: "secret"
+    authMethod: "kubernetes" # token | kubernetes — kubernetes is required for the scoped OBO role
+    # OpenBao kubernetes-auth role for the OBO cache. A SEPARATE, SCOPED role:
+    # the stack's openbao-init binds it to the auth-server
+    # ServiceAccount with a policy limited to the reserved "obo-cache" namespace,
+    # NOT the registry's broad mcp-egress policy -- so the auth-server can
+    # read/write its own cache entries but never any user's PAT/3LO secrets.
+    # Requires authMethod: kubernetes.
+    role: "auth-server-obo-cache"
 # PingFederate integration (used when authProvider.type = "pingfederate")
 pingfederate:
   enabled: false

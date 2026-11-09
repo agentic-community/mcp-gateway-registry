@@ -65,6 +65,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+DEFAULT_TARGET: int = 5000
 CHART_TITLE: str = "AI Registry -- When does the cumulative install count cross {target}?"
 FIGURE_WIDTH: int = 14
 FIGURE_HEIGHT: int = 7
@@ -382,8 +383,8 @@ def main() -> None:
     parser.add_argument(
         "--target",
         type=int,
-        default=2000,
-        help="Target install count to forecast (default: 2000)",
+        default=DEFAULT_TARGET,
+        help=f"Target install count to forecast (default: {DEFAULT_TARGET})",
     )
     parser.add_argument(
         "--output",

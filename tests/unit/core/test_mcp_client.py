@@ -4,17 +4,26 @@ Unit tests for registry/core/mcp_client.py
 Tests the MCPClientService for tool discovery and server connections.
 """
 
-import contextlib
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from mcp.types import (
+    Implementation,
+    ListToolsResult,
+    Tool,
+)
 
 from registry.core.mcp_client import (
+    MAX_TOOL_LIST_PAGES,
     MCPClientService,
     _build_headers_for_server,
     _extract_tool_details,
     _get_tools_sse,
     _get_tools_streamable_http,
+    _list_all_tools,
+    _log_discovery_failure,
+    _root_cause,
+    _server_info_dict,
     detect_server_transport,
     detect_server_transport_aware,
     get_tools_from_server_with_server_info,
@@ -42,10 +51,8 @@ def mock_server_info():
 
 @pytest.fixture
 def mock_tools_response():
-    """Create mock tools response from MCP server."""
-    mock_tool = MagicMock()
-    mock_tool.name = "test_tool"
-    mock_tool.description = """Test tool for testing.
+    """A tools/list result as the MCP SDK 2.x returns it: a list of Tool models."""
+    description = """Test tool for testing.
 
     Args:
         param1: First parameter
@@ -57,17 +64,14 @@ def mock_tools_response():
     Raises:
         ValueError: If parameters are invalid
     """
-    mock_tool.inputSchema = {
+    schema = {
         "type": "object",
         "properties": {
             "param1": {"type": "string"},
             "param2": {"type": "integer"},
         },
     }
-
-    mock_response = MagicMock()
-    mock_response.tools = [mock_tool]
-    return mock_response
+    return [Tool(name="test_tool", description=description, input_schema=schema)]
 
 
 @pytest.fixture
@@ -406,7 +410,7 @@ async def test_detect_server_transport_streamable_http_success():
     """Test detecting transport with successful streamable-http connection."""
     url = "http://localhost:8000"
 
-    with patch("registry.core.mcp_client.streamablehttp_client") as mock_client:
+    with patch("registry.core.mcp_client.streamable_http_client") as mock_client:
         mock_client.return_value.__aenter__.return_value = MagicMock()
 
         result = await detect_server_transport(url)
@@ -420,7 +424,7 @@ async def test_detect_server_transport_sse_fallback():
     """Test detecting transport with SSE fallback."""
     url = "http://localhost:8000"
 
-    with patch("registry.core.mcp_client.streamablehttp_client") as mock_streamable:
+    with patch("registry.core.mcp_client.streamable_http_client") as mock_streamable:
         mock_streamable.side_effect = Exception("Connection failed")
 
         with patch("registry.core.mcp_client.sse_client") as mock_sse:
@@ -437,7 +441,7 @@ async def test_detect_server_transport_default():
     """Test detecting transport defaults to streamable-http."""
     url = "http://localhost:8000"
 
-    with patch("registry.core.mcp_client.streamablehttp_client") as mock_streamable:
+    with patch("registry.core.mcp_client.streamable_http_client") as mock_streamable:
         mock_streamable.side_effect = Exception("Connection failed")
 
         with patch("registry.core.mcp_client.sse_client") as mock_sse:
@@ -517,7 +521,9 @@ def test_extract_tool_details(mock_tools_response):
     assert "parsed_description" in result[0]
     assert result[0]["parsed_description"]["main"] == "Test tool for testing."
     assert "param1" in result[0]["parsed_description"]["args"]
-    assert "schema" in result[0]
+    assert result[0]["schema"]["properties"]["param1"] == {"type": "string"}
+    # The MCP field name too, which virtual mappings, the catalog and search read.
+    assert result[0]["inputSchema"] == result[0]["schema"]
     # Verify raw description is also stored
     assert "description" in result[0]
     assert "Test tool for testing" in result[0]["description"]
@@ -526,16 +532,9 @@ def test_extract_tool_details(mock_tools_response):
 @pytest.mark.unit
 def test_extract_tool_details_no_description():
     """Test extracting tool details with no description."""
-    mock_tool = MagicMock()
-    mock_tool.name = "simple_tool"
-    mock_tool.description = None
-    mock_tool.__doc__ = None  # MagicMock has its own __doc__; clear it
-    mock_tool.inputSchema = {}
+    tool = Tool(name="simple_tool", input_schema={"type": "object"})
 
-    mock_response = MagicMock()
-    mock_response.tools = [mock_tool]
-
-    result = _extract_tool_details(mock_response)
+    result = _extract_tool_details([tool])
 
     assert len(result) == 1
     assert result[0]["name"] == "simple_tool"
@@ -545,10 +544,7 @@ def test_extract_tool_details_no_description():
 @pytest.mark.unit
 def test_extract_tool_details_empty_response():
     """Test extracting tool details from empty response."""
-    mock_response = MagicMock()
-    mock_response.tools = []
-
-    result = _extract_tool_details(mock_response)
+    result = _extract_tool_details([])
 
     assert len(result) == 0
 
@@ -556,9 +552,7 @@ def test_extract_tool_details_empty_response():
 @pytest.mark.unit
 def test_extract_tool_details_complex_docstring():
     """Test extracting tool details with complex docstring."""
-    mock_tool = MagicMock()
-    mock_tool.name = "complex_tool"
-    mock_tool.description = """
+    description = """
     Main description line 1.
     Main description line 2.
 
@@ -573,12 +567,9 @@ def test_extract_tool_details_complex_docstring():
         ValueError: When something goes wrong
         TypeError: When type is incorrect
     """
-    mock_tool.inputSchema = {}
+    tool = Tool(name="complex_tool", description=description, input_schema={"type": "object"})
 
-    mock_response = MagicMock()
-    mock_response.tools = [mock_tool]
-
-    result = _extract_tool_details(mock_response)
+    result = _extract_tool_details([tool])
 
     assert len(result) == 1
     parsed = result[0]["parsed_description"]
@@ -599,21 +590,18 @@ async def test_get_tools_streamable_http_success(mock_server_info, mock_tools_re
     """Test getting tools via streamable-http successfully."""
     url = "http://localhost:8000/mcp"
 
-    mock_session = AsyncMock()
-    mock_session.initialize = AsyncMock()
-    mock_session.list_tools = AsyncMock(return_value=mock_tools_response)
+    with (
+        patch("registry.core.mcp_client._assert_mcp_url_fetchable", return_value=True),
+        patch(
+            "registry.core.mcp_client._discover_streamable_http",
+            AsyncMock(return_value=(mock_tools_response, None)),
+        ),
+    ):
+        result = await _get_tools_streamable_http(url, mock_server_info)
 
-    with patch("registry.core.mcp_client.streamablehttp_client") as mock_client:
-        mock_client.return_value.__aenter__.return_value = (MagicMock(), MagicMock(), MagicMock())
-
-        with patch("registry.core.mcp_client.ClientSession") as mock_session_class:
-            mock_session_class.return_value.__aenter__.return_value = mock_session
-
-            result = await _get_tools_streamable_http(url, mock_server_info)
-
-            assert result is not None
-            assert len(result) == 1
-            assert result[0]["name"] == "test_tool"
+    assert result is not None
+    assert len(result) == 1
+    assert result[0]["name"] == "test_tool"
 
 
 @pytest.mark.unit
@@ -622,18 +610,16 @@ async def test_get_tools_streamable_http_timeout():
     """Test getting tools via streamable-http with timeout."""
     url = "http://localhost:8000/mcp"
 
-    mock_session = AsyncMock()
-    mock_session.initialize = AsyncMock(side_effect=TimeoutError())
+    with (
+        patch("registry.core.mcp_client._assert_mcp_url_fetchable", return_value=True),
+        patch(
+            "registry.core.mcp_client._discover_streamable_http",
+            AsyncMock(side_effect=TimeoutError()),
+        ),
+    ):
+        result = await _get_tools_streamable_http(url, None)
 
-    with patch("registry.core.mcp_client.streamablehttp_client") as mock_client:
-        mock_client.return_value.__aenter__.return_value = (MagicMock(), MagicMock(), MagicMock())
-
-        with patch("registry.core.mcp_client.ClientSession") as mock_session_class:
-            mock_session_class.return_value.__aenter__.return_value = mock_session
-
-            result = await _get_tools_streamable_http(url, None)
-
-            assert result is None
+    assert result is None
 
 
 @pytest.mark.unit
@@ -646,29 +632,17 @@ async def test_get_tools_streamable_http_anthropic_registry():
         "headers": [],
     }
 
-    mock_session = AsyncMock()
-    mock_session.initialize = AsyncMock()
-    mock_session.list_tools = AsyncMock(return_value=MagicMock(tools=[]))
+    discover = AsyncMock(return_value=([], None))
+    with (
+        patch("registry.core.mcp_client._assert_mcp_url_fetchable", return_value=True),
+        patch("registry.core.mcp_client._discover_streamable_http", discover),
+    ):
+        await _get_tools_streamable_http(url, server_info)
 
-    with patch("registry.core.mcp_client.streamablehttp_client") as mock_client:
-        # Capture the URL passed to streamablehttp_client
-        captured_urls = []
-
-        @contextlib.asynccontextmanager
-        async def mock_cm(*args, **kwargs):
-            captured_urls.append(kwargs.get("url"))
-            yield (MagicMock(), MagicMock(), MagicMock())
-
-        mock_client.side_effect = mock_cm
-
-        with patch("registry.core.mcp_client.ClientSession") as mock_session_class:
-            mock_session_class.return_value.__aenter__.return_value = mock_session
-
-            await _get_tools_streamable_http(url, server_info)
-
-            # Verify instance_id parameter was added
-            assert len(captured_urls) > 0
-            assert any("instance_id=default" in u for u in captured_urls)
+    # Verify instance_id parameter was added to the URL actually connected to
+    captured_urls = [call.args[0] for call in discover.call_args_list]
+    assert len(captured_urls) > 0
+    assert any("instance_id=default" in u for u in captured_urls)
 
 
 @pytest.mark.unit
@@ -677,32 +651,17 @@ async def test_get_tools_streamable_http_fallback_endpoints():
     """Test getting tools trying multiple endpoints."""
     url = "http://localhost:8000"
 
-    mock_session = AsyncMock()
-    mock_session.initialize = AsyncMock()
-    mock_session.list_tools = AsyncMock(return_value=MagicMock(tools=[]))
+    # First attempt fails, second succeeds.
+    discover = AsyncMock(side_effect=[Exception("Connection failed"), ([], None)])
+    with (
+        patch("registry.core.mcp_client._assert_mcp_url_fetchable", return_value=True),
+        patch("registry.core.mcp_client._discover_streamable_http", discover),
+    ):
+        await _get_tools_streamable_http(url, None)
 
-    call_count = 0
-
-    def mock_client_side_effect(*args, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            # First attempt fails
-            raise Exception("Connection failed")
-        else:
-            # Second attempt succeeds
-            return (MagicMock(), MagicMock(), MagicMock())
-
-    with patch("registry.core.mcp_client.streamablehttp_client") as mock_client:
-        mock_client.return_value.__aenter__.side_effect = mock_client_side_effect
-
-        with patch("registry.core.mcp_client.ClientSession") as mock_session_class:
-            mock_session_class.return_value.__aenter__.return_value = mock_session
-
-            await _get_tools_streamable_http(url, None)
-
-            # Should try /mcp/ first, then / (root)
-            assert call_count == 2
+    # Should try /mcp/ first, then / (root)
+    tried = [call.args[0] for call in discover.call_args_list]
+    assert tried == ["http://localhost:8000/mcp/", "http://localhost:8000/"]
 
 
 # =============================================================================
@@ -716,20 +675,17 @@ async def test_get_tools_sse_success(mock_tools_response):
     """Test getting tools via SSE successfully."""
     url = "http://localhost:8000/sse"
 
-    mock_session = AsyncMock()
-    mock_session.initialize = AsyncMock()
-    mock_session.list_tools = AsyncMock(return_value=mock_tools_response)
+    with (
+        patch("registry.core.mcp_client._assert_mcp_url_fetchable", return_value=True),
+        patch(
+            "registry.core.mcp_client._discover_sse",
+            AsyncMock(return_value=(mock_tools_response, None)),
+        ),
+    ):
+        result = await _get_tools_sse(url, None)
 
-    with patch("registry.core.mcp_client.sse_client") as mock_client:
-        mock_client.return_value.__aenter__.return_value = (MagicMock(), MagicMock())
-
-        with patch("registry.core.mcp_client.ClientSession") as mock_session_class:
-            mock_session_class.return_value.__aenter__.return_value = mock_session
-
-            result = await _get_tools_sse(url, None)
-
-            assert result is not None
-            assert len(result) == 1
+    assert result is not None
+    assert len(result) == 1
 
 
 @pytest.mark.unit
@@ -738,18 +694,13 @@ async def test_get_tools_sse_timeout():
     """Test getting tools via SSE with timeout."""
     url = "http://localhost:8000/sse"
 
-    mock_session = AsyncMock()
-    mock_session.initialize = AsyncMock(side_effect=TimeoutError())
+    with (
+        patch("registry.core.mcp_client._assert_mcp_url_fetchable", return_value=True),
+        patch("registry.core.mcp_client._discover_sse", AsyncMock(side_effect=TimeoutError())),
+    ):
+        result = await _get_tools_sse(url, None)
 
-    with patch("registry.core.mcp_client.sse_client") as mock_client:
-        mock_client.return_value.__aenter__.return_value = (MagicMock(), MagicMock())
-
-        with patch("registry.core.mcp_client.ClientSession") as mock_session_class:
-            mock_session_class.return_value.__aenter__.return_value = mock_session
-
-            result = await _get_tools_sse(url, None)
-
-            assert result is None
+    assert result is None
 
 
 @pytest.mark.unit
@@ -772,29 +723,15 @@ async def test_get_tools_sse_url_normalization():
     """Test getting tools via SSE with URL normalization."""
     url = "http://localhost:8000"
 
-    mock_session = AsyncMock()
-    mock_session.initialize = AsyncMock()
-    mock_session.list_tools = AsyncMock(return_value=MagicMock(tools=[]))
+    discover = AsyncMock(return_value=([], None))
+    with (
+        patch("registry.core.mcp_client._assert_mcp_url_fetchable", return_value=True),
+        patch("registry.core.mcp_client._discover_sse", discover),
+    ):
+        await _get_tools_sse(url, None)
 
-    captured_url = None
-
-    @contextlib.asynccontextmanager
-    async def mock_cm(url_arg, *args, **kwargs):
-        nonlocal captured_url
-        captured_url = url_arg
-        yield (MagicMock(), MagicMock())
-
-    with patch("registry.core.mcp_client.sse_client") as mock_client:
-        mock_client.side_effect = mock_cm
-
-        with patch("registry.core.mcp_client.ClientSession") as mock_session_class:
-            mock_session_class.return_value.__aenter__.return_value = mock_session
-
-            await _get_tools_sse(url, None)
-
-            # Should append /sse to URL
-            assert captured_url is not None
-            assert captured_url.endswith("/sse")
+    # Should append /sse to URL
+    assert discover.call_args.args[0].endswith("/sse")
 
 
 # =============================================================================
@@ -958,27 +895,24 @@ async def test_full_tool_discovery_flow_streamable_http(mock_server_info, mock_t
     """Test complete tool discovery flow for streamable-http."""
     url = "http://localhost:8000"
 
-    mock_session = AsyncMock()
-    mock_session.initialize = AsyncMock()
-    mock_session.list_tools = AsyncMock(return_value=mock_tools_response)
+    with (
+        patch("registry.core.mcp_client._assert_mcp_url_fetchable", return_value=True),
+        patch(
+            "registry.core.mcp_client._discover_streamable_http",
+            AsyncMock(return_value=(mock_tools_response, None)),
+        ),
+        # Full flow: detect transport -> get tools
+        patch(
+            "registry.core.mcp_client.detect_server_transport_aware",
+            return_value="streamable-http",
+        ),
+    ):
+        result = await get_tools_from_server_with_server_info(url, mock_server_info)
 
-    with patch("registry.core.mcp_client.streamablehttp_client") as mock_client:
-        mock_client.return_value.__aenter__.return_value = (MagicMock(), MagicMock(), MagicMock())
-
-        with patch("registry.core.mcp_client.ClientSession") as mock_session_class:
-            mock_session_class.return_value.__aenter__.return_value = mock_session
-
-            # Full flow: detect transport -> get tools
-            with patch(
-                "registry.core.mcp_client.detect_server_transport_aware",
-                return_value="streamable-http",
-            ):
-                result = await get_tools_from_server_with_server_info(url, mock_server_info)
-
-                assert result is not None
-                assert len(result) == 1
-                assert result[0]["name"] == "test_tool"
-                assert "parsed_description" in result[0]
+    assert result is not None
+    assert len(result) == 1
+    assert result[0]["name"] == "test_tool"
+    assert "parsed_description" in result[0]
 
 
 @pytest.mark.unit
@@ -988,24 +922,19 @@ async def test_full_tool_discovery_flow_sse(mock_tools_response):
     url = "http://localhost:8000"
     server_info = {"supported_transports": ["sse"], "headers": []}
 
-    mock_session = AsyncMock()
-    mock_session.initialize = AsyncMock()
-    mock_session.list_tools = AsyncMock(return_value=mock_tools_response)
+    with (
+        patch("registry.core.mcp_client._assert_mcp_url_fetchable", return_value=True),
+        patch(
+            "registry.core.mcp_client._discover_sse",
+            AsyncMock(return_value=(mock_tools_response, None)),
+        ),
+        # Full flow: detect transport -> get tools
+        patch("registry.core.mcp_client.detect_server_transport_aware", return_value="sse"),
+    ):
+        result = await get_tools_from_server_with_server_info(url, server_info)
 
-    with patch("registry.core.mcp_client.sse_client") as mock_client:
-        mock_client.return_value.__aenter__.return_value = (MagicMock(), MagicMock())
-
-        with patch("registry.core.mcp_client.ClientSession") as mock_session_class:
-            mock_session_class.return_value.__aenter__.return_value = mock_session
-
-            # Full flow: detect transport -> get tools
-            with patch(
-                "registry.core.mcp_client.detect_server_transport_aware", return_value="sse"
-            ):
-                result = await get_tools_from_server_with_server_info(url, server_info)
-
-                assert result is not None
-                assert len(result) == 1
+    assert result is not None
+    assert len(result) == 1
 
 
 # =============================================================================
@@ -1025,10 +954,10 @@ class TestMcpClientSsrfGuard:
 
         server_info = {"supported_transports": ["streamable-http"], "headers": []}
 
-        # streamablehttp_client and header build must NOT be reached.
+        # streamable_http_client and header build must NOT be reached.
         with (
             patch("registry.core.mcp_client._build_headers_for_server") as mock_headers,
-            patch("registry.core.mcp_client.streamablehttp_client") as mock_client,
+            patch("registry.core.mcp_client.streamable_http_client") as mock_client,
             patch("registry.utils.url_guard.socket.getaddrinfo") as mock_resolve,
         ):
             mock_resolve.return_value = [(None, None, None, None, ("10.0.0.5", 443))]
@@ -1046,7 +975,7 @@ class TestMcpClientSsrfGuard:
 
         with (
             patch("registry.core.mcp_client._build_headers_for_server") as mock_headers,
-            patch("registry.core.mcp_client.streamablehttp_client") as mock_client,
+            patch("registry.core.mcp_client.streamable_http_client") as mock_client,
         ):
             result = await _get_tools_streamable_http(
                 "http://169.254.169.254/latest/meta-data/", {"headers": []}
@@ -1081,7 +1010,7 @@ class TestMcpClientSsrfGuard:
 
         with (
             patch("registry.core.mcp_client._build_headers_for_server") as mock_headers,
-            patch("registry.core.mcp_client.streamablehttp_client") as mock_client,
+            patch("registry.core.mcp_client.streamable_http_client") as mock_client,
             patch("registry.utils.url_guard.socket.getaddrinfo") as mock_resolve,
         ):
             mock_resolve.return_value = [(None, None, None, None, ("10.1.2.3", 443))]
@@ -1143,7 +1072,7 @@ class TestMcpClientSsrfGuard:
 
         with (
             patch("registry.core.mcp_client._build_headers_for_server") as mock_headers,
-            patch("registry.core.mcp_client.streamablehttp_client") as mock_stream,
+            patch("registry.core.mcp_client.streamable_http_client") as mock_stream,
             patch("registry.core.mcp_client.sse_client") as mock_sse,
             patch("registry.utils.url_guard.socket.getaddrinfo", side_effect=_resolve),
         ):
@@ -1166,7 +1095,7 @@ class TestMcpClientSsrfGuard:
                 return_value={},
             ) as mock_headers,
             patch(
-                "registry.core.mcp_client.streamablehttp_client",
+                "registry.core.mcp_client.streamable_http_client",
                 side_effect=RuntimeError("stop after header build"),
             ),
         ):
@@ -1197,7 +1126,7 @@ class TestMcpClientSsrfGuard:
                 return_value={},
             ) as mock_headers,
             patch(
-                "registry.core.mcp_client.streamablehttp_client",
+                "registry.core.mcp_client.streamable_http_client",
                 side_effect=RuntimeError("stop after header build"),
             ),
         ):
@@ -1265,7 +1194,7 @@ class TestBuiltinMcpOutboundIdentityBinding:
         server_info = {**self._BUILTIN, "mcp_endpoint": actual}
         with (
             patch("registry.core.mcp_client._build_headers_for_server") as headers,
-            patch("registry.core.mcp_client.streamablehttp_client") as client,
+            patch("registry.core.mcp_client.streamable_http_client") as client,
         ):
             result = await _get_tools_streamable_http(server_info["proxy_pass_url"], server_info)
         assert result is None
@@ -1296,7 +1225,7 @@ class TestBuiltinMcpOutboundIdentityBinding:
         server_info["mcp_endpoint"] = "http://mcpgw-server:8003/mcp"
         with (
             patch("registry.core.mcp_client._build_headers_for_server") as headers,
-            patch("registry.core.mcp_client.streamablehttp_client") as client,
+            patch("registry.core.mcp_client.streamable_http_client") as client,
         ):
             result = await _get_tools_streamable_http("http://mcpgw-server:8003/", server_info)
         assert result is None
@@ -1311,7 +1240,7 @@ async def test_mcp_logs_strip_query_and_exception_detail(caplog):
     with (
         patch("registry.core.mcp_client._assert_mcp_url_fetchable", return_value=True),
         patch(
-            "registry.core.mcp_client.streamablehttp_client",
+            "registry.core.mcp_client.streamable_http_client",
             side_effect=RuntimeError("response-body-secret https://internal.example/path"),
         ),
         caplog.at_level("ERROR", logger="registry.core.mcp_client"),
@@ -1323,3 +1252,143 @@ async def test_mcp_logs_strip_query_and_exception_detail(caplog):
     assert "query-secret" not in caplog.text
     assert "response-body-secret" not in caplog.text
     assert "RuntimeError" in caplog.text
+
+
+# =============================================================================
+# MCP SDK 2.x MIGRATION: pagination, negotiation mode, field names, logging
+# =============================================================================
+
+
+def _page(
+    names: list[str],
+    next_cursor: str | None,
+) -> ListToolsResult:
+    """Build one tools/list page with simple object-rooted tools."""
+    tools = [Tool(name=name, input_schema={"type": "object"}) for name in names]
+    return ListToolsResult(tools=tools, next_cursor=next_cursor)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_list_all_tools_follows_next_cursor():
+    """Discovery reads every page, passing back each nextCursor."""
+    client = MagicMock()
+    client.list_tools = AsyncMock(
+        side_effect=[_page(["a", "b"], "2"), _page(["c", "d"], "4"), _page(["e"], None)]
+    )
+
+    tools = await _list_all_tools(client)
+
+    assert [tool.name for tool in tools] == ["a", "b", "c", "d", "e"]
+    cursors = [call.kwargs["cursor"] for call in client.list_tools.call_args_list]
+    assert cursors == [None, "2", "4"]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_list_all_tools_stops_at_page_cap():
+    """A server that never stops returning a cursor is paged at most MAX_TOOL_LIST_PAGES times."""
+    client = MagicMock()
+    client.list_tools = AsyncMock(return_value=_page(["x"], "again"))
+
+    tools = await _list_all_tools(client)
+
+    assert client.list_tools.call_count == MAX_TOOL_LIST_PAGES
+    assert len(tools) == MAX_TOOL_LIST_PAGES
+
+
+@pytest.mark.unit
+def test_extract_tool_details_reads_sdk2_input_schema():
+    """SDK 2.x stores the schema in input_schema; the inputSchema alias is JSON-only.
+
+    Regression guard: getattr(tool, "inputSchema") is missing on a 2.x Tool, so
+    reading it would silently store an empty schema for every tool.
+    """
+    schema = {"type": "object", "properties": {"q": {"type": "string"}}, "required": ["q"]}
+    tool = Tool(name="search", description="Search.", input_schema=schema)
+
+    result = _extract_tool_details([tool])
+
+    assert result[0]["schema"] == schema
+
+
+@pytest.mark.unit
+def test_server_info_dict_handles_anonymous_server():
+    """A 2026-07-28 server may omit its identity; that yields an empty dict."""
+    assert _server_info_dict(None) == {}
+    assert _server_info_dict(Implementation(name="srv", version="1.2.3")) == {
+        "name": "srv",
+        "version": "1.2.3",
+    }
+
+
+@pytest.mark.unit
+def test_root_cause_unwraps_nested_exception_groups():
+    """The SDK raises inside anyio task groups; logging needs the real error."""
+    inner = ValueError("real cause")
+    wrapped = ExceptionGroup("outer", [ExceptionGroup("inner", [inner])])
+
+    assert _root_cause(wrapped) is inner
+    assert _root_cause(inner) is inner
+
+
+@pytest.mark.unit
+def test_log_discovery_failure_names_failing_tool_field(caplog):
+    """A tools/list ValidationError inside an ExceptionGroup is logged with its field path."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError) as caught:
+        ListToolsResult.model_validate({"tools": [{"name": "bad", "inputSchema": "not-an-object"}]})
+    validation_error = caught.value
+    wrapped = ExceptionGroup("task group", [validation_error])
+
+    with caplog.at_level("ERROR", logger="registry.core.mcp_client"):
+        _log_discovery_failure(
+            "Streamable-HTTP connection failed", "https://h.example/mcp", wrapped
+        )
+
+    assert "ValidationError" in caplog.text
+    assert "tools.0.inputSchema" in caplog.text
+    assert "ExceptionGroup" not in caplog.text
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("helper_name", "expected_mode"),
+    [("_discover_streamable_http", "auto"), ("_discover_sse", "legacy")],
+)
+async def test_discovery_mode_per_transport(helper_name, expected_mode):
+    """Streamable HTTP negotiates (server/discover, then initialize); HTTP+SSE always uses the handshake."""
+    from registry.core import mcp_client
+
+    discover_tools = AsyncMock(return_value=([], None))
+    with (
+        patch("registry.core.mcp_client._discover_tools", discover_tools),
+        patch("registry.core.mcp_client.streamable_http_client", MagicMock()),
+        patch("registry.core.mcp_client.sse_client", MagicMock()),
+    ):
+        await getattr(mcp_client, helper_name)("https://h.example/mcp", {"X-Test": "1"})
+
+    assert discover_tools.call_args.kwargs["mode"] == expected_mode
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_discover_streamable_http_sends_headers_on_sdk_http_client():
+    """The SDK 2.x transport takes headers only through the httpx2 client passed in."""
+    from registry.core import mcp_client
+
+    transport_factory = MagicMock()
+    with (
+        patch("registry.core.mcp_client._discover_tools", AsyncMock(return_value=([], None))),
+        patch("registry.core.mcp_client.streamable_http_client", transport_factory),
+    ):
+        await mcp_client._discover_streamable_http(
+            "https://h.example/mcp", {"Authorization": "Bearer t", "X-Test": "1"}
+        )
+
+    http_client = transport_factory.call_args.kwargs["http_client"]
+    assert http_client.headers["X-Test"] == "1"
+    assert http_client.headers["Authorization"] == "Bearer t"
+    assert transport_factory.call_args.args[0] == "https://h.example/mcp"

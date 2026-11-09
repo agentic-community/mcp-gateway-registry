@@ -56,6 +56,7 @@ import logging
 import operator as _operator
 import os
 import re
+import ssl
 import sys
 import threading
 import time
@@ -71,13 +72,14 @@ from urllib.parse import (
     urlparse,
 )
 
-import httpx
-import mcp
+import certifi
+import httpx2
 import yaml
 from langchain_anthropic import ChatAnthropic
 from langchain_aws import ChatBedrock
 from langchain_core.tools import tool
 from langgraph.prebuilt import create_react_agent
+from mcp import Client
 from mcp.client.sse import sse_client
 from mcp.client.streamable_http import streamable_http_client
 from registry_client import (
@@ -94,6 +96,10 @@ logging.basicConfig(
 
 # Get logger
 logger = logging.getLogger(__name__)
+
+# The MCP SDK's own HTTP client defaults (mcp.shared._httpx_utils).
+SDK_DEFAULT_TIMEOUT_SECONDS: float = 30.0
+SDK_DEFAULT_SSE_READ_TIMEOUT_SECONDS: float = 300.0
 
 # Global registry client instance (initialized in main)
 registry_client: RegistryClient | None = None
@@ -786,18 +792,40 @@ def _add_egress_auth(
     return headers
 
 
+def _certifi_ssl_context() -> ssl.SSLContext:
+    """TLS trust for httpx2, which reads only the OS store; certifi is what httpx used."""
+    return ssl.create_default_context(cafile=certifi.where())
+
+
+def _sse_http_client(
+    headers: dict[str, str] | None = None,
+    timeout: httpx2.Timeout | None = None,
+    auth: httpx2.Auth | None = None,
+) -> httpx2.AsyncClient:
+    """The SDK's SSE client factory with certifi trust and the SDK's default timeouts."""
+    if timeout is None:
+        timeout = httpx2.Timeout(
+            SDK_DEFAULT_TIMEOUT_SECONDS, read=SDK_DEFAULT_SSE_READ_TIMEOUT_SECONDS
+        )
+    return httpx2.AsyncClient(
+        headers=headers,
+        timeout=timeout,
+        auth=auth,
+        verify=_certifi_ssl_context(),
+    )
+
+
 async def _invoke_via_sse(
     server_url: str,
     headers: dict[str, str],
     tool_name: str,
     arguments: dict[str, Any],
 ) -> str:
-    """Invoke tool via SSE transport."""
-    async with sse_client(server_url, headers=headers) as (read, write):
-        async with mcp.ClientSession(read, write) as session:
-            await session.initialize()
-            result = await session.call_tool(tool_name, arguments=arguments)
-            return _format_tool_response(result)
+    """Invoke tool via the HTTP+SSE transport, which only speaks the initialize handshake."""
+    transport = sse_client(server_url, headers=headers, httpx_client_factory=_sse_http_client)
+    async with Client(transport, mode="legacy") as client:
+        result = await client.call_tool(tool_name, arguments=arguments)
+        return _format_tool_response(result)
 
 
 async def _invoke_via_http(
@@ -806,16 +834,17 @@ async def _invoke_via_http(
     tool_name: str,
     arguments: dict[str, Any],
 ) -> str:
-    """Invoke tool via streamable HTTP transport."""
-    async with httpx.AsyncClient(headers=headers) as http_client:
-        async with streamable_http_client(
-            url=server_url,
-            http_client=http_client,
-        ) as (read, write, _):
-            async with mcp.ClientSession(read, write) as session:
-                await session.initialize()
-                result = await session.call_tool(tool_name, arguments=arguments)
-                return _format_tool_response(result)
+    """Invoke tool via streamable HTTP transport.
+
+    Client(mode="auto") speaks MCP 2026-07-28 to servers that support it and
+    falls back to the initialize handshake for older servers. The MCP SDK 2.x
+    takes headers only through its own httpx2 client.
+    """
+    async with httpx2.AsyncClient(headers=headers, verify=_certifi_ssl_context()) as http_client:
+        transport = streamable_http_client(server_url, http_client=http_client)
+        async with Client(transport, mode="auto") as client:
+            result = await client.call_tool(tool_name, arguments=arguments)
+            return _format_tool_response(result)
 
 
 def _format_tool_response(result: Any) -> str:

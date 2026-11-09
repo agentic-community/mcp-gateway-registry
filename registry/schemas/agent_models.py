@@ -7,6 +7,7 @@ for agent discovery and registration in the MCP Gateway Registry.
 Based on: docs/design/a2a-protocol-integration.md
 """
 
+import ipaddress
 import logging
 import re
 from datetime import datetime
@@ -19,6 +20,7 @@ from pydantic import (
     ConfigDict,
     Field,
     field_validator,
+    model_serializer,
     model_validator,
 )
 
@@ -27,6 +29,7 @@ from registry.schemas.proxy_mixin import (
     assert_proxy_target_resolvable,
     egress_guard_validator,
 )
+from registry.utils.metadata_limits import validate_metadata_limits
 
 # Configure logging with basicConfig
 logging.basicConfig(
@@ -95,6 +98,39 @@ def _validate_protocol_version(
     return version
 
 
+# Transport bindings a2a.proto names explicitly. protocol_binding is NOT
+# restricted to this set: A2A 1.0 allows custom bindings identified by a
+# URI, so the validator below only rejects empty/non-string values. This
+# constant exists purely as a documentation aid (e.g. for IDE autocomplete /
+# error messages), not an enum.
+_WELL_KNOWN_PROTOCOL_BINDINGS: tuple[str, ...] = ("JSONRPC", "HTTP+JSON", "GRPC")
+
+
+def _validate_protocol_binding(
+    binding: str,
+) -> str:
+    """
+    Validate an AgentInterface transport binding.
+
+    A2A 1.0 treats this as an open string (custom transports are identified
+    by a URI), not a closed enum, so only non-empty/whitespace is enforced.
+    See _WELL_KNOWN_PROTOCOL_BINDINGS for the values a2a.proto names
+    explicitly, which are not the only valid ones.
+
+    Args:
+        binding: Transport binding string
+
+    Returns:
+        Validated binding string
+
+    Raises:
+        ValueError: If binding is empty or not a non-empty string
+    """
+    if not binding or not binding.strip():
+        raise ValueError("protocol_binding cannot be empty")
+    return binding
+
+
 def _validate_skill_ids_unique(
     skills: list["Skill"],
 ) -> list["Skill"]:
@@ -157,6 +193,161 @@ def _validate_url_format(
         raise ValueError(f"Invalid URL format: {e}")
 
     return url
+
+
+_HOSTNAME_LABEL_PATTERN = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
+
+
+def _is_valid_http_url(
+    url: str,
+) -> bool:
+    """Return True if `url` passes _validate_url_format, False otherwise."""
+    try:
+        _validate_url_format(url)
+        return True
+    except ValueError:
+        return False
+
+
+def _is_valid_hostname(
+    host: str,
+) -> bool:
+    """Return True if `host` is a syntactically valid DNS hostname.
+
+    Rejects empty labels (e.g. the host half of `.:99999`) and labels that
+    are only hyphens (e.g. `-:0`); a plain character-class regex over the
+    whole string lets both through, since `.` and `-` are themselves valid
+    characters in a hostname, just not valid on their own.
+    """
+    if not host or len(host) > 253:
+        return False
+    return all(_HOSTNAME_LABEL_PATTERN.match(label) for label in host.split("."))
+
+
+def _is_valid_port(
+    port: str,
+) -> bool:
+    """Return True if `port` is a valid 1-65535 TCP port, rejecting port 0."""
+    return port.isdigit() and 1 <= int(port) <= 65535
+
+
+def _is_valid_grpc_authority(
+    url: str,
+) -> bool:
+    """Return True if `url` is a bare gRPC authority address (host:port).
+
+    gRPC targets are conventionally given as `host:port` with no scheme
+    (e.g. `grpc.example.com:443`), which `_validate_url_format` rejects
+    outright since it requires an http(s) scheme. Also accepts a bracketed
+    IPv6 host (e.g. `[::1]:50051`), the standard way to disambiguate an
+    IPv6 address's own colons from the port separator.
+    """
+    if url.startswith("["):
+        closing = url.find("]")
+        if closing == -1 or not url[closing + 1 :].startswith(":"):
+            return False
+        host, port = url[1:closing], url[closing + 2 :]
+        try:
+            ipaddress.IPv6Address(host)
+        except ValueError:
+            return False
+        return _is_valid_port(port)
+
+    host, sep, port = url.rpartition(":")
+    if not sep:
+        return False
+    return _is_valid_hostname(host) and _is_valid_port(port)
+
+
+# Schemes accepted for a CUSTOM (URI-identified) AgentInterface binding url.
+# Standard HTTP bindings (JSONRPC, HTTP+JSON) are HTTP(S)-only and validated
+# with _validate_url_format; only custom bindings reach this set, where WS(S)
+# covers the WebSocket endpoint the A2A custom-protocol-binding spec declares
+# as a ws:// or wss:// url
+# (https://a2a-protocol.org/latest/topics/custom-protocol-bindings/).
+_INTERFACE_URL_SCHEMES = ("http://", "https://", "ws://", "wss://")
+
+
+def _validate_interface_url_format(
+    url: str,
+) -> str:
+    """
+    Validate a non-GRPC AgentInterface url.
+
+    Like _validate_url_format, but also accepts the WebSocket schemes
+    (ws://, wss://) that A2A custom protocol bindings use, which the
+    HTTP(S)-only _validate_url_format would otherwise reject.
+
+    Args:
+        url: URL string to validate
+
+    Returns:
+        Validated URL string
+
+    Raises:
+        ValueError: If the url is empty, uses an unsupported scheme, or has
+            no hostname
+    """
+    if not url:
+        raise ValueError("URL cannot be empty")
+
+    if not url.startswith(_INTERFACE_URL_SCHEMES):
+        raise ValueError("Interface URL must use HTTP(S) or WS(S) protocol")
+
+    try:
+        from urllib.parse import urlparse
+
+        parsed = urlparse(url)
+        if not parsed.netloc:
+            raise ValueError("URL must include a valid hostname")
+    except ValueError:
+        raise
+    except Exception as e:
+        raise ValueError(f"Invalid URL format: {e}")
+
+    return url
+
+
+def _validate_interface_url(
+    url: str,
+    protocol_binding: str,
+) -> str:
+    """
+    Validate an AgentInterface url, binding-aware.
+
+    Three cases, by binding:
+
+    - ``GRPC``: a bare host:port authority address (no scheme) in addition to a
+      full HTTP(S) URL (e.g. a gateway fronting gRPC).
+    - The other bindings a2a.proto names explicitly (``JSONRPC``, ``HTTP+JSON``):
+      these are HTTP transports, so they require a full HTTP(S) URL. A WebSocket
+      URL on a standard HTTP binding is a contradiction and is rejected.
+    - Custom (URI-identified) bindings: HTTP(S) or the WebSocket schemes
+      (ws://, wss://) the A2A custom-protocol-binding spec declares, since a
+      custom binding is where a WebSocket endpoint legitimately appears.
+
+    Args:
+        url: URL or address string to validate
+        protocol_binding: The interface's protocol_binding value
+
+    Returns:
+        Validated url string
+
+    Raises:
+        ValueError: If the url does not match the form its binding accepts
+    """
+    if protocol_binding == "GRPC":
+        if _is_valid_grpc_authority(url) or _is_valid_http_url(url):
+            return url
+        raise ValueError(
+            "GRPC interface url must be a host:port address (e.g. "
+            "'grpc.example.com:443') or a full HTTP(S) URL"
+        )
+    # Standard HTTP bindings named by a2a.proto must use HTTP(S); only custom
+    # bindings may use the WebSocket schemes.
+    if protocol_binding in _WELL_KNOWN_PROTOCOL_BINDINGS:
+        return _validate_url_format(url)
+    return _validate_interface_url_format(url)
 
 
 def _validate_security_references(
@@ -259,6 +450,80 @@ class SecurityScheme(BaseModel):
         return v
 
 
+class StringList(BaseModel):
+    """Wrapped scope list per the A2A 1.0 ``SecurityRequirement`` schema.
+
+    The spec models each scheme's scopes as a ``StringList`` (a2a.proto)
+    rather than a bare ``repeated string``, so they're wrapped in this
+    one-field object.
+    """
+
+    values: list[str] = Field(default_factory=list, alias="list")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    @model_serializer
+    def _serialize(
+        self,
+    ) -> dict[str, list[str]]:
+        """Always serialize under the A2A wire key ``list``.
+
+        Pydantic emits a field's name, not its alias, unless ``by_alias=True``
+        is passed, and the registry's publish/projection paths dump without it.
+        That would surface this field as ``values`` on read, diverging from the
+        A2A wire shape (``list``). Serializing explicitly pins the wire key on
+        every dump, regardless of ``by_alias``, so stored and returned cards
+        stay spec-shaped. Input still accepts both spellings via
+        ``populate_by_name``.
+        """
+        return {"list": self.values}
+
+
+class SecurityRequirement(BaseModel):
+    """A2A 1.0 ``SecurityRequirement``, a security-scheme-to-scopes map.
+
+    Per a2a.proto: ``message SecurityRequirement { map<string, StringList>
+    schemes = 1; }``. The map itself is wrapped under a ``schemes`` field,
+    not inlined directly onto this message. Confirmed against the
+    authoritative proto at
+    https://github.com/a2aproject/A2A/blob/main/specification/a2a.proto.
+
+    ``extra="forbid"`` is required, not cosmetic: without it, the pre-spec
+    unwrapped shape (``{"oauth2": {"list": [...]}}``, scheme names as
+    top-level keys) is accepted as a valid but field-less SecurityRequirement:
+    ``schemes`` silently defaults to ``{}`` and the scheme/scope data is
+    discarded rather than rejected.
+    """
+
+    schemes: dict[str, StringList] = Field(default_factory=dict)
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+
+class AgentCardSignature(BaseModel):
+    """JSON Web Signature (RFC 7515) computed over an AgentCard.
+
+    Per the A2A 1.0 schema, ``AgentCard.signatures`` is an array of these
+    (detached-JWS form: protected header + signature, both base64url, plus
+    an optional cleartext header for display).
+    """
+
+    protected: str = Field(
+        ...,
+        description="Base64url-encoded JWS protected header",
+    )
+    signature: str = Field(
+        ...,
+        description="Base64url-encoded JWS signature",
+    )
+    header: dict[str, Any] | None = Field(
+        default=None,
+        description="Optional cleartext JWS header (unprotected)",
+    )
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
 class AgentProvider(BaseModel):
     """
     A2A Agent Provider information.
@@ -353,6 +618,88 @@ class Skill(BaseModel):
         return v.strip()
 
 
+class AgentInterface(BaseModel):
+    """
+    A single A2A transport interface entry.
+
+    Mirrors the A2A 1.0 `AgentInterface` message: one entry per transport
+    binding an agent actually exposes for a given protocol (e.g. JSONRPC and
+    HTTP+JSON at the same URL). Distinct from `AgentCard.preferred_transport`
+    (a single string field) that can only name one binding and cannot
+    represent an agent that advertises more than one, which real A2A 1.0
+    agents do today.
+
+    Note: Uses snake_case internally but serializes to camelCase for A2A
+    compliance.
+    """
+
+    url: str = Field(
+        ...,
+        description=(
+            "Endpoint address for this transport binding. A full HTTP(S) "
+            "URL for JSONRPC/HTTP+JSON; GRPC additionally accepts a bare "
+            "host:port authority address (e.g. 'grpc.example.com:443')."
+        ),
+    )
+    protocol_binding: str = Field(
+        ...,
+        alias="protocolBinding",
+        description=(
+            "Transport binding identifier. A2A 1.0 treats this as an open "
+            f"string (custom bindings are identified by a URI); {', '.join(_WELL_KNOWN_PROTOCOL_BINDINGS)} "
+            "are the values a2a.proto names explicitly, not the only valid ones."
+        ),
+    )
+    protocol_version: str = Field(
+        ...,
+        alias="protocolVersion",
+        description="A2A protocol version this interface implements (e.g. '1.0')",
+    )
+    tenant: str | None = Field(
+        default=None,
+        description=(
+            "Optional tenant identifier for tenant-scoped A2A routing. "
+            "Clients that use tenant-scoped routing must echo this back; "
+            "declared explicitly so it survives registration instead of "
+            "being silently dropped (Pydantic ignores unknown fields by "
+            "default)."
+        ),
+    )
+
+    model_config = ConfigDict(
+        populate_by_name=True  # Allow both snake_case and camelCase on input
+    )
+
+    @field_validator("protocol_binding")
+    @classmethod
+    def _validate_protocol_binding_field(
+        cls,
+        v: str,
+    ) -> str:
+        """Validate transport binding is non-empty (open string, not an enum)."""
+        return _validate_protocol_binding(v)
+
+    @field_validator("protocol_version")
+    @classmethod
+    def _validate_protocol_version_field(
+        cls,
+        v: str,
+    ) -> str:
+        """Validate protocol version format."""
+        return _validate_protocol_version(v)
+
+    @model_validator(mode="after")
+    def _validate_url_for_binding(self) -> "AgentInterface":
+        """Validate `url`, binding-aware (GRPC also accepts host:port).
+
+        A model-level validator rather than a `url` field_validator because
+        the accepted url shape depends on protocol_binding, and field
+        validators cannot see sibling fields.
+        """
+        _validate_interface_url(self.url, self.protocol_binding)
+        return self
+
+
 class AgentCard(ProxyableMixin):
     """
     A2A Agent Card - machine-readable agent profile.
@@ -426,6 +773,18 @@ class AgentCard(ProxyableMixin):
         alias="preferredTransport",
         description="Preferred transport protocol: JSONRPC, GRPC, HTTP+JSON",
     )
+    supported_interfaces: list[AgentInterface] = Field(
+        default_factory=list,
+        alias="supportedInterfaces",
+        description=(
+            "Transport interfaces this agent actually exposes (e.g. JSONRPC "
+            "and HTTP+JSON at the same URL). preferred_transport names only "
+            "one binding and cannot represent an agent advertising more than "
+            "one; this field is the one that does. List order is a "
+            "preference signal (the first entry is preferred), same as "
+            "preferred_transport's role for a single binding."
+        ),
+    )
     provider: AgentProvider | None = Field(
         None,
         description="Agent provider information per A2A spec",
@@ -448,6 +807,18 @@ class AgentCard(ProxyableMixin):
     security: list[dict[str, list[str]]] | None = Field(
         None,
         description="Security requirements array",
+    )
+    security_requirements: list[SecurityRequirement] | None = Field(
+        None,
+        alias="securityRequirements",
+        description=(
+            "A2A 1.0 security requirements array (each entry a "
+            "SecurityRequirement wrapping a schemes: map<string, "
+            "StringList>). Co-exists with the legacy 'security' field: "
+            "'security' is the field this registry has always accepted "
+            "(bare scope arrays), 'securityRequirements' is the spec-exact "
+            "A2A 1.0 shape. Neither is derived from the other."
+        ),
     )
     supports_authenticated_extended_card: bool | None = Field(
         None,
@@ -529,6 +900,14 @@ class AgentCard(ProxyableMixin):
     signature: str | None = Field(
         None,
         description="JWS signature for card integrity",
+    )
+    signatures: list[AgentCardSignature] | None = Field(
+        None,
+        description=(
+            "A2A 1.0 'signatures' array (structured JWS entries). Co-exists "
+            "with the legacy 'signature' field (a single raw string); "
+            "neither is derived from the other."
+        ),
     )
     trust_level: str = Field(
         "community",
@@ -700,6 +1079,13 @@ class AgentCard(ProxyableMixin):
         """Validate security requirements reference existing schemes."""
         if self.security is not None:
             _validate_security_references(self.security, self.security_schemes)
+        if self.security_requirements is not None:
+            for requirement in self.security_requirements:
+                for scheme_name in requirement.schemes.keys():
+                    if scheme_name not in self.security_schemes:
+                        raise ValueError(
+                            f"Security requirement references undefined scheme: {scheme_name}"
+                        )
         return self
 
     @model_validator(mode="after")
@@ -1034,6 +1420,15 @@ class AgentRegistrationRequest(ProxyableMixin):
         alias="defaultOutputModes",
         description="Supported output MIME types (e.g., ['text', 'text/plain'])",
     )
+    supported_interfaces: list[dict[str, Any]] | None = Field(
+        None,
+        alias="supportedInterfaces",
+        description=(
+            "Transport interfaces this agent exposes, e.g. "
+            "[{'url': ..., 'protocolBinding': 'JSONRPC', 'protocolVersion': '1.0'}]. "
+            "Optional at registration time."
+        ),
+    )
     ans_agent_id: str | None = Field(
         default=None,
         description="Optional ANS Agent ID to link during registration",
@@ -1042,6 +1437,21 @@ class AgentRegistrationRequest(ProxyableMixin):
         ...,
         alias="supportedProtocol",
         description="Agent protocol: 'a2a' for A2A protocol agents, 'other' for non-A2A agents",
+    )
+    security_requirements: list[dict[str, Any]] | None = Field(
+        None,
+        alias="securityRequirements",
+        description=(
+            "A2A 1.0 security requirements array, e.g. "
+            "[{'schemes': {'oauth2': {'list': ['read']}}}]. Optional at registration time."
+        ),
+    )
+    signatures: list[dict[str, Any]] | None = Field(
+        None,
+        description=(
+            "A2A 1.0 signatures array, e.g. "
+            "[{'protected': ..., 'signature': ...}]. Optional at registration time."
+        ),
     )
     metadata: dict[str, Any] = Field(
         default_factory=dict,
@@ -1151,6 +1561,20 @@ class AgentRegistrationRequest(ProxyableMixin):
             raise ValueError(f"trust_level must be one of: {', '.join(valid_values)}")
         return v
 
+    @field_validator("metadata")
+    @classmethod
+    def _cap_metadata_request(
+        cls,
+        v: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Enforce the shared metadata size and nesting limits (issue #1811).
+
+        Checked on the request model only, not on AgentCard, so agents stored
+        before the limits existed still load.
+        """
+        validate_metadata_limits(v)
+        return v
+
     @field_validator("proxy_target_url")
     @classmethod
     def _guard_proxy_target_url_request(cls, v: str | None) -> str | None:
@@ -1238,11 +1662,18 @@ class AgentCardPatch(BaseModel):
     protocol_version: str | None = Field(default=None, alias="protocolVersion")
     provider: dict[str, str] | None = None
     skills: list[dict[str, Any]] | None = None
+    supported_interfaces: list[dict[str, Any]] | None = Field(
+        default=None, alias="supportedInterfaces"
+    )
     security_schemes: dict[str, dict[str, Any]] | None = Field(
         default=None, alias="securitySchemes"
     )
     capabilities: dict[str, Any] | None = None
     security: list[dict[str, list[str]]] | None = None
+    security_requirements: list[dict[str, Any]] | None = Field(
+        default=None, alias="securityRequirements"
+    )
+    signatures: list[dict[str, Any]] | None = None
     tags: list[str] | str | None = None
     visibility: str | None = None
     allowed_groups: list[str] | None = Field(default=None, alias="allowedGroups")

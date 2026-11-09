@@ -23,6 +23,11 @@ output "documentdb_endpoint" {
   value       = aws_docdb_cluster.telemetry.endpoint
 }
 
+output "documentdb_final_snapshot_identifier" {
+  description = "Final snapshot name stored for production cluster deletion; null in testing"
+  value       = aws_docdb_cluster.telemetry.final_snapshot_identifier
+}
+
 output "documentdb_secret_arn" {
   description = "Secrets Manager ARN for DocumentDB credentials"
   value       = aws_secretsmanager_secret.documentdb_credentials.arn

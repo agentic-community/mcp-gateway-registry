@@ -8,21 +8,55 @@ Copied directly from main_old.py working implementation.
 import asyncio
 import logging
 import re
+
+# MCP SDK 2.x. Client(mode="auto") speaks MCP 2026-07-28 and falls back to the
+# initialize handshake for servers on 2025-11-25 and earlier. The SDK's HTTP
+# stack is httpx2, a separate package from the httpx the rest of the registry
+# uses.
+import ssl
 from typing import (
     Any,
+    Literal,
     TypedDict,
 )
 
-# MCP Client imports
-from mcp import ClientSession
+import httpx2
+from mcp import Client
 from mcp.client.sse import sse_client
-from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.streamable_http import streamable_http_client
+from mcp.types import (
+    Implementation,
+    Tool,
+)
+from pydantic import ValidationError
 
 from ..common.log_redaction import redact_url
 from .backend_oauth import RESOLVED_BEARER_KEY as _BACKEND_OAUTH_TOKEN_KEY
 from .backend_oauth import with_bearer as _with_backend_oauth
 
 logger = logging.getLogger(__name__)
+
+# One budget covers connecting, version negotiation and listing every page of
+# tools. It replaces the old separate 10s initialize and 15s list_tools limits.
+MCP_DISCOVERY_TIMEOUT_SECONDS: float = 25.0
+# A server that keeps returning nextCursor stops being paged after this many
+# pages, so a buggy or hostile server cannot hold discovery open.
+MAX_TOOL_LIST_PAGES: int = 50
+# HTTP client timeouts for the SDK transport. The overall budget above is the
+# real limit; these only bound a single stalled read or connect.
+MCP_HTTP_CONNECT_TIMEOUT_SECONDS: float = 10.0
+MCP_HTTP_READ_TIMEOUT_SECONDS: float = 25.0
+# The SDK's own client defaults (mcp.shared._httpx_utils), kept for the SSE
+# transport, whose stream stays open between events.
+SDK_DEFAULT_TIMEOUT_SECONDS: float = 30.0
+SDK_DEFAULT_SSE_READ_TIMEOUT_SECONDS: float = 300.0
+MCP_DISCOVERY_CLIENT_NAME: str = "mcp-gateway-registry"
+MCP_DISCOVERY_CLIENT_VERSION: str = "2.0.0"
+
+# Negotiation mode per transport. Streamable HTTP probes server/discover and
+# falls back to initialize. The HTTP+SSE transport predates 2026-07-28, so it
+# always uses the handshake.
+_TransportMode = Literal["auto", "legacy"]
 
 
 def _assert_mcp_url_fetchable(
@@ -31,8 +65,8 @@ def _assert_mcp_url_fetchable(
 ) -> bool:
     """Fail-closed SSRF check before an MCP SDK connection is opened.
 
-    The MCP SDK transports (``streamablehttp_client`` / ``sse_client``) build
-    their own httpx client, so they cannot use the pinned guarded transport that
+    The MCP SDK transports (``streamable_http_client`` / ``sse_client``) run on
+    their own httpx2 client, so they cannot use the pinned guarded transport that
     protects the registry's direct fetches. This helper re-validates the target
     against the proxy profile (public-only unless the operator allowlisted the
     internal target) immediately before a connection is opened, so a
@@ -70,6 +104,258 @@ def _assert_mcp_url_fetchable(
             f"MCP connection blocked for {redact_url(url)} validation_type={type(exc).__name__}",
         )
         return False
+
+
+def _describe_validation_error(
+    error: ValidationError,
+) -> str:
+    """Summarize a pydantic error from the SDK without dumping tool schemas.
+
+    The MCP SDK validates the whole tools/list result at once, so one tool
+    whose schema the SDK rejects fails the listing. Name where it failed, for
+    example "tools.4.inputSchema.type", so the operator can find the tool.
+
+    Args:
+        error: The ValidationError the SDK raised.
+
+    Returns:
+        A short description with the error count and the first failing field.
+    """
+    errors = error.errors()
+    first = ".".join(str(part) for part in errors[0]["loc"]) if errors else "unknown"
+    return f"{len(errors)} validation error(s), first at {first}"
+
+
+def _server_info_dict(
+    implementation: Implementation | None,
+) -> "MCPServerInfo":
+    """Convert the SDK's server identity into the registry's MCPServerInfo.
+
+    Args:
+        implementation: Server identity from the SDK. None when a 2026-07-28
+            server did not identify itself.
+
+    Returns:
+        MCPServerInfo with name and version when known, else empty.
+    """
+    info: MCPServerInfo = {}
+    if implementation is None:
+        return info
+    if implementation.name:
+        info["name"] = implementation.name
+    if implementation.version:
+        info["version"] = implementation.version
+    return info
+
+
+async def _list_all_tools(
+    client: Client,
+) -> list[Tool]:
+    """List every tool, following nextCursor up to MAX_TOOL_LIST_PAGES pages.
+
+    Args:
+        client: An entered MCP SDK client.
+
+    Returns:
+        All tools across pages, in server order.
+    """
+    tools: list[Tool] = []
+    cursor: str | None = None
+    for page in range(1, MAX_TOOL_LIST_PAGES + 1):
+        result = await client.list_tools(cursor=cursor)
+        tools.extend(result.tools)
+        cursor = result.next_cursor
+        if not cursor:
+            return tools
+        logger.debug(f"tools/list page {page} returned a cursor; fetching the next page")
+    logger.warning(
+        f"tools/list still returned a cursor after {MAX_TOOL_LIST_PAGES} pages; "
+        f"keeping the first {len(tools)} tools"
+    )
+    return tools
+
+
+async def _discover_tools(
+    transport: Any,
+    mode: _TransportMode,
+) -> tuple[list[Tool], Implementation | None]:
+    """Connect over an SDK transport, negotiate, and list every tool.
+
+    In "auto" mode the SDK sends server/discover first. A 2026-07-28 server
+    answers it and gets stateless requests. A handshake-era server does not,
+    so the SDK falls back to initialize. Response caching is off, because
+    discovery must see the server's current list.
+
+    Args:
+        transport: An SDK transport context manager, not yet entered.
+        mode: "auto" for Streamable HTTP, "legacy" for HTTP+SSE.
+
+    Returns:
+        The tools and the server identity (None if the server sent none).
+
+    Raises:
+        TimeoutError: The whole exchange took longer than
+            MCP_DISCOVERY_TIMEOUT_SECONDS.
+        Exception: Any connection, protocol or validation error from the SDK.
+    """
+    client = Client(
+        transport,
+        mode=mode,
+        cache=None,
+        client_info=Implementation(
+            name=MCP_DISCOVERY_CLIENT_NAME,
+            version=MCP_DISCOVERY_CLIENT_VERSION,
+        ),
+    )
+    async with asyncio.timeout(MCP_DISCOVERY_TIMEOUT_SECONDS):
+        async with client:
+            logger.debug(f"MCP session negotiated protocol_version={client.protocol_version}")
+            tools = await _list_all_tools(client)
+            return tools, client.server_info
+
+
+def _tls_context() -> ssl.SSLContext:
+    """The registry's TLS trust for httpx2 (imported here, as url_guard is above)."""
+    from ..utils.url_guard import egress_ssl_context
+
+    return egress_ssl_context()
+
+
+def _verified_http_client(
+    headers: dict[str, str] | None = None,
+    timeout: httpx2.Timeout | None = None,
+    auth: httpx2.Auth | None = None,
+) -> httpx2.AsyncClient:
+    """The SDK's client factory, with the registry's TLS trust.
+
+    Same defaults as mcp.shared._httpx_utils.create_mcp_http_client; only the
+    certificate trust differs (see egress_ssl_context).
+    """
+    if timeout is None:
+        timeout = httpx2.Timeout(
+            SDK_DEFAULT_TIMEOUT_SECONDS,
+            read=SDK_DEFAULT_SSE_READ_TIMEOUT_SECONDS,
+        )
+    return httpx2.AsyncClient(
+        headers=headers,
+        timeout=timeout,
+        auth=auth,
+        verify=_tls_context(),
+    )
+
+
+async def _discover_streamable_http(
+    mcp_url: str,
+    headers: dict[str, str],
+) -> tuple[list[Tool], Implementation | None]:
+    """Discover tools over Streamable HTTP, speaking either protocol era.
+
+    The SDK only takes headers through its own httpx2 client, so build one
+    that carries them. The SDK does not close a client it was given, so this
+    function closes it.
+
+    Args:
+        mcp_url: The exact MCP endpoint, already checked by
+            _assert_mcp_url_fetchable.
+        headers: Headers built for this exact destination.
+
+    Returns:
+        The tools and the server identity.
+    """
+    timeout = httpx2.Timeout(
+        MCP_HTTP_READ_TIMEOUT_SECONDS,
+        connect=MCP_HTTP_CONNECT_TIMEOUT_SECONDS,
+    )
+    async with httpx2.AsyncClient(
+        headers=headers,
+        timeout=timeout,
+        verify=_tls_context(),
+    ) as http_client:
+        transport = streamable_http_client(mcp_url, http_client=http_client)
+        return await _discover_tools(transport, mode="auto")
+
+
+async def _discover_sse(
+    sse_url: str,
+    headers: dict[str, str],
+) -> tuple[list[Tool], Implementation | None]:
+    """Discover tools over the deprecated HTTP+SSE transport (handshake only).
+
+    Args:
+        sse_url: The exact SSE endpoint, already checked by
+            _assert_mcp_url_fetchable.
+        headers: Headers built for this exact destination.
+
+    Returns:
+        The tools and the server identity.
+    """
+    transport = sse_client(sse_url, headers=headers, httpx_client_factory=_verified_http_client)
+    return await _discover_tools(transport, mode="legacy")
+
+
+def _connection_result(
+    base_url: str,
+    sdk_tools: list[Tool],
+    implementation: Implementation | None,
+) -> "MCPConnectionResult":
+    """Build the MCPConnectionResult for get_mcp_connection_result.
+
+    Args:
+        base_url: The server's base URL, for the log line.
+        sdk_tools: Tools from the SDK.
+        implementation: Server identity from the SDK, if the server sent one.
+
+    Returns:
+        MCPConnectionResult with tools and server_info.
+    """
+    mcp_server_info = _server_info_dict(implementation)
+    if mcp_server_info:
+        logger.info(
+            f"MCP Server Info from {redact_url(base_url)}: "
+            f"name={mcp_server_info.get('name')}, "
+            f"version={mcp_server_info.get('version')}"
+        )
+    tools = _extract_tool_details(sdk_tools)
+    return MCPConnectionResult(tools=tools or [], server_info=mcp_server_info)
+
+
+def _root_cause(
+    error: BaseException,
+) -> BaseException:
+    """Return the first non-group exception inside an ExceptionGroup.
+
+    The SDK runs transports in anyio task groups, so a failure such as a
+    tools/list ValidationError reaches the caller wrapped in an ExceptionGroup.
+    Logging only "ExceptionGroup" hides the reason.
+
+    Args:
+        error: The exception the caller caught.
+
+    Returns:
+        The first leaf exception, or the error itself when it is not a group.
+    """
+    while isinstance(error, BaseExceptionGroup) and error.exceptions:
+        error = error.exceptions[0]
+    return error
+
+
+def _log_discovery_failure(
+    prefix: str,
+    url: str,
+    error: Exception,
+) -> None:
+    """Log a failed discovery attempt without leaking credentials or schemas.
+
+    Args:
+        prefix: What was being attempted, for the log line.
+        url: The endpoint; redacted before logging.
+        error: The exception raised.
+    """
+    cause = _root_cause(error)
+    detail = type(cause).__name__
+    if isinstance(cause, ValidationError):
+        detail = f"{detail}: {_describe_validation_error(cause)}"
+    logger.error(f"{prefix} endpoint={redact_url(url)} type={detail}")
 
 
 class MCPServerInfo(TypedDict, total=False):
@@ -117,9 +403,6 @@ def normalize_sse_endpoint_url(endpoint_url: str) -> str:
 
     # If no mount path pattern detected, return as-is
     return endpoint_url
-
-
-import httpx
 
 
 def _build_headers_for_server(
@@ -314,7 +597,7 @@ async def detect_server_transport(base_url: str) -> str:
     # Test streamable-http first (default preference)
     try:
         mcp_url = base_url.rstrip("/") + "/mcp/"
-        async with streamablehttp_client(url=mcp_url) as connection:
+        async with streamable_http_client(mcp_url) as connection:
             logger.debug(f"Server at {redact_url(base_url)} supports streamable-http transport")
             return "streamable-http"
     except Exception as e:
@@ -411,20 +694,10 @@ async def _get_tools_streamable_http(base_url: str, server_info: dict = None) ->
         headers = _build_headers_for_server(server_info, destination_url=mcp_url)
 
         try:
-            async with streamablehttp_client(url=mcp_url, headers=headers) as (
-                read,
-                write,
-                get_session_id,
-            ):
-                async with ClientSession(read, write) as session:
-                    await asyncio.wait_for(session.initialize(), timeout=10.0)
-                    tools_response = await asyncio.wait_for(session.list_tools(), timeout=15.0)
-                    result = _extract_tool_details(tools_response)
-                    return result
+            tools, _ = await _discover_streamable_http(mcp_url, headers)
+            return _extract_tool_details(tools)
         except Exception as e:
-            logger.error(
-                f"Streamable-HTTP connection failed endpoint={redact_url(mcp_url)} type={type(e).__name__}",
-            )
+            _log_discovery_failure("Streamable-HTTP connection failed", mcp_url, e)
             return None
 
     # If URL already has MCP endpoint, use it directly
@@ -450,22 +723,10 @@ async def _get_tools_streamable_http(base_url: str, server_info: dict = None) ->
             return None
         headers = _build_headers_for_server(server_info, destination_url=mcp_url)
         try:
-            async with streamablehttp_client(url=mcp_url, headers=headers) as (
-                read,
-                write,
-                get_session_id,
-            ):
-                async with ClientSession(read, write) as session:
-                    await asyncio.wait_for(session.initialize(), timeout=10.0)
-                    tools_response = await asyncio.wait_for(session.list_tools(), timeout=15.0)
-
-                    result = _extract_tool_details(tools_response)
-                    return result
+            tools, _ = await _discover_streamable_http(mcp_url, headers)
+            return _extract_tool_details(tools)
         except Exception as e:
-            logger.error(
-                f"Streamable-HTTP connection failed endpoint={redact_url(base_url)} type={type(e).__name__}",
-            )
-
+            _log_discovery_failure("Streamable-HTTP connection failed", base_url, e)
             return None
     else:
         # Try with /mcp suffix first, then without if it fails
@@ -477,17 +738,9 @@ async def _get_tools_streamable_http(base_url: str, server_info: dict = None) ->
             headers = _build_headers_for_server(server_info, destination_url=mcp_url)
             try:
                 logger.info(f"Trying streamable-http endpoint={redact_url(mcp_url)}")
-                async with streamablehttp_client(url=mcp_url, headers=headers) as (
-                    read,
-                    write,
-                    get_session_id,
-                ):
-                    async with ClientSession(read, write) as session:
-                        await asyncio.wait_for(session.initialize(), timeout=10.0)
-                        tools_response = await asyncio.wait_for(session.list_tools(), timeout=15.0)
-
-                        logger.info(f"MCP connection succeeded endpoint={redact_url(mcp_url)}")
-                        return _extract_tool_details(tools_response)
+                tools, _ = await _discover_streamable_http(mcp_url, headers)
+                logger.info(f"MCP connection succeeded endpoint={redact_url(mcp_url)}")
+                return _extract_tool_details(tools)
 
             except TimeoutError:
                 logger.error(
@@ -497,8 +750,8 @@ async def _get_tools_streamable_http(base_url: str, server_info: dict = None) ->
                     continue
                 return None
             except Exception as e:
-                logger.error(
-                    f"MCP Check Error: Streamable-HTTP connection failed to {redact_url(mcp_url)}: {type(e).__name__}"
+                _log_discovery_failure(
+                    "MCP Check Error: Streamable-HTTP connection failed", mcp_url, e
                 )
                 if mcp_url == endpoints_to_try[0]:
                     continue
@@ -537,8 +790,9 @@ async def _get_tools_sse(base_url: str, server_info: dict = None) -> list[dict] 
     headers = _build_headers_for_server(server_info, destination_url=mcp_server_url)
 
     try:
-        # Monkey patch httpx to fix mount path issues (legacy SSE support)
-        original_request = httpx.AsyncClient.request
+        # Monkey patch the SDK's HTTP client to fix mount path issues (legacy SSE
+        # support). SDK 2.x uses httpx2; patching httpx would silently do nothing.
+        original_request = httpx2.AsyncClient.request
 
         async def patched_request(self, method, url, **kwargs):
             if isinstance(url, str) and "/messages/" in url:
@@ -547,17 +801,13 @@ async def _get_tools_sse(base_url: str, server_info: dict = None) -> list[dict] 
                 url = normalize_sse_endpoint_url_for_request(str(url))
             return await original_request(self, method, url, **kwargs)
 
-        httpx.AsyncClient.request = patched_request  # type: ignore[method-assign]  # legacy SSE monkeypatch
+        httpx2.AsyncClient.request = patched_request  # type: ignore[method-assign]  # legacy SSE monkeypatch
 
         try:
-            async with sse_client(mcp_server_url, headers=headers) as (read, write):
-                async with ClientSession(read, write, sampling_callback=None) as session:
-                    await asyncio.wait_for(session.initialize(), timeout=10.0)
-                    tools_response = await asyncio.wait_for(session.list_tools(), timeout=15.0)
-
-                    return _extract_tool_details(tools_response)
+            tools, _ = await _discover_sse(mcp_server_url, headers)
+            return _extract_tool_details(tools)
         finally:
-            httpx.AsyncClient.request = original_request  # type: ignore[method-assign]  # restore monkeypatch
+            httpx2.AsyncClient.request = original_request  # type: ignore[method-assign]  # restore monkeypatch
 
     except TimeoutError:
         logger.error(
@@ -565,20 +815,31 @@ async def _get_tools_sse(base_url: str, server_info: dict = None) -> list[dict] 
         )
         return None
     except Exception as e:
-        logger.error(
-            f"SSE connection failed endpoint={redact_url(base_url)} type={type(e).__name__}",
-        )
+        _log_discovery_failure("SSE connection failed", base_url, e)
         return None
 
 
-def _extract_tool_details(tools_response) -> list[dict]:
-    """Extract tool details from MCP tools response."""
+def _extract_tool_details(
+    tools: list[Tool],
+) -> list[dict]:
+    """Extract tool details from the SDK's tool list.
+
+    SDK 2.x models use snake_case attributes (input_schema); only the JSON
+    alias is inputSchema, so getattr(tool, "inputSchema") would find nothing
+    and silently store an empty schema.
+
+    Args:
+        tools: Tools returned by tools/list, across all pages.
+
+    Returns:
+        One dict per tool with name, description, parsed_description, schema.
+    """
     tool_details_list: list[dict[str, Any]] = []
 
-    if tools_response and hasattr(tools_response, "tools"):
-        for tool in tools_response.tools:
-            tool_name = getattr(tool, "name", "Unknown Name")
-            tool_desc = getattr(tool, "description", None) or getattr(tool, "__doc__", None)
+    if tools:
+        for tool in tools:
+            tool_name = tool.name or "Unknown Name"
+            tool_desc = tool.description
 
             # Parse docstring into sections
             parsed_desc = {
@@ -633,7 +894,7 @@ def _extract_tool_details(tools_response) -> list[dict]:
             else:
                 parsed_desc["main"] = "No description available."
 
-            tool_schema = getattr(tool, "inputSchema", {})
+            tool_schema = tool.input_schema or {}
 
             tool_details_list.append(
                 {
@@ -641,6 +902,9 @@ def _extract_tool_details(tools_response) -> list[dict]:
                     "description": tool_desc or "",
                     "parsed_description": parsed_desc,
                     "schema": tool_schema,
+                    # The MCP field name, which the virtual-server mapping, the tool
+                    # catalog and search read. "schema" stays for ToolDescription.
+                    "inputSchema": tool_schema,
                 }
             )
 
@@ -775,38 +1039,8 @@ async def get_mcp_connection_result(
 
     try:
         if transport == "streamable-http":
-            async with streamablehttp_client(url=mcp_url, headers=headers) as (
-                read,
-                write,
-                get_session_id,
-            ):
-                async with ClientSession(read, write) as session:
-                    # Capture the initialize result which contains serverInfo
-                    init_result = await asyncio.wait_for(session.initialize(), timeout=10.0)
-                    tools_response = await asyncio.wait_for(session.list_tools(), timeout=15.0)
-
-                    tools = _extract_tool_details(tools_response)
-
-                    # Extract server info from initialize result
-                    mcp_server_info: MCPServerInfo = {}
-                    if (
-                        init_result
-                        and hasattr(init_result, "serverInfo")
-                        and init_result.serverInfo
-                    ):
-                        if hasattr(init_result.serverInfo, "name"):
-                            mcp_server_info["name"] = init_result.serverInfo.name
-                        if hasattr(init_result.serverInfo, "version"):
-                            mcp_server_info["version"] = init_result.serverInfo.version
-
-                    if mcp_server_info:
-                        logger.info(
-                            f"MCP Server Info from {redact_url(base_url)}: "
-                            f"name={mcp_server_info.get('name')}, "
-                            f"version={mcp_server_info.get('version')}"
-                        )
-
-                    return MCPConnectionResult(tools=tools or [], server_info=mcp_server_info)
+            sdk_tools, implementation = await _discover_streamable_http(mcp_url, headers)
+            return _connection_result(base_url, sdk_tools, implementation)
 
         elif transport == "sse":
             # For SSE transport
@@ -819,34 +1053,8 @@ async def get_mcp_connection_result(
                 return None
             headers = _build_headers_for_server(server_info, destination_url=sse_url)
 
-            async with sse_client(url=sse_url, headers=headers) as (read, write):
-                async with ClientSession(read, write) as session:
-                    # Capture the initialize result which contains serverInfo
-                    init_result = await asyncio.wait_for(session.initialize(), timeout=10.0)
-                    tools_response = await asyncio.wait_for(session.list_tools(), timeout=15.0)
-
-                    tools = _extract_tool_details(tools_response)
-
-                    # Extract server info from initialize result
-                    mcp_server_info = MCPServerInfo()
-                    if (
-                        init_result
-                        and hasattr(init_result, "serverInfo")
-                        and init_result.serverInfo
-                    ):
-                        if hasattr(init_result.serverInfo, "name"):
-                            mcp_server_info["name"] = init_result.serverInfo.name
-                        if hasattr(init_result.serverInfo, "version"):
-                            mcp_server_info["version"] = init_result.serverInfo.version
-
-                    if mcp_server_info:
-                        logger.info(
-                            f"MCP Server Info from {redact_url(base_url)}: "
-                            f"name={mcp_server_info.get('name')}, "
-                            f"version={mcp_server_info.get('version')}"
-                        )
-
-                    return MCPConnectionResult(tools=tools or [], server_info=mcp_server_info)
+            sdk_tools, implementation = await _discover_sse(sse_url, headers)
+            return _connection_result(base_url, sdk_tools, implementation)
 
         else:
             logger.error(f"Unsupported transport type: {transport}")
@@ -856,9 +1064,7 @@ async def get_mcp_connection_result(
         logger.error(f"MCP connection timeout endpoint={redact_url(mcp_url)}")
         return None
     except Exception as e:
-        logger.error(
-            f"MCP connection-result failure endpoint={redact_url(base_url)} type={type(e).__name__}",
-        )
+        _log_discovery_failure("MCP connection-result failure", base_url, e)
         return None
 
 

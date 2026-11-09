@@ -44,6 +44,25 @@ tests:
       # The marker SECRET must NOT appear in the (non-secret) configmap.
       - notExists:
           path: data.AUTH_SERVER_NGINX_MARKER_SECRET
+      # authMount unset: no OPENBAO_AUTH_MOUNT, the app keeps the method's default path.
+      - notExists:
+          path: data.OPENBAO_AUTH_MOUNT
+
+  - it: renders OPENBAO_AUTH_MOUNT when openbao.authMount is set
+    set:
+      egressAuth:
+        enabled: true
+        secretStoreBackend: openbao
+        oauthCallbackBaseUrl: https://gw.example.com
+        openbao:
+          addr: http://openbao.default.svc:8200
+          authMethod: kubernetes
+          role: registry-egress
+          authMount: k8s-prod
+    asserts:
+      - equal:
+          path: data.OPENBAO_AUTH_MOUNT
+          value: "k8s-prod"
 
   - it: derives the callback base URL from global.domain + routing mode
     set:
@@ -174,3 +193,23 @@ tests:
       - equal:
           path: data.EGRESS_HTTP_POOL_CONNECT_RETRIES
           value: "3"
+
+  - it: renders a numeric zero pool knob instead of replacing it with the default
+    # MAX_KEEPALIVE=0 / KEEPALIVE_EXPIRY=0 is the documented runtime rollback lever;
+    # Sprig's `default` would turn a numeric 0 back into "20" / "30".
+    set:
+      egressAuth:
+        enabled: true
+        httpPoolMaxKeepalive: 0
+        httpPoolKeepaliveExpirySeconds: 0
+        httpPoolConnectRetries: 0
+    asserts:
+      - equal:
+          path: data.EGRESS_HTTP_POOL_MAX_KEEPALIVE
+          value: "0"
+      - equal:
+          path: data.EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS
+          value: "0"
+      - equal:
+          path: data.EGRESS_HTTP_POOL_CONNECT_RETRIES
+          value: "0"

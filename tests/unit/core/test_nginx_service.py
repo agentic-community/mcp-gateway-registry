@@ -5,6 +5,7 @@ Tests the NginxConfigService for configuration generation and reload.
 """
 
 import asyncio
+import hashlib
 import re
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, mock_open, patch
@@ -76,6 +77,9 @@ def nginx_service():
             mock_settings.deployment_mode.value = "with-gateway"
             mock_settings.nginx_config_path = "/etc/nginx/conf.d/nginx_rev_proxy.conf"
             mock_settings.auth_server_url = "http://auth-server:8888"
+            mock_settings.auth_server_nginx_marker_secret = (
+                "test-nginx-marker-secret-0123456789abcdef"
+            )
 
             service = NginxConfigService()
             yield service
@@ -520,6 +524,7 @@ async def test_a2a_blocks_emitted_when_flag_enabled(
         mock_settings.a2a_reverse_proxy_effective = True
         mock_settings.nginx_config_path = "/etc/nginx/conf.d/nginx_rev_proxy.conf"
         mock_settings.auth_server_url = "http://auth-server:8888"
+        mock_settings.auth_server_nginx_marker_secret = "test-nginx-marker-secret-0123456789abcdef"
         with patch.object(nginx_service.nginx_template_path, "exists", return_value=True):
             with patch("builtins.open", mock_open(read_data=template_content)):
                 with patch("registry.health.service.health_service", mock_health_service):
@@ -554,6 +559,7 @@ async def test_a2a_blocks_skipped_when_flag_disabled(
         mock_settings.a2a_reverse_proxy_effective = False
         mock_settings.nginx_config_path = "/etc/nginx/conf.d/nginx_rev_proxy.conf"
         mock_settings.auth_server_url = "http://auth-server:8888"
+        mock_settings.auth_server_nginx_marker_secret = "test-nginx-marker-secret-0123456789abcdef"
         with patch.object(nginx_service.nginx_template_path, "exists", return_value=True):
             with patch("builtins.open", mock_open(read_data=template_content)):
                 with patch("registry.health.service.health_service", mock_health_service):
@@ -604,6 +610,9 @@ async def test_enabling_agent_changes_rendered_config_hash(
             mock_settings.a2a_reverse_proxy_enabled = True
             mock_settings.nginx_config_path = "/etc/nginx/conf.d/nginx_rev_proxy.conf"
             mock_settings.auth_server_url = "http://auth-server:8888"
+            mock_settings.auth_server_nginx_marker_secret = (
+                "test-nginx-marker-secret-0123456789abcdef"
+            )
             with patch.object(nginx_service.nginx_template_path, "exists", return_value=True):
                 with patch("builtins.open", mock_open(read_data=template_content)):
                     with patch("registry.health.service.health_service", mock_health_service):
@@ -1022,6 +1031,34 @@ def test_create_location_block_internal_service(nginx_service):
     assert "proxy_set_header X-Upstream-Url $backend_url" in block
     # Should preserve original host for internal services
     assert "proxy_set_header Host $host" in block
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("transport", ["streamable-http", "sse", "direct"])
+@pytest.mark.parametrize("egress_mode", ["none", "oauth_user", "pat", "obo_exchange"])
+def test_direct_route_location_only_proxies_to_mcp_proxy(nginx_service, transport, egress_mode):
+    """Every proxy_pass in a direct-route location targets the mcp-proxy hop.
+
+    The auth-server authorizes the synthetic connect tool (issue #1860) as
+    tools/list on a direct route, which is safe only because the mcp-proxy hop
+    answers that tool itself and never forwards it (see _scope_check_target in
+    auth_server/server.py). A direct location that proxied straight to a backend
+    would turn that exemption into a tool-grant bypass, so this pins the nginx
+    side of the contract.
+    """
+    server_info = {
+        "proxy_pass_url": "https://api.example.com/mcp",
+        "egress_auth_mode": egress_mode,
+    }
+    block = nginx_service._create_location_block(
+        "/test", "https://api.example.com/mcp", transport, server_info
+    )
+
+    assert 'set $registered_route_mode "direct";' in block
+    proxy_passes = [
+        line.strip() for line in block.splitlines() if line.strip().startswith("proxy_pass ")
+    ]
+    assert proxy_passes == ["proxy_pass http://auth-server:8888/mcp-proxy/test/;"]
 
 
 @pytest.mark.unit
@@ -1842,43 +1879,52 @@ def test_registry_api_locations_forward_internal_token():
         assert "proxy_set_header X-Registry-Api-Auth $registry_api_auth;" in text, conf.name
 
 
-def test_generated_protected_api_block_carries_internal_token():
-    """The generated /api/ block (protected) carries the marker + token forward;
-    the unprotected variant (NGINX_DISABLE_API_AUTH_REQUEST) carries none.
-    """
-    from pathlib import Path
+def _nginx_size(value: str) -> int:
+    """Bytes for an nginx size such as `64k`."""
+    return int(value[:-1]) * 1024 if value.endswith("k") else int(value)
 
-    src = (
-        Path(__file__).resolve().parents[3] / "registry" / "core" / "nginx_service.py"
-    ).read_text()
-    # The protected block string must contain all three directives.
-    assert 'set $registry_api_auth "1";' in src
-    assert (
-        "auth_request_set $auth_internal_token_registry "
-        "$upstream_http_x_internal_token_registry;" in src
+
+def test_validate_locations_fit_the_registry_token():
+    """Issue #1939: every `location = /validate` block reads the auth_request
+    response into a buffer that fits the largest registry token the auth server
+    will mint, with buffer directives nginx -t accepts; pins its own failure
+    handling (so a server-level error_page can never decide the auth verdict);
+    and no location captures the removed X-Groups header (a second copy of the
+    groups overflowed 16k), while every location that forwards the registry
+    token clears a client-sent X-Groups instead of passing it through.
+    """
+    from auth_server.internal_request_token import (
+        INTERNAL_TOKEN_MAX_BYTES,
+        VALIDATE_RESPONSE_HEADER_BUDGET,
     )
-    assert "proxy_set_header X-Internal-Token-Registry $auth_internal_token_registry;" in src
 
+    for conf_path in (_HTTP_AND_HTTPS_CONF, _HTTP_ONLY_CONF):
+        name = conf_path.name
+        text = conf_path.read_text()
+        blocks = [
+            chunk.split("\n    }", 1)[0] for chunk in text.split("location = /validate {")[1:]
+        ]
+        assert blocks, f"{name}: no `location = /validate` block"
+        for block in blocks:
+            size = _nginx_size(re.search(r"proxy_buffer_size (\w+);", block).group(1))
+            count, each = re.search(r"proxy_buffers (\d+) (\w+);", block).groups()
+            busy = _nginx_size(re.search(r"proxy_busy_buffers_size (\w+);", block).group(1))
+            each_bytes = _nginx_size(each)
 
-def test_unprotected_api_block_still_rate_limited():
-    """When auth_request is bypassed (NGINX_DISABLE_API_AUTH_REQUEST=true), the
-    replacement /api/ block must STILL carry the inbound rate limits — /api/ is
-    the highest-volume surface and dropping the edge/registration caps here would
-    reopen the flood path the limits exist to close.
-    """
-    from pathlib import Path
-
-    src = (
-        Path(__file__).resolve().parents[3] / "registry" / "core" / "nginx_service.py"
-    ).read_text()
-    # Isolate the unprotected replacement block so we assert on IT, not the
-    # protected block elsewhere in the file.
-    marker = "unprotected_api_block = "
-    assert marker in src
-    unprotected = src[src.index(marker) : src.index('"""', src.index(marker) + len(marker) + 4) + 3]
-    assert "limit_req zone=mcp_gateway_edge burst=100 nodelay;" in unprotected
-    assert "limit_req zone=mcp_gateway_register burst=10 nodelay;" in unprotected
-    assert "limit_conn mcp_gateway_conn 100;" in unprotected
+            # The auth server lets a response grow to the budget, so the buffer must
+            # hold the budget; the budget in turn must hold a maximum-size token.
+            assert size > VALIDATE_RESPONSE_HEADER_BUDGET > INTERNAL_TOKEN_MAX_BYTES, name
+            assert max(size, each_bytes) <= busy <= (int(count) - 1) * each_bytes, name
+            assert "error_page 500 502 504 = @auth_subrequest_failed;" in block, name
+        assert "upstream_http_x_groups" not in text, name
+        for chunk in text.split("\n    location ")[1:]:
+            location = chunk.split("\n    }", 1)[0]
+            forwards = (
+                "proxy_set_header X-Internal-Token-Registry $auth_internal_token_registry;"
+                in location
+            )
+            clears = 'proxy_set_header X-Groups "";' in location
+            assert forwards == clears, f"{name}: {location.splitlines()[0]}"
 
 
 @pytest.mark.unit
@@ -2075,6 +2121,65 @@ class TestConfigValidationBeforePersist:
 
         # Last-good config is intact; the unvalidated candidate never reached disk.
         assert live.read_text() == "# last good\n"
+
+    def test_rejected_first_render_does_not_restore_raw_template(self, tmp_path):
+        """Issue #1575: the entrypoint copies the raw template into the live
+        path before the first render. When nginx -t rejects that render, the
+        raw template must not come back as last-good, because nginx then fails
+        on a placeholder and hides the real error."""
+        live = tmp_path / "nginx_rev_proxy.conf"
+        live.write_text("server {\n    {{REAL_IP_CONFIG}}\n    {{LOCATION_BLOCKS}}\n}\n")
+
+        with patch.object(
+            nginx_module,
+            "_run_nginx_config_test",
+            return_value=(False, "open() nginx-access.log failed (13: Permission denied)"),
+        ):
+            with pytest.raises(RuntimeError, match="Permission denied"):
+                _REAL_WRITE_AND_VALIDATE(live, "# rendered config\n")
+
+        assert not live.exists()
+        assert not (tmp_path / (live.name + nginx_module._LAST_GOOD_SUFFIX)).exists()
+
+    def test_accepted_first_render_replaces_raw_template(self, tmp_path):
+        """A first render that passes nginx -t replaces the raw template and
+        leaves no backup behind."""
+        live = tmp_path / "nginx_rev_proxy.conf"
+        live.write_text("server {\n    {{LOCATION_BLOCKS}}\n}\n")
+
+        with patch.object(nginx_module, "_run_nginx_config_test", return_value=(True, "")):
+            _REAL_WRITE_AND_VALIDATE(live, "# rendered config\n")
+
+        assert live.read_text() == "# rendered config\n"
+        assert not (tmp_path / (live.name + nginx_module._LAST_GOOD_SUFFIX)).exists()
+
+
+class TestUnrenderedTemplateMarkers:
+    """The marker list must match what the shipped templates and the entrypoint use."""
+
+    @pytest.mark.parametrize(
+        "template_name",
+        ["nginx_rev_proxy_http_only.conf", "nginx_rev_proxy_http_and_https.conf"],
+    )
+    def test_shipped_templates_are_detected_as_unrendered(self, template_name):
+        template = Path(__file__).parents[3] / "docker" / template_name
+
+        assert nginx_module._is_unrendered_template(template)
+
+    def test_rendered_config_is_not_detected_as_unrendered(self, tmp_path):
+        rendered = tmp_path / "nginx_rev_proxy.conf"
+        rendered.write_text("server {\n    listen 8080;\n}\n")
+
+        assert not nginx_module._is_unrendered_template(rendered)
+
+    def test_markers_match_entrypoint_wait_loop(self):
+        entrypoint = Path(__file__).parents[3] / "docker" / "registry-entrypoint.sh"
+        entrypoint_markers = re.findall(
+            r'grep -q "(\{\{[A-Z_]+\}\})" "/etc/nginx/conf\.d/nginx_rev_proxy\.conf"',
+            entrypoint.read_text(),
+        )
+
+        assert sorted(entrypoint_markers) == sorted(nginx_module._UNRENDERED_TEMPLATE_MARKERS)
 
 
 class TestRunNginxConfigTest:
@@ -2751,6 +2856,134 @@ async def test_proxy_ssl_placeholder_is_substituted_end_to_end(
     )
 
 
+def _location_blocks(text: str) -> list[str]:
+    """Split a config into its four-space-indented ``location`` blocks."""
+    return [
+        "    location " + chunk.split("\n    }", 1)[0]
+        for chunk in text.split("\n    location ")[1:]
+    ]
+
+
+def _is_api_location(block: str) -> bool:
+    """True for the registry ``/api/`` catch-all location (rendered or raw)."""
+    return re.match(r"    location (\{\{ROOT_PATH\}\})?/api/ \{", block) is not None
+
+
+@pytest.mark.parametrize("conf_path", [_HTTP_ONLY_CONF, _HTTP_AND_HTTPS_CONF])
+def test_api_auth_request_markers_wrap_only_the_api_auth_request(conf_path):
+    """Issue #1962: every /api/ location (one per frontend server block) carries the
+    API_AUTH_REQUEST markers, no other location does, and the markers bracket
+    nothing but ``auth_request /validate;``. So NGINX_DISABLE_API_AUTH_REQUEST can
+    never drop a header clear, a rate limit or another location's auth check.
+    """
+    text = conf_path.read_text()
+    blocks = _location_blocks(text)
+    api_blocks = [b for b in blocks if _is_api_location(b)]
+    marked = [b for b in blocks if "{{API_AUTH_REQUEST_START}}" in b]
+    assert api_blocks, f"{conf_path.name}: no /api/ location"
+    assert marked == api_blocks, f"{conf_path.name}: markers must be in every /api/ only"
+    assert text.count("{{API_AUTH_REQUEST_START}}") == len(api_blocks)
+    assert text.count("{{API_AUTH_REQUEST_END}}") == len(api_blocks)
+
+    for block in marked:
+        region = block.split("{{API_AUTH_REQUEST_START}}", 1)[1]
+        region = region.split("{{API_AUTH_REQUEST_END}}", 1)[0]
+        directives = [
+            line.strip()
+            for line in region.splitlines()[1:-1]
+            if line.strip() and not line.strip().startswith("#")
+        ]
+        assert directives == ["auth_request /validate;"], conf_path.name
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.parametrize("conf_path", [_HTTP_ONLY_CONF, _HTTP_AND_HTTPS_CONF])
+async def test_disable_api_auth_request_drops_auth_request_from_api_only(
+    conf_path, nginx_service, sample_servers, mock_health_service, mock_atomic_write
+):
+    """Issue #1962: NGINX_DISABLE_API_AUTH_REQUEST=true must change the rendered
+    config, and only by removing ``auth_request`` from the /api/ location.
+
+    The flag used to text-match a stale copy of the /api/ location, so the
+    lookup silently failed and nginx kept ``auth_request`` while the registry
+    (which reads the same flag) assumed it was gone. This renders the real
+    templates with the flag off and on and checks the difference directly.
+    """
+    base_env = {"AUTH_PROVIDER": "keycloak"}
+    rendered_off = await _render_real_conf(
+        nginx_service,
+        sample_servers,
+        mock_health_service,
+        mock_atomic_write,
+        conf_path,
+        {**base_env, "NGINX_DISABLE_API_AUTH_REQUEST": "false"},
+    )
+    mock_atomic_write.reset_mock()
+    rendered_on = await _render_real_conf(
+        nginx_service,
+        sample_servers,
+        mock_health_service,
+        mock_atomic_write,
+        conf_path,
+        {**base_env, "NGINX_DISABLE_API_AUTH_REQUEST": "true"},
+    )
+
+    for rendered in (rendered_off, rendered_on):
+        assert "API_AUTH_REQUEST_" not in rendered, f"{conf_path.name}: marker leaked"
+
+    assert rendered_on != rendered_off, f"{conf_path.name}: flag did not change nginx output"
+
+    blocks_off = _location_blocks(rendered_off)
+    blocks_on = _location_blocks(rendered_on)
+    assert len(blocks_off) == len(blocks_on)
+    api_off = [b for b in blocks_off if _is_api_location(b)]
+    api_on = [b for b in blocks_on if _is_api_location(b)]
+    assert api_off
+    assert len(api_off) == len(api_on)
+
+    for off, on in zip(api_off, api_on, strict=True):
+        # Flag off: the template's /api/ location is rendered as written.
+        assert "auth_request /validate;" in off
+
+        # Flag on: auth_request is gone from /api/, and nothing else in it changed.
+        assert "auth_request /validate;" not in on
+        on_lines = on.splitlines()
+        assert [line for line in off.splitlines() if line not in on_lines] == [
+            "        # Authenticate request via auth server (validates JWT Bearer tokens)",
+            "        auth_request /validate;",
+        ]
+        for kept in (
+            'proxy_set_header X-Internal-Secret "";',
+            'proxy_set_header X-Groups "";',
+            "proxy_set_header X-Internal-Token-Registry $auth_internal_token_registry;",
+            "limit_req zone=mcp_gateway_edge burst=100 nodelay;",
+            "limit_req zone=mcp_gateway_register burst=10 nodelay;",
+            "limit_conn mcp_gateway_conn 100;",
+            "error_page 502 = @upstream_unavailable;",
+        ):
+            assert kept in on, f"{conf_path.name}: /api/ lost {kept!r}"
+        assert "proxy_set_header X-Forwarded-Proto $scheme;" not in on
+
+    # Every other location (including /api/auth/me and /api/ard/, which also
+    # run auth_request) is identical with the flag on and off.
+    others_off = [b for b in blocks_off if not _is_api_location(b)]
+    others_on = [b for b in blocks_on if not _is_api_location(b)]
+    assert others_on == others_off
+    assert any("auth_request /validate;" in b for b in others_on)
+
+
+def test_api_auth_request_markers_without_markers_leave_template_unchanged(caplog):
+    """A template with no markers (e.g. a custom one) is left as is, and enabling
+    the flag logs that /api/ keeps auth_request instead of failing silently.
+    """
+    template = "location /api/ {\n    auth_request /validate;\n}\n"
+    assert nginx_module._apply_api_auth_request_markers(template, True) == template
+    with caplog.at_level("WARNING"):
+        assert nginx_module._apply_api_auth_request_markers(template, False) == template
+    assert "/api/ keeps auth_request" in caplog.text
+
+
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_one_unroutable_server_does_not_drop_the_others(
@@ -2792,3 +3025,243 @@ async def test_one_unroutable_server_does_not_drop_the_others(
     assert result is True, "one unroutable server must not fail the whole render"
     rendered = mock_atomic_write.call_args_list[0][0][1]
     assert "/test-server-2" in rendered, "the healthy sibling's location was dropped"
+
+
+_GENERATED_BLOCK_PLACEHOLDERS: tuple[str, ...] = (
+    "{{LOCATION_BLOCKS}}",
+    "{{AGENT_LOCATION_BLOCKS}}",
+    "{{VIRTUAL_SERVER_BLOCKS}}",
+)
+
+
+def _nginx_code(text: str) -> str:
+    """Drop comments and quoted-string contents so braces and `@` are structural."""
+    out: list[str] = []
+    quote = ""
+    in_comment = False
+    for ch in text:
+        if in_comment:
+            if ch == "\n":
+                in_comment = False
+                out.append(ch)
+        elif quote:
+            if ch == quote:
+                quote = ""
+                out.append(ch)
+        elif ch == "#":
+            in_comment = True
+        elif ch in "'\"":
+            quote = ch
+            out.append(ch)
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def _server_blocks(text: str) -> list[str]:
+    """Return the body of every top-level `server { ... }` block."""
+    code = _nginx_code(text)
+    blocks: list[str] = []
+    for match in re.finditer(r"^server\s*\{", code, re.MULTILINE):
+        depth = 0
+        for end in range(match.end() - 1, len(code)):
+            depth += {"{": 1, "}": -1}.get(code[end], 0)
+            if depth == 0:
+                blocks.append(code[match.end() : end])
+                break
+    return blocks
+
+
+def _unresolved_named_locations(server_block: str) -> set[str]:
+    """Named locations a server block references but does not define.
+
+    Only `error_page ... =@name` / `error_page ... @name` and `try_files ... @name`
+    can name a location, so only those count; a userinfo `@` in a URL does not.
+    """
+    defined = set(re.findall(r"location\s+@(\w+)", server_block))
+    referenced = set(re.findall(r"error_page[^;]*?=?\s*@(\w+)\s*;", server_block))
+    referenced |= set(re.findall(r"try_files[^;]*\s@(\w+)\s*;", server_block))
+    return referenced - defined
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.parametrize("conf_path", [_HTTP_ONLY_CONF, _HTTP_AND_HTTPS_CONF])
+async def test_rendered_named_locations_resolve_in_their_server_block(
+    conf_path, nginx_service, sample_servers, mock_health_service, mock_atomic_write
+):
+    """nginx -t does not check that `error_page ... = @name` resolves: a missing
+    named location only fails at request time, with a 500. Render the real
+    template with healthy MCP servers and require every named location a server
+    block references, including those in generated locations, to be defined in
+    that same server block.
+    """
+    mock_health_service.server_health_status = dict.fromkeys(sample_servers, HealthStatus.HEALTHY)
+    env_values = {
+        "AUTH_PROVIDER": "keycloak",
+        "KEYCLOAK_URL": "http://keycloak:8080",
+        "NGINX_DISABLE_API_AUTH_REQUEST": "false",
+    }
+    with patch.object(nginx_service.nginx_template_path, "exists", return_value=True):
+        with patch("builtins.open", mock_open(read_data=conf_path.read_text())):
+            with patch("registry.health.service.health_service", mock_health_service):
+                with patch.object(nginx_service, "get_additional_server_names", return_value=""):
+                    with patch.object(nginx_service, "reload_nginx", return_value=True):
+                        with patch(
+                            "os.environ.get",
+                            side_effect=lambda key, default=None: env_values.get(key, default),
+                        ):
+                            assert await nginx_service.generate_config_async(sample_servers)
+    rendered = mock_atomic_write.call_args_list[0][0][1]
+    hosting = [block for block in _server_blocks(rendered) if "/test-server-2/" in block]
+
+    assert hosting, f"{conf_path.name}: no server block carries the generated MCP locations"
+    for block in _server_blocks(rendered):
+        assert not _unresolved_named_locations(block), conf_path.name
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("conf_path", [_HTTP_ONLY_CONF, _HTTP_AND_HTTPS_CONF])
+def test_generated_block_named_locations_exist_where_blocks_land(conf_path):
+    """Agent, virtual-server and generic-proxy locations only render with live
+    repositories, so check them by source: every named location the generator
+    can emit must be defined in each template server block that hosts generated
+    locations.
+    """
+    import registry.core.nginx_service as generator
+
+    emitted = set(re.findall(r"= @(\w+)", Path(generator.__file__).read_text()))
+    hosting = [
+        block
+        for block in _server_blocks(conf_path.read_text())
+        if any(placeholder in block for placeholder in _GENERATED_BLOCK_PLACEHOLDERS)
+    ]
+
+    assert hosting, f"{conf_path.name}: no server block hosts generated locations"
+    for block in hosting:
+        defined = set(re.findall(r"location\s+@(\w+)", block))
+        assert emitted <= defined, f"{conf_path.name}: missing {sorted(emitted - defined)}"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("conf_path", [_HTTP_ONLY_CONF, _HTTP_AND_HTTPS_CONF])
+def test_cors_502_handler_only_serves_locations_that_already_send_cors(conf_path):
+    """`@upstream_unavailable_cors` adds `Access-Control-Allow-Origin *`. Using it
+    from a location that sends no CORS header would let any website read that
+    route's 502, and a CORS location without it would answer its own browser
+    clients' 502 with an unreadable body. So the handler and the header must
+    appear together in every location.
+    """
+    for chunk in conf_path.read_text().split("\n    location ")[1:]:
+        location = chunk.split("\n    }", 1)[0]
+        if location.startswith("@"):
+            continue
+        sends_cors = "add_header 'Access-Control-Allow-Origin'" in location
+        uses_cors_handler = "error_page 502 = @upstream_unavailable_cors;" in location
+        assert uses_cors_handler == sends_cors, location.splitlines()[0]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_marker_secret_renders_from_settings_not_process_env(
+    nginx_service, sample_servers, mock_health_service, mock_atomic_write
+):
+    """Settings can load the marker from .env without it reaching os.environ.
+    Rendering it from os.environ would then emit an empty marker, and the auth
+    server, which refuses to mint without a matching marker, would 401 every
+    registry API request.
+    """
+    rendered = await _render_real_conf(
+        nginx_service,
+        sample_servers,
+        mock_health_service,
+        mock_atomic_write,
+        _HTTP_ONLY_CONF,
+        {"AUTH_PROVIDER": "cognito", "NGINX_DISABLE_API_AUTH_REQUEST": "false"},
+    )
+
+    assert (
+        'proxy_set_header X-Validate-Source-Secret "test-nginx-marker-secret-0123456789abcdef";'
+        in rendered
+    )
+
+
+# =============================================================================
+# REQUEST BODY CAPTURE SIZE (bodies over ~10 KB returned a bare 500)
+# =============================================================================
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("transport", ["streamable-http", "sse"])
+def test_body_capturing_location_keeps_whole_body_in_memory(nginx_service, transport):
+    """capture_body.lua can only read an in-memory body for /validate.
+
+    client_body_buffer_size must equal client_max_body_size, or a body between the
+    two is spilled to a temp file, /validate refuses it (413), and auth_request turns
+    that into a 500 for the client.
+    """
+    from registry.core.nginx_service import MCP_MAX_REQUEST_BODY_SIZE
+
+    server_info = {
+        "proxy_pass_url": "http://localhost:8000/mcp",
+        "supported_transports": [transport],
+    }
+
+    block = nginx_service._generate_transport_location_blocks("/test", server_info)[0]
+
+    assert "capture_body.lua" in block
+    assert f"client_max_body_size {MCP_MAX_REQUEST_BODY_SIZE};" in block
+    assert f"client_body_buffer_size {MCP_MAX_REQUEST_BODY_SIZE};" in block
+
+
+@pytest.mark.unit
+def test_every_capture_body_site_sets_the_body_size_directives():
+    """Every location that runs capture_body.lua, including virtual servers, must
+    also set the body size directives, so a new location cannot reintroduce the 500."""
+    import inspect
+
+    from registry.core import nginx_service as module
+
+    lines = inspect.getsource(module).splitlines()
+    capture_lines = [i for i, line in enumerate(lines) if "lua/capture_body.lua;" in line]
+
+    assert len(capture_lines) >= 5
+    for index in capture_lines:
+        assert lines[index - 1].strip() == "{_MCP_BODY_CAPTURE_SIZE_DIRECTIVES}", (
+            f"capture_body.lua at module line {index + 1} lacks the body size directives"
+        )
+
+
+@pytest.mark.asyncio
+async def test_scheduler_writes_virtual_mappings_even_when_config_is_unchanged(
+    monkeypatch, tmp_path
+):
+    """Adding a tool on a backend a virtual server already uses changes only its
+    mapping file, not the nginx config. The mapping must still be written, and
+    nginx must not be rewritten or reloaded."""
+    from registry.core.nginx_service import NginxReloadScheduler
+
+    scheduler = NginxReloadScheduler(debounce_seconds=0.0, poll_external=False)
+    live = tmp_path / "nginx_rev_proxy.conf"
+
+    async def _fake_fetch():
+        return {}
+
+    commit = AsyncMock()
+    write_and_validate = MagicMock()
+    reload_nginx = MagicMock(return_value=True)
+    monkeypatch.setattr(nginx_module, "settings", _scheduler_settings(live))
+    monkeypatch.setattr(nginx_module, "_fetch_all_enabled_servers", _fake_fetch)
+    monkeypatch.setattr(
+        nginx_module.nginx_service, "render_config", AsyncMock(return_value="# same config\n")
+    )
+    monkeypatch.setattr(nginx_module.nginx_service, "_commit_virtual_server_mappings", commit)
+    monkeypatch.setattr(nginx_module, "_write_and_validate_config", write_and_validate)
+    monkeypatch.setattr(nginx_module.nginx_service, "reload_nginx", reload_nginx)
+    scheduler._last_config_hash = hashlib.sha256(b"# same config\n").hexdigest()
+
+    await scheduler._do_reload_if_changed()
+
+    commit.assert_awaited_once()
+    write_and_validate.assert_not_called()
+    reload_nginx.assert_not_called()

@@ -9,6 +9,7 @@ URL normalization. Validation must happen at the interpolation site and must
 fail closed (no HTTP request made) on any non-matching value.
 """
 
+import base64
 import sys
 import types
 from pathlib import Path
@@ -50,46 +51,67 @@ def _make_mock_response(payload=None, status_code=200):
     return mock_resp
 
 
-async def _call_get_skill_content(skill_name, resource_path=None, capture=None):
-    """Call get_skill_content with a mocked HTTP client and registry headers.
+async def _call_get_skill_content(
+    skill_name,
+    resource_path=None,
+    capture=None,
+    payload=None,
+    include_binary=False,
+):
+    """Call get_skill_content with a mocked pooled client and registry headers.
+
+    The tool now issues its request through the process-lifetime pooled client
+    (``servers/mcpgw/http_pool.py``), so the seam is ``shared_async_client`` plus
+    ``client.request(method, url, ...)`` rather than a per-call
+    ``httpx.AsyncClient`` context manager.
 
     Args:
         skill_name: Value passed to the tool.
         resource_path: Optional resource_path value.
-        capture: If provided, a dict populated with the captured .get() args
-                 (keys "url" and "params") whenever the client is invoked.
+        capture: If provided, a dict populated with the captured request args
+                 (keys "method", "url" and "params") whenever the client is invoked.
+        payload: Optional JSON body returned by the registry.
+        include_binary: Value passed to the tool's include_binary parameter.
 
     Returns:
         The result dict from get_skill_content.
     """
     mock_response = _make_mock_response(
-        {"url": "https://registry.example/skills/x", "content": "hello"}
+        payload
+        if payload is not None
+        else {"url": "https://registry.example/skills/x", "content": "hello"}
     )
 
     called = {"count": 0}
 
-    async def mock_get(url, **get_kwargs):
+    async def mock_request(method, url, **request_kwargs):
         called["count"] += 1
         if capture is not None:
+            capture["method"] = method
             capture["url"] = url
-            capture["params"] = get_kwargs.get("params")
+            capture["params"] = request_kwargs.get("params")
         return mock_response
 
     mock_client = AsyncMock()
-    mock_client.get = mock_get
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.request = mock_request
 
     with (
-        patch.object(mcpgw_server.httpx, "AsyncClient", return_value=mock_client),
+        patch.object(mcpgw_server, "shared_async_client", return_value=mock_client),
         patch.object(
             mcpgw_server,
             "_get_registry_headers",
             AsyncMock(return_value={"Authorization": "Bearer test-token"}),
         ),
     ):
-        result = await mcpgw_server.get_skill_content(skill_name, resource_path=resource_path)
+        result = await mcpgw_server.get_skill_content(
+            skill_name,
+            resource_path=resource_path,
+            include_binary=include_binary,
+        )
 
+    # A pooled client must never be closed by a request path -- that would tear the
+    # pool down for every other concurrent caller.
+    mock_client.aclose.assert_not_awaited()
     result["_http_call_count"] = called["count"]
     return result
 
@@ -200,3 +222,126 @@ class TestGetSkillContentResourcePathDefense:
 
         assert result["status"] == "success"
         assert result["_http_call_count"] == 1
+
+
+def _binary_asset_payload(path: str, data: bytes) -> dict:
+    """Build the registry JSON body for an asset resource."""
+    return {
+        "content_base64": base64.b64encode(data).decode("ascii"),
+        "encoding": "base64",
+        "size_bytes": len(data),
+        "path": path,
+        "type": "asset",
+        "url": f"https://raw.example.com/{path}",
+    }
+
+
+class TestGetSkillContentBinaryResource:
+    """Binary assets return metadata by default and base64 only on request."""
+
+    async def test_binary_resource_returns_metadata_by_default(self):
+        png_bytes = b"\x89PNG\r\n\x1a\n" + bytes(range(256))
+        payload = _binary_asset_payload("assets/logo.png", png_bytes)
+
+        result = await _call_get_skill_content(
+            "valid-skill",
+            resource_path="assets/logo.png",
+            payload=payload,
+        )
+
+        assert result["status"] == "success"
+        assert result["source_url"] == payload["url"]
+        assert result["resource_path"] == "assets/logo.png"
+        assert result["resource_type"] == "asset"
+        assert result["content_type"] == "image/png"
+        assert result["size_bytes"] == len(png_bytes)
+        assert "content" not in result
+        assert "content_base64" not in result
+        assert "content_encoding" not in result
+
+    async def test_include_binary_adds_base64(self):
+        png_bytes = b"\x89PNG\r\n\x1a\n" + bytes(range(256))
+        payload = _binary_asset_payload("assets/logo.png", png_bytes)
+
+        result = await _call_get_skill_content(
+            "valid-skill",
+            resource_path="assets/logo.png",
+            payload=payload,
+            include_binary=True,
+        )
+
+        assert result["content_encoding"] == "base64"
+        assert base64.b64decode(result["content_base64"]) == png_bytes
+        assert result["resource_type"] == "asset"
+        assert result["source_url"] == payload["url"]
+        assert "content" not in result
+
+    async def test_unknown_extension_falls_back_to_octet_stream(self):
+        payload = _binary_asset_payload("assets/blob.dat", b"\x00\x01")
+
+        result = await _call_get_skill_content(
+            "valid-skill",
+            resource_path="assets/blob.dat",
+            payload=payload,
+        )
+
+        assert result["content_type"] == "application/octet-stream"
+
+    async def test_text_resource_keeps_content(self):
+        result = await _call_get_skill_content(
+            "valid-skill",
+            resource_path="references/notes.md",
+        )
+
+        assert result["status"] == "success"
+        assert result["content"] == "hello"
+        assert result["resource_type"] == ""
+        assert result["content_type"] == "text/markdown"
+        assert "content_base64" not in result
+
+    async def test_text_asset_returns_content_without_include_binary(self):
+        payload = {
+            "content": "# Report\n\nSummary: {{summary}}\n",
+            "size_bytes": 31,
+            "path": "assets/report-template.md",
+            "type": "asset",
+            "url": "https://raw.example.com/assets/report-template.md",
+        }
+
+        result = await _call_get_skill_content(
+            "valid-skill",
+            resource_path="assets/report-template.md",
+            payload=payload,
+        )
+
+        assert result["status"] == "success"
+        assert result["content"] == payload["content"]
+        assert result["resource_type"] == "asset"
+        assert result["source_url"] == payload["url"]
+        assert result["size_bytes"] == 31
+        assert result["content_type"] == "text/markdown"
+        assert "content_base64" not in result
+
+    async def test_text_resource_without_known_extension_defaults_to_text_plain(self):
+        payload = {
+            "content": "MIT License\n",
+            "size_bytes": 12,
+            "path": "assets/LICENSE",
+            "type": "asset",
+            "url": "https://raw.example.com/assets/LICENSE",
+        }
+
+        result = await _call_get_skill_content(
+            "valid-skill",
+            resource_path="assets/LICENSE",
+            payload=payload,
+        )
+
+        assert result["status"] == "success"
+        assert result["content_type"] == "text/plain"
+
+    async def test_skill_md_fetch_has_no_content_type(self):
+        result = await _call_get_skill_content("valid-skill")
+
+        assert result["status"] == "success"
+        assert "content_type" not in result

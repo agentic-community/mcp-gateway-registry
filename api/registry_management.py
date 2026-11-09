@@ -2271,6 +2271,7 @@ def cmd_egress_configure(args: argparse.Namespace) -> int:
             custom_scope_separator=args.custom_scope_separator,
             custom_token_auth_style=args.custom_token_auth_style,
             custom_resource=args.custom_resource,
+            expected_issuer=args.expected_issuer,
         )
         print(json.dumps(response, indent=2, default=str))
         return 0
@@ -7167,6 +7168,11 @@ Examples:
     egress_configure_parser.add_argument(
         "--custom-resource",
         help="RFC 8707 resource indicator, sent on authorize and token requests (custom only)",
+    )
+    egress_configure_parser.add_argument(
+        "--expected-issuer",
+        help="RFC 9207 issuer of the provider's authorization server (any provider). "
+        "When set, the OAuth callback rejects a reply whose iss names another issuer",
     )
 
     # Get egress config command

@@ -23,6 +23,7 @@ from ..schemas.agent_models import (
     AgentBatchItem,
     AgentBatchItemResult,
     AgentCard,
+    AgentInterface,
     BatchItemOp,
     _DeleteItem,
     _PatchItem,
@@ -68,7 +69,7 @@ async def _authorize(
 
     The scope half routes through ``user_has_asset_permission("agent", ...)`` (the
     same map the HTTP handlers use), so a sibling family's scope (e.g.
-    modify_service) can never satisfy an agent op here -- the previous bug where
+    modify_service) can never satisfy an agent op here. The previous bug where
     batch patch/replace accepted modify_service and batch delete required no
     delete_agent scope at all (owner-or-admin only, bypassing the single-card
     gate). ``user_has_asset_permission`` reads only is_admin + ui_permissions, so
@@ -161,10 +162,18 @@ def _build_card_from_request(request, path: str, existing: AgentCard | None) -> 
         )
 
     optional_kwargs: dict[str, Any] = {}
+    if request.security_requirements:
+        optional_kwargs["security_requirements"] = request.security_requirements
+    if request.signatures:
+        optional_kwargs["signatures"] = request.signatures
     if request.default_input_modes:
         optional_kwargs["default_input_modes"] = request.default_input_modes
     if request.default_output_modes:
         optional_kwargs["default_output_modes"] = request.default_output_modes
+    if request.supported_interfaces:
+        optional_kwargs["supported_interfaces"] = [
+            AgentInterface(**iface) for iface in request.supported_interfaces
+        ]
 
     capabilities = dict(request.capabilities) if request.capabilities else {}
     if request.streaming and "streaming" not in capabilities:
@@ -223,7 +232,7 @@ async def _do_register(
     submitted_by: str,
 ) -> AgentBatchItemResult:
     """Register a new agent (POST /api/agents/register parity)."""
-    from ..api.agent_routes import _normalize_path
+    from ..api.agent_routes import _apply_a2a_reverse_proxy_split, _normalize_path
 
     request = item.card
     path = _normalize_path(request.path, request.name)
@@ -231,7 +240,19 @@ async def _do_register(
     if await agent_service.get_agent_info(path):
         return _result(index, item.op, path, 409, "conflict", f"path '{path}' already exists")
 
-    card = _build_card_from_request(request, path, existing=None)
+    # _build_card_from_request can raise (e.g. a malformed supportedInterfaces
+    # entry fails AgentInterface construction) on genuinely bad client input,
+    # which must come back as a 422 validation error, not an unhandled
+    # exception reported as a 500. Narrowed to ValueError (pydantic's
+    # ValidationError is a ValueError subclass) rather than bare Exception;
+    # unlike _do_replace's sibling try/except below, this one deliberately
+    # does NOT catch arbitrary exceptions, so a genuine programming/
+    # infrastructure failure here still surfaces as the outer handler's 500,
+    # instead of being misreported as a client input error.
+    try:
+        card = _build_card_from_request(request, path, existing=None)
+    except ValueError as e:
+        return _result(index, item.op, path, 422, "validation_error", str(e))
     card.registered_by = submitted_by
 
     is_valid, errors = await _validate(card)
@@ -243,6 +264,16 @@ async def _do_register(
     )
     if not allowed:
         return _result(index, item.op, path, 403, "gate_denied", reason)
+
+    # Reverse-proxy split, same as the single-card register path: in with-gateway
+    # mode advertise the gateway url and keep the backend in proxy_pass_url (no-op
+    # in registry-only mode). Without this a batch-registered proxied agent would
+    # persist the backend as its top-level url AND never get proxy_pass_url, so
+    # the read-time backend projection (keyed on proxy_pass_url) could not fire.
+    try:
+        _apply_a2a_reverse_proxy_split(card, path)
+    except ValueError as e:
+        return _result(index, item.op, path, 422, "validation_error", str(e))
 
     await agent_service.register_agent(card)
 
@@ -262,7 +293,7 @@ async def _do_patch(
     submitted_by: str,
 ) -> AgentBatchItemResult:
     """Apply a JSON Merge Patch to an existing agent (PATCH parity)."""
-    from ..api.agent_routes import _normalize_path
+    from ..api.agent_routes import _apply_a2a_reverse_proxy_split, _normalize_path
 
     path = _normalize_path(item.path)
     existing = await agent_service.get_agent_info(path)
@@ -301,7 +332,14 @@ async def _do_patch(
     if not allowed:
         return _result(index, item.op, path, 403, "gate_denied", reason)
 
-    await agent_service.update_agent(path, merged.model_dump())
+    # Re-apply the reverse-proxy split on the write path (parity with single-card
+    # PATCH) so an edit that changes url cannot desync the advertised gateway url
+    # from the stored backend; no-op in registry-only mode.
+    try:
+        _apply_a2a_reverse_proxy_split(merged, path)
+        await agent_service.update_agent(path, merged.model_dump())
+    except ValueError as e:
+        return _result(index, item.op, path, 422, "validation_error", str(e))
 
     updated = await agent_service.get_agent_info(path)
     _fire_webhook("update", updated.model_dump(mode="json"), submitted_by)
@@ -314,7 +352,11 @@ async def _do_replace(
     submitted_by: str,
 ) -> AgentBatchItemResult:
     """Fully replace an existing agent card (PUT parity)."""
-    from ..api.agent_routes import _normalize_path
+    from ..api.agent_routes import (
+        _apply_a2a_reverse_proxy_split,
+        _normalize_path,
+        _restore_proxied_agent_on_replace,
+    )
 
     path = _normalize_path(item.path)
     existing = await agent_service.get_agent_info(path)
@@ -323,6 +365,7 @@ async def _do_replace(
 
     try:
         card = _build_card_from_request(item.card, path, existing=existing)
+        _restore_proxied_agent_on_replace(card, existing, path)
     except Exception as e:
         return _result(index, item.op, path, 422, "validation_error", str(e))
 
@@ -336,7 +379,13 @@ async def _do_replace(
     if not allowed:
         return _result(index, item.op, path, 403, "gate_denied", reason)
 
-    await agent_service.update_agent(path, card.model_dump())
+    # Reverse-proxy split, same as the single-card PUT path; no-op in
+    # registry-only mode.
+    try:
+        _apply_a2a_reverse_proxy_split(card, path)
+        await agent_service.update_agent(path, card.model_dump())
+    except ValueError as e:
+        return _result(index, item.op, path, 422, "validation_error", str(e))
 
     updated = await agent_service.get_agent_info(path)
     _fire_webhook("update", updated.model_dump(mode="json"), submitted_by)

@@ -12,13 +12,38 @@ data:
     # Initialize Keycloak with MCP Gateway configuration
     # This script sets up the initial realm, clients, groups, and users
 
-    set -e
+    set -eo pipefail
 
     # These will be set properly after loading .env in main()
     KEYCLOAK_URL=""  # Will be overridden with KEYCLOAK_ADMIN_URL after .env is loaded
     REALM="mcp-gateway"
     KEYCLOAK_ADMIN=$KEYCLOAK_ADMIN
     KEYCLOAK_ADMIN_PASSWORD=$KEYCLOAK_ADMIN_PASSWORD
+
+    # Client scopes that carry gateway authorization rather than OIDC
+    # identity. The gateway resolves these names into server and tool access,
+    # so a self-registered (DCR) client must never be able to request one: it
+    # would be choosing its own privilege.
+    #
+    # The last two matter most here. They are the `_id` of a scope document
+    # granting `server: "*"` with every action
+    # (scripts/registry-admins.json, scripts/mcp-registry-admin.json), and
+    # unlike the first four their names carry no "/", so the earlier filter,
+    # which excluded only slash-containing names, left both requestable
+    # through anonymous DCR on this deployment surface.
+    PRIVILEGED_CLIENT_SCOPES=(
+        "mcp-servers-unrestricted/read"
+        "mcp-servers-unrestricted/execute"
+        "mcp-servers-restricted/read"
+        "mcp-servers-restricted/execute"
+        "mcp-registry-admin"
+        "registry-admins"
+    )
+
+    # Names withheld from the DCR allowlist. Identical to the creation list
+    # here, because this surface creates all six; kept as its own name so the
+    # three Keycloak setup scripts read the same way.
+    DCR_WITHHELD_SCOPES=("${PRIVILEGED_CLIENT_SCOPES[@]}")
 
     # Colors for output
     RED='\033[0;31m'
@@ -53,14 +78,29 @@ data:
 
     # Function to get admin token
     get_admin_token() {
-        local response=$(curl -s -X POST "${KEYCLOAK_URL}/realms/master/protocol/openid-connect/token" \
-            -H "Content-Type: application/x-www-form-urlencoded" \
-            -d "username=${KEYCLOAK_ADMIN}" \
-            -d "password=${KEYCLOAK_ADMIN_PASSWORD}" \
-            -d "grant_type=password" \
-            -d "client_id=admin-cli")
+        local response token status=0
+        if ! command -v curl >/dev/null || ! command -v jq >/dev/null; then
+            echo "Keycloak setup requires curl and jq" >&2
+            exit 1
+        fi
 
-        echo "$response" | grep -o '"access_token":"[^"]*' | cut -d'"' -f4
+        response=$(printf '%s' "$KEYCLOAK_ADMIN_PASSWORD" | curl -s -f -X POST \
+            "${KEYCLOAK_URL}/realms/master/protocol/openid-connect/token" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            --data-urlencode "username=${KEYCLOAK_ADMIN}" \
+            --data-urlencode 'password@-' \
+            -d "grant_type=password" \
+            -d "client_id=admin-cli") || status=$?
+        if [ "$status" -eq 22 ]; then
+            return 0
+        elif [ "$status" -ne 0 ]; then
+            echo "Keycloak admin token request failed (curl exit ${status})" >&2
+            exit 1
+        fi
+
+        if token=$(jq -er '.access_token | select(type == "string" and length > 0)' <<< "$response" 2>/dev/null); then
+            printf '%s\n' "$token"
+        fi
     }
 
     # Function to check if realm exists
@@ -163,6 +203,26 @@ data:
         fi
     }
 
+    # Empty output means no matching client; request or JSON failures are errors.
+    _lookup_client_id() {
+        local token=$1
+        local client_id=$2
+        local response
+
+        if ! response=$(curl -fs \
+            -H "Authorization: Bearer ${token}" \
+            "${KEYCLOAK_URL}/admin/realms/${REALM}/clients?clientId=${client_id}"); then
+            echo -e "${RED}Failed to look up client ${client_id}${NC}" >&2
+            return 1
+        fi
+        if ! jq -r --arg client_id "$client_id" \
+            'if type == "array" then [.[] | select(.clientId == $client_id) | .id | select(type == "string" and length > 0)][0] // empty else error("invalid client list") end' \
+            <<< "$response" 2>/dev/null; then
+            echo -e "${RED}Invalid client lookup response for ${client_id}${NC}" >&2
+            return 1
+        fi
+    }
+
     # Upsert a Keycloak client: create if missing, otherwise PUT the full
     # representation to apply any attribute changes (e.g. post.logout.redirect.uris)
     # to existing deployments.
@@ -171,10 +231,8 @@ data:
         local client_id=$2
         local client_json=$3
 
-        local existing_id=$(curl -s \
-            -H "Authorization: Bearer ${token}" \
-            "${KEYCLOAK_URL}/admin/realms/${REALM}/clients?clientId=${client_id}" \
-            | grep -o '"id":"[^"]*' | head -1 | cut -d'"' -f4)
+        local existing_id
+        existing_id=$(_lookup_client_id "$token" "$client_id") || return 1
 
         if [ -z "$existing_id" ]; then
             local status=$(curl -s -o /dev/null -w "%{http_code}" \
@@ -189,10 +247,7 @@ data:
                 # empty (e.g. a create race). Accepting 409 as success here would
                 # skip the PUT and silently drop the representation, which is the
                 # bug this function exists to prevent. Re-resolve and update.
-                existing_id=$(curl -s \
-                    -H "Authorization: Bearer ${token}" \
-                    "${KEYCLOAK_URL}/admin/realms/${REALM}/clients?clientId=${client_id}" \
-                    | grep -o '"id":"[^"]*' | head -1 | cut -d'"' -f4)
+                existing_id=$(_lookup_client_id "$token" "$client_id") || return 1
                 if [ -z "$existing_id" ]; then
                     echo -e "${RED}Client ${client_id} reported 409 but could not be resolved${NC}" >&2
                     return 1
@@ -249,6 +304,7 @@ data:
             "name": "MCP Gateway Web Client",
             "enabled": true,
             "clientAuthenticatorType": "client-secret",
+            "secret": "'"${KEYCLOAK_CLIENT_SECRET}"'",
             "redirectUris": [
                 "'${AUTH_SERVER_EXTERNAL_URL:-http://localhost:8888}'/oauth2/callback/keycloak",
                 "'${REGISTRY_URL:-http://localhost:7860}'/*",
@@ -282,6 +338,7 @@ data:
             "name": "MCP Gateway M2M Client",
             "enabled": true,
             "clientAuthenticatorType": "client-secret",
+            "secret": "'"${KEYCLOAK_M2M_CLIENT_SECRET}"'",
             "protocol": "openid-connect",
             "standardFlowEnabled": false,
             "implicitFlowEnabled": false,
@@ -327,7 +384,7 @@ data:
 
         echo "Creating custom MCP scopes..."
 
-        local scopes=("mcp-servers-unrestricted/read" "mcp-servers-unrestricted/execute" "mcp-servers-restricted/read" "mcp-servers-restricted/execute" "mcp-registry-admin" "registry-admins")
+        local scopes=("${PRIVILEGED_CLIENT_SCOPES[@]}")
 
         for scope in "${scopes[@]}"; do
             local scope_json='{
@@ -370,7 +427,9 @@ data:
             return 1
         fi
 
-        # Get all available client scopes
+        # Deliberately NOT "${PRIVILEGED_CLIENT_SCOPES[@]}": the M2M client
+        # gets the four server scopes only, not the two admin scope-document
+        # names, which no client should hold as a default scope.
         local scopes=("mcp-servers-unrestricted/read" "mcp-servers-unrestricted/execute" "mcp-servers-restricted/read" "mcp-servers-restricted/execute")
 
         for scope in "${scopes[@]}"; do
@@ -637,61 +696,61 @@ data:
         echo -e "${GREEN}Users created and assigned to groups successfully!${NC}"
     }
 
-    # Function to create client secrets
-    setup_client_secrets() {
+    # Verify the realm's stored client secrets match the chart-rendered ones.
+    #
+    # create_clients already PUT the desired "secret" into both client
+    # representations. This is the read-back check: registry and auth-server
+    # hold the chart's values in their env, so a mismatch here means every
+    # OIDC flow would fail with invalid_client. Fail the Job loudly instead of
+    # leaving silently broken auth behind.
+    #
+    # This function no longer writes keycloak-client-secret. The chart renders
+    # it in the Sync/install phase because the app pods mount it with
+    # envFrom and cannot start without it.
+    verify_client_secrets() {
         local token=$1
 
-        echo "Setting up client secrets..."
+        echo "Verifying client secrets match the chart-provided values..."
 
-        # Get web client ID
-        local web_client_id=$(curl -s -H "Authorization: Bearer ${token}" \
-            "${KEYCLOAK_URL}/admin/realms/${REALM}/clients?clientId=mcp-gateway-web" | \
-            jq -r '.[0].id')
+        local failed=0
+        local pair
+        for pair in "mcp-gateway-web:${KEYCLOAK_CLIENT_SECRET}" "mcp-gateway-m2m:${KEYCLOAK_M2M_CLIENT_SECRET}"; do # pragma: allowlist secret
+            local client_id="${pair%%:*}"
+            local expected="${pair#*:}"
 
-        # Generate secret for web client
-        curl -s -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/clients/${web_client_id}/client-secret" \
-            -H "Authorization: Bearer ${token}" \
-            -H "Content-Type: application/json" > /dev/null
+            local uuid=$(curl -s -H "Authorization: Bearer ${token}" \
+                "${KEYCLOAK_URL}/admin/realms/${REALM}/clients?clientId=${client_id}" | \
+                jq -r '.[0].id // empty')
+            if [ -z "$uuid" ]; then
+                echo -e "${RED}Could not resolve client ${client_id}${NC}" >&2
+                failed=1
+                continue
+            fi
 
-        local web_secret_response=$(curl -s "${KEYCLOAK_URL}/admin/realms/${REALM}/clients/${web_client_id}/client-secret" \
-            -H "Authorization: Bearer ${token}")
-        web_secret=$(echo "$web_secret_response" | jq -r '.value // empty')
+            local actual=$(curl -s -H "Authorization: Bearer ${token}" \
+                "${KEYCLOAK_URL}/admin/realms/${REALM}/clients/${uuid}/client-secret" | \
+                jq -r '.value // empty')
+            if [ "$actual" = "$expected" ]; then
+                echo -e "${GREEN}${client_id} secret matches keycloak-client-secret${NC}"
+            else
+                echo -e "${RED}${client_id} secret in Keycloak does not match keycloak-client-secret.${NC}" >&2
+                echo "Keycloak rejected or ignored the secret in the client representation." >&2
+                failed=1
+            fi
+        done
 
-        # Get M2M client ID
-        local m2m_client_id=$(curl -s -H "Authorization: Bearer ${token}" \
-            "${KEYCLOAK_URL}/admin/realms/${REALM}/clients?clientId=mcp-gateway-m2m" | \
-            jq -r '.[0].id')
+        if [ "$failed" -ne 0 ]; then
+            echo -e "${RED}Client secret verification failed — registry/auth-server would get invalid_client on every login.${NC}" >&2
+            return 1
+        fi
 
-        # Generate secret for M2M client
-        curl -s -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/clients/${m2m_client_id}/client-secret" \
-            -H "Authorization: Bearer ${token}" \
-            -H "Content-Type: application/json" > /dev/null
-
-        local m2m_secret_response=$(curl -s "${KEYCLOAK_URL}/admin/realms/${REALM}/clients/${m2m_client_id}/client-secret" \
-            -H "Authorization: Bearer ${token}")
-        m2m_secret=$(echo "$m2m_secret_response" | jq -r '.value // empty')
-
-        echo -e "${GREEN}Client secrets generated!${NC}"
         echo ""
         echo "=============================================="
-        echo -e "${YELLOW}Client credentials have been created.${NC}"
-        echo "=============================================="
-        echo ""
         echo -e "${GREEN}To retrieve all client credentials, run:${NC}"
         echo "  ./keycloak/setup/get-all-client-credentials.sh"
         echo ""
         echo "This will save all credentials to .oauth-tokens/"
         echo "=============================================="
-
-        # Use --dry-run=client | apply so this is idempotent on helm upgrades
-        # (this Job runs as a post-install + post-upgrade hook; kubectl create
-        # by itself fails with AlreadyExists on re-run).
-        kubectl create secret generic keycloak-client-secret \
-          --from-literal=KEYCLOAK_CLIENT_ID=mcp-gateway-web \
-          --from-literal=KEYCLOAK_CLIENT_SECRET=$web_secret \
-          --from-literal=KEYCLOAK_M2M_CLIENT_ID=mcp-gateway-m2m \
-          --from-literal=KEYCLOAK_M2M_CLIENT_SECRET=$m2m_secret \
-          --dry-run=client -o yaml | kubectl apply -f -
     }
 
     # Function to setup groups mapper for OAuth2 clients
@@ -771,7 +830,7 @@ data:
     # =========================================================================
     # Dynamic Client Registration (RFC 7591) support
     # =========================================================================
-    # Three configuration changes are needed so that MCP clients (Claude Code,
+    # Four configuration changes are needed so that MCP clients (Claude Code,
     # Claude.ai connectors, Cursor, etc.) can register themselves dynamically
     # and receive tokens that carry the user's groups for per-user authorization
     # at the gateway:
@@ -784,6 +843,10 @@ data:
     #    "Allowed Client Scopes" policies to accept all realm client-scopes.
     # 3. configure_dcr_trusted_hosts - relax the anonymous DCR "Trusted Hosts"
     #    policy so MCP clients running on diverse cloud egress IPs can register.
+    # 4. configure_dcr_allowed_mapper_types() - narrow down the DCR "Allowed Protocol
+    #    Mapper Types" policy (anonymous + authenticated). The gateway's own groups/audience
+    #    mappers live on the server-side `basic` client-scope, so this does not
+    #    affect legitimate MCP.
 
     setup_dcr_groups_mapper() {
         local token=$1
@@ -890,9 +953,9 @@ data:
     }
 
     # Widen one subType's "Allowed Client Scopes" policy to include every
-    # client-scope defined in the realm. Both 'anonymous' and 'authenticated'
-    # subTypes need this because Keycloak picks one based on whether the DCR
-    # request carries an initial-access / registration token.
+    # NON-PRIVILEGED client-scope defined in the realm. Both 'anonymous' and
+    # 'authenticated' subTypes need this because Keycloak picks one based on
+    # whether the DCR request carries an initial-access / registration token.
     _widen_allowed_scopes_policy() {
         local token=$1
         local sub_type=$2
@@ -935,7 +998,7 @@ data:
             -d "$policy_json")
 
         if [ "$response" = "204" ]; then
-            echo -e "${GREEN}${sub_type} Allowed Client Scopes policy includes all realm scopes.${NC}"
+            echo -e "${GREEN}${sub_type} Allowed Client Scopes policy includes non-privileged realm scopes.${NC}"
         else
             echo -e "${RED}FAILED (${sub_type}): HTTP status ${response}${NC}"
             return 1
@@ -950,9 +1013,22 @@ data:
         local components=$(curl -s -H "Authorization: Bearer ${token}" \
             "${KEYCLOAK_URL}/admin/realms/${REALM}/components?type=org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy")
 
+        # Exclude every scope in DCR_WITHHELD_SCOPES, which is built from the
+        # same list create_scopes() creates from, so a privileged scope added
+        # there cannot stay requestable here by omission. The "/" filter is
+        # kept as a second rule for a privileged scope some other tool
+        # created in this realm.
+        local privileged_json=$(printf '%s\n' "${DCR_WITHHELD_SCOPES[@]}" | jq -R . | jq -sc .)
+
         local all_scope_names=$(curl -s -H "Authorization: Bearer ${token}" \
             "${KEYCLOAK_URL}/admin/realms/${REALM}/client-scopes" | \
-            jq -c '[.[].name]')
+            jq -c --argjson privileged "$privileged_json" \
+                '[
+                    .[].name
+                    | . as $scope
+                    | select(($privileged | index($scope)) == null)
+                    | select(contains("/") | not)
+                 ]')
 
         _widen_allowed_scopes_policy "$token" "anonymous" "$components" "$all_scope_names" || return 1
         _widen_allowed_scopes_policy "$token" "authenticated" "$components" "$all_scope_names" || return 1
@@ -1003,6 +1079,56 @@ data:
             echo -e "${RED}Failed to update Trusted Hosts policy. HTTP status: ${response}${NC}"
             return 1
         fi
+    }
+
+    configure_dcr_allowed_mapper_types() {
+        local token=$1
+
+        local components=$(curl -s -H "Authorization: Bearer ${token}" \
+            "${KEYCLOAK_URL}/admin/realms/${REALM}/components?type=org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy")
+
+        local sub_type
+        for sub_type in anonymous authenticated; do
+            local policy_id=$(echo "$components" | \
+                jq -r --arg st "$sub_type" '.[] | select(.name=="Allowed Protocol Mapper Types" and .subType==$st) | .id')
+            local parent_id=$(echo "$components" | \
+                jq -r --arg st "$sub_type" '.[] | select(.name=="Allowed Protocol Mapper Types" and .subType==$st) | .parentId')
+
+            if [ -z "$policy_id" ] || [ "$policy_id" = "null" ]; then
+                echo -e "${YELLOW}No '${sub_type}' Allowed Protocol Mapper Types policy found; skipping.${NC}"
+                continue
+            fi
+
+            local policy_json=$(jq -n \
+                --arg name "Allowed Protocol Mapper Types" \
+                --arg providerId "allowed-protocol-mappers" \
+                --arg providerType "org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy" \
+                --arg parentId "$parent_id" \
+                --arg subType "$sub_type" \
+                '{
+                    name: $name,
+                    providerId: $providerId,
+                    providerType: $providerType,
+                    parentId: $parentId,
+                    subType: $subType,
+                    config: {
+                        "allowed-protocol-mapper-types": []
+                    }
+                }')
+
+            local response=$(curl -s -o /dev/null -w "%{http_code}" \
+                -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}/components/${policy_id}" \
+                -H "Authorization: Bearer ${token}" \
+                -H "Content-Type: application/json" \
+                -d "$policy_json")
+
+            if [ "$response" = "204" ]; then
+                echo -e "${GREEN}Allowed Protocol Mapper Types (${sub_type}) narrowed down: no client-supplied mappers permitted.${NC}"
+            else
+                echo -e "${RED}Failed to update Allowed Protocol Mapper Types (${sub_type}). HTTP status: ${response}${NC}"
+                return 1
+            fi
+        done
     }
 
     # Function to generate random password
@@ -1085,6 +1211,13 @@ data:
             exit 1
         fi
 
+        if [ -z "$KEYCLOAK_CLIENT_SECRET" ] || [ -z "$KEYCLOAK_M2M_CLIENT_SECRET" ]; then
+            echo -e "${RED}Error: KEYCLOAK_CLIENT_SECRET / KEYCLOAK_M2M_CLIENT_SECRET are not set${NC}"
+            echo "They are supplied by the keycloak-client-secret Secret rendered by the chart."
+            echo "Check global.existingKeycloakClientSecret and that the Secret holds both keys."
+            exit 1
+        fi
+
         # Wait for Keycloak to be ready
         wait_for_keycloak
 
@@ -1107,7 +1240,7 @@ data:
             create_groups "$TOKEN"
             create_users "$TOKEN"
             create_service_account_user "$TOKEN"
-            setup_client_secrets "$TOKEN"
+            verify_client_secrets "$TOKEN"
             setup_groups_mapper "$TOKEN"
             setup_m2m_scopes "$TOKEN"
 
@@ -1128,6 +1261,7 @@ data:
                 setup_dcr_audience_mapper "$TOKEN"
                 configure_dcr_allowed_scopes "$TOKEN"
                 configure_dcr_trusted_hosts "$TOKEN"
+                configure_dcr_allowed_mapper_types "$TOKEN"
             else
                 echo ""
                 echo -e "${YELLOW}DCR realm setup skipped (ENABLE_DCR_CONFIG=${ENABLE_DCR_CONFIG:-false}).${NC}"
@@ -1144,12 +1278,12 @@ data:
         # Drift-free across re-runs because: (1) main() reuses passwords from
         # this same secret when it already exists, and (2) upsert_user() PUTs
         # /reset-password on 409 so the realm side picks up the same value.
-        kubectl create secret generic registry-login-credentials \
-          --from-literal=REGISTRY_ADMIN_NAME=admin \
-          --from-literal=REGISTRY_ADMIN_PASSWORD=$INITIAL_ADMIN_PASSWORD \
-          --from-literal=REGISTRY_USER_NAME=testuser \
-          --from-literal=REGISTRY_USER_PASSWORD=$INITIAL_USER_PASSWORD \
-          --dry-run=client -o yaml | kubectl apply -f -
+        # Feed credentials over stdin so they are absent from kubectl argv and logs.
+        printf 'REGISTRY_ADMIN_NAME=%s\nREGISTRY_ADMIN_PASSWORD=%s\nREGISTRY_USER_NAME=%s\nREGISTRY_USER_PASSWORD=%s\n' \
+          'admin' "$INITIAL_ADMIN_PASSWORD" 'testuser' "$INITIAL_USER_PASSWORD" \
+          | kubectl create secret generic registry-login-credentials \
+              --from-env-file=/dev/stdin --dry-run=client -o yaml \
+          | kubectl apply -f -
 
         echo ""
         echo -e "${GREEN}Keycloak initialization complete!${NC}"
@@ -1157,14 +1291,8 @@ data:
         echo "You can now access Keycloak at: ${KEYCLOAK_URL}"
         echo "Admin console: ${KEYCLOAK_URL}/admin"
         echo "Realm: ${REALM}"
-        echo ""
-        echo "Default users created:"
-        echo "  - admin/${INITIAL_ADMIN_PASSWORD} (admin access)"
-        echo "  - testuser/${INITIAL_USER_PASSWORD} (user access)"
-        echo ""
-        echo -e "${YELLOW}IMPORTANT: Save these passwords! They are randomly generated.${NC}"
-        echo -e "${YELLOW}Passwords have been saved to the Kubernetes secret: registry-login-credentials${NC}"
-        echo -e "${YELLOW}Consider changing them after first login for security.${NC}"
+        echo "Credentials are saved to the Kubernetes secret: registry-login-credentials" # pragma: allowlist secret
+        echo "Retrieve them from the Secret; the setup Job does not print passwords."
     }
 
     # Run main function

@@ -92,6 +92,11 @@ def _build_openbao() -> SecretStoreBase:
     client = hvac.Client(**client_kwargs)
 
     method = settings.openbao_auth_method
+    # Auth method mount path. Empty keeps hvac's default (the method name), so
+    # existing deployments are unaffected; a shared Vault typically mounts one
+    # kubernetes auth per cluster under its own path.
+    auth_mount = settings.openbao_auth_mount.strip().strip("/")
+    mount_kwargs = {"mount_point": auth_mount} if auth_mount else {}
 
     # Build a (re-)login closure for the configured auth method. The store calls
     # it once at construction and again whenever a request fails because the
@@ -118,7 +123,7 @@ def _build_openbao() -> SecretStoreBase:
             # the kubelet, so a cached copy could itself be stale on re-auth.
             with open("/var/run/secrets/kubernetes.io/serviceaccount/token") as fh:
                 jwt = fh.read()
-            client.auth.kubernetes.login(role=role, jwt=jwt)
+            client.auth.kubernetes.login(role=role, jwt=jwt, **mount_kwargs)
         elif method == "approle":
             import os
 
@@ -128,7 +133,7 @@ def _build_openbao() -> SecretStoreBase:
                 raise ValueError(
                     "OPENBAO_AUTH_METHOD=approle requires OPENBAO_ROLE_ID and OPENBAO_SECRET_ID."
                 )
-            client.auth.approle.login(role_id=role_id, secret_id=secret_id)
+            client.auth.approle.login(role_id=role_id, secret_id=secret_id, **mount_kwargs)
         else:
             raise ValueError(
                 f"Invalid OPENBAO_AUTH_METHOD={method!r}. Accepted: token, kubernetes, approle."

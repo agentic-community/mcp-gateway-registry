@@ -10,7 +10,11 @@ from urllib.parse import urlencode
 import jwt
 import requests
 
-from .base import AuthProvider
+from .base import (
+    AuthProvider,
+    IdTokenVerificationError,
+    normalize_groups_claim,
+)
 
 # Constants for self-signed token validation
 JWT_ISSUER = os.environ.get("JWT_ISSUER", "mcp-auth-server")
@@ -26,6 +30,12 @@ SECRET_KEY = os.environ.get("SECRET_KEY")
 # "http://keycloak:8080" cannot also match "http://keycloak:80801".
 _URL_BOUNDARY_CHARS: frozenset[str] = frozenset({"/", "?", "#"})
 
+# Clock-skew tolerance when verifying a token Keycloak minted a moment ago (the
+# result of an OBO token exchange): the IdP's clock may run slightly ahead of
+# this process, which would otherwise fail the iat check. Same value as the
+# leeway on the internal hop token (registry/auth/internal.py).
+_EXCHANGED_TOKEN_LEEWAY_SECONDS: int = 5
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -33,6 +43,31 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _unverified_subject(token: str) -> str:
+    """Return the ``sub`` claim of a JWT without verifying its signature.
+
+    Used only to compare the subject of two tokens the realm itself issued,
+    where the token read here has already been verified upstream.
+
+    Args:
+        token: The JWT to read.
+
+    Returns:
+        The ``sub`` claim as a string.
+
+    Raises:
+        IdTokenVerificationError: The token cannot be decoded or has no ``sub``.
+    """
+    try:
+        claims = jwt.decode(token, options={"verify_signature": False})
+    except jwt.InvalidTokenError as exc:
+        raise IdTokenVerificationError("subject token is not a decodable JWT") from exc
+    subject = claims.get("sub")
+    if not isinstance(subject, str) or not subject:
+        raise IdTokenVerificationError("subject token carries no 'sub' claim")
+    return subject
 
 
 class KeycloakProvider(AuthProvider):
@@ -124,34 +159,10 @@ class KeycloakProvider(AuthProvider):
             if not signing_key:
                 raise ValueError(f"No matching key found for kid: {kid}")
 
-            # Validate and decode token - accept multiple valid issuers
-            valid_issuers = [
-                self.external_realm_url,  # External URL: https://mcpgateway.ddns.net/realms/mcp-gateway
-                self.realm_url,  # Internal URL: http://keycloak:8080/realms/mcp-gateway
-                f"http://localhost:8080/realms/{self.realm}",  # Localhost URL for development
-            ]
-
-            # Accepted audiences: only audiences that identify THIS gateway.
-            #   - self.client_id     (the gateway's own pre-defined web client)
-            #   - self.m2m_client_id (the gateway's M2M client)
-            #   - "mcp-gateway"      (custom audience added by the realm's
-            #                         audience mapper on the `basic` scope, which
-            #                         is reliably attached to every DCR'd client
-            #                         as well as the web and M2M clients.
-            #                         See keycloak/setup/init-keycloak.sh::
-            #                         setup_dcr_audience_mapper.)
-            #
-            # "account" is deliberately NOT accepted. It is Keycloak's default
-            # audience present on EVERY realm user token regardless of which
-            # client requested it, so accepting it would let a token minted for
-            # a different client in the same realm be replayed against the
-            # gateway (a same-realm cross-client confused-deputy). Fail closed:
-            # a token must carry an audience that names this gateway.
-            accepted_audiences = [
-                self.client_id,
-                self.m2m_client_id,
-                "mcp-gateway",
-            ]
+            # Validate and decode token - accept multiple valid issuers, and only
+            # audiences that identify THIS gateway (see accepted_audiences).
+            valid_issuers = self._valid_issuers()
+            accepted_audiences = self.accepted_audiences()
 
             claims = None
             last_error = None
@@ -179,11 +190,12 @@ class KeycloakProvider(AuthProvider):
             )
 
             # Extract user info from claims
+            groups = normalize_groups_claim(claims.get("groups"), source="keycloak groups")
             return {
                 "valid": True,
                 "username": claims.get("preferred_username", claims.get("sub")),
                 "email": claims.get("email"),
-                "groups": claims.get("groups", []),
+                "groups": groups,
                 "scopes": claims.get("scope", "").split() if claims.get("scope") else [],
                 "client_id": claims.get("azp", claims.get("aud", self.client_id)),
                 "method": "keycloak",
@@ -223,16 +235,116 @@ class KeycloakProvider(AuthProvider):
         Raises:
             IdTokenVerificationError: If verification fails.
         """
-        valid_issuers = [
-            self.external_realm_url,
-            self.realm_url,
-            f"http://localhost:8080/realms/{self.realm}",
-        ]
+        valid_issuers = self._valid_issuers()
         # Keycloak sets the id_token 'aud' to the client that requested it.
         accepted_audiences = [self.client_id, self.m2m_client_id]
         return self._verify_id_token_with_jwks(
             id_token, valid_issuers, accepted_audiences, expected_nonce=expected_nonce
         )
+
+    def exchanged_token_gateway_audiences(
+        self,
+        token: str,
+        target_audience: str,
+        subject_token: str,
+    ) -> list[str]:
+        """Verify an OBO-exchanged token and return the gateway audiences it carries.
+
+        The token minted by an OBO token exchange is forwarded to the upstream
+        MCP server, so it must be audienced to that server, must belong to the
+        same user as the token that was exchanged, and must NOT also be a
+        credential for this gateway. Keycloak's legacy token exchange (V1)
+        mints it with the audience client's default client scopes and only
+        adds the requested audience; with the realm's ``mcp-gateway`` audience
+        mapper on the ``basic`` scope, the result would also pass
+        ``validate_token``, and the upstream could replay it against the
+        gateway as the user. Standard exchange (V2, 26.2+) filters ``aud`` down
+        to the requested audience.
+
+        The token is verified like an id_token (realm JWKS signature, RS256,
+        issuer allowlist, expiry and issued-at with a small clock-skew leeway)
+        with ``target_audience`` as the required audience. Its ``sub`` must
+        equal the subject token's ``sub``, so an IdP policy that mints a token
+        for a different user (impersonation) is refused. The subject token is
+        read without verifying its signature here. /validate verifies a bearer
+        token's signature only when no session cookie authenticated the
+        request, so this method does not rely on it. The caller has already
+        bound the subject token's ``sub`` to the authorized principal
+        (``_obo_subject_matches_principal``), and Keycloak verified its
+        signature during the exchange, so a forged subject token never
+        produces a token to verify.
+
+        Args:
+            token: The access token returned by the token-exchange grant.
+            target_audience: The audience the exchange was requested for.
+            subject_token: The ingress token that was exchanged.
+
+        Returns:
+            The audiences in the token that this gateway accepts, sorted; empty
+            when the token is safe to forward.
+
+        Raises:
+            IdTokenVerificationError: If the token fails verification, does not
+                carry ``target_audience``, has no ``sub``, or its ``sub`` differs
+                from the subject token's. A malformed JWKS entry can surface as
+                a PyJWT error instead; callers must treat any exception as a
+                failed verification.
+        """
+        claims = self._verify_id_token_with_jwks(
+            token,
+            self._valid_issuers(),
+            [target_audience],
+            leeway_seconds=_EXCHANGED_TOKEN_LEEWAY_SECONDS,
+        )
+        exchanged_subject = claims.get("sub")
+        if not exchanged_subject:
+            # A token without the user's subject is not a delegated token. With
+            # legacy exchange this happens when the target client's default
+            # scopes lack the `sub` mapper (Keycloak's built-in `basic` scope carries it).
+            raise IdTokenVerificationError("exchanged token carries no 'sub' claim")
+        if exchanged_subject != _unverified_subject(subject_token):
+            raise IdTokenVerificationError("exchanged token 'sub' does not match the subject token")
+        aud = claims.get("aud")
+        audiences = {aud} if isinstance(aud, str) else set(aud or [])
+        return sorted(audiences.intersection(self.accepted_audiences()))
+
+    def _valid_issuers(self) -> list[str]:
+        """Issuers a token from this realm may carry.
+
+        The external URL (e.g. https://mcpgateway.ddns.net/realms/mcp-gateway),
+        the internal URL (e.g. http://keycloak:8080/realms/mcp-gateway) and the
+        localhost URL used in development.
+        """
+        return [
+            self.external_realm_url,
+            self.realm_url,
+            f"http://localhost:8080/realms/{self.realm}",
+        ]
+
+    def accepted_audiences(self) -> list[str]:
+        """Audiences that make an access token valid AT THIS GATEWAY.
+
+        - ``self.client_id``: the gateway's own pre-defined web client.
+        - ``self.m2m_client_id``: the gateway's M2M client.
+        - ``"mcp-gateway"``: custom audience added by the realm's audience
+          mapper on the ``basic`` scope, which is reliably attached to every
+          DCR'd client as well as the web and M2M clients (see
+          keycloak/setup/init-keycloak.sh::setup_dcr_audience_mapper).
+
+        ``"account"`` is deliberately NOT accepted. It is Keycloak's default
+        audience present on EVERY realm user token regardless of which client
+        requested it, so accepting it would let a token minted for a different
+        client in the same realm be replayed against the gateway (a same-realm
+        cross-client confused-deputy). Fail closed: a token must carry an
+        audience that names this gateway.
+
+        The OBO exchanged-token check (``exchanged_token_gateway_audiences``)
+        refuses tokens carrying any of these, so a new way for the gateway to
+        accept a token (for example per-server extra audiences) must be
+        reflected here too. ``test_validate_token_ignores_per_server_extra_audiences``
+        fails if ``validate_token`` starts honoring ``extra_audiences`` first.
+        """
+        return [self.client_id, self.m2m_client_id, "mcp-gateway"]
 
     def _validate_self_signed_token(self, token: str) -> dict[str, Any]:
         """Validate a self-signed JWT token generated by our auth server.
@@ -276,9 +388,9 @@ class KeycloakProvider(AuthProvider):
                     scopes = scope_value
 
             # Extract groups from claims
-            groups = claims.get("groups", [])
-            if isinstance(groups, str):
-                groups = [groups]
+            groups = normalize_groups_claim(
+                claims.get("groups"), source="keycloak self-signed groups"
+            )
 
             # Counts only: group names are organizational PII and the scope list
             # reveals the authz model. The subject is masked (may be an email).

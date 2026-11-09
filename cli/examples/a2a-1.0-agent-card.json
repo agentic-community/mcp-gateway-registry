@@ -1,0 +1,53 @@
+{
+  "name": "Trip Planning Agent",
+  "description": "Finds flights and builds travel plans.",
+  "url": "https://agent.example.com/a2a",
+  "path": "/trip-planning-agent",
+  "protocolVersion": "1.0",
+  "supportedProtocol": "a2a",
+  "version": "1.0.0",
+  "supportedInterfaces": [
+    {
+      "url": "https://agent.example.com/a2a",
+      "protocolBinding": "JSONRPC",
+      "protocolVersion": "1.0"
+    },
+    {
+      "url": "https://agent.example.com/a2a",
+      "protocolBinding": "HTTP+JSON",
+      "protocolVersion": "1.0"
+    }
+  ],
+  "capabilities": {
+    "streaming": true
+  },
+  "defaultInputModes": ["text/plain"],
+  "defaultOutputModes": ["text/plain"],
+  "securitySchemes": {
+    "bearer": {
+      "type": "http",
+      "scheme": "bearer",
+      "bearerFormat": "JWT"
+    }
+  },
+  "securityRequirements": [
+    {
+      "schemes": {
+        "bearer": {
+          "list": []
+        }
+      }
+    }
+  ],
+  "skills": [
+    {
+      "id": "plan_trip",
+      "name": "Plan Trip",
+      "description": "Build a travel plan from a destination and dates.",
+      "tags": ["travel", "planning"]
+    }
+  ],
+  "tags": ["travel", "a2a"],
+  "visibility": "public",
+  "status": "active"
+}

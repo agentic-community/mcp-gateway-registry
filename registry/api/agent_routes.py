@@ -13,6 +13,7 @@ import json
 import logging
 from datetime import UTC, datetime
 from typing import Annotated, Any
+from urllib.parse import urlsplit
 
 import httpx
 from fastapi import (
@@ -33,6 +34,7 @@ from ..audit.request_id import sanitize_correlation_id
 from ..auth.asset_permissions import user_has_asset_permission
 from ..auth.csrf import verify_csrf_token_flexible
 from ..auth.dependencies import nginx_proxied_auth
+from ..auth.resource_binding import normalize_request_path
 from ..common.log_redaction import redact_headers, redact_mapping, redact_url
 from ..core.config import settings
 from ..core.metrics import ASSET_ID_SUPPLIED_TOTAL
@@ -46,6 +48,7 @@ from ..schemas.agent_models import (
     AgentCard,
     AgentCardPatch,
     AgentInfo,
+    AgentInterface,
     AgentProvider,
     AgentRegistrationRequest,
     PullCardFieldChange,
@@ -73,6 +76,7 @@ from ..services.lifecycle_events import (
     user_can_change_lifecycle_status,
 )
 from ..services.registration_gate_service import check_registration_gate
+from ..services.visibility import gateway_routable_agent_interfaces
 from ..services.webhook_service import send_registration_webhook
 from ..utils.metadata import (
     flatten_metadata_to_text,
@@ -80,7 +84,12 @@ from ..utils.metadata import (
     project_metadata,
 )
 from ..utils.request_utils import get_client_ip
-from ..utils.url_guard import PROXY_PROFILE, guarded_async_client, validate_agent_url
+from ..utils.url_guard import (
+    PROXY_PROFILE,
+    guarded_async_client,
+    normalize_url_identity,
+    validate_agent_url,
+)
 from ._etag_utils import (
     parse_if_match,
     updated_ms,
@@ -406,11 +415,14 @@ A2A_SPEC_FIELDS: set[str] = {
     "default_output_modes",
     "skills",
     "preferred_transport",
+    "supported_interfaces",
     "provider",
     "icon_url",
     "documentation_url",
     "security_schemes",
     "security",
+    "security_requirements",
+    "signatures",
     "supports_authenticated_extended_card",
 }
 
@@ -420,9 +432,11 @@ A2A_CAMEL_TO_SNAKE: dict[str, str] = {
     "defaultInputModes": "default_input_modes",
     "defaultOutputModes": "default_output_modes",
     "preferredTransport": "preferred_transport",
+    "supportedInterfaces": "supported_interfaces",
     "iconUrl": "icon_url",
     "documentationUrl": "documentation_url",
     "securitySchemes": "security_schemes",
+    "securityRequirements": "security_requirements",
     "supportsAuthenticatedExtendedCard": "supports_authenticated_extended_card",
 }
 
@@ -532,6 +546,60 @@ def _normalize_remote_card_keys(
     return normalized
 
 
+# Nested AgentInterface entry keys that _normalize_remote_card_keys (top-level
+# only) does not reach. A subset of A2A_CAMEL_TO_SNAKE scoped to the fields that
+# appear on an interface entry.
+_INTERFACE_CAMEL_TO_SNAKE = {
+    "protocolBinding": "protocol_binding",
+    "protocolVersion": "protocol_version",
+}
+
+
+def _normalize_interface_entry(
+    entry: Any,
+) -> Any:
+    """Normalize one supported_interfaces entry for diff comparison.
+
+    Converts the nested camelCase keys a remote card uses to the snake_case
+    spelling current_agent.model_dump() produces, and drops null values:
+    current_dict's entries include unset optional fields (e.g. `tenant`) as
+    explicit None, while a remote card that never set them omits the key
+    entirely, so without this every comparison would spuriously differ by
+    that one key.
+    """
+    if not isinstance(entry, dict):
+        return entry
+    return {_INTERFACE_CAMEL_TO_SNAKE.get(k, k): v for k, v in entry.items() if v is not None}
+
+
+def _normalize_requirement(
+    entry: Any,
+) -> Any:
+    """Normalize one security_requirements entry for diff comparison.
+
+    Each entry is a SecurityRequirement wrapping a `schemes` map of scheme name
+    to its scope list. model_dump() emits the scope list under the wire alias
+    `list`; the `values` fallback covers a hand-built or remote card that used
+    the StringList field name. Both sides are keyed to `list` so an equivalent
+    requirement does not report a spurious diff.
+    """
+    if not isinstance(entry, dict):
+        return entry
+    schemes = entry.get("schemes")
+    if not isinstance(schemes, dict):
+        return entry
+    return {
+        "schemes": {
+            scheme: (
+                {"list": scopes.get("list", scopes.get("values", []))}
+                if isinstance(scopes, dict)
+                else scopes
+            )
+            for scheme, scopes in schemes.items()
+        }
+    }
+
+
 def _compute_card_diff(
     current_agent: AgentCard,
     remote_card: dict[str, Any],
@@ -584,6 +652,50 @@ def _compute_card_diff(
                     key=lambda s: (s.get("id") if isinstance(s, dict) else "") or "",
                 )
 
+        if field_name == "supported_interfaces":
+            # _normalize_remote_card_keys only converts TOP-LEVEL keys, so
+            # each remote entry still has camelCase protocolBinding/
+            # protocolVersion while current_dict's entries (from
+            # current_agent.model_dump()) use snake_case, so normalize the
+            # remote side's nested keys too (generically, by key, so any
+            # future AgentInterface field, e.g. the optional `tenant`
+            # field, survives comparison without needing a matching
+            # hardcoded entry here), or every comparison would spuriously
+            # report a diff on every registered agent, since these are
+            # required fields present on every entry (unlike the
+            # skills/inputModes case, which is optional and often absent).
+            #
+            # Handled via its own comparison + append + continue, rather
+            # than reassigning current_value/remote_value like the
+            # skills/security_schemes blocks do, for two reasons:
+            #  1. Order is a meaningful preference signal in A2A 1.0 (first
+            #     entry = preferred), unlike skills' unordered list, so the
+            #     comparison must stay order-sensitive, with no sorting.
+            #  2. The value stored in PullCardFieldChange.remote_value
+            #     (what _build_safe_card_updates later writes back verbatim)
+            #     must keep the agent's own original keys/order/casing.
+            #     Normalizing it for the comparison and then storing that
+            #     normalized copy would silently alter what gets persisted
+            #     the next time this diff is applied.
+            # Normalization (nested camelCase to snake_case, null-dropping) is
+            # done by the module-level _normalize_interface_entry.
+            current_cmp = current_value
+            remote_cmp = remote_value
+            if isinstance(current_cmp, list):
+                current_cmp = [_normalize_interface_entry(e) for e in current_cmp]
+            if isinstance(remote_cmp, list):
+                remote_cmp = [_normalize_interface_entry(e) for e in remote_cmp]
+
+            if current_cmp != remote_cmp:
+                changes.append(
+                    PullCardFieldChange(
+                        field=field_name,
+                        current_value=current_value,
+                        remote_value=remote_value,
+                    )
+                )
+            continue
+
         if field_name == "security_schemes" and isinstance(current_value, dict):
             current_value = {
                 k: _drop_nulls(v) if isinstance(v, dict) else v for k, v in current_value.items()
@@ -592,6 +704,25 @@ def _compute_card_diff(
                 remote_value = {
                     k: _drop_nulls(v) if isinstance(v, dict) else v for k, v in remote_value.items()
                 }
+
+        if field_name == "security_requirements":
+            # Each entry is a SecurityRequirement wrapping its scheme map
+            # under "schemes" (a2a.proto: SecurityRequirement.schemes is
+            # map<string, StringList>, not inlined onto the entry itself).
+            # model_dump() emits the StringList under its wire alias ("list")
+            # via StringList's model_serializer; the "values" fallback in
+            # _normalize_requirement covers a hand-built or remote card that
+            # used the field name. Both sides are normalized to the wire key so
+            # an equivalent requirement doesn't report a spurious diff.
+            if isinstance(current_value, list):
+                current_value = [_normalize_requirement(e) for e in current_value]
+            if isinstance(remote_value, list):
+                remote_value = [_normalize_requirement(e) for e in remote_value]
+
+        if field_name == "signatures" and isinstance(current_value, list):
+            current_value = [_drop_nulls(s) if isinstance(s, dict) else s for s in current_value]
+            if isinstance(remote_value, list):
+                remote_value = [_drop_nulls(s) if isinstance(s, dict) else s for s in remote_value]
 
         if current_value != remote_value:
             changes.append(
@@ -695,28 +826,80 @@ def _gateway_agent_url(
     return f"{base}{AGENT_ROUTE_PREFIX}/{agent_path.strip('/')}/"
 
 
+def _classify_gateway_agent_route(
+    candidate_url: str,
+    gateway_url: str,
+) -> str | None:
+    """Classify a card URL against this agent's nginx route.
+
+    Both standard HTTP and HTTPS listeners serve agent routes. Only those
+    paired ports (or the advertised listener itself) belong to this gateway;
+    another hostname or nonstandard port may be a genuine backend.
+    """
+    candidate = urlsplit(normalize_url_identity(candidate_url))
+    gateway = urlsplit(normalize_url_identity(gateway_url))
+    if (candidate.hostname or "").rstrip(".") != (gateway.hostname or "").rstrip("."):
+        return None
+    if (candidate.scheme, candidate.netloc) != (gateway.scheme, gateway.netloc):
+        # Both standard public listeners are represented without a port after
+        # URL normalization. A custom port may be a different application.
+        if candidate.port is not None or gateway.port is not None:
+            return None
+    gateway_path = normalize_request_path(gateway.path)
+    candidate_path = normalize_request_path(candidate.path)
+    if candidate_path != gateway_path and not candidate_path.startswith(gateway_path + "/"):
+        return None
+
+    # An echo may differ in host casing, explicit default port or trailing
+    # slash, but a rewritten path, query or other listener is not an echo.
+    if (
+        not candidate.query
+        and (candidate.scheme, candidate.netloc) == (gateway.scheme, gateway.netloc)
+        and candidate.path.removesuffix("/") == gateway.path.removesuffix("/")
+    ):
+        return "same"
+    return "nested"
+
+
+def _restore_proxied_agent_on_replace(
+    agent_card: AgentCard,
+    existing: AgentCard,
+    path: str,
+) -> None:
+    """Restore the stored backend when a PUT echoes the advertised gateway URL.
+
+    Non-admin reads project interface URLs onto the gateway. Only an exact
+    projection of the stored interfaces can be restored to backend URLs;
+    changed declarations must name the actual backend and pass validation.
+    """
+    if agent_card.url != _gateway_agent_url(path) or not existing.proxy_pass_url:
+        return
+    agent_card.proxy_pass_url = existing.proxy_pass_url
+    submitted = agent_card.supported_interfaces
+    if not submitted or not all(interface.url == agent_card.url for interface in submitted):
+        return
+    expected = gateway_routable_agent_interfaces(
+        existing.supported_interfaces, existing.proxy_pass_url
+    )
+    if len(submitted) == len(expected) and all(
+        isinstance(original, AgentInterface)
+        and (item.protocol_binding, item.protocol_version, item.tenant)
+        == (original.protocol_binding, original.protocol_version, original.tenant)
+        for item, original in zip(submitted, expected, strict=True)
+    ):
+        agent_card.supported_interfaces = existing.supported_interfaces
+
+
 def _apply_a2a_reverse_proxy_split(
     agent_card: AgentCard,
     path: str,
 ) -> None:
-    """Advertise the gateway url and keep the registrant backend in proxy_pass_url.
+    """Advertise the gateway only for declared interfaces its route can serve.
 
-    In A2A reverse-proxy mode the stored ``url`` is the gateway-facing address and
-    the registrant's real backend lives in ``proxy_pass_url``. This mutates the
-    card in place so discovery routes callers through the gateway. It is idempotent
-    and MUST run on every write path (register, PUT, PATCH), not just register, or
-    an edit that changes ``url`` would desync the advertised url from the backend.
-
-    Only applies when ``a2a_reverse_proxy_effective`` (flag AND with-gateway) and
-    the agent speaks a2a; otherwise the card is left untouched (registry-only mode
-    keeps url == backend, and non-a2a agents are never proxied). When the card's
-    ``url`` already points at the gateway (an edit that did not touch the backend),
-    the existing ``proxy_pass_url`` is preserved rather than overwritten with the
-    gateway url.
-
-    Args:
-        agent_card: The card being written; mutated in place.
-        path: Normalized agent path with a leading slash (e.g. "/travel").
+    The nginx agent location forwards one HTTP backend path. Keep the original
+    interfaces in storage, but reject a card if no declared JSONRPC or
+    HTTP+JSON interface points at that exact backend. Legacy cards without an
+    interface list retain their existing top-level URL behavior.
     """
     if not settings.a2a_reverse_proxy_effective:
         return
@@ -724,17 +907,20 @@ def _apply_a2a_reverse_proxy_split(
         return
 
     gateway_url = _gateway_agent_url(path)
+    backend_url = agent_card.proxy_pass_url if agent_card.url == gateway_url else agent_card.url
+    if agent_card.supported_interfaces and not gateway_routable_agent_interfaces(
+        agent_card.supported_interfaces, str(backend_url or "")
+    ):
+        raise ValueError(
+            "A2A gateway requires a declared JSONRPC or HTTP+JSON interface "
+            "at the registered backend URL; disable reverse proxy or register "
+            "a routable interface"
+        )
     if agent_card.url == gateway_url:
-        # url already gateway-facing (edit that did not change the backend); keep
-        # the stored backend so we do not clobber it with the gateway url.
         return
-
     agent_card.proxy_pass_url = agent_card.url
     agent_card.url = gateway_url
-    logger.info(
-        f"A2A reverse-proxy: agent '{path}' advertised url set to gateway "
-        f"({agent_card.url}); backend preserved in proxy_pass_url."
-    )
+    logger.info("A2A reverse-proxy: agent '%s' advertised gateway url %s", path, gateway_url)
 
 
 def _weak_etag_for(agent_card: AgentCard) -> str:
@@ -1035,10 +1221,18 @@ async def register_agent(
 
         # Build optional kwargs for fields that have defaults on AgentCard
         optional_card_kwargs: dict[str, Any] = {}
+        if request.security_requirements:
+            optional_card_kwargs["security_requirements"] = request.security_requirements
+        if request.signatures:
+            optional_card_kwargs["signatures"] = request.signatures
         if request.default_input_modes:
             optional_card_kwargs["default_input_modes"] = request.default_input_modes
         if request.default_output_modes:
             optional_card_kwargs["default_output_modes"] = request.default_output_modes
+        if request.supported_interfaces:
+            optional_card_kwargs["supported_interfaces"] = [
+                AgentInterface(**iface) for iface in request.supported_interfaces
+            ]
         if request.metadata:
             optional_card_kwargs["metadata"] = request.metadata
         # Build capabilities: merge explicit capabilities dict with streaming bool
@@ -1121,7 +1315,7 @@ async def register_agent(
         # gateway. Mirrors the MCP-server url/proxy_pass_url split; proxy_pass_url
         # is redacted from non-admin reads (registry/services/visibility.py) and
         # the nginx generator proxies to it. When the flag is off, the card is
-        # stored exactly as registered (no proxy_pass_url) -- backwards compatible.
+        # stored exactly as registered (no proxy_pass_url), i.e. backwards compatible.
         #
         # Gated on a2a_reverse_proxy_effective (flag AND with-gateway), NOT the
         # raw flag: in registry-only mode there is no gateway to route through, so
@@ -2034,7 +2228,6 @@ async def pull_agent_card(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Agent '{path}' is synced from {source_peer} and cannot be updated locally.",
         )
-
     # 4. Check agent has a valid URL and is A2A protocol
     if not existing_agent.url:
         raise HTTPException(
@@ -2048,15 +2241,38 @@ async def pull_agent_card(
             detail="Pull card is only supported for A2A protocol agents",
         )
 
-    # 5. Fetch remote card
-    base_url = str(existing_agent.url).rstrip("/")
-    remote_card_raw, remote_card_url = await _fetch_remote_agent_card(base_url)
+    # In reverse-proxy mode `url` is the advertised gateway route. Fetch and
+    # compare against the registrant's backend, as the health checker does.
+    backend_url = existing_agent.proxy_pass_url or existing_agent.url
+    remote_card_raw, remote_card_url = await _fetch_remote_agent_card(str(backend_url).rstrip("/"))
 
-    # 6. Normalize camelCase keys to snake_case
     remote_card = _normalize_remote_card_keys(remote_card_raw)
 
-    # 7. Compute diff (A2A-spec fields only)
-    changes = _compute_card_diff(existing_agent, remote_card)
+    # A proxied agent advertises the gateway in `url`, while `proxy_pass_url`
+    # is the backend we fetched. An echo of the advertised listener and raw
+    # path does not repoint the backend; nginx-canonicalized aliases, child
+    # routes and the alternate listener loop back.
+    remote_url = remote_card.get("url")
+    if isinstance(remote_url, str):
+        gateway_url = (
+            str(existing_agent.url) if existing_agent.proxy_pass_url else _gateway_agent_url(path)
+        )
+        try:
+            gateway_route = _classify_gateway_agent_route(remote_url, gateway_url)
+        except UrlValidationError:
+            gateway_route = None  # Invalid URLs reach the URL-change validator below.
+        if gateway_route == "same" and existing_agent.proxy_pass_url:
+            remote_card.pop("url")
+        elif gateway_route is not None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Remote agent card URL points back to this agent's gateway route",
+            )
+
+    comparison_card = existing_agent
+    if existing_agent.proxy_pass_url:
+        comparison_card = existing_agent.model_copy(update={"url": str(backend_url)})
+    changes = _compute_card_diff(comparison_card, remote_card)
     has_changes = len(changes) > 0
 
     # S3: a change to the agent's URL could indicate a redirect/takeover, so log
@@ -2115,6 +2331,11 @@ async def pull_agent_card(
     applied = False
     if not dry_run and has_changes:
         updates.update(_build_safe_card_updates(changes))
+        if existing_agent.proxy_pass_url and "url" in updates:
+            # Pulling a changed backend URL must not publish it as the gateway
+            # URL. Validate before persisting it under the backend field.
+            validate_agent_url(str(updates["url"]))
+            updates["proxy_pass_url"] = updates.pop("url")
 
     # 9. Persist. In dry-run mode this is just the health side-effect; in apply
     #    mode it is health + A2A fields in one call.
@@ -2130,6 +2351,11 @@ async def pull_agent_card(
                 "Remote agent card URL failed SSRF validation and was rejected "
                 "(private/internal addresses are not allowed)"
             ),
+        ) from e
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Remote agent card is not routable through the gateway: {e}",
         ) from e
     except Exception as e:
         # In dry-run mode a failed health write should not fail the preview.
@@ -2301,10 +2527,18 @@ async def update_agent(
     try:
         # Build optional kwargs for fields that have defaults on AgentCard
         update_optional_kwargs: dict[str, Any] = {}
+        if request.security_requirements:
+            update_optional_kwargs["security_requirements"] = request.security_requirements
+        if request.signatures:
+            update_optional_kwargs["signatures"] = request.signatures
         if request.default_input_modes:
             update_optional_kwargs["default_input_modes"] = request.default_input_modes
         if request.default_output_modes:
             update_optional_kwargs["default_output_modes"] = request.default_output_modes
+        if request.supported_interfaces:
+            update_optional_kwargs["supported_interfaces"] = [
+                AgentInterface(**iface) for iface in request.supported_interfaces
+            ]
 
         updated_agent = AgentCard(
             protocol_version=request.protocol_version,
@@ -2342,6 +2576,7 @@ async def update_agent(
             status=request.status if request.status else existing_agent.status,
             **update_optional_kwargs,
         )
+        _restore_proxied_agent_on_replace(updated_agent, existing_agent, path)
 
         # Lifecycle status change requires change_lifecycle_status (Issue #1330).
         _check_agent_lifecycle_status_permission(existing_agent, updated_agent, user_context)
@@ -2411,7 +2646,17 @@ async def update_agent(
         f"Agent '{updated_agent.name}' ({path}) updated by user '{user_context['username']}'"
     )
 
-    return updated_agent.model_dump()
+    agent_dict = updated_agent.model_dump()
+    from ..services.visibility import (
+        redact_agent_backend_fields,
+        redact_proxy_backend_url,
+        should_redact_backend_urls,
+    )
+
+    if should_redact_backend_urls(user_context):
+        redact_agent_backend_fields(agent_dict)
+    redact_proxy_backend_url(agent_dict, user_context)
+    return agent_dict
 
 
 @router.patch("/agents/{path:path}")
@@ -2546,7 +2791,13 @@ async def patch_agent(
     # Re-apply the reverse-proxy url/proxy_pass_url split so a PATCH of url keeps
     # the advertised gateway url in sync with the stored backend (idempotent when
     # url already points at the gateway).
-    _apply_a2a_reverse_proxy_split(merged_agent, path)
+    try:
+        _apply_a2a_reverse_proxy_split(merged_agent, path)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid agent card: {e}",
+        ) from e
 
     # Registration gate (parity with PUT)
     gate_result = await check_registration_gate(
@@ -2588,7 +2839,17 @@ async def patch_agent(
     )
 
     response.headers["ETag"] = _weak_etag_for(updated)
-    return updated.model_dump()
+    agent_dict = updated.model_dump()
+    from ..services.visibility import (
+        redact_agent_backend_fields,
+        redact_proxy_backend_url,
+        should_redact_backend_urls,
+    )
+
+    if should_redact_backend_urls(user_context):
+        redact_agent_backend_fields(agent_dict)
+    redact_proxy_backend_url(agent_dict, user_context)
+    return agent_dict
 
 
 @router.delete("/agents/{path:path}")
@@ -2645,7 +2906,7 @@ async def delete_agent(
     # Strict dual gate, uniform with server/skill/custom-entity delete: the caller
     # must hold the delete_agent scope AND be an admin or the agent's owner.
     # Previously ownership alone sufficed (scope OR owner), letting an owner delete
-    # without the delete_agent grant -- the lone outlier among the asset families.
+    # without the delete_agent grant, the lone outlier among the asset families.
     # The scope half routes through the canonical helper keyed on the agent NAME
     # (matching modify/toggle and the batch path); the ownership check below
     # (skipped for admins) supplies the AND-owner half.
@@ -2761,7 +3022,7 @@ async def discover_agents_by_skills(
 
         relevance_score = 0.6 * skill_match_score + 0.2 * tag_match_score + 0.2 * trust_boost
 
-        # Extract streaming capability -- check capabilities dict first, fall back to
+        # Extract streaming capability: check capabilities dict first, fall back to
         # top-level field for agents registered before the capabilities dict change
         streaming = (
             agent.capabilities.get("streaming", False)

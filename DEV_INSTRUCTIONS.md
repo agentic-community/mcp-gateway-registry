@@ -18,13 +18,13 @@ We recommend the fastest option to get started:
 #### Option A: macOS Setup (Fastest ⚡)
 Complete this setup guide first:
 
-- [macOS Setup Guide](macos-setup-guide.md)
+- [macOS Setup Guide](docs/macos-setup-guide.md)
 - Time to first run: ~30 minutes
 
 #### Option B: EC2 Complete Configuration (Preferred for Server Setup)
 If working on EC2 or a Linux server, complete this guide first:
 
-- [Complete Configuration Guide](complete-configuration-guide.md)
+- [Complete Setup Guide](docs/complete-setup-guide.md)
 - Time to first run: ~60 minutes
 
 ## Before You Start Coding
@@ -48,51 +48,51 @@ Before submitting a pull request, you must run and pass the test suite:
 
 ### Quick Start Testing
 ```bash
-# Generate fresh credentials (tokens expire in 5 minutes)
-./credentials-provider/generate_creds.sh
+# One-time: install the dev extras. A plain `uv sync` omits test dependencies
+# such as freezegun, and the check below fails without them.
+uv sync --extra dev
 
-# Run the suite locally. This is the same command CI runs on your PR.
+# Run the suite locally. These are the same commands CI runs on your PR.
 # Drop -n for serial if 8 workers exhaust memory on a small instance.
+uv run python scripts/test.py check
 uv run python scripts/test.py coverage -n 8
+
+# Faster iteration while you work:
+uv run python scripts/test.py fast
 
 # Other targets (unit, integration, e2e, auth, servers, search, health, core):
 uv run python scripts/test.py --help
 ```
 
+The pytest suite mocks its external dependencies, so it needs no running stack and no credentials.
+
 ### For PR Merge (REQUIRED)
 
-The same command as above. All tests must pass (0 failures) before merging, and CI runs
-it again on the PR.
+The same `check` and `coverage` commands as above. All tests must pass (0 failures) before merging, and CI runs them again on the PR.
 
 ### Understanding the Tests
-See the comprehensive testing documentation:
+See the testing documentation:
 
-- **[tests/README.md](tests/README.md)** - Start here! Navigation guide with access control overview
-- **[tests/TEST_QUICK_REFERENCE.md](tests/TEST_QUICK_REFERENCE.md)** - Quick reference for how-to guides
-- **[tests/lob-bot-access-control-testing.md](tests/lob-bot-access-control-testing.md)** - Access control test details
-- **[auth_server/scopes.yml](auth_server/scopes.yml)** - Permission definitions (admin, LOB1, LOB2)
+- **[tests/README.md](tests/README.md)** - Start here. Layout of the test tree, fixtures and auto-mocking
+- **[docs/testing/README.md](docs/testing/README.md)** - Testing guide: markers, coverage, CI and troubleshooting
+- **[docs/testing/QUICK-START.md](docs/testing/QUICK-START.md)** - Quick reference for the `scripts/test.py` targets
+- **[docs/scopes.md](docs/scopes.md)** - Permission model. Scopes live in DocumentDB; see [docs/scopes-mgmt.md](docs/scopes-mgmt.md) to manage them
 
-### Common Testing Workflows
+### Testing Against a Running Stack
 
-**Agent CRUD Testing:**
+Manual and end-to-end checks against a deployed gateway need fresh tokens. Keycloak access tokens expire after 5 minutes by default.
+
 ```bash
+# Tokens for all agents and services
 ./credentials-provider/generate_creds.sh
-bash tests/agent_crud_test.sh
-```
 
-**Access Control Testing (LOB Bots):**
-```bash
+# Tokens for the access-control test accounts (admin, LOB1, LOB2)
 ./keycloak/setup/generate-agent-token.sh admin-bot
 ./keycloak/setup/generate-agent-token.sh lob1-bot
 ./keycloak/setup/generate-agent-token.sh lob2-bot
-bash tests/run-lob-bot-tests.sh
 ```
 
-**Check Test Logs:**
-```bash
-ls -lh /tmp/*_*.log
-grep -i "error\|fail" /tmp/*.log
-```
+Then follow [docs/testing.md](docs/testing.md) for the CLI and agent test workflows.
 
 ## Fork and Contribute
 
@@ -134,9 +134,7 @@ Before submitting a pull request:
 - [ ] Read docs/llms.txt
 - [ ] Read AGENTS.md (coding standards)
 - [ ] Code follows project conventions (use ruff, mypy, pytest)
-- [ ] Generated fresh credentials: `./credentials-provider/generate_creds.sh`
-- [ ] Local tests pass: `uv run python scripts/test.py coverage -n 8`
-- [ ] PR merge tests pass: `uv run python scripts/test.py coverage -n 8` (all tests must pass)
+- [ ] Tests pass locally: `uv run python scripts/test.py check` and `uv run python scripts/test.py coverage -n 8` (0 failures)
 - [ ] Reviewed test documentation: [tests/README.md](tests/README.md)
 - [ ] Changes are pushed to a fork, not directly to this repo
 - [ ] Pull request is created with clear description

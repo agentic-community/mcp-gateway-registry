@@ -48,3 +48,55 @@ tests:
       - matchRegex:
           path: data["script.sh"]
           pattern: 'configure_dcr_trusted_hosts "\$TOKEN"'
+      - matchRegex:
+          path: data["script.sh"]
+          # Without this call a DCR client can define its own protocol
+          # mappers, and a mapper chooses what the `groups` claim says.
+          pattern: 'configure_dcr_allowed_mapper_types "\$TOKEN"'
+
+  - it: withholds every privileged client scope from the DCR allowlist
+    templates:
+      - templates/configmap.yaml
+    asserts:
+      # The two admin scope-document names carry no "/", so the filter must
+      # exclude them by name. A filter that only drops slash-containing
+      # names leaves both requestable through anonymous DCR, and each
+      # resolves to a scope document granting `server: "*"` with every
+      # action.
+      - matchRegex:
+          path: data["script.sh"]
+          pattern: 'PRIVILEGED_CLIENT_SCOPES=\(\n(.*\n)*?\s+"mcp-registry-admin"\n'
+      - matchRegex:
+          path: data["script.sh"]
+          pattern: 'PRIVILEGED_CLIENT_SCOPES=\(\n(.*\n)*?\s+"registry-admins"\n'
+      - matchRegex:
+          path: data["script.sh"]
+          pattern: 'DCR_WITHHELD_SCOPES=\("\$\{PRIVILEGED_CLIENT_SCOPES\[@\]\}"\)'
+      # The allowlist is built from the withheld list, not from the name
+      # shape alone.
+      - matchRegex:
+          path: data["script.sh"]
+          pattern: 'privileged_json=\$\(printf ''%s\\n'' "\$\{DCR_WITHHELD_SCOPES\[@\]\}" \| jq -R \. \| jq -sc \.\)'
+      - matchRegex:
+          path: data["script.sh"]
+          pattern: 'select\(\(\$privileged \| index\(\$scope\)\) == null\)'
+      # The superseded filter, which excluded only slash-containing names,
+      # must not come back.
+      - notMatchRegex:
+          path: data["script.sh"]
+          pattern: 'jq -c ''\[\.\[\]\.name \| select\(contains\("/"\) \| not\)\]'''
+
+  - it: creates the privileged scopes from one list, and keeps them off the M2M client
+    templates:
+      - templates/configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["script.sh"]
+          pattern: 'local scopes=\("\$\{PRIVILEGED_CLIENT_SCOPES\[@\]\}"\)'
+      # The M2M client holds the four server scopes only. Assigning it the
+      # admin scope-document names would make every M2M token an admin
+      # token, so that list stays written out rather than reusing the
+      # creation list.
+      - matchRegex:
+          path: data["script.sh"]
+          pattern: 'local scopes=\("mcp-servers-unrestricted/read" "mcp-servers-unrestricted/execute" "mcp-servers-restricted/read" "mcp-servers-restricted/execute"\)'

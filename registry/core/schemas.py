@@ -449,6 +449,12 @@ class EgressOAuthConfig(BaseModel):
     custom_scope_separator: str | None = None
     custom_token_auth_style: str | None = None
     custom_resource: str | None = None
+    expected_issuer: str | None = Field(
+        default=None,
+        description="Optional RFC 9207 issuer identifier of the provider's authorization server. "
+        "When set, the egress OAuth callback rejects a sign-in reply whose iss names a "
+        "different issuer. Empty keeps the callback as before.",
+    )
     updated_at: str | None = None
 
 
@@ -1169,6 +1175,12 @@ class OAuthDiscoveryConfigRequest(BaseModel):
     custom_scope_separator: str | None = None
     custom_token_auth_style: str | None = None
     custom_resource: str | None = None
+    expected_issuer: str | None = Field(
+        default=None,
+        description="Optional RFC 9207 issuer identifier of the provider's authorization server. "
+        "When set, the egress OAuth callback rejects a sign-in reply whose iss names a "
+        "different issuer. Empty keeps the callback as before.",
+    )
 
 
 class OAuth2Provider(BaseModel):

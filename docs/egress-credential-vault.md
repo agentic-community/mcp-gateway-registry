@@ -154,7 +154,7 @@ sequenceDiagram
     K-->>S: miss
     S-->>V: consent_required + authorize_url + connect_url + request_state
     V-->>P: EgressTokenResponse(consent_required=true)
-    Note over P,C: -32042 elicitation fires only on token-requiring methods<br/>(tools/call, prompts/get, resources/read). Other methods get a plain JSON-RPC error.
+    Note over P,C: The gateway answers initialize, ping and the list methods itself.<br/>tools/list returns one connect_mcpgw_[server] tool. -32042 fires on<br/>tools/call (including the connect tool), prompts/get and resources/read.
     P-->>C: JSON-RPC -32042 URLElicitationRequiredError (mode=url, url=connect_url)
 
     Note over C,TP: User consents (browser)
@@ -379,7 +379,7 @@ prefix; the AS facade is mounted at root and registered only when
 
 | Method | Path | Auth | Purpose |
 |--------|------|------|---------|
-| `POST` | `/api/servers/{server_path}/egress-auth` | proxied auth + admin | Configure egress OAuth on a server (provider, client_id, write-only encrypted client_secret, scopes, custom URLs, optional RFC 8707 `custom_resource`). |
+| `POST` | `/api/servers/{server_path}/egress-auth` | proxied auth + admin | Configure egress OAuth on a server (provider, client_id, write-only encrypted client_secret, scopes, custom URLs, optional RFC 8707 `custom_resource`, optional RFC 9207 `expected_issuer`). |
 | `GET` | `/api/servers/{server_path}/egress-auth` | proxied auth + admin | Read the non-secret egress config (secret stripped). |
 
 ### End-user
@@ -414,7 +414,7 @@ and `AUTH_SERVER_NGINX_MARKER_SECRET`.
 | `EGRESS_REFRESH_WORKER_INTERVAL_SECONDS` | `120` | Background proactive-refresh scan interval; `0` disables the sweep. |
 | `EGRESS_STATE_TTL_SECONDS` | `600` | Lifetime of the AEAD-encrypted OAuth consent state. |
 | `EGRESS_REGISTRY_INTERNAL_URL` | `http://registry:8091` | URL the auth-server uses to reach the registry's dedicated internal vend listener (never exposed to the host / public Ingress). |
-| `AUTH_SERVER_NGINX_MARKER_SECRET` | _(required)_ | Shared secret nginx force-sets on `/validate`; the auth-server only mints an mcp-proxy token when it matches. **Required at startup** (auth-server and registry refuse to start without it) and must be identical across both. Set a strong random value. **(secret)** |
+| `AUTH_SERVER_NGINX_MARKER_SECRET` | _(required)_ | Shared secret nginx force-sets on `/validate`; the auth-server mints the mcp-proxy, generic-proxy and registry API tokens only when it matches. **Required at startup** (auth-server and registry refuse to start without it) and must be identical across both. Rotate it on both together: during a mismatch every registry API and UI request returns 401, not just egress. Set a strong random value. **(secret)** |
 | `EGRESS_CREDENTIAL_ENCRYPTION_KEY` | `""` | Application-layer root key. When set (>= 32 chars), `StoredToken` payloads are AES-256-GCM encrypted under a per-principal HKDF-derived key before reaching either backend, so the vault holds ciphertext. Empty = plaintext at rest (legacy). Backend-independent; legacy plaintext entries are re-encrypted on first read. Must live **outside** the secret-store trust boundary it protects. **(secret)** |
 | `EGRESS_CREDENTIAL_ENCRYPTION_REQUIRE_ENCRYPTED` | `false` | Terminal strict mode. When `true` (and the key is set), reads **reject** any remaining legacy plaintext entry instead of accepting it, closing the plaintext-downgrade/injection hole against a write-capable backend. Enable only after read-repair has migrated all entries. |
 | `AWS_SECRETS_REGION` | `""` | AWS region (required when `SECRET_STORE_BACKEND=secrets-manager`). |
@@ -425,6 +425,7 @@ and `AUTH_SERVER_NGINX_MARKER_SECRET`.
 | `OPENBAO_KV_MOUNT` | `secret` | OpenBao KV v2 mount point. |
 | `OPENBAO_AUTH_METHOD` | `token` | `token` \| `kubernetes` \| `approle`. |
 | `OPENBAO_ROLE` | `""` | OpenBao role (required for `kubernetes` auth only; `approle` does not read it). |
+| `OPENBAO_AUTH_MOUNT` | `""` | Mount path of the `kubernetes` or `approle` auth method. Empty uses the method's default path (`auth/kubernetes`, `auth/approle`); set it when the method is mounted elsewhere, for example one `kubernetes` mount per cluster on a shared Vault. |
 | `OPENBAO_ROLE_ID` | `""` | AppRole role id (required, together with `OPENBAO_SECRET_ID`, when `OPENBAO_AUTH_METHOD=approle`). |
 | `OPENBAO_SECRET_ID` | `""` | AppRole secret id (required, together with `OPENBAO_ROLE_ID`, when `OPENBAO_AUTH_METHOD=approle`). **(secret)** |
 
@@ -688,6 +689,16 @@ A public client also changes what the **admin form** asks for: once the style is
 `none` the Client Secret field disappears, `client_id` becomes required, and any
 previously stored secret is dropped on save.
 
+### Setting `expected_issuer`
+
+Every provider sends the user back to the same `/oauth2/egress/callback`, so the callback cannot tell from the URL which authorization server issued a code. [RFC 9207](https://www.rfc-editor.org/rfc/rfc9207) fixes that: the authorization server adds `iss` to its reply, and the client compares it with the issuer it expected. MCP 2026-07-28 requires clients to do this.
+
+`expected_issuer` is optional and works with any provider, built-in or `custom`. When it is set, the gateway records it in the signed consent state when consent begins, and the callback refuses a reply whose `iss` names a different issuer, before it exchanges the code. The comparison is exact, as the RFC requires. A reply without `iss` is accepted, because the gateway does not know whether the provider sends one. With the field empty, the callback behaves as it did before.
+
+Take the value from the `issuer` field of the provider's authorization-server metadata, the same document step 2 above reads. It must be an `https` URL with no query and no fragment. Leave it empty for a provider that publishes no metadata, such as GitHub OAuth apps.
+
+Set it with `registry_management.py egress-configure --expected-issuer <url>`, the `expected_issuer` field of `POST /api/servers/{server_path}/egress-auth` and `PUT /api/servers/{server_path}/oauth-discovery`, or the Expected issuer field in the server edit form.
+
 ---
 
 <a id="setup-ide"></a>
@@ -700,17 +711,15 @@ which is how the gateway asks the user to open the consent page.
 
 End-user flow:
 
-1. The user invokes a tool on an egress-configured server through their IDE
-   (Cursor, Claude Code, VS Code, etc.).
-2. On the first token-requiring call (`tools/call`, `prompts/get`,
-   `resources/read`) the gateway returns a `-32042` `URLElicitationRequiredError`
-   carrying the gateway-issued **connect URL**. The client opens it in a browser.
+1. The user adds the egress-configured server to their MCP client (Cursor, Claude Code, Claude Desktop, VS Code, etc.). Until they connect their provider account, the server lists a single tool, `connect_mcpgw_<server>`. Chat clients only call tools they can see, so this tool gives them a way to start the consent step.
+2. On the first token-requiring call (`tools/call`, `prompts/get`, `resources/read`), including a call to the connect tool, the gateway returns the gateway-issued **connect URL**. By default (`EGRESS_CONSENT_USE_ELICITATION=false`) it comes back as a tool result with `isError: true` whose text contains the URL, which every client can show. With `EGRESS_CONSENT_USE_ELICITATION=true` the gateway returns a `-32042` `URLElicitationRequiredError` instead, and the client opens the URL in a browser. An MCP 2026-07-28 client that declares URL elicitation (`elicitation.url` in `params._meta` client capabilities) gets the 2026-07-28 form of the same prompt: a result with `resultType: "input_required"` holding one URL-mode `elicitation/create`. The client asks the user, then sends the same call again. If the account is now connected, the gateway removes its own `requestState` and `inputResponses` and forwards the call. If the user declined, the gateway returns the `isError` result with the URL. Every other client keeps the `-32042` answer.
 3. If the user has no live gateway session, the connect page bounces them to the
    gateway login (e.g. Keycloak) first, then continues.
 4. The user approves at the provider's consent screen. The browser shows
    "Connected — close this tab and retry."
-5. The user re-runs the tool. The gateway now vends the stored token
-   transparently; no further prompts until the refresh token dies or is revoked.
+5. The user reconnects the server in their MCP client so it reloads the real tool list, then runs the tool. The gateway now vends the stored token with no further prompts until the refresh token expires or the user revokes it.
+
+The gateway owns `connect_mcpgw_<server>` and answers every call to it itself, so the call never reaches the backend. On a direct route, a caller who can list the server's tools can call the connect tool without a separate tool grant. Virtual servers do not list it, and calling it through a virtual route needs an ordinary tool grant. Before consent the gateway answers `server/discover` with JSON-RPC `-32601` (method not found), so the client falls back to `initialize`.
 
 Users can review and revoke their connections in the UI at **Connected Accounts**
 (sidebar entry), which is backed by `GET`/`DELETE /api/egress-auth/connections`.
@@ -719,13 +728,14 @@ Users can review and revoke their connections in the UI at **Connected Accounts*
 
 ## Security model
 
+- **Authorization reply issuer (RFC 9207).** When a server sets `expected_issuer`, the callback refuses a reply whose `iss` differs from the value snapshotted in the consent state, so a code from another authorization server is never exchanged. See [Setting `expected_issuer`](#setting-expected_issuer).
 - **Marker secret (fail-closed).** nginx force-sets `X-Validate-Source-Secret` on
-  the internal `/validate` subrequest. The auth-server mints an mcp-proxy token
-  **only** if the marker matches — so a direct caller hitting `:8888` with a forged
-  `X-Resolved-Upstream` cannot obtain one. `AUTH_SERVER_NGINX_MARKER_SECRET` is
-  **required at startup** (both auth-server and registry refuse to start without
-  it); an empty marker — which would mint unconditionally — is rejected rather than
-  silently disabling the check.
+  the internal `/validate` subrequest. The auth-server mints its internal tokens
+  (mcp-proxy, generic-proxy and registry API) **only** if the marker matches, so a
+  direct caller hitting `:8888` with a forged `X-Resolved-Upstream`,
+  `X-Resolved-Generic-Upstream` or `X-Registry-Api-Auth` cannot obtain one.
+  `AUTH_SERVER_NGINX_MARKER_SECRET` is **required at startup** (both auth-server
+  and registry refuse to start without it), and an empty marker mints nothing.
 - **Dedicated internal vend listener (network boundary).** The vend endpoint
   `/_egress_internal/egress-token` is served on a separate nginx listener
   (`registry:8091`) that is NEVER published to the host (Compose) nor routed by
@@ -811,13 +821,14 @@ Users can review and revoke their connections in the UI at **Connected Accounts*
 |---------|--------------------|
 | Startup fails: "requires a Mongo-family STORAGE_BACKEND" | `EGRESS_AUTH_ENABLED=true` with `STORAGE_BACKEND=file`. Switch to a Mongo-family backend. |
 | Startup fails: "requires EGRESS_OAUTH_CALLBACK_BASE_URL" | Set the public callback base URL. |
-| Client never gets a consent prompt | The MCP client must support URL-mode elicitation (`-32042` `URLElicitationRequiredError`), and the elicitation only fires on token-requiring methods (`tools/call`, `prompts/get`, `resources/read`). Check the server's `egress_auth_mode` is `oauth_user`. |
+| Client never gets a consent prompt | The elicitation only fires on token-requiring methods (`tools/call`, `prompts/get`, `resources/read`). Ask the model to call `connect_mcpgw_<server>`, the one tool the server lists before consent. A client without URL-mode elicitation support needs `EGRESS_CONSENT_USE_ELICITATION=false`, which puts the connect URL in the tool result text. Check the server's `egress_auth_mode` is `oauth_user`. |
+| Connected, but the client still shows only the connect tool or no tools | The client cached the pre-consent tool list. Reconnect the server in the client. If the auth-server log still shows `has no token`, the account was connected under a different identity: the Registry UI session and the MCP client must sign in as the same user. |
 | Consent loops (re-asked every call) | Usually an `auth_method` mismatch between consent-write and vend-read — confirm the IdP method canonicalizes to `oauth2`. Or the stored refresh token is dead (provider revoked it) → re-consent. |
 | Connected once, but tools still show empty / vend logs "has no token" | The consent-write and vend paths keyed the vault on different `user_id`s. Since keying moved to the OIDC `sub` (see [Vault key scheme](#vault-key-scheme)), an existing connection created under the old display-name key is invisible to the new `sub`-keyed lookup. Fix: **disconnect and reconnect once** (from Connected Accounts), which re-writes the entry under the `sub`. On Entra this reconnect must follow a fresh gateway login so the session carries the persisted `subject`. |
 | Connected, but a `tools/call` asks to reconnect after a backend URL change | Destination binding: changing a server's `proxy_pass_url`, `mcp_endpoint` (or a custom provider's `custom_token_url`) invalidates credentials bound to the old destination. **Reconnect once** (from Connected Accounts) to rebind. Adding a *new version* at a URL that was not registered when you connected only requires a reconnect for calls routed to that new version; existing routes are unaffected. Promoting a version never requires a reconnect. |
 | After upgrading to the exact-destination-binding release, every connection asks to reconnect once | Credentials stored before the upgrade carry an empty or origin-only binding (for example `https://api.example.com` instead of `https://api.example.com/mcp`), which does not match the exact outbound URL — a deliberate one-time forced reconnect (`oauth_user` → connect nudge, `pat` → "submit a PAT"; a designated discovery identity must reconnect too, and its server reports unhealthy discovery until then), mirroring the `sub`-keying migration above. |
 | "Connection failed" on the consent callback; registry logs `state user mismatch` | The account-swap guard saw the consent-initiate principal differ from the callback's live-session principal. Almost always the session predates the `sub`-persisting login — **log out and back in**, then reconnect, so the cookie session carries the `subject` the initiate leg bound the state to. |
-| Vend returns 401 from auth-server | Marker secret mismatch. Ensure `AUTH_SERVER_NGINX_MARKER_SECRET` matches on registry + auth-server, and nginx sets it on `/validate`. |
+| Vend returns 401 from auth-server, or every registry API call returns 401 | Marker secret mismatch. Ensure `AUTH_SERVER_NGINX_MARKER_SECRET` matches on registry + auth-server, and nginx sets it on `/validate`. The auth-server logs `nginx marker missing/mismatched` for each refused mint. |
 | OpenBao reads fail with permission denied | The role token lapsed. The store re-authenticates and retries once; persistent failure means a real policy/role gap — verify the `mcp-egress` policy and the role binding to the registry ServiceAccount. |
 | `decrypt` errors on client secret | `SECRET_KEY` was rotated after the server's egress config was saved. Re-save the egress config with the client secret. |
 | Vend/list fails: "Egress credential failed authentication" or "is encrypted but ... not set" | `EGRESS_CREDENTIAL_ENCRYPTION_KEY` is missing, was changed, or does not match the key entries were encrypted under. The store fails closed rather than returning/overwriting plaintext. Restore the original key (rotation needs the old key available to decrypt existing entries). |

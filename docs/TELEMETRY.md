@@ -171,16 +171,30 @@ Older registry versions keep sending older schema versions; the collector accept
 
 ## Cloud Provider Detection
 
-Cloud detection cascades through env vars, DMI files, ECS task metadata, Kubernetes node-name heuristics, and (last resort) cloud IMDS endpoints. The first tier that produces a signal wins; the rest are skipped.
+Cloud detection cascades through env vars, DMI files, ECS task metadata, Kubernetes node-name heuristics, cloud IMDS endpoints, and finally a developer-machine check. The first tier that produces a signal wins; the rest are skipped.
+
+Two operator settings run before the cascade and replace it:
+
+1. `MCP_CLOUD_PROVIDER` (Helm: `app.mcpCloudProvider`), reported with method `explicit`.
+2. The answer to the admin-UI banner, reported with method `operator_declared`, or `operator_declined` with `cloud=unknown` when the operator chose Dismiss.
 
 | Method (`cloud_detection_method`) | Signal |
 |-----------------------------------|--------|
 | `env` | One of `AWS_REGION`, `AWS_DEFAULT_REGION`, `GOOGLE_CLOUD_PROJECT`, `GCLOUD_PROJECT`, `WEBSITE_INSTANCE_ID`, `AZURE_CLIENT_ID` is set |
 | `dmi` | `/sys/devices/virtual/dmi/id/{board_asset_tag,product_name,sys_vendor}` readable and matches known vendor strings |
 | `ecs_meta` | `ECS_CONTAINER_METADATA_URI_V4` or `ECS_CONTAINER_METADATA_URI` is set (AWS only) |
-| `k8s_heuristic` | `KUBERNETES_SERVICE_HOST` set and `NODE_NAME` matches a cloud-specific pattern (`*.compute.internal` for AWS, `gke-*` for GCP, `aks-*` for Azure) |
+| `k8s_heuristic` | `KUBERNETES_SERVICE_HOST` set and `NODE_NAME` matches a cloud-specific pattern: `*.compute.internal`, `*.ec2.internal`, or an EC2 instance ID such as `i-0123456789abcdef0` (EKS Auto Mode, Karpenter) for AWS; `gke-*` for GCP; `aks-*` for Azure |
 | `imds` | Live HTTP probe to `http://169.254.169.254/` (AWS IMDSv2, Azure) or `http://metadata.google.internal/` (GCP). 300ms timeout per provider, tried sequentially AWS -> GCP -> Azure. Worst case: ~900ms once per process at startup. |
-| `unknown` | No signal fired. |
+| `host_os` | The registry runs directly on a macOS or Windows host. Reported as `cloud=local`. |
+| `wsl` | `/proc/sys/kernel/osrelease` contains `microsoft` (WSL2). Reported as `cloud=local`. |
+| `docker_desktop` | The kernel release ends in `-linuxkit` (Docker Desktop). Reported as `cloud=local`. |
+| `unknown` | No signal fired. The registry logs a WARNING once per process naming `MCP_CLOUD_PROVIDER`, and shows admins a banner asking where it runs. |
+
+### When detection ends at `unknown`
+
+The admin UI shows a banner asking where the registry runs: AWS, Azure, GCP, on-premises, or other. The registry saves the answer on its registry card and reports it from then on, so the banner does not come back. To set the cloud at deploy time instead, set `MCP_CLOUD_PROVIDER` to one of `aws`, `azure`, `gcp`, `on_premises` or `other` (Helm: `app.mcpCloudProvider`).
+
+A self-hosted collector must run the collector code from the same release or later. An older collector rejects `cloud=local`, and rejects `aws`, `azure` or `gcp` with method `operator_declared`, and it drops a rejected event without an error.
 
 ### Zero-cost opt-in (no outbound network)
 

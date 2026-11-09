@@ -1,0 +1,71 @@
+{
+  "path": "/virtual/compat-test",
+  "server_name": "MCP Protocol Compatibility Test",
+  "description": "Virtual server over the MCP everything reference server (dual-era), its 2025 release (handshake only, with resources), pingmcp (legacy) and pingmcp in modern mode (2026-07-28 only) for MCP 2026-07-28 compatibility testing. The echo tools are aliased per backend.",
+  "tool_mappings": [
+    {
+      "tool_name": "echo",
+      "alias": "ev_echo",
+      "backend_server_path": "/everything/"
+    },
+    {
+      "tool_name": "get-sum",
+      "backend_server_path": "/everything/"
+    },
+    {
+      "tool_name": "get-header-params",
+      "backend_server_path": "/everything/"
+    },
+    {
+      "tool_name": "get-structured-content",
+      "backend_server_path": "/everything/"
+    },
+    {
+      "tool_name": "get-annotated-message",
+      "backend_server_path": "/everything/"
+    },
+    {
+      "tool_name": "trigger-long-running-operation",
+      "backend_server_path": "/everything/"
+    },
+    {
+      "tool_name": "echo",
+      "alias": "evl_echo",
+      "backend_server_path": "/everything-legacy/"
+    },
+    {
+      "tool_name": "echo",
+      "alias": "ping_echo",
+      "backend_server_path": "/pingmcp/"
+    },
+    {
+      "tool_name": "echo",
+      "backend_server_path": "/pingmcp-modern/",
+      "alias": "pm_echo"
+    },
+    {
+      "tool_name": "inspect_request",
+      "backend_server_path": "/pingmcp-modern/"
+    },
+    {
+      "tool_name": "header_param",
+      "backend_server_path": "/pingmcp-modern/"
+    },
+    {
+      "tool_name": "needs_input",
+      "backend_server_path": "/pingmcp-modern/"
+    }
+  ],
+  "required_scopes": [],
+  "tool_scope_overrides": [],
+  "tags": [
+    "mcp",
+    "testing",
+    "protocol",
+    "compatibility"
+  ],
+  "supported_transports": [
+    "streamable-http"
+  ],
+  "is_enabled": true
+}
