@@ -156,7 +156,7 @@ def access_denied_error(
     if not isinstance(payload, dict) or payload.get("jsonrpc") != "2.0" or "id" not in payload:
         return None
     request_id = payload.get("id")
-    if not isinstance(request_id, (str, int)) or isinstance(request_id, bool):
+    if not isinstance(request_id, str | int) or isinstance(request_id, bool):
         request_id = None
     tool = str(tool_name)[:MAX_DENIED_NAME_LENGTH] if tool_name else None
     data: dict[str, Any] = {"reason": reason, "method": method, "server": server_path}
