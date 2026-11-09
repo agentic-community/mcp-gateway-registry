@@ -135,7 +135,7 @@ jobs:
           persist-credentials: false
 
       - name: Run Checkov
-        uses: bridgecrewio/checkov-action@c3e106d5f8f4253a6de5110efb41a080f83db294 # v12.3135.0
+        uses: bridgecrewio/checkov-action@45edc9d8856b664db2ec251f5f8632361f0a67aa # v12.3139.0
         with:
           directory: terraform/aws-ecs
           framework: terraform
