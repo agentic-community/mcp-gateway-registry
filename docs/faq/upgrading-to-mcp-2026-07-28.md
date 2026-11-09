@@ -21,6 +21,8 @@ Support for MCP 2026-07-28 starts in release 1.37.0. For how the gateway handles
 - **No server push yet.** `subscriptions/listen`, the new way to receive change notifications, answers "method not found". Clients carry on and see changes the next time they ask. Progress messages from a long tool call still arrive at the end of the call.
 - **Larger tool calls.** Requests up to 1 MB now go through. Tool calls above about 10 KB used to fail with HTTP 500.
 - **Sign-in headers.** A 401 carries one `WWW-Authenticate` header (it carried two), and a 403 now names the protected-resource metadata in `WWW-Authenticate`.
+- **Refusals say what was refused.** When the gateway refuses an MCP request, the 403 body is a JSON-RPC error with code `-32003`. Its message names the method, the tool for `tools/call`, and the server, and `error.data.reason` says why: `not_permitted`, `no_scopes` or `origin_refused`.
+- **Browser sessions must come from the gateway's own pages.** An MCP request signed in with the registry's browser session cookie, instead of a bearer token, gets HTTP 403 unless its `Origin` header is the gateway's own origin. MCP clients send a bearer token, so they are not affected.
 
 ## Check your scopes
 
@@ -36,7 +38,7 @@ Support for MCP 2026-07-28 starts in release 1.37.0. For how the gateway handles
 4. **Add the missing methods.** Edit the group in **Settings > IAM > Groups**, or send `PATCH /api/management/iam/groups/<group>` with the group's full `scope_config.server_access` list. The PATCH replaces the whole list.
 5. **Groups with a `server: "*"` entry.** The API no longer saves an access entry that covers every server (`server: "*"` or `"all"`), so you cannot save a group that still has one as it is. Recreate the group with per-server entries and grant broad visibility through `ui_permissions` (`"all"`) instead.
 
-A client that hits this sees a plain HTTP 403 that does not name the method, so the auth-server log is the place to find the cause.
+A client that hits this gets HTTP 403 with a JSON-RPC error that names the refused method and tool, and the auth-server log records the same refusal.
 
 ## What changes for operators
 
@@ -52,6 +54,8 @@ A client that hits this sees a plain HTTP 403 that does not name the method, so 
 **A user gets HTTP 403 on a call that worked before the upgrade.** Search the auth-server log for `Access denied` with that user's server and method, then add the method as described in [Check your scopes](#check-your-scopes).
 
 **A server shows 0 tools in the registry, but users can call its tools.** The server requires each user to sign in, and the registry's background fetch has no user. In the server's edit form, turn on **Discovery Identity (OAuth 2.1)**, save, then press **Connect account for discovery**, so the registry can list tools and run security scans with that account. Until then, avoid pressing Rescan: a scan that cannot authenticate fails, and a failed scan disables the server.
+
+**A request gets HTTP 403 with reason `origin_refused`.** The request was signed in with the browser session cookie and its `Origin` header was missing or named another site. Send a bearer token instead of the cookie. If the gateway serves a page from an address that is neither `AUTH_SERVER_EXTERNAL_URL` nor `REGISTRY_URL`, set one of them to that address on the auth server.
 
 **A 2026-07-28 client fails on a direct route.** The backend speaks only the older protocol. Use the client in auto mode, or reach the server through a virtual server, which translates.
 

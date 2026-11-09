@@ -168,6 +168,8 @@ class TestGenerateVirtualServerBlocks:
 
         assert "error_page 401 = @auth_error" in result
         assert "error_page 403 = @forbidden_error" in result
+        # Issue #2006: @forbidden_error returns the captured JSON-RPC error body.
+        assert "auth_request_set $mcp_error_body $upstream_http_x_mcp_error_body" in result
 
     @pytest.mark.asyncio
     async def test_entra_block_points_401_at_the_per_virtual_prm(

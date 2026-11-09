@@ -1097,6 +1097,7 @@ the drift between copies is the hole.
   `X-CSRF-Token` header OR a `csrf_token` form field, so a JSON-body route works
   fine via the header. Skip only routes authed purely by `validate_internal_auth`
   / internal-token (not browser/cookie surfaces).
+- **Cookie-authenticated proxy requests → `registry/common/request_origin.py`.** A browser attaches the session cookie to a request any site makes, and an MCP client cannot send a CSRF token. So every MCP, virtual, agent and proxy request authenticated by the cookie goes through `origin_refusal()` at `/validate` (`_refuse_cross_origin_cookie_request` in `auth_server/server.py`), before any scope check or token mint. Trusted origins come only from configuration (`AUTH_SERVER_EXTERNAL_URL`, `REGISTRY_URL`), never from `Host` or `X-Forwarded-*`. A missing `Origin` passes only on GET/HEAD/OPTIONS; `null`, malformed and foreign values always fail. Parse an origin with `normalize_origin()`, the same parser the CORS allowlist uses (#1996).
 - **Internal service-to-service auth → `registry/auth/internal.py`.**
   `generate_internal_token()` to mint, `validate_internal_auth` /
   `validate_internal_session_secret` as the route dependency. Internal tokens are

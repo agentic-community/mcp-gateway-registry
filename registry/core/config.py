@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from registry.common.request_origin import normalize_origin
 from registry.common.secret_key import validate_secret_key
 from registry.constants import (
     MAX_EMBEDDINGS_EXTRA_HEADERS,
@@ -26,11 +27,8 @@ from registry.utils.header_validation import (
 def _normalize_cors_origin(value: str) -> str | None:
     """Validate and normalize a single CORS origin string.
 
-    A valid origin is ``scheme://host[:port]`` with an ``http`` or ``https``
-    scheme and no path, query, fragment, credentials, or wildcard. This is a
-    strict allowlist check: anything that does not parse cleanly to an exact
-    origin returns ``None`` so the caller can reject it rather than widening
-    the CORS policy.
+    The parser lives in ``registry/common/request_origin.py`` so the CORS
+    allowlist and the auth server's MCP Origin check accept the same origins.
 
     Args:
         value: Candidate origin string (already whitespace-stripped).
@@ -39,43 +37,7 @@ def _normalize_cors_origin(value: str) -> str | None:
         The normalized ``scheme://host[:port]`` origin (lower-cased scheme and
         host), or ``None`` if the value is not a well-formed exact origin.
     """
-    if not value or "*" in value:
-        return None
-    try:
-        parsed = urlparse(value)
-        # Accessing .port validates the port and may raise ValueError for an
-        # out-of-range or non-numeric port; catching it here fails closed.
-        port = parsed.port
-    except ValueError:
-        return None
-    if parsed.scheme not in ("http", "https"):
-        return None
-    if not parsed.hostname:
-        return None
-    # Reject anything carrying a path/query/fragment or userinfo: an origin is
-    # only scheme + host + optional port.
-    if parsed.path not in ("", "/") or parsed.query or parsed.fragment:
-        return None
-    if parsed.username or parsed.password:
-        return None
-    host = parsed.hostname.lower()
-    # Strip a single trailing dot (FQDN root label). Browsers never send a
-    # trailing-dot Origin header, so a configured "example.com." would be a
-    # dead entry; normalizing it keeps the allowlist matching real origins.
-    if host.endswith(".") and not host.endswith(".."):
-        host = host[:-1]
-    if not host:
-        return None
-    # urlparse strips the brackets from IPv6 literals; restore them so the
-    # reconstructed origin matches the bracketed form a browser sends in the
-    # Origin header (e.g. http://[::1]:8080). A colon in the hostname is only
-    # valid for an IPv6 literal.
-    if ":" in host:
-        host = f"[{host}]"
-    scheme = parsed.scheme.lower()
-    if port is not None:
-        return f"{scheme}://{host}:{port}"
-    return f"{scheme}://{host}"
+    return normalize_origin(value)
 
 
 # Accepted values for STORAGE_BACKEND. Keep in sync with the Terraform allowlist

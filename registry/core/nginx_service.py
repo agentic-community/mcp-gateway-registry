@@ -2183,6 +2183,8 @@ class NginxConfigService:
         auth_request_set $auth_user $upstream_http_x_user;
         auth_request_set $auth_username $upstream_http_x_username;
         auth_request_set $auth_method $upstream_http_x_auth_method;
+        # JSON-RPC error body for a refused request, returned by @forbidden_error.
+        auth_request_set $mcp_error_body $upstream_http_x_mcp_error_body;
 {_MCP_BODY_CAPTURE_SIZE_DIRECTIVES}
         rewrite_by_lua_file /etc/nginx/lua/capture_body.lua;
         content_by_lua_file /etc/nginx/lua/virtual_router.lua;
@@ -3473,6 +3475,8 @@ class NginxConfigService:
         auth_request_set $rl_limit $upstream_http_x_ratelimit_limit;
         auth_request_set $rl_reset $upstream_http_x_ratelimit_reset;
         auth_request_set $rl_retry $upstream_http_retry_after;
+        # JSON-RPC error body for a refused request, returned by @forbidden_error.
+        auth_request_set $mcp_error_body $upstream_http_x_mcp_error_body;
 {proxy_directive}
         proxy_http_version 1.1;
         proxy_ssl_server_name on;

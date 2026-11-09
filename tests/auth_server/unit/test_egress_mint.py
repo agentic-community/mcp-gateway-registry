@@ -1157,7 +1157,15 @@ class TestValidateSignsOboSubjectDigest:
         }
         if cookie_result is not None:
             headers["Cookie"] = "mcp_gateway_session=signed-session-value"
+            # A browser sends Origin on a POST; the gateway refuses a cookie
+            # request from any other origin (issue #1996).
+            headers["X-Original-Method"] = "POST"
+            headers["Origin"] = "https://example.com"
         with (
+            patch(
+                "auth_server.server._gateway_trusted_origins",
+                return_value=frozenset({"https://example.com"}),
+            ),
             patch("auth_server.server.get_scope_repository", return_value=repo),
             patch("auth_server.server.get_auth_provider", return_value=provider),
             patch(

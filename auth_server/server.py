@@ -119,10 +119,18 @@ from registry.audit.service import AuditLogger, NonDurableAuditError, enforce_du
 from registry.audit.sink import emit_audit_event
 from registry.common.log_redaction import redact_url
 from registry.common.mcp_protocol import (
+    DENIED_BY_SCOPES,
+    DENIED_NO_SCOPES,
+    DENIED_ORIGIN,
     META_CLIENT_CAPABILITIES_KEY,
+    access_denied_error,
     is_modern_request,
     request_meta,
     shape_result,
+)
+from registry.common.request_origin import (
+    origin_of_url,
+    origin_refusal,
 )
 from registry.common.scopes_loader import reload_scopes_config
 from registry.common.secret_key import validate_secret_key, validate_signing_secret
@@ -1157,6 +1165,108 @@ def _is_cookie_auth_method(auth_method: str) -> bool:
     are programmatic and set the header explicitly, so they are exempt.
     """
     return (auth_method or "").lower() in ("session_cookie", "cookie", "session")
+
+
+# Response header that carries the JSON-RPC error body for a refused MCP request.
+# nginx captures it with auth_request_set and @forbidden_error returns it as the
+# 403 body (issue #2006). Only /validate sets it, so a client cannot supply it.
+_MCP_ERROR_BODY_HEADER: str = "X-Mcp-Error-Body"
+
+# Configured URLs whose origins count as the gateway's own (issue #1996). Each is
+# a deployment setting, never the request's Host or X-Forwarded-* headers.
+_GATEWAY_ORIGIN_URL_ENV_VARS: tuple[str, ...] = ("AUTH_SERVER_EXTERNAL_URL", "REGISTRY_URL")
+
+
+def _gateway_trusted_origins() -> frozenset[str]:
+    """Return the gateway's own origins, from configuration only.
+
+    A cookie-authenticated MCP request must come from one of these. They come
+    from AUTH_SERVER_EXTERNAL_URL, REGISTRY_URL and settings.registry_url, so a
+    client-controlled Host or forwarded header cannot add one.
+    """
+    urls = [os.environ.get(name, "") for name in _GATEWAY_ORIGIN_URL_ENV_VARS]
+    urls.append(getattr(settings, "registry_url", "") or "")
+    origins = set()
+    for url in urls:
+        origin = origin_of_url(url)
+        if origin:
+            origins.add(origin)
+    return frozenset(origins)
+
+
+def _mcp_denied_headers(
+    payload: object,
+    reason: str,
+    method: str,
+    tool_name: str | None,
+    server_name: str,
+) -> dict[str, str]:
+    """Headers for a 403 that tell nginx which JSON-RPC error body to return.
+
+    Returns an empty dict when the payload is not a JSON-RPC request with an
+    id, so nginx falls back to its plain 403 body.
+    """
+    server_path = "/" + (server_name or "").strip("/") + "/"
+    error = access_denied_error(payload, reason, method, tool_name, server_path)
+    if error is None:
+        return {}
+    # json.dumps escapes CR, LF and non-ASCII, so the value is header-safe.
+    return {_MCP_ERROR_BODY_HEADER: json.dumps(error, separators=(",", ":"))}
+
+
+def _refuse_cross_origin_cookie_request(
+    request: Request,
+    auth_method: str,
+    original_url: str,
+    original_method: str,
+    request_payload: object,
+    server_name: str | None,
+) -> None:
+    """Refuse a cookie-authenticated MCP request from another site (issue #1996).
+
+    A browser attaches the session cookie to a request any site makes, so on
+    MCP, agent and proxy routes a cookie-authenticated request must carry an
+    Origin header naming the gateway's own origin (see origin_refusal for the
+    rules). Bearer-token requests are not checked. Registry API routes keep
+    their own CSRF token check.
+
+    Raises:
+        HTTPException: 403 when the request is refused.
+    """
+    if not _is_cookie_auth_method(auth_method):
+        return
+    if _is_registry_api_request(original_url):
+        return
+    origin_header = request.headers.get("Origin")
+    refusal = origin_refusal(origin_header, original_method, _gateway_trusted_origins())
+    if refusal is None:
+        return
+    method = ""
+    tool_name = None
+    if isinstance(request_payload, dict):
+        method = str(request_payload.get("method") or "")
+        params = request_payload.get("params")
+        if method == "tools/call" and isinstance(params, dict):
+            tool_name = params.get("name")
+    logger.warning(
+        "Refusing cookie-authenticated %s %s to %s: %s (Origin=%r)",
+        original_method,
+        method or "-",
+        server_name or "-",
+        refusal,
+        (origin_header or "")[:200],
+    )
+    headers = {"Connection": "close"}
+    headers.update(
+        _mcp_denied_headers(
+            request_payload, DENIED_ORIGIN, method or original_method, tool_name, server_name or ""
+        )
+    )
+    raise HTTPException(
+        status_code=403,
+        detail="Cookie-authenticated request refused: Origin is not the gateway's own origin",
+        headers=headers,
+    )
 
 
 def _generic_write_csrf_refused(
@@ -4872,6 +4982,14 @@ async def validate_request(request: Request):
         # For providers that use groups (Keycloak, Entra ID, Cognito, Okta, Auth0), map groups to scopes
         user_groups = validation_result.get("groups", [])
         auth_method = validation_result.get("method", "")
+        _refuse_cross_origin_cookie_request(
+            request,
+            auth_method,
+            original_url,
+            original_method,
+            request_payload,
+            server_name_from_url,
+        )
         existing_scopes = validation_result.get("scopes", []) or []
         if user_groups and auth_method in ["keycloak", "entra", "cognito", "okta", "auth0"]:
             # Map IdP groups to scopes using the group mappings (query DocumentDB)
@@ -5072,7 +5190,12 @@ async def validate_request(request: Request):
                 raise HTTPException(
                     status_code=403,
                     detail=f"Access denied to {server_name}.{method} - user has no scopes configured",
-                    headers={"Connection": "close"},
+                    headers={
+                        "Connection": "close",
+                        **_mcp_denied_headers(
+                            request_payload, DENIED_NO_SCOPES, method, actual_tool_name, server_name
+                        ),
+                    },
                 )
 
             # The synthetic connect tool is checked as tools/list, only on a
@@ -5096,7 +5219,12 @@ async def validate_request(request: Request):
                 raise HTTPException(
                     status_code=403,
                     detail=f"Access denied to {server_name}.{method}",
-                    headers={"Connection": "close"},
+                    headers={
+                        "Connection": "close",
+                        **_mcp_denied_headers(
+                            request_payload, DENIED_BY_SCOPES, method, actual_tool_name, server_name
+                        ),
+                    },
                 )
             logger.debug(
                 "Scope validation passed for %s.%s (tool: %s)",

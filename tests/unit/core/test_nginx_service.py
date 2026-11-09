@@ -943,6 +943,8 @@ def test_create_location_block_streamable_http(nginx_service):
     assert "auth_request_set $rl_limit $upstream_http_x_ratelimit_limit" in block
     assert "auth_request_set $rl_reset $upstream_http_x_ratelimit_reset" in block
     assert "auth_request_set $rl_retry $upstream_http_retry_after" in block
+    # Issue #2006: capture the JSON-RPC error body @forbidden_error returns.
+    assert "auth_request_set $mcp_error_body $upstream_http_x_mcp_error_body" in block
     assert "proxy_buffering off" in block
     assert "auth_request /validate" in block
     # Upstream timeouts derived from MCP_PROXY_TIMEOUT so long-running MCP tool
