@@ -1308,6 +1308,10 @@ class TestValidateEndpoint:
             ),
             patch("auth_server.server.signer", test_signer),
             patch("session_store.resolve_session", _fake_resolve),
+            patch(
+                "auth_server.server._gateway_trusted_origins",
+                return_value=frozenset({"https://example.com"}),
+            ),
         ):
             client = TestClient(server_module.app)
 
@@ -1316,6 +1320,8 @@ class TestValidateEndpoint:
                 headers={
                     "Cookie": f"mcp_gateway_session={valid_session_cookie}",
                     "X-Original-URL": "https://example.com/test-server/mcp",
+                    "X-Original-Method": "POST",
+                    "Origin": "https://example.com",
                 },
             )
 

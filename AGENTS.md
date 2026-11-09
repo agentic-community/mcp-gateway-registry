@@ -303,7 +303,8 @@ working in those areas.
   `registry/utils/url_guard.py` `guarded_client`/`guarded_async_client` (never a
   bare `httpx` client), IP categories/literal and tunnel unwrapping →
   `registry/utils/url_guard.py`, URL identity → `normalize_url_identity`, URL log
-  redaction → `registry/common/log_redaction.py` `redact_url`; CSRF →
+  redaction → `registry/common/log_redaction.py` `redact_url`; Origin check on
+  cookie-authenticated proxy requests → `registry/common/request_origin.py`; CSRF →
   `registry/auth/csrf.py`; internal service auth →
   `registry/auth/internal.py`; signing-secret validation →
   `registry/common/secret_key.py`; read redaction → `registry/services/visibility.py`;
