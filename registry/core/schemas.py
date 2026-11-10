@@ -851,8 +851,8 @@ class ServerInfo(ProxyableMixin):
         "connected this server's provider account (oauth_user) or submitted a PAT (pat) "
         "returns the server's stored tool_list, with the connect tool first for "
         "oauth_user, instead of only the connect tool. For clients that only call tools "
-        "an admin enabled ahead of time, such as Gemini Enterprise data stores "
-        "(issue #1986). Only valid with egress_auth_mode oauth_user or pat.",
+        "an admin enabled ahead of time (issue #1986). Only valid with egress_auth_mode "
+        "oauth_user or pat.",
     )
 
     # Lifecycle and federation metadata fields

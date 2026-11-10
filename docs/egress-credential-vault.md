@@ -727,7 +727,7 @@ Users can review and revoke their connections in the UI at **Connected Accounts*
 <a id="list-tools-before-consent"></a>
 ### Listing a server's tools before the user connects
 
-Some clients only call tools that an admin turned on ahead of time. Gemini Enterprise is one: an admin builds a data store from the server's tool list and enables specific tools, and Gemini calls nothing else. The admin is usually connected, so they enable the real tools. A user who has not connected then gets a list holding only `connect_mcpgw_<server>`, which nobody enabled, so Gemini never sends a call and the user never sees the connect URL.
+Some clients only call tools that an admin turned on ahead of time: the admin picks tools from the server's tool list, and the client calls nothing else. The admin is usually connected, so they pick the real tools. A user who has not connected then gets a list holding only `connect_mcpgw_<server>`, which nobody turned on, so the client never sends a call and the user never sees the connect URL.
 
 For those clients, turn on **List this server's tools before a user connects** in the server's egress settings. It applies to `oauth_user` and `pat` servers. With it on, a direct-route `tools/list` from a user who has not connected (or has not submitted a PAT) returns the server's stored tools:
 

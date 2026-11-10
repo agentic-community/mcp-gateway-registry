@@ -327,10 +327,10 @@ def _pre_consent_tool_list(
 ) -> list[dict] | None:
     """Stored tools to list before consent, or None to keep today's response.
 
-    Issue #1986: clients such as Gemini Enterprise only call tools an admin
-    enabled ahead of time, so a pre-consent list holding only the connect tool
-    gives them nothing to call. A server that opts in lists its stored tools
-    instead, the way a virtual route already does.
+    Issue #1986: some clients only call tools an admin enabled ahead of time,
+    so a pre-consent list holding only the connect tool gives them nothing to
+    call. A server that opts in lists its stored tools instead, the way a
+    virtual route already does.
 
     Returns None unless the mcp-proxy hop asked (it asks only for a direct-route
     tools/list), the route is direct, and the server opted in. Blocked tools are

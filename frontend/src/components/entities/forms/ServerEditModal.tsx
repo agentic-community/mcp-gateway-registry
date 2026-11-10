@@ -421,9 +421,9 @@ const ServerEditModal: React.FC<ServerEditModalProps> = ({
                       List this server&apos;s tools before a user connects
                     </label>
                     <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                      For clients such as Gemini Enterprise that only call tools an admin
-                      enabled ahead of time. A user who has not connected sees the stored tool
-                      list, and calling a tool returns the connect instructions.
+                      For clients that only call tools an admin enabled ahead of time. A user
+                      who has not connected sees the stored tool list, and calling a tool
+                      returns the connect instructions.
                     </p>
                     {form.egress_list_tools_before_consent && form.num_tools === 0 && (
                       <p className="text-xs text-amber-700 dark:text-amber-400 mt-1">

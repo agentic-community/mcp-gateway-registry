@@ -7179,8 +7179,8 @@ Examples:
         "--list-tools-before-consent",
         action="store_true",
         help="oauth_user and pat only: list the server's stored tools on a direct-route "
-        "tools/list before a user connects, for clients such as Gemini Enterprise that "
-        "only call tools an admin enabled ahead of time. Omitting it turns it off",
+        "tools/list before a user connects, for clients that only call tools an admin "
+        "enabled ahead of time. Omitting it turns it off",
     )
 
     # Get egress config command
