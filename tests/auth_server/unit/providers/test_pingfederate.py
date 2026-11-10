@@ -191,7 +191,7 @@ class TestPingFederateDiscovery:
         mock_get.assert_called_once_with(provider.config_url, timeout=10)
 
     @patch("auth_server.providers.pingfederate.requests.get")
-    def test_discovery_uses_lru_cache(self, mock_get):
+    def test_discovery_uses_cache(self, mock_get):
         """Test subsequent calls use cached discovery doc."""
         mock_response = MagicMock()
         mock_response.json.return_value = MOCK_DISCOVERY_DOC
@@ -202,8 +202,48 @@ class TestPingFederateDiscovery:
         provider._get_openid_configuration()
         provider._get_openid_configuration()
 
-        # Should only fetch once due to @lru_cache
+        # Should only fetch once: the discovery document is cached
         assert mock_get.call_count == 1
+
+    @patch("auth_server.providers.pingfederate.requests.get")
+    def test_discovery_cache_shared_across_instances(self, mock_get):
+        """A new provider per request reuses the cached discovery doc (issue #2012)."""
+        mock_response = MagicMock()
+        mock_response.json.return_value = MOCK_DISCOVERY_DOC
+        mock_response.raise_for_status.return_value = None
+        mock_get.return_value = mock_response
+
+        _create_provider()._get_openid_configuration()
+        _create_provider()._get_openid_configuration()
+
+        assert mock_get.call_count == 1
+
+    @patch("auth_server.providers.pingfederate.requests.get")
+    def test_discovery_caller_edit_does_not_change_cache(self, mock_get):
+        """Editing a returned discovery doc cannot leak into later requests."""
+        mock_response = MagicMock()
+        mock_response.json.return_value = MOCK_DISCOVERY_DOC
+        mock_response.raise_for_status.return_value = None
+        mock_get.return_value = mock_response
+
+        _create_provider()._get_openid_configuration()["issuer"] = "https://evil.example"
+        config = _create_provider()._get_openid_configuration()
+
+        assert config["issuer"] == "https://pf.example.com"
+
+    @patch("auth_server.providers.pingfederate.requests.get")
+    def test_discovery_failure_is_not_cached(self, mock_get):
+        """A failed discovery fetch is retried on the next call."""
+        mock_response = MagicMock()
+        mock_response.json.return_value = MOCK_DISCOVERY_DOC
+        mock_response.raise_for_status.return_value = None
+        mock_get.side_effect = [requests.ConnectionError("down"), mock_response]
+
+        with pytest.raises(ValueError):
+            _create_provider()._get_openid_configuration()
+        config = _create_provider()._get_openid_configuration()
+
+        assert config["issuer"] == "https://pf.example.com"
 
     @patch("auth_server.providers.pingfederate.requests.get")
     def test_discovery_failure_raises(self, mock_get):
@@ -326,8 +366,7 @@ class TestPingFederateJWKS:
         mock_get.return_value = mock_jwks_response
 
         provider = _create_provider()
-        # Pre-cache discovery to avoid side_effect complexity
-        provider._get_openid_configuration.cache_clear()
+        # Pin discovery to avoid side_effect complexity
         with patch.object(provider, "_get_openid_configuration", return_value=MOCK_DISCOVERY_DOC):
             provider.get_jwks()
 

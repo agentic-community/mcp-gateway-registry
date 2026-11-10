@@ -1053,11 +1053,12 @@ class TestKeycloakMetadataRewritesEveryUrl:
 
     @patch("auth_server.providers.keycloak.requests.get")
     def test_cached_configuration_is_not_mutated(self, mock_get):
-        """The rewrite must not poison the lru_cache it reads from.
+        """The rewrite must not poison the discovery cache it reads from.
 
-        _get_openid_configuration is lru_cached, so rewriting nested objects in
-        place would corrupt the document for every later caller -- including the
-        internal-URL consumers that must keep pointing at the cluster host.
+        _get_openid_configuration is cached for the process, so rewriting nested
+        objects in the cached copy would corrupt the document for every later
+        caller -- including the internal-URL consumers that must keep pointing
+        at the cluster host.
         """
         provider = self._provider(mock_get, self._full_openid_config(self.INTERNAL))
 
@@ -1068,6 +1069,27 @@ class TestKeycloakMetadataRewritesEveryUrl:
         assert cached["token_endpoint"].startswith(self.INTERNAL)
         assert cached["mtls_endpoint_aliases"]["token_endpoint"].startswith(self.INTERNAL)
         assert first == second
+
+    @patch("auth_server.providers.keycloak.requests.get")
+    def test_discovery_cache_shared_across_instances(self, mock_get):
+        """A new provider per request reuses the cached discovery doc (issue #2012)."""
+        config = self._full_openid_config(self.INTERNAL)
+
+        self._provider(mock_get, config).authorization_server_metadata()
+        self._provider(mock_get, config).authorization_server_metadata()
+
+        assert mock_get.call_count == 1
+
+    @patch("auth_server.providers.keycloak.requests.get")
+    def test_discovery_caller_edit_does_not_change_cache(self, mock_get):
+        """Editing a returned discovery doc cannot leak into the next provider."""
+        config = self._full_openid_config(self.INTERNAL)
+
+        first = self._provider(mock_get, config)._get_openid_configuration()
+        first["mtls_endpoint_aliases"]["token_endpoint"] = "https://evil.example"
+        second = self._provider(mock_get, config)._get_openid_configuration()
+
+        assert second["mtls_endpoint_aliases"]["token_endpoint"].startswith(self.INTERNAL)
 
     @patch("auth_server.providers.keycloak.requests.get")
     def test_passthrough_when_internal_equals_external(self, mock_get):
