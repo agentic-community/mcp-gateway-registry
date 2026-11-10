@@ -20315,6 +20315,11 @@
               }
             ],
             "title": "Target Audience"
+          },
+          "list_tools_before_consent": {
+            "type": "boolean",
+            "title": "List Tools Before Consent",
+            "default": false
           }
         },
         "type": "object",
@@ -20372,6 +20377,12 @@
           "server_path": {
             "type": "string",
             "title": "Server Path"
+          },
+          "include_pre_consent_tools": {
+            "type": "boolean",
+            "title": "Include Pre Consent Tools",
+            "description": "Set by the mcp-proxy hop on a direct-route tools/list. Asks the registry to return the server's stored tools on a consent miss when the server opted in (egress_list_tools_before_consent). A hint only: the registry still decides from the verified token's route binding and the stored opt-in.",
+            "default": false
           }
         },
         "type": "object",
@@ -20508,6 +20519,22 @@
             ],
             "title": "Pat Value Prefix",
             "description": "pat: value prefix before the PAT (e.g. 'Bearer ' or '' for a bare token)."
+          },
+          "pre_consent_tools": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pre Consent Tools",
+            "description": "MCP tool entries (name, description, inputSchema) from the selected version's stored tool_list, blocked tools removed. Set only on a consent miss when the request asked, the route is direct and the server opted in. Not filtered by the caller's tool grants: the mcp-proxy hop applies those."
           }
         },
         "type": "object",
