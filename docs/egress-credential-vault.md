@@ -154,7 +154,7 @@ sequenceDiagram
     K-->>S: miss
     S-->>V: consent_required + authorize_url + connect_url + request_state
     V-->>P: EgressTokenResponse(consent_required=true)
-    Note over P,C: The gateway answers initialize, ping and the list methods itself.<br/>tools/list returns one connect_mcpgw_[server] tool. -32042 fires on<br/>tools/call (including the connect tool), prompts/get and resources/read.
+    Note over P,C: The gateway answers initialize, ping and the list methods itself.<br/>tools/list returns one connect_mcpgw_[server] tool, followed by the server's<br/>stored tools when the server opts in. -32042 fires on<br/>tools/call (including the connect tool), prompts/get and resources/read.
     P-->>C: JSON-RPC -32042 URLElicitationRequiredError (mode=url, url=connect_url)
 
     Note over C,TP: User consents (browser)
@@ -379,7 +379,7 @@ prefix; the AS facade is mounted at root and registered only when
 
 | Method | Path | Auth | Purpose |
 |--------|------|------|---------|
-| `POST` | `/api/servers/{server_path}/egress-auth` | proxied auth + admin | Configure egress OAuth on a server (provider, client_id, write-only encrypted client_secret, scopes, custom URLs, optional RFC 8707 `custom_resource`, optional RFC 9207 `expected_issuer`). |
+| `POST` | `/api/servers/{server_path}/egress-auth` | proxied auth + admin | Configure egress OAuth on a server (provider, client_id, write-only encrypted client_secret, scopes, custom URLs, optional RFC 8707 `custom_resource`, optional RFC 9207 `expected_issuer`, optional `list_tools_before_consent`). |
 | `GET` | `/api/servers/{server_path}/egress-auth` | proxied auth + admin | Read the non-secret egress config (secret stripped). |
 
 ### End-user
@@ -724,6 +724,24 @@ The gateway owns `connect_mcpgw_<server>` and answers every call to it itself, s
 Users can review and revoke their connections in the UI at **Connected Accounts**
 (sidebar entry), which is backed by `GET`/`DELETE /api/egress-auth/connections`.
 
+<a id="list-tools-before-consent"></a>
+### Listing a server's tools before the user connects
+
+Some clients only call tools that an admin turned on ahead of time. Gemini Enterprise is one: an admin builds a data store from the server's tool list and enables specific tools, and Gemini calls nothing else. The admin is usually connected, so they enable the real tools. A user who has not connected then gets a list holding only `connect_mcpgw_<server>`, which nobody enabled, so Gemini never sends a call and the user never sees the connect URL.
+
+For those clients, turn on **List this server's tools before a user connects** in the server's egress settings. It applies to `oauth_user` and `pat` servers. With it on, a direct-route `tools/list` from a user who has not connected (or has not submitted a PAT) returns the server's stored tools:
+
+- An `oauth_user` server lists `connect_mcpgw_<server>` first, then the stored tools.
+- A `pat` server lists the stored tools only.
+
+Calling one of those tools before connecting returns the same answer the connect tool gets: the connect URL for `oauth_user`, or the "submit a PAT" message for `pat`. The gateway never contacts the backend until the user connects. After that, `tools/list` comes from the backend, as it does without the setting.
+
+The gateway filters the stored list for each caller with the same per-tool grant and blocked-tool checks it applies to a connected user's list, so a user sees only tools they could call after connecting. It drops any stored tool named `connect_mcpgw_<server>`, because the gateway owns that name. Virtual servers already list their mapped tools before consent, so the setting has no effect on them.
+
+The stored list is the server's `tool_list` in the registry. An `oauth_user` backend usually refuses anonymous discovery, so the health check alone cannot fill it. Give the server a tool list when you register it, or designate a discovery identity (`PUT /api/servers/{server_path}/oauth-discovery`). With an empty `tool_list`, the setting changes nothing, the edit form shows a warning, and the registry logs `lists tools before consent but has no stored tool_list`. The stored list can differ from what the backend returns once the user connects.
+
+Set it with the checkbox in the server edit form, `registry_management.py egress-configure --list-tools-before-consent`, or `"list_tools_before_consent": true` in `POST /api/servers/{server_path}/egress-auth`. That request replaces the whole egress config, so a request without the field turns the setting off. To check the result, list the server's tools as a user who has not connected: your own admin session is probably connected, and a connected session always sees the backend's list.
+
 ---
 
 ## Security model
@@ -822,6 +840,7 @@ Users can review and revoke their connections in the UI at **Connected Accounts*
 | Startup fails: "requires a Mongo-family STORAGE_BACKEND" | `EGRESS_AUTH_ENABLED=true` with `STORAGE_BACKEND=file`. Switch to a Mongo-family backend. |
 | Startup fails: "requires EGRESS_OAUTH_CALLBACK_BASE_URL" | Set the public callback base URL. |
 | Client never gets a consent prompt | The elicitation only fires on token-requiring methods (`tools/call`, `prompts/get`, `resources/read`). Ask the model to call `connect_mcpgw_<server>`, the one tool the server lists before consent. A client without URL-mode elicitation support needs `EGRESS_CONSENT_USE_ELICITATION=false`, which puts the connect URL in the tool result text. Check the server's `egress_auth_mode` is `oauth_user`. |
+| List tools before consent is on, but an unconnected user still sees only the connect tool (or, for `pat`, no tools) | The server has no stored `tool_list`. Register it with a tool list or designate a discovery identity. See [Listing a server's tools before the user connects](#list-tools-before-consent). If the list is filled, check that the user reached the server through its direct route (`/<server>/mcp`), not a virtual server, and that their scope grants the tools. |
 | Connected, but the client still shows only the connect tool or no tools | The client cached the pre-consent tool list. Reconnect the server in the client. If the auth-server log still shows `has no token`, the account was connected under a different identity: the Registry UI session and the MCP client must sign in as the same user. |
 | Consent loops (re-asked every call) | Usually an `auth_method` mismatch between consent-write and vend-read — confirm the IdP method canonicalizes to `oauth2`. Or the stored refresh token is dead (provider revoked it) → re-consent. |
 | Connected once, but tools still show empty / vend logs "has no token" | The consent-write and vend paths keyed the vault on different `user_id`s. Since keying moved to the OIDC `sub` (see [Vault key scheme](#vault-key-scheme)), an existing connection created under the old display-name key is invisible to the new `sub`-keyed lookup. Fix: **disconnect and reconnect once** (from Connected Accounts), which re-writes the entry under the `sub`. On Entra this reconnect must follow a fresh gateway login so the session carries the persisted `subject`. |

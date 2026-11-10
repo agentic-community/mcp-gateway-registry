@@ -27,6 +27,9 @@ from registry.egress_auth.upstream_binding import registered_versions, selected_
 from registry.exceptions import UrlValidationError
 from registry.schemas.proxy_mixin import _assert_egress_allowed, build_proxy_client_path
 from registry.utils.path_utils import make_version_id
+from registry.utils.tool_schema import (
+    mcp_input_schema as _ensure_mcp_compliant_schema,
+)
 from registry.utils.tool_schema import stored_input_schema
 from registry.utils.url_guard import validate_proxy_pass_url, validate_server_path
 
@@ -81,9 +84,6 @@ def _virtual_config_generation(
 # exists yet. Subsequent writes preserve whatever mode the destination
 # currently has so an operator's chmod isn't silently reverted.
 DEFAULT_NGINX_CONFIG_MODE: int = 0o644
-
-# JSON Schema keywords that hold reusable definitions (2020-12 and draft-07).
-SCHEMA_DEFINITION_KEYS: tuple[str, ...] = ("$defs", "definitions")
 
 # Route prefix under which enabled A2A agents are reverse-proxied through the
 # gateway. An agent registered at path "/flight-booking-agent" is
@@ -1047,74 +1047,6 @@ def _write_and_validate_config(
             raise
 
     raise RuntimeError(f"nginx config rejected by nginx -t: {message.strip()}")
-
-
-def _wrap_non_object_schema(
-    input_schema: dict[str, Any],
-) -> dict[str, Any]:
-    """Nest a non-object schema under properties.value, keeping its definitions.
-
-    References such as "#/$defs/Item" resolve against the document root. The
-    definitions therefore move to the new root, or the references would break.
-    """
-    inner = dict(input_schema)
-    wrapper: dict[str, Any] = {"type": "object", "properties": {"value": inner}}
-    for key in SCHEMA_DEFINITION_KEYS:
-        if key in inner:
-            wrapper[key] = inner.pop(key)
-    return wrapper
-
-
-def _ensure_mcp_compliant_schema(input_schema: dict[str, Any]) -> dict[str, Any]:
-    """Ensure inputSchema conforms to MCP spec by adding 'type': 'object' if missing.
-
-    The MCP spec requires all tool inputSchema definitions to have "type": "object"
-    at the top level. This function ensures backend tool schemas are compliant.
-
-    Args:
-        input_schema: The input schema from a backend tool
-
-    Returns:
-        MCP-compliant schema with "type": "object" at top level
-    """
-    if not input_schema:
-        return {"type": "object", "properties": {}}
-
-    # If schema already has "type": "object", return as-is
-    if input_schema.get("type") == "object":
-        return input_schema
-
-    # A type list that allows an object (for example ["object", "null"]) already
-    # describes the arguments object. MCP 2026-07-28 requires the root type to
-    # be exactly "object", so narrow it instead of nesting the arguments.
-    root_type = input_schema.get("type")
-    if isinstance(root_type, list) and "object" in root_type:
-        schema_copy = input_schema.copy()
-        schema_copy["type"] = "object"
-        return schema_copy
-
-    # If schema has "type" but it's not "object", wrap it
-    if "type" in input_schema:
-        logger.warning(
-            f"Tool inputSchema has non-object type '{input_schema.get('type')}'. "
-            "Wrapping in object schema to comply with MCP spec."
-        )
-        return _wrap_non_object_schema(input_schema)
-
-    # If no "type" field but has "properties", add "type": "object"
-    if "properties" in input_schema or "additionalProperties" in input_schema:
-        schema_copy = input_schema.copy()
-        schema_copy["type"] = "object"
-        return schema_copy
-
-    # Default: wrap unknown schema structure
-    logger.warning(
-        "Tool inputSchema missing 'type' field and has unexpected structure. "
-        "Adding 'type': 'object' to comply with MCP spec."
-    )
-    schema_copy = input_schema.copy()
-    schema_copy["type"] = "object"
-    return schema_copy
 
 
 class NginxConfigService:

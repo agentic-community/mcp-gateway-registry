@@ -4668,7 +4668,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
             "provider": "github",
         }
 
-        async def _consent_vend(token, server):
+        async def _consent_vend(token, server, **_kwargs):
             return vend
 
         with (
@@ -4714,7 +4714,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
             "provider": "github",
         }
 
-        async def _consent_vend(token, server):
+        async def _consent_vend(token, server, **_kwargs):
             return vend
 
         with (
@@ -4760,7 +4760,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
         """POST a JSON-RPC body to an egress server whose user has no token."""
         import auth_server.server as server_module
 
-        async def _consent_vend(token, server):
+        async def _consent_vend(token, server, **_kwargs):
             return dict(_CONSENT_VEND)
 
         authorize = authorize or AsyncMock(return_value=None)
@@ -4919,7 +4919,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
             "provider": "github",
         }
 
-        async def _consent_vend(token, server):
+        async def _consent_vend(token, server, **_kwargs):
             return vend
 
         with (
@@ -4962,7 +4962,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
             "provider": "github",
         }
 
-        async def _consent_vend(token, server):
+        async def _consent_vend(token, server, **_kwargs):
             return vend
 
         with (
@@ -4996,7 +4996,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
             "provider": "github",
         }
 
-        async def _consent_vend(token, server):
+        async def _consent_vend(token, server, **_kwargs):
             return vend
 
         with (
@@ -5104,7 +5104,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
         )
         vend_paths = []
 
-        async def vend(_token, registered_server):
+        async def vend(_token, registered_server, **_kwargs):
             vend_paths.append(registered_server)
             return {"access_token": "backend-token"}
 
@@ -5129,7 +5129,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
 
         seen: list[str] = []
 
-        async def vend(_token, registered_server):
+        async def vend(_token, registered_server, **_kwargs):
             seen.append(registered_server)
             return {"access_token": "nested-credential"}
 
@@ -5282,7 +5282,7 @@ class TestMcpProxyOboExchange:
     """
 
     @staticmethod
-    async def _obo_directive_vend(token, server):
+    async def _obo_directive_vend(token, server, **_kwargs):
         return {
             "mode": "obo_exchange",
             "obo_target_audience": "api://outlook-mcp-server",
@@ -6066,7 +6066,7 @@ class TestMcpProxyOboExchange:
         assert sent["authorization"] == "Bearer real-exchanged-token"
 
     @staticmethod
-    async def _keycloak_obo_directive_vend(token, server):
+    async def _keycloak_obo_directive_vend(token, server, **_kwargs):
         return {
             "mode": "obo_exchange",
             "obo_target_audience": "finance-mcp-server",
@@ -6257,7 +6257,7 @@ class TestMcpProxyPatMode:
     def test_pat_hit_injects_and_strips_ingress_creds(self):
         import auth_server.server as server_module
 
-        async def _pat_vend(token, server):
+        async def _pat_vend(token, server, **_kwargs):
             return {"access_token": "ghp_the_pat"}
 
         patch_httpx, captured = _capture_upstream_headers()
@@ -6300,7 +6300,7 @@ class TestMcpProxyPatMode:
         client-supplied copy so only the gateway-injected value reaches upstream."""
         import auth_server.server as server_module
 
-        async def _pat_vend(token, server):
+        async def _pat_vend(token, server, **_kwargs):
             return {
                 "access_token": "glpat_the_pat",
                 "pat_header_name": "PRIVATE-TOKEN",
@@ -6345,7 +6345,7 @@ class TestMcpProxyPatMode:
     def test_pat_miss_is_terminal_no_forward(self):
         import auth_server.server as server_module
 
-        async def _pat_miss_vend(token, server):
+        async def _pat_miss_vend(token, server, **_kwargs):
             return {"consent_required": True, "mode": "pat"}
 
         patch_httpx, captured = _capture_upstream_headers()
@@ -7829,7 +7829,7 @@ class TestMcpProxyEgressUnavailable:
     def test_tools_call_returns_retryable_503(self):
         import auth_server.server as server_module
 
-        async def _boom(token, server):
+        async def _boom(token, server, **_kwargs):
             raise server_module.EgressVendUnavailable("registry returned 503")
 
         with (
@@ -7866,7 +7866,7 @@ class TestMcpProxyEgressUnavailable:
 
         vend_called = {"n": 0}
 
-        async def _boom(token, server):
+        async def _boom(token, server, **_kwargs):
             vend_called["n"] += 1
             raise server_module.EgressVendUnavailable("registry returned 503")
 
