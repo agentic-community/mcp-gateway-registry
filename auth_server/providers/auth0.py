@@ -72,9 +72,7 @@ class Auth0Provider(AuthProvider):
         self.m2m_client_secret = m2m_client_secret or client_secret
         self.groups_claim = groups_claim
 
-        # JWKS cache
-        self._jwks_cache: dict[str, Any] | None = None
-        self._jwks_cache_time: float = 0
+        # JWKS cache TTL. The cache itself is shared per jwks_url on AuthProvider.
         self._jwks_cache_ttl: int = 3600  # 1 hour
 
         # Auth0 endpoints
@@ -121,9 +119,6 @@ class Auth0Provider(AuthProvider):
             except Exception as e:
                 logger.debug(f"Not a self-signed token: {e}")
 
-            # Get JWKS for validation
-            jwks = self.get_jwks()
-
             # Decode token header to get key ID
             unverified_header = jwt.get_unverified_header(token)
             kid = unverified_header.get("kid")
@@ -131,15 +126,8 @@ class Auth0Provider(AuthProvider):
             if not kid:
                 raise ValueError("Token missing 'kid' in header")
 
-            # Find matching key
-            signing_key = None
-            for key in jwks.get("keys", []):
-                if key.get("kid") == kid:
-                    from jwt import PyJWK
-
-                    signing_key = PyJWK(key).key
-                    break
-
+            # Find the matching key; refetches the JWKS once if the IdP rotated keys
+            signing_key = self._find_jwks_signing_key(kid)
             if not signing_key:
                 raise ValueError(f"No matching key found for kid: {kid}")
 

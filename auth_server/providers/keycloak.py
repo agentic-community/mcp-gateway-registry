@@ -3,7 +3,6 @@
 import logging
 import os
 import time
-from functools import lru_cache
 from typing import Any
 from urllib.parse import urlencode
 
@@ -102,9 +101,7 @@ class KeycloakProvider(AuthProvider):
         self.m2m_client_id = m2m_client_id or client_id
         self.m2m_client_secret = m2m_client_secret or client_secret
 
-        # Cache for JWKS and configuration
-        self._jwks_cache: dict[str, Any] | None = None
-        self._jwks_cache_time: float = 0
+        # JWKS cache TTL. The cache itself is shared per jwks_url on AuthProvider.
         self._jwks_cache_ttl: int = 3600  # 1 hour
 
         # Keycloak endpoints - use internal URL for server-to-server, external for browser redirects
@@ -137,9 +134,6 @@ class KeycloakProvider(AuthProvider):
             except Exception as e:
                 logger.debug(f"Not a self-signed token: {e}")
 
-            # Get JWKS for validation
-            jwks = self.get_jwks()
-
             # Decode token header to get key ID
             unverified_header = jwt.get_unverified_header(token)
             kid = unverified_header.get("kid")
@@ -147,15 +141,8 @@ class KeycloakProvider(AuthProvider):
             if not kid:
                 raise ValueError("Token missing 'kid' in header")
 
-            # Find matching key
-            signing_key = None
-            for key in jwks.get("keys", []):
-                if key.get("kid") == kid:
-                    from jwt import PyJWK
-
-                    signing_key = PyJWK(key).key
-                    break
-
+            # Find the matching key; refetches the JWKS once if the IdP rotated keys
+            signing_key = self._find_jwks_signing_key(kid)
             if not signing_key:
                 raise ValueError(f"No matching key found for kid: {kid}")
 
@@ -606,9 +593,9 @@ class KeycloakProvider(AuthProvider):
     def _rewrite_internal_urls(self, node: Any) -> Any:
         """Recursively rewrite every internal Keycloak URL in a JSON structure.
 
-        Returns new containers rather than mutating in place. That matters:
-        ``_get_openid_configuration`` is ``lru_cache``d, so mutating a nested
-        dict would poison the cache for every later caller.
+        Returns new containers rather than mutating in place. The discovery
+        cache already hands each caller its own copy; not mutating keeps this
+        safe without relying on that.
 
         Args:
             node: Any JSON value from the discovery document.
@@ -652,22 +639,13 @@ class KeycloakProvider(AuthProvider):
         # shape for mypy and for a malformed upstream document.
         return rewritten if isinstance(rewritten, dict) else dict(config)
 
-    @lru_cache(maxsize=1)
     def _get_openid_configuration(self) -> dict[str, Any]:
-        """Get OpenID Connect configuration from Keycloak."""
-        try:
-            logger.debug(f"Fetching OpenID configuration from {self.config_url}")
-            response = requests.get(self.config_url, timeout=10)
-            response.raise_for_status()
+        """Return Keycloak's discovery document, shared across instances by ``config_url``.
 
-            config = response.json()
-            logger.debug("OpenID configuration retrieved successfully")
-
-            return config
-
-        except requests.RequestException as e:
-            logger.error(f"Failed to get OpenID configuration: {e}")
-            raise ValueError(f"OpenID configuration retrieval failed: {e}")
+        Raises:
+            ValueError: If the discovery document cannot be retrieved.
+        """
+        return self._fetch_shared_openid_configuration(self.config_url)
 
     def _check_keycloak_health(self) -> bool:
         """Check if Keycloak is healthy and accessible."""
