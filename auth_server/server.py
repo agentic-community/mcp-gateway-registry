@@ -8373,8 +8373,14 @@ def _strip_generic_internal_headers(headers: dict[str, str]) -> dict[str, str]:
 async def _vend_egress_token(
     internal_proxy_token: str,
     registered_server: str,
+    *,
+    include_pre_consent_tools: bool = False,
 ) -> dict | None:
     """Vend for the registered server path bound by the verified proxy token.
+
+    ``include_pre_consent_tools`` asks the registry to return the server's
+    stored tools on a consent miss when the server opted in (issue #1986). The
+    mcp-proxy hop sets it only for a direct-route ``tools/list``.
 
     The registry re-verifies the token and checks its bound upstream against
     this server's registered destinations before returning a credential.
@@ -8413,7 +8419,10 @@ async def _vend_egress_token(
         resp = await post_with_reconnect(
             client,
             f"{base}/_egress_internal/egress-token",
-            json={"server_path": registered_server},
+            json={
+                "server_path": registered_server,
+                "include_pre_consent_tools": include_pre_consent_tools,
+            },
             headers={
                 "Authorization": f"Bearer {service_token}",
                 "X-Internal-Token": internal_proxy_token,
@@ -8857,6 +8866,51 @@ def _connect_tool_definition(
     }
 
 
+async def _stored_tools_before_consent(
+    registered_server: str,
+    user_scopes: list[str],
+    vend: dict,
+    direct_route: bool,
+) -> list[dict] | None:
+    """The caller's share of the server's stored tools, listed before consent.
+
+    The registry sends ``pre_consent_tools`` only for a direct-route
+    ``tools/list`` on a server that opted in (issue #1986). This applies the
+    same per-tool grant and block check as an upstream ``tools/list``, and it
+    runs whatever ``MCP_TOOLS_LIST_FILTER_ENABLED`` says: the list comes from
+    the registry, not the upstream, so there is no upstream decision to defer
+    to. An entry named like this server's connect tool is dropped, because the
+    gateway owns that name.
+
+    Args:
+        registered_server: The registered server path from the signed proxy token.
+        user_scopes: The caller's scopes.
+        vend: The registry's vend response.
+        direct_route: True only when nginx asserted a direct route.
+
+    Returns:
+        The filtered tools (possibly empty), or None when the server did not opt
+        in or the route is not direct.
+    """
+    stored = vend.get("pre_consent_tools")
+    if not direct_route or not isinstance(stored, list):
+        return None
+    connect_name = _connect_tool_name(registered_server)
+    candidates: list[dict] = []
+    for tool in stored:
+        if isinstance(tool, dict) and tool.get("name") != connect_name:
+            candidates.append(tool)
+    kept = await filter_tools_list_response(registered_server, user_scopes, candidates)
+    logger.info(
+        "mcp_proxy: egress server=%s has no credential; listing %d of %d stored tools "
+        "before consent",
+        registered_server,
+        len(kept),
+        len(stored),
+    )
+    return kept
+
+
 def _connect_tool_local_result(
     server_name: str,
     req_id: object,
@@ -8911,7 +8965,7 @@ def _pre_consent_local_response(
     mode: str,
     connect_url: str = "",
     provider: str = "the provider",
-    connect_tool: dict | None = None,
+    listed_tools: list[dict] | None = None,
 ) -> Response | None:
     """Answer the methods that never need the upstream while consent is pending.
 
@@ -8923,9 +8977,11 @@ def _pre_consent_local_response(
     - ``server/discover``: JSON-RPC "method not found", so the client falls
       back to ``initialize`` instead of showing an error.
     - discovery lists: an empty list marked ``EGRESS_CONSENT_REQUIRED_HEADER``.
-      When ``connect_tool`` is given, ``tools/list`` returns that one tool
-      instead (issue #1860). The header stays, so an aggregating caller still
-      sees "consent pending" and ignores the body.
+      When ``listed_tools`` is given, ``tools/list`` returns those tools
+      instead: the caller decides what is listed (the connect tool, issue
+      #1860, and, for a server that opted in, its stored tools, issue #1986)
+      and this helper decides the response shape. The header stays, so an
+      aggregating caller still sees "consent pending" and ignores the body.
 
     Returns None for every other method; the caller answers those with its
     consent/PAT instruction.
@@ -8960,8 +9016,8 @@ def _pre_consent_local_response(
     if result_key is None:
         return None
     items: list[dict] = []
-    if method == "tools/list" and connect_tool is not None:
-        items = [connect_tool]
+    if method == "tools/list" and listed_tools:
+        items = listed_tools
     return JSONResponse(
         status_code=200,
         content={
@@ -8978,6 +9034,7 @@ def _pat_missing_response(
     incoming_method: str | None,
     req_id: object,
     incoming_payload: object = None,
+    listed_tools: list[dict] | None = None,
 ):
     """Terminal tool result for a ``pat`` server with no usable PAT.
 
@@ -8989,7 +9046,13 @@ def _pat_missing_response(
     whose text tells the human where to submit a PAT. Methods that never need
     the upstream are answered by ``_pre_consent_local_response``.
     """
-    local = _pre_consent_local_response(incoming_method, req_id, incoming_payload, "pat")
+    local = _pre_consent_local_response(
+        incoming_method,
+        req_id,
+        incoming_payload,
+        "pat",
+        listed_tools=listed_tools,
+    )
     if local is not None:
         return local
 
@@ -9611,7 +9674,11 @@ async def mcp_proxy(
         internal_proxy_token = request.headers.get("X-Internal-Token", "")
         if internal_proxy_token:
             try:
-                vend = await _vend_egress_token(internal_proxy_token, registered_server)
+                vend = await _vend_egress_token(
+                    internal_proxy_token,
+                    registered_server,
+                    include_pre_consent_tools=direct_route and incoming_method == "tools/list",
+                )
             except EgressVendUnavailable as exc:
                 # Transient vend failure: fail closed with a retryable signal
                 # rather than forwarding tokenless (-> silent upstream 401) or
@@ -9828,7 +9895,21 @@ async def mcp_proxy(
                 # terminal -- return the actionable "no PAT configured" message
                 # rather than forwarding stripped credentials to a 401ing upstream.
                 req_id = incoming_payload.get("id") if isinstance(incoming_payload, dict) else None
-                return _pat_missing_response(server_name, incoming_method, req_id, incoming_payload)
+                # A pat server that opted in lists its stored tools on a direct
+                # tools/list; calling one returns this same PAT message (#1986).
+                stored_tools = await _stored_tools_before_consent(
+                    registered_server,
+                    user_scopes,
+                    vend,
+                    direct_route,
+                )
+                return _pat_missing_response(
+                    server_name,
+                    incoming_method,
+                    req_id,
+                    incoming_payload,
+                    listed_tools=stored_tools,
+                )
             elif vend and (vend.get("connect_url") or vend.get("authorize_url")):
                 # Egress is configured for this server but the user has no usable
                 # token, and the upstream is itself an OAuth resource server that
@@ -9844,6 +9925,9 @@ async def mcp_proxy(
                 #   - tools/list on a direct route returns one synthetic connect
                 #     tool (issue #1860). Chat clients only call tools they can
                 #     see, so an empty list left them no way to reach consent.
+                #     A server that opted in also lists its stored tools after
+                #     it (issue #1986), for clients that only call tools an
+                #     admin enabled ahead of time.
                 #   - tools/call (and prompts/get, resources/read): need the
                 #     third-party token, so we ask the user to connect via MCP
                 #     URL-mode elicitation. A call to the connect tool lands here
@@ -9854,9 +9938,19 @@ async def mcp_proxy(
                 #     https://modelcontextprotocol.io/specification/draft/client/elicitation
                 req_id = incoming_payload.get("id") if isinstance(incoming_payload, dict) else None
                 provider = vend.get("provider") or "the provider"
-                connect_tool = None
+                listed_tools: list[dict] | None = None
                 if direct_route:
-                    connect_tool = _connect_tool_definition(registered_server, provider)
+                    # The connect tool goes first, then any stored tools the
+                    # server opted in to list before consent (#1986).
+                    listed_tools = [_connect_tool_definition(registered_server, provider)]
+                    stored_tools = await _stored_tools_before_consent(
+                        registered_server,
+                        user_scopes,
+                        vend,
+                        direct_route,
+                    )
+                    if stored_tools:
+                        listed_tools.extend(stored_tools)
                 local = _pre_consent_local_response(
                     incoming_method,
                     req_id,
@@ -9864,7 +9958,7 @@ async def mcp_proxy(
                     "oauth",
                     connect_url=vend.get("connect_url") or vend.get("authorize_url") or "",
                     provider=provider,
-                    connect_tool=connect_tool,
+                    listed_tools=listed_tools,
                 )
                 if local is not None:
                     logger.info(

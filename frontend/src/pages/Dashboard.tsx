@@ -72,7 +72,12 @@ import type {
 } from '../types/customEntity';
 import axios from 'axios';
 import { getBaseURL } from '../utils/basePath';
-import { isEgressAuthEnabled, loadEgressCardState, type EgressCardState } from '../utils/egressAuth';
+import {
+  buildEgressConfigBody,
+  isEgressAuthEnabled,
+  loadEgressCardState,
+  type EgressCardState,
+} from '../utils/egressAuth';
 import { toAuthScheme } from '../components/formFields';
 import { EgressConnectProvider } from '../contexts/EgressConnectContext';
 import {
@@ -332,6 +337,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     egress_custom_resource: '',  // RFC 8707 resource indicator (optional)
     egress_expected_issuer: '',  // RFC 9207 issuer of the provider (optional)
     egress_target_audience: '',
+    egress_list_tools_before_consent: false,  // issue #1986, oauth_user and pat only
     // Discovery Identity (OAuth 2.1) — an independent flag under Backend Auth.
     oauth_discovery_enabled: false,
     oauth_discovery_provider: '',
@@ -1358,6 +1364,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         egress_custom_resource: serverDetails.egress_oauth?.custom_resource || '',
         egress_expected_issuer: serverDetails.egress_oauth?.expected_issuer || '',
         egress_target_audience: serverDetails.egress_oauth?.target_audience || '',
+        egress_list_tools_before_consent: serverDetails.egress_list_tools_before_consent === true,
         oauth_discovery_enabled: serverDetails.oauth_discovery?.enabled === true,
         oauth_discovery_provider: serverDetails.oauth_discovery?.oauth?.provider || '',
         oauth_discovery_client_id: serverDetails.oauth_discovery?.oauth?.client_id || '',
@@ -1413,6 +1420,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         egress_custom_resource: '',
         egress_expected_issuer: '',
         egress_target_audience: '',
+        egress_list_tools_before_consent: false,
         oauth_discovery_enabled: false,
         oauth_discovery_provider: '',
         oauth_discovery_client_id: '',
@@ -1650,57 +1658,11 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
           const csrf = await axios.get('/api/auth/csrf-token');
           const csrfHeaders: Record<string, string> = {};
           if (csrf.data?.csrf_token) csrfHeaders['X-CSRF-Token'] = csrf.data.csrf_token;
-          const mode = editForm.egress_auth_mode;
-          const scopesList = editForm.egress_scopes
-            .split(/[,\s]+/)
-            .map(s => s.trim())
-            .filter(Boolean);
-          if (mode === 'obo_exchange') {
-            await axios.post(
-              `/api/servers${editingServer.path}/egress-auth`,
-              {
-                egress_auth_mode: 'obo_exchange',
-                target_audience: editForm.egress_target_audience.trim(),
-                scopes: scopesList,
-              },
-              { headers: csrfHeaders }
-            );
-          } else if (mode === 'oauth_user') {
-            await axios.post(
-              `/api/servers${editingServer.path}/egress-auth`,
-              {
-                egress_auth_mode: 'oauth_user',
-                egress_provider: editForm.egress_provider.trim(),
-                client_id: editForm.egress_client_id.trim(),
-                // Blank secret on edit keeps the stored one (backend semantics).
-                client_secret: editForm.egress_client_secret || undefined,
-                scopes: scopesList,
-                custom_authorize_url: editForm.egress_custom_authorize_url || undefined,
-                custom_token_url: editForm.egress_custom_token_url || undefined,
-                custom_token_auth_style: editForm.egress_custom_token_auth_style || undefined,
-                custom_resource: editForm.egress_custom_resource || undefined,
-                expected_issuer: editForm.egress_expected_issuer || undefined,
-              },
-              { headers: csrfHeaders }
-            );
-          } else if (mode === 'pat') {
-            await axios.post(
-              `/api/servers${editingServer.path}/egress-auth`,
-              {
-                egress_auth_mode: 'pat',
-                egress_provider: editForm.egress_provider.trim(),
-                // The inject header is inherited from Backend Authentication at
-                // vend time, so it is not sent here.
-              },
-              { headers: csrfHeaders }
-            );
-          } else {
-            await axios.post(
-              `/api/servers${editingServer.path}/egress-auth`,
-              { egress_auth_mode: 'none' },
-              { headers: csrfHeaders }
-            );
-          }
+          await axios.post(
+            `/api/servers${editingServer.path}/egress-auth`,
+            buildEgressConfigBody(editForm),
+            { headers: csrfHeaders }
+          );
         } catch (egressErr: unknown) {
           console.error('Egress auth config failed to apply:', egressErr);
           failedParts.push('egress auth');

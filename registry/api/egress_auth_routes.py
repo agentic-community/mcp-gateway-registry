@@ -23,7 +23,7 @@ import re
 import secrets
 from datetime import UTC, datetime, timedelta
 from html import escape
-from typing import Annotated
+from typing import Annotated, Any
 from urllib.parse import urlencode, urlparse
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -68,6 +68,9 @@ from registry.utils.credential_encryption import (
     encrypt_credential,
     validate_custom_header_name,
 )
+from registry.utils.tool_schema import (
+    stored_tool_to_mcp,
+)
 from registry.utils.url_guard import (
     CREDENTIALED_OAUTH_PROFILE,
     PROXY_PROFILE,
@@ -89,6 +92,11 @@ _PAT_MAX_TTL_SECONDS: int = 30 * 24 * 3600
 # RFC 9207 issuer identifiers are short URLs; cap what an operator may store.
 MAX_EXPECTED_ISSUER_LENGTH: int = 2048
 _TTL_UNIT_SECONDS: dict[str, int] = {"minutes": 60, "hours": 3600, "days": 86400}
+# Most stored tools one pre-consent tools/list returns (issue #1986). Bounds the
+# vend response and the per-tool filter the mcp-proxy hop runs on it.
+MAX_PRE_CONSENT_TOOLS: int = 500
+# Egress modes whose users have a pre-consent state that can list stored tools.
+LIST_BEFORE_CONSENT_MODES: tuple[str, ...] = ("oauth_user", "pat")
 
 
 def _derive_pat_inject_header(server: dict) -> tuple[str, str]:
@@ -294,6 +302,79 @@ def _build_request_state(
         return None
 
 
+def _blocked_tool_names(
+    tool_overrides: object,
+) -> set[str]:
+    """Return the tool names a server's ``tool_overrides`` marks blocked.
+
+    Mirrors ``get_blocked_tools`` in the server repository, on a document the
+    caller already holds, so no second read is needed.
+    """
+    if not isinstance(tool_overrides, dict):
+        return set()
+    blocked: set[str] = set()
+    for name, entry in tool_overrides.items():
+        if isinstance(entry, dict) and entry.get("blocked") is True:
+            blocked.add(name)
+    return blocked
+
+
+def _pre_consent_tool_list(
+    server: dict,
+    selected: dict,
+    direct_route: bool,
+    wanted: bool,
+) -> list[dict] | None:
+    """Stored tools to list before consent, or None to keep today's response.
+
+    Issue #1986: clients such as Gemini Enterprise only call tools an admin
+    enabled ahead of time, so a pre-consent list holding only the connect tool
+    gives them nothing to call. A server that opts in lists its stored tools
+    instead, the way a virtual route already does.
+
+    Returns None unless the mcp-proxy hop asked (it asks only for a direct-route
+    tools/list), the route is direct, and the server opted in. Blocked tools are
+    dropped here. The caller's per-tool grants are applied by the mcp-proxy hop.
+
+    Args:
+        server: The active server document.
+        selected: The version document the route is bound to (``server`` itself
+            for the active version).
+        direct_route: True only when the signed proxy token carries
+            ``virtual_backend`` and it is False. A token without the claim is
+            not treated as direct, matching the mcp-proxy hop.
+        wanted: ``include_pre_consent_tools`` from the request.
+
+    Returns:
+        MCP tool entries, possibly empty, or None.
+    """
+    if not wanted or not direct_route:
+        return None
+    if server.get("egress_list_tools_before_consent") is not True:
+        return None
+    # A linked inactive version may lack its own tool_list; it borrows the
+    # active version's, as virtual server mappings do.
+    raw = selected.get("tool_list") if "tool_list" in selected else server.get("tool_list")
+    if not isinstance(raw, list) or not raw:
+        logger.warning(
+            "egress vend: %s lists tools before consent but has no stored tool_list",
+            server.get("path"),
+        )
+        return None
+    blocked = _blocked_tool_names(server.get("tool_overrides"))
+    tools: list[dict] = []
+    for entry in raw[:MAX_PRE_CONSENT_TOOLS]:
+        converted = stored_tool_to_mcp(entry)
+        if converted is not None and converted["name"] not in blocked:
+            tools.append(converted)
+    logger.info(
+        "egress vend: returning %d stored tools before consent for %s",
+        len(tools),
+        server.get("path"),
+    )
+    return tools
+
+
 class EgressTokenRequest(BaseModel):
     """Body for POST /internal/egress-token.
 
@@ -303,6 +384,13 @@ class EgressTokenRequest(BaseModel):
     """
 
     server_path: str
+    include_pre_consent_tools: bool = Field(
+        default=False,
+        description="Set by the mcp-proxy hop on a direct-route tools/list. Asks the "
+        "registry to return the server's stored tools on a consent miss when the server "
+        "opted in (egress_list_tools_before_consent). A hint only: the registry still "
+        "decides from the verified token's route binding and the stored opt-in.",
+    )
 
 
 class EgressTokenResponse(BaseModel):
@@ -365,6 +453,13 @@ class EgressTokenResponse(BaseModel):
     pat_value_prefix: str | None = Field(
         default=None,
         description="pat: value prefix before the PAT (e.g. 'Bearer ' or '' for a bare token).",
+    )
+    pre_consent_tools: list[dict[str, Any]] | None = Field(
+        default=None,
+        description="MCP tool entries (name, description, inputSchema) from the selected "
+        "version's stored tool_list, blocked tools removed. Set only on a consent miss "
+        "when the request asked, the route is direct and the server opted in. Not "
+        "filtered by the caller's tool grants: the mcp-proxy hop applies those.",
     )
 
 
@@ -729,6 +824,9 @@ async def vend_egress_token(
     # The credential must have been approved for this exact destination.
     requested_upstream = approved_url
     egress_oauth = server["egress_oauth"]
+    # Stored tools for a pre-consent tools/list (issue #1986). Built only on the
+    # two consent-miss returns below, never for a successful vend.
+    direct_route = claims.get("virtual_backend") is False
 
     # A per-user principal with no resolved vault id: refuse rather than guess.
     # Reachable for tokens minted before the ``egress_user`` claim existed; those
@@ -769,7 +867,16 @@ async def vend_egress_token(
                 pat_header_name=header_name,
                 pat_value_prefix=value_prefix,
             )
-        return EgressTokenResponse(consent_required=True, mode="pat")
+        return EgressTokenResponse(
+            consent_required=True,
+            mode="pat",
+            pre_consent_tools=_pre_consent_tool_list(
+                server,
+                selected,
+                direct_route=direct_route,
+                wanted=body.include_pre_consent_tools,
+            ),
+        )
 
     # obo_exchange: return the exchange DIRECTIVE, not a token. The actual IdP
     # token exchange runs in auth_server (which holds the gateway's own IdP
@@ -871,6 +978,12 @@ async def vend_egress_token(
         connect_url=connect_url,
         request_state=request_state,
         provider=provider,
+        pre_consent_tools=_pre_consent_tool_list(
+            server,
+            selected,
+            direct_route=direct_route,
+            wanted=body.include_pre_consent_tools,
+        ),
     )
 
 
@@ -895,6 +1008,10 @@ class EgressConfigRequest(BaseModel):
     expected_issuer: str | None = None  # RFC 9207 issuer of the provider (any provider)
     # obo_exchange only: the internal MCP server's audience (IdP-shaped).
     target_audience: str | None = None
+    # oauth_user and pat only: list the stored tools on a direct-route tools/list
+    # before the user connects (issue #1986). Like every field here, omitting it
+    # on a POST resets it, because the request replaces the whole config.
+    list_tools_before_consent: bool = False
 
 
 def _egress_config_view(server: dict) -> dict:
@@ -913,6 +1030,7 @@ def _egress_config_view(server: dict) -> dict:
         "custom_token_auth_style": eo.get("custom_token_auth_style"),
         "custom_resource": eo.get("custom_resource"),
         "expected_issuer": eo.get("expected_issuer"),
+        "list_tools_before_consent": server.get("egress_list_tools_before_consent") is True,
     }
 
 
@@ -1109,6 +1227,20 @@ async def configure_egress_auth(
         server["egress_oauth"] = {"provider": provider, "scopes": body.scopes or []}
     else:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid egress_auth_mode")
+
+    if body.list_tools_before_consent and server["egress_auth_mode"] not in (
+        LIST_BEFORE_CONSENT_MODES
+    ):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="list_tools_before_consent requires egress_auth_mode oauth_user or pat",
+        )
+    server["egress_list_tools_before_consent"] = body.list_tools_before_consent
+    logger.info(
+        "egress config: %s list_tools_before_consent=%s",
+        server_path,
+        body.list_tools_before_consent,
+    )
 
     if not await server_service.update_server(server_path, server):
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="update failed")
