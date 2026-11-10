@@ -58,10 +58,13 @@ providers:
     display_name: "Okta"
     client_id: "${OKTA_CLIENT_ID}"
     client_secret: "${OKTA_CLIENT_SECRET}"
-    auth_url: "https://${OKTA_DOMAIN}/oauth2/v1/authorize"
-    token_url: "https://${OKTA_DOMAIN}/oauth2/v1/token"
-    user_info_url: "https://${OKTA_DOMAIN}/oauth2/v1/userinfo"
-    logout_url: "https://${OKTA_DOMAIN}/oauth2/v1/logout"
+    # ${OKTA_OAUTH2_BASE_URL} is resolved at startup from OKTA_DOMAIN and
+    # OKTA_AUTH_SERVER_ID (load_oauth2_config), the same way OktaProvider builds
+    # its endpoints, so login and token validation use one authorization server.
+    auth_url: "${OKTA_OAUTH2_BASE_URL}/authorize"
+    token_url: "${OKTA_OAUTH2_BASE_URL}/token"
+    user_info_url: "${OKTA_OAUTH2_BASE_URL}/userinfo"
+    logout_url: "${OKTA_OAUTH2_BASE_URL}/logout"
     scopes: ["openid", "email", "profile", "groups"]
     response_type: "code"
     grant_type: "authorization_code"

@@ -29,6 +29,31 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def okta_oauth2_base_url(
+    okta_domain: str,
+    auth_server_id: str,
+) -> str:
+    """Return the base URL of the Okta authorization server's OAuth2 endpoints.
+
+    The org authorization server serves ``/oauth2/v1/*``; a custom one serves
+    ``/oauth2/<auth_server_id>/v1/*``. The browser login (``oauth2_providers.yml``)
+    and ``OktaProvider`` both build their endpoints from this, so the login gets
+    its id_token from the same server whose issuer and keys the provider checks.
+
+    Args:
+        okta_domain: Okta org domain, with or without ``https://``.
+        auth_server_id: ``OKTA_AUTH_SERVER_ID``, or ``""`` for the org server.
+
+    Returns:
+        The base URL, without a trailing slash, for example
+        ``https://dev-123456.okta.com/oauth2/default/v1``.
+    """
+    domain = okta_domain.replace("https://", "").rstrip("/")
+    if auth_server_id:
+        return f"https://{domain}/oauth2/{auth_server_id}/v1"
+    return f"https://{domain}/oauth2/v1"
+
+
 class OktaProvider(AuthProvider):
     """Okta authentication provider implementation.
 
@@ -97,25 +122,18 @@ class OktaProvider(AuthProvider):
 
         # Okta endpoints (org or custom authorization server)
         base_url = f"https://{self.okta_domain}"
+        oauth2_base = okta_oauth2_base_url(self.okta_domain, auth_server_id)
+        self.auth_url = f"{oauth2_base}/authorize"
+        self.token_url = f"{oauth2_base}/token"
+        self.userinfo_url = f"{oauth2_base}/userinfo"
+        self.jwks_url = f"{oauth2_base}/keys"
+        self.logout_url = f"{oauth2_base}/logout"
         if auth_server_id:
-            # Custom authorization server endpoints
-            oauth2_base = f"{base_url}/oauth2/{auth_server_id}/v1"
-            self.auth_url = f"{oauth2_base}/authorize"
-            self.token_url = f"{oauth2_base}/token"
-            self.userinfo_url = f"{oauth2_base}/userinfo"
-            self.jwks_url = f"{oauth2_base}/keys"
-            self.logout_url = f"{oauth2_base}/logout"
             self.issuer = f"{base_url}/oauth2/{auth_server_id}"
             logger.info(
                 f"Initialized Okta provider with custom authorization server '{auth_server_id}'"
             )
         else:
-            # Default org authorization server endpoints
-            self.auth_url = f"{base_url}/oauth2/v1/authorize"
-            self.token_url = f"{base_url}/oauth2/v1/token"
-            self.userinfo_url = f"{base_url}/oauth2/v1/userinfo"
-            self.jwks_url = f"{base_url}/oauth2/v1/keys"
-            self.logout_url = f"{base_url}/oauth2/v1/logout"
             self.issuer = base_url
             logger.info(f"Initialized Okta provider for domain '{self.okta_domain}'")
 

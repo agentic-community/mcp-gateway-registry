@@ -402,7 +402,8 @@ that server's Connect dialog:
 | M2M client id | `OKTA_M2M_CLIENT_ID` | `okta_m2m_client_id` | `auth-server.okta.m2mClientId` | Defaults to web client. |
 | M2M client secret **(secret)** | `OKTA_M2M_CLIENT_SECRET` | `okta_m2m_client_secret` | `auth-server.okta.m2mClientSecret` | — |
 | API token **(secret)** | `OKTA_API_TOKEN` | `okta_api_token` | `auth-server.okta.apiToken` | For IAM operations. |
-| Auth server id | `OKTA_AUTH_SERVER_ID` | `okta_auth_server_id` | `auth-server.okta.authServerId` | Custom AS; defaults to Org AS. |
+| Auth server id | `OKTA_AUTH_SERVER_ID` | `okta_auth_server_id` | `auth-server.okta.authServerId` | Custom authorization server for both the browser login and token validation: the last segment of its Issuer URI (`default` for the default server). Unset uses the Org authorization server. See [Okta setup, Step 2a](okta-setup.md#step-2a-custom-authorization-server-optional). |
+| Allowed token audiences | `OKTA_M2M_ALLOWED_AUDIENCES` | `okta_m2m_allowed_audiences` | `auth-server.okta.m2mAllowedAudiences` | `aud` values accepted on Okta access tokens besides the client IDs; applies to user and M2M tokens. Set it to the custom authorization server's audience (for example `api://default`). Empty accepts only the client IDs. |
 
 ### 12e — Auth0
 

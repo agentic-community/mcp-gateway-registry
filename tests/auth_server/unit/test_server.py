@@ -3477,6 +3477,39 @@ class TestEntraBrowserOAuthCloudEndpoints:
         assert config["providers"]["keycloak"]["enabled"] is True
 
 
+class TestOktaBrowserAuthorizationServer:
+    """The browser login uses the Okta authorization server the provider verifies against."""
+
+    @pytest.mark.parametrize("auth_server_id", ["", "default", "aus1example2345"])
+    def test_browser_endpoints_match_the_provider(self, monkeypatch, auth_server_id):
+        """An id_token from the login must come from the issuer the provider accepts.
+
+        With OKTA_AUTH_SERVER_ID set, the provider verifies tokens against that
+        custom authorization server. A login sent to the org server instead
+        returns an id_token whose issuer and signing keys the provider refuses,
+        so every login fails with "ID token verification failed".
+        """
+        from providers.okta import OktaProvider
+
+        from auth_server.server import load_oauth2_config
+
+        monkeypatch.setenv("OKTA_DOMAIN", "dev-123456.okta.com")
+        if auth_server_id:
+            monkeypatch.setenv("OKTA_AUTH_SERVER_ID", auth_server_id)
+        else:
+            monkeypatch.delenv("OKTA_AUTH_SERVER_ID", raising=False)
+
+        browser = load_oauth2_config()["providers"]["okta"]
+        provider = OktaProvider("dev-123456.okta.com", "test-client", "test-secret")
+
+        assert (
+            browser["auth_url"],
+            browser["token_url"],
+            browser["user_info_url"],
+            browser["logout_url"],
+        ) == (provider.auth_url, provider.token_url, provider.userinfo_url, provider.logout_url)
+
+
 class TestOAuth2PkceAndNonce:
     """The OAuth2 flow must use PKCE (S256) and an OIDC nonce.
 

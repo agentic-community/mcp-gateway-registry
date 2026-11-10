@@ -6600,6 +6600,31 @@ def _entra_enabled() -> bool:
     return False
 
 
+def _resolve_okta_endpoints(
+    config: dict,
+) -> None:
+    """Point the Okta login at the authorization server OktaProvider validates against.
+
+    With OKTA_AUTH_SERVER_ID set, OktaProvider accepts only tokens from that
+    custom authorization server. A login sent to the org server returns an
+    id_token with another issuer and signing keys, and every login fails. Both
+    now take their endpoints from ``okta_oauth2_base_url``.
+
+    Args:
+        config: The parsed ``oauth2_providers.yml``; its Okta URLs are updated in place.
+    """
+    okta = config.get("providers", {}).get("okta")
+    okta_domain = os.environ.get("OKTA_DOMAIN", "")
+    if not okta or not okta_domain:
+        return
+    from providers.okta import okta_oauth2_base_url
+
+    base = okta_oauth2_base_url(okta_domain, os.environ.get("OKTA_AUTH_SERVER_ID", ""))
+    for field in ("auth_url", "token_url", "user_info_url", "logout_url"):
+        if field in okta:
+            okta[field] = Template(okta[field]).safe_substitute(OKTA_OAUTH2_BASE_URL=base)
+
+
 # Load OAuth2 providers configuration
 def load_oauth2_config():
     """Load the OAuth2 providers configuration from oauth2_providers.yml"""
@@ -6652,6 +6677,7 @@ def load_oauth2_config():
                 ENTRA_GRAPH_BASE_URL=graph_base
             )
 
+    _resolve_okta_endpoints(config)
     resolved = substitute_env_vars(config)
     # substitute_env_vars turns only "true"/"false" into booleans, so a value
     # such as "0" would stay a truthy string and enable Entra. Use the parsed
