@@ -960,7 +960,7 @@ class EntraIdProvider(AuthProvider):
             # nginx closes /validate at ten seconds; cap the whole OBO and
             # paginated Graph chain to leave room for scope mapping and signing.
             async with asyncio.timeout(GRAPH_GROUP_LOOKUP_TIMEOUT_SECONDS):
-                graph_token = await obo_exchange(
+                graph_token, _ = await obo_exchange(
                     idp_provider,
                     subject_token=access_token,
                     target_audience=graph_resource,
