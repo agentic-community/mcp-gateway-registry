@@ -480,7 +480,7 @@ class TestGraphProxyBearerRecovery:
             patch(
                 "auth_server.providers.entra.obo_exchange",
                 new_callable=AsyncMock,
-                return_value="graph-token",
+                return_value=("graph-token", 3599),
             ) as exchange,
             patch("auth_server.providers.entra.guarded_async_client", return_value=client),
         ):
@@ -537,7 +537,7 @@ class TestGraphProxyBearerRecovery:
             patch(
                 "auth_server.providers.entra.obo_exchange",
                 new_callable=AsyncMock,
-                return_value="graph-token",
+                return_value=("graph-token", 3599),
             ) as exchange,
             patch("auth_server.providers.entra.guarded_async_client", return_value=client),
         ):
@@ -579,7 +579,7 @@ class TestGraphProxyBearerRecovery:
             patch(
                 "auth_server.providers.entra.obo_exchange",
                 new_callable=AsyncMock,
-                return_value="dod-token",
+                return_value=("dod-token", 3599),
             ) as exchange,
             patch("auth_server.providers.entra.guarded_async_client", return_value=client),
         ):
