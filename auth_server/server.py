@@ -8209,6 +8209,37 @@ def _complete_events_only(
     return b""
 
 
+def _has_jsonrpc_response(
+    body: bytes,
+) -> bool:
+    """Whether any complete SSE event in the body carries a JSON-RPC response.
+
+    A truncated stream can end after notifications but before the response to
+    the request. Delivering that as a 200 leaves an MCP client waiting for an
+    answer that never arrives, so the caller treats it the same as a stream in
+    which no event completed.
+
+    Args:
+        body: Complete-event prefix returned by `_complete_events_only`.
+
+    Returns:
+        True when a `data:` payload is a JSON object with an `id` and either a
+        `result` or an `error`.
+    """
+    for line in body.decode("utf-8", errors="replace").splitlines():
+        if not line.startswith("data:"):
+            continue
+        try:
+            message = json.loads(line[len("data:") :].strip())
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(message, dict) or "id" not in message:
+            continue
+        if "result" in message or "error" in message:
+            return True
+    return False
+
+
 async def _read_bounded(
     response: httpx.Response,
     max_bytes: int,
@@ -8233,7 +8264,7 @@ async def _read_bounded(
     size = 0
     chunks: list[bytes] = []
     try:
-        async for chunk in response.aiter_bytes(chunk_size=64 * 1024):
+        async for chunk in response.aiter_bytes():
             size += len(chunk)
             if size > max_bytes:
                 raise HTTPException(
@@ -10324,11 +10355,13 @@ async def mcp_proxy(
                 )
             except _UpstreamStreamTruncated as exc:
                 complete_bytes = _complete_events_only(exc.partial)
-                if not complete_bytes:
+                if not complete_bytes or not _has_jsonrpc_response(complete_bytes):
                     logger.error(
-                        "mcp_proxy: upstream %s closed the SSE stream before any event "
-                        f"completed ({len(exc.partial)} bytes buffered, none usable)",
+                        "mcp_proxy: upstream %s closed the SSE stream before a JSON-RPC "
+                        "response arrived (%d bytes buffered, %d in complete events)",
                         redact_url(upstream_url),
+                        len(exc.partial),
+                        len(complete_bytes),
                     )
                     raise HTTPException(
                         status_code=502,
@@ -10355,7 +10388,7 @@ async def mcp_proxy(
         # closed -- never forward the credential.
         logger.error(
             "mcp_proxy: egress upstream %s blocked by egress SSRF guard: %s",
-            upstream_url,
+            redact_url(upstream_url),
             exc,
         )
         raise HTTPException(
@@ -10363,14 +10396,14 @@ async def mcp_proxy(
             detail="Upstream MCP server blocked by egress policy",
         ) from exc
     except httpx.TimeoutException as exc:
-        logger.error(f"mcp_proxy: upstream timeout for {upstream_url}: {exc}")
+        logger.error(f"mcp_proxy: upstream timeout for {redact_url(upstream_url)}: {exc}")
         raise HTTPException(
             status_code=504,
             detail="Upstream MCP server timed out",
         ) from exc
     except TimeoutError as exc:
         logger.error(
-            f"mcp_proxy: upstream response for {upstream_url} not complete "
+            f"mcp_proxy: upstream response for {redact_url(upstream_url)} not complete "
             f"after the {proxy_timeout}s overall deadline"
         )
         raise HTTPException(
@@ -10378,7 +10411,7 @@ async def mcp_proxy(
             detail="Upstream MCP server timed out",
         ) from exc
     except httpx.HTTPError as exc:
-        logger.error(f"mcp_proxy: upstream error for {upstream_url}: {exc}")
+        logger.error(f"mcp_proxy: upstream error for {redact_url(upstream_url)}: {exc}")
         raise HTTPException(
             status_code=502,
             detail="Upstream MCP server error",
