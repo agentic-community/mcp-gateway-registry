@@ -2743,6 +2743,12 @@ module "ecs_service_mcpgw" {
         {
           name  = "EGRESS_HTTP_POOL_CONNECT_RETRIES"
           value = tostring(var.egress_http_pool_connect_retries)
+        },
+        # SSRF guard: an operator CIDR may admit a reserved address (e.g. Istio
+        # ServiceEntry VIPs in 240.240.0.0/16). Same value as the registry. #2018
+        {
+          name  = "SSRF_ALLOWED_CIDRS"
+          value = var.ssrf_allowed_cidrs
         }
         ],
         # Extra environment variables from user (Issue #1000)

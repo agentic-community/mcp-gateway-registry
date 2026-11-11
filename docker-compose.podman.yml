@@ -778,6 +778,9 @@ services:
       - EGRESS_HTTP_POOL_MAX_KEEPALIVE=${EGRESS_HTTP_POOL_MAX_KEEPALIVE:-20}
       - EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS=${EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS:-30}
       - EGRESS_HTTP_POOL_CONNECT_RETRIES=${EGRESS_HTTP_POOL_CONNECT_RETRIES:-1}
+      # SSRF guard: an operator CIDR may admit a reserved address (e.g. Istio
+      # ServiceEntry VIPs in 240.240.0.0/16). Same value as the registry. #2018
+      - SSRF_ALLOWED_CIDRS=${SSRF_ALLOWED_CIDRS:-}
     env_file:
       - path: ${MCP_EXTRA_ENV_DIR:-./extra_env}/mcpgw.env
         required: false

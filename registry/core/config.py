@@ -771,7 +771,7 @@ class Settings(BaseSettings):
             "Comma-separated CIDR ranges whose addresses the SSRF guard accepts "
             "for proxy_pass_url / agent URLs even though they are private (e.g. "
             "'10.0.0.0/8,192.168.0.0/16'). Use for internal MCP-server subnets. "
-            "A listed range can also admit reserved addresses it contains, such "
+            "A listed range can also admit reserved IPv4 addresses it contains, such "
             "as Istio's auto-allocated ServiceEntry range '240.240.0.0/16'. "
             "Cloud metadata/credential, link-local, unspecified and multicast "
             "addresses are never permitted."
