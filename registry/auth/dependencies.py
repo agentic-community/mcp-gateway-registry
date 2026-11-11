@@ -43,7 +43,13 @@ async def resolve_session_from_cookie(
         return None
 
     try:
-        payload = signer.loads(cookie_value, max_age=settings.session_max_age_seconds)
+        # With the __Host- prefix the salt names the cookie, so a value signed
+        # for another cookie name (the one the prefix replaced) is refused.
+        payload = signer.loads(
+            cookie_value,
+            max_age=settings.session_max_age_seconds,
+            salt=settings.session_cookie_signing_salt,
+        )
     except SignatureExpired:
         logger.debug("Session cookie has expired")
         return None

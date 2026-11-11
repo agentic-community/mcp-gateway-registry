@@ -23,6 +23,8 @@ async def websocket_endpoint(websocket: WebSocket):
         # the handshake carries more than once is refused like a missing one.
         # The session cookie is the only credential read here: a session in the
         # URL would land in access logs, so the query string is never consulted.
+        # Closing before accept refuses the handshake: the client gets HTTP 403,
+        # and the 1008 code below never reaches it as a close frame.
         logger.info(f"WebSocket connection attempt from {websocket.client}")
         session_cookie = request_session_cookie(websocket)
 

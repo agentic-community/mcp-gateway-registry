@@ -16,6 +16,7 @@ from registry.common.session_cookie import (
     check_host_prefix_settings,
     check_session_cookie_name,
     effective_session_cookie_name,
+    session_cookie_signing_salt,
 )
 from registry.constants import (
     MAX_EMBEDDINGS_EXTRA_HEADERS,
@@ -2584,6 +2585,19 @@ class Settings(BaseSettings):
         """
         return effective_session_cookie_name(
             self.session_cookie_name,
+            self.session_cookie_host_prefix,
+        )
+
+    @property
+    def session_cookie_signing_salt(self) -> str | None:
+        """The salt both services sign and check the session cookie value with.
+
+        None (the serializer's default) with ``SESSION_COOKIE_HOST_PREFIX``
+        off; with it on, a salt naming the effective cookie name, so a value
+        signed for another name is refused.
+        """
+        return session_cookie_signing_salt(
+            self.session_cookie_effective_name,
             self.session_cookie_host_prefix,
         )
 

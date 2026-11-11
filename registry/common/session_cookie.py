@@ -35,6 +35,10 @@ DEFAULT_SESSION_COOKIE_NAME: str = "mcp_gateway_session"
 # A browser stores a cookie whose name starts with this only when it is Secure,
 # has Path=/ and has no Domain, so no sibling subdomain can set or overwrite it.
 HOST_COOKIE_PREFIX: str = "__Host-"
+# With the __Host- prefix on, the session cookie value is signed with this plus
+# the cookie's effective name as the itsdangerous salt, so a value signed for
+# one cookie name fails the check under another.
+SESSION_COOKIE_SIGNING_SALT_PREFIX: str = "mcp-gateway-session-cookie:"
 # The session cookie's SameSite and HttpOnly attributes are fixed, not settings.
 # SameSite must be Lax: the login callback sets the cookie on a top-level
 # cross-site navigation back from the identity provider, and a browser drops a
@@ -115,6 +119,38 @@ def effective_session_cookie_name(
     if host_prefix:
         return HOST_COOKIE_PREFIX + name
     return name
+
+
+def session_cookie_signing_salt(
+    effective_name: str,
+    host_prefix: bool,
+) -> str | None:
+    """Return the salt the session cookie value is signed and checked with.
+
+    Turning the ``__Host-`` prefix on renames the cookie but leaves the previous
+    one in browsers until it expires, with the session it names still live. The
+    previous cookie carries the parent ``Domain``, so every host under it keeps
+    receiving the value, and the value alone is a signed session id. With the
+    prefix on the salt names the cookie, so that value, or one signed for any
+    other name, fails the check when presented as the ``__Host-`` cookie.
+
+    With the prefix off this returns None: itsdangerous keeps its default salt,
+    and every cookie signed before the prefix existed stays valid.
+
+    Args:
+        effective_name: The name the session cookie is set and read under.
+        host_prefix: The ``SESSION_COOKIE_HOST_PREFIX`` value.
+
+    Returns:
+        The salt for the serializer's ``dumps`` and ``loads``, or None for its default.
+
+    Example:
+        >>> session_cookie_signing_salt("__Host-mcp_gateway_session", host_prefix=True)
+        'mcp-gateway-session-cookie:__Host-mcp_gateway_session'
+    """
+    if not host_prefix:
+        return None
+    return SESSION_COOKIE_SIGNING_SALT_PREFIX + effective_name
 
 
 def check_host_prefix_settings(

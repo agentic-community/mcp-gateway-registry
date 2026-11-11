@@ -55,7 +55,7 @@ global:
   # must agree: two domains leave the browser two session cookies, which both
   # refuse. Do not set registry.app.sessionCookieDomain or
   # auth-server.app.sessionCookieDomain: the chart refuses one that differs
-  # from this value.
+  # from the domain it renders (this value, or ".<global.domain>" when empty).
   sessionCookieDomain: ""
   # Security settings
   # secretKey: If not provided, a random 64-character key is auto-generated

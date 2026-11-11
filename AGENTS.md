@@ -455,6 +455,11 @@ working in those areas.
   HttpOnly cookie, its hash in the `state`, checked before the code exchange), not only
   to the principal; start a consent only for the browser's own session (never a bearer),
   and consume the single-use `state` once, right after it decodes, before the `code` check.
+- **Credential cookies:** read the session cookie through one exact-name parser and treat
+  a duplicate as no session. A change that renames or rescopes a credential cookie leaves
+  the old copy live in browsers: bind the signature to the cookie name
+  (`session_cookie_signing_salt`) so the old value fails under the new name, and tell
+  operators to end the old sessions.
 - **Frontend:** one shared URL-scheme guard on every dynamic href/`window.open`/
   markdown link (allowlist http/https/mailto, render unsafe as text); enforce
   `react/jsx-no-script-url`.

@@ -43,6 +43,7 @@ from starlette.responses import Response
 
 import registry.auth.dependencies as registry_dependencies
 from registry.auth.session_cookie import clear_session_cookie
+from registry.common.session_cookie import session_cookie_signing_salt
 from registry.core.config import Settings
 from tests.auth_server.unit.test_egress_vault_identity_properties import (
     _COLLIDING_PROFILE,
@@ -251,6 +252,32 @@ def test_validate_and_registry_read_the_host_prefixed_cookie(monkeypatch):
 
     assert login.cookie, login.set_cookie_headers
     assert _registry_sees_browser_session(name, login.cookie, hop.registry_context, login.store)
+
+
+@pytest.mark.parametrize(
+    "signed_for",
+    [
+        pytest.param(None, id="the-cookie-the-prefix-replaced"),
+        pytest.param(f"__Host-{_CUSTOM_NAME}", id="another-host-prefixed-name"),
+    ],
+)
+def test_host_prefixed_cookie_refuses_a_value_signed_for_another_name(monkeypatch, signed_for):
+    """With the prefix on, a live session's value signed under another name is refused.
+
+    Turning the prefix on leaves the previous cookie in browsers, and it still
+    reaches every host under the parent domain. Its value names a live session,
+    so neither service may accept it as the ``__Host-`` cookie.
+    """
+    _configure_session_cookie_name(monkeypatch, None, host_prefix=True)
+    login = _login("keycloak", _ACCOUNT_ID, _COLLIDING_PROFILE)
+    session_id = login.store.documents[0]["session_id"]
+    salt = None if signed_for is None else session_cookie_signing_salt(signed_for, True)
+    other = server_module.signer.dumps(session_id, salt=salt)
+
+    assert _auth_server_accepts(login.cookie, login.store)
+    assert _registry_accepts(login.cookie, login.store)
+    assert not _auth_server_accepts(other, login.store)
+    assert not _registry_accepts(other, login.store)
 
 
 _EXAMPLE_DOMAIN: str = ".example.com"
