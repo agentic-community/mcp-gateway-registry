@@ -60,6 +60,27 @@ tests:
             name: SSRF_ALLOWED_CIDRS
             value: ""
 
+  - it: global.ssrfAllowedCidrs wins over app.ssrfAllowedCidrs (#2018)
+    set:
+      global.ssrfAllowedCidrs: "240.240.0.0/16"
+      app.ssrfAllowedCidrs: "10.0.0.0/8"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSRF_ALLOWED_CIDRS
+            value: "240.240.0.0/16"
+
+  - it: falls back to app.ssrfAllowedCidrs when global is unset (standalone, #2018)
+    set:
+      app.ssrfAllowedCidrs: "10.0.0.0/8"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSRF_ALLOWED_CIDRS
+            value: "10.0.0.0/8"
+
   - it: renders SSRF allowlist overrides for internal MCP-server upstreams
     set:
       app:

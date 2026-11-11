@@ -1,0 +1,52 @@
+suite: global.ssrfAllowedCidrs is set once and reaches every subchart (#2018)
+release:
+  name: test
+  namespace: default
+tests:
+  - it: global.ssrfAllowedCidrs reaches the registry deployment
+    templates:
+      - charts/registry/templates/deployment.yaml
+    set:
+      global:
+        ssrfAllowedCidrs: "240.240.0.0/16"
+      registry:
+        app:
+          ssrfAllowedCidrs: "10.0.0.0/8"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSRF_ALLOWED_CIDRS
+            value: "240.240.0.0/16"
+
+  - it: global.ssrfAllowedCidrs reaches the auth-server deployment
+    templates:
+      - charts/auth-server/templates/deployment.yaml
+    set:
+      global:
+        ssrfAllowedCidrs: "240.240.0.0/16"
+      auth-server:
+        app:
+          ssrfAllowedCidrs: "10.0.0.0/8"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSRF_ALLOWED_CIDRS
+            value: "240.240.0.0/16"
+
+  - it: global.ssrfAllowedCidrs reaches the mcpgw deployment
+    templates:
+      - charts/mcpgw/templates/deployment.yaml
+    set:
+      global:
+        ssrfAllowedCidrs: "240.240.0.0/16"
+      mcpgw:
+        app:
+          ssrfAllowedCidrs: "10.0.0.0/8"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSRF_ALLOWED_CIDRS
+            value: "240.240.0.0/16"
