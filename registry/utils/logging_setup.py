@@ -20,7 +20,77 @@ from datetime import UTC, datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+from ..common.log_redaction import redact_url
+
 LOG_FORMAT = "%(asctime)s,p%(process)s,{%(filename)s:%(lineno)d},%(levelname)s,%(message)s"
+
+# Loggers whose request lines include a URL with its query string, and the
+# position of that URL in the record's arguments. A query string can carry a
+# credential (#2027): the registry's logout call sends the user's id_token_hint
+# to the auth server in one, and an OAuth callback receives code and state.
+#
+# httpx, at INFO, for every outbound request:
+#   'HTTP Request: %s %s "%s %d %s"' -> (method, url, http_version, status, reason)
+# uvicorn's access log, for every inbound request:
+#   '%s - "%s %s HTTP/%s" %d' -> (client, method, path_with_query, http_version, status)
+HTTPX_LOGGER_NAME: str = "httpx"
+HTTPX_URL_ARG_INDEX: int = 1
+ACCESS_LOGGER_NAME: str = "uvicorn.access"
+ACCESS_LOG_PATH_ARG_INDEX: int = 2
+REQUEST_LINE_ARG_COUNT: int = 5
+
+
+class _QueryStringFilter(logging.Filter):
+    """Remove the query string from the URL in a request log line (#2027).
+
+    The line keeps the method, URL or path, and status, so it still shows
+    which request ran and how it ended. The URL goes through the canonical
+    ``redact_url``, which drops the query string, fragment and userinfo. A
+    record whose arguments do not have the expected shape passes unchanged.
+    """
+
+    def __init__(
+        self,
+        url_arg_index: int,
+    ) -> None:
+        super().__init__()
+        self.url_arg_index = url_arg_index
+
+    def filter(
+        self,
+        record: logging.LogRecord,
+    ) -> bool:
+        args = record.args
+        if not isinstance(args, tuple) or len(args) != REQUEST_LINE_ARG_COUNT:
+            return True
+        # httpx passes an httpx.URL object, uvicorn a str; both print the same.
+        # redact_url keeps scheme://host[:port]/path (or the bare path) and drops
+        # the query, fragment and any user:pass@ prefix.
+        new_args = list(args)
+        new_args[self.url_arg_index] = redact_url(str(args[self.url_arg_index]))
+        record.args = tuple(new_args)
+        return True
+
+
+def _add_query_string_filter(
+    logger_name: str,
+    url_arg_index: int,
+) -> None:
+    """Add a ``_QueryStringFilter`` to a logger once, so repeated setup does not stack copies."""
+    target = logging.getLogger(logger_name)
+    already_added = any(isinstance(f, _QueryStringFilter) for f in target.filters)
+    if not already_added:
+        target.addFilter(_QueryStringFilter(url_arg_index))
+
+
+def _strip_query_strings_from_request_logs() -> None:
+    """Keep query strings, and the credentials they can carry, out of request log lines.
+
+    Covers httpx's outbound request line and uvicorn's inbound access line.
+    Both lines still log, without the part after ``?``.
+    """
+    _add_query_string_filter(HTTPX_LOGGER_NAME, HTTPX_URL_ARG_INDEX)
+    _add_query_string_filter(ACCESS_LOGGER_NAME, ACCESS_LOG_PATH_ARG_INDEX)
 
 
 class JsonlFormatter(logging.Formatter):
@@ -84,6 +154,7 @@ def setup_logging(
 
     root = logging.getLogger()
     root.setLevel(level)
+    _strip_query_strings_from_request_logs()
 
     for handler in root.handlers[:]:
         root.removeHandler(handler)
