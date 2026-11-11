@@ -242,6 +242,18 @@ const initialAgentForm: AgentFormData = {
 
 const RegisterPage: React.FC = () => {
   const navigate = useNavigate();
+
+  // After a successful registration we return to the dashboard. The dashboard's
+  // shared ServerStatsContext (servers/agents/custom records + sidebar counts)
+  // listens for the 'registry-data-changed' event to refetch, so dispatch it
+  // here. Without this signal the new entity does not appear, and the sidebar
+  // count stays stale, until the user manually reloads the page (the provider
+  // does not reliably remount across this client-side navigation).
+  const navigateHome = useCallback(() => {
+    window.dispatchEvent(new Event('registry-data-changed'));
+    navigate('/');
+  }, [navigate]);
+
   const { user } = useAuth();
   const [registrationType, setRegistrationType] = useState<RegistrationType>('server');
   const [registrationMode, setRegistrationMode] = useState<RegistrationMode>('form');
@@ -737,12 +749,12 @@ const RegisterPage: React.FC = () => {
           message: `Server registered, but its OAuth config failed to save (${detail || 'unknown error'}). Add it from Edit.`,
           type: 'error',
         });
-        setTimeout(() => navigate('/'), 2500);
+        setTimeout(() => navigateHome(), 2500);
         return;
       }
 
       setToast({ message: 'Server registered successfully!', type: 'success' });
-      setTimeout(() => navigate('/'), 1500);
+      setTimeout(() => navigateHome(), 1500);
     } catch (error: unknown) {
       const axiosError = error as { response?: { data?: { detail?: string; error?: string; reason?: string } } };
       const message = axiosError.response?.data?.error
@@ -753,7 +765,7 @@ const RegisterPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [serverForm, navigate, egressFeatureAvailable]);
+  }, [serverForm, navigateHome, egressFeatureAvailable]);
 
 
   const performAgentRegistration = useCallback(async (): Promise<void> => {
@@ -818,7 +830,7 @@ const RegisterPage: React.FC = () => {
       });
 
       setToast({ message: 'Agent registered successfully!', type: 'success' });
-      setTimeout(() => navigate('/'), 1500);
+      setTimeout(() => navigateHome(), 1500);
     } catch (error: unknown) {
       const axiosError = error as { response?: { data?: { detail?: string | { message?: string } } } };
       let message = 'Failed to register agent';
@@ -833,7 +845,7 @@ const RegisterPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [agentForm, navigate]);
+  }, [agentForm, navigateHome]);
 
 
   const handleServerSubmit = useCallback(async (e: React.FormEvent) => {

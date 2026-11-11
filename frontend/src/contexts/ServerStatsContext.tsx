@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef, ReactNode } from 'react';
 import axios from 'axios';
 import { useRegistryConfig } from '../hooks/useRegistryConfig';
 import type { LocalRuntime } from '../types/server';
@@ -147,13 +147,15 @@ export const ServerStatsProvider: React.FC<ServerStatsProviderProps> = ({ childr
   // Get registry config to determine which features are enabled
   const { config: registryConfig } = useRegistryConfig();
 
-  const fetchData = useCallback(async () => {
-    // Wait for registry config before fetching. Without it we don't yet know
-    // which custom types exist, so computing stats now would show a core-only
-    // total that visibly jumps when the custom counts arrive a moment later.
-    if (!registryConfig) {
-      return;
-    }
+  // Coalesce overlapping refreshes into a single in-flight fetch. Several
+  // mutation flows call refreshData() directly AND dispatch
+  // 'registry-data-changed' (handled below), and that event can also arrive
+  // from a sibling component mid-fetch. Without this guard those would issue
+  // duplicate parallel list fetches; here a concurrent caller reuses the
+  // promise already in flight.
+  const inFlightRef = useRef<Promise<void> | null>(null);
+
+  const _fetchDataImpl = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
@@ -418,9 +420,55 @@ export const ServerStatsProvider: React.FC<ServerStatsProviderProps> = ({ childr
     }
   }, [registryConfig]);
 
+  const fetchData = useCallback(async () => {
+    // Wait for registry config before fetching. Without it we don't yet know
+    // which custom types exist, so computing stats now would show a core-only
+    // total that visibly jumps when the custom counts arrive a moment later.
+    if (!registryConfig) {
+      return;
+    }
+    // Reuse an in-flight fetch so a direct refreshData() call and the
+    // 'registry-data-changed' event it is paired with collapse into one.
+    if (inFlightRef.current) {
+      return inFlightRef.current;
+    }
+    const run = _fetchDataImpl();
+    inFlightRef.current = run;
+    try {
+      await run;
+    } finally {
+      inFlightRef.current = null;
+    }
+  }, [registryConfig, _fetchDataImpl]);
+
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // Keep a ref to the latest fetchData so the event listener below always
+  // calls the current closure (which captures the current registryConfig)
+  // without having to re-subscribe every time fetchData is re-created.
+  const fetchDataRef = useRef(fetchData);
+  useEffect(() => {
+    fetchDataRef.current = fetchData;
+  }, [fetchData]);
+
+  // Keep the shared stats/servers/agents/custom-records in sync after ANY
+  // mutation. Several flows (notably skill create/edit/delete/toggle) refresh
+  // only their own sibling data source and never this context, so the sidebar
+  // counts and any list derived from here would otherwise stay stale until a
+  // manual page refresh. Every mutation handler already dispatches the
+  // 'registry-data-changed' event (the same signal Layout uses to refresh the
+  // tag list), so listening for it here is the single place that keeps this
+  // shared source consistent. fetchData itself no-ops until registryConfig is
+  // available, so an early event cannot trigger a core-only count flash.
+  useEffect(() => {
+    const handleDataChanged = () => {
+      void fetchDataRef.current();
+    };
+    window.addEventListener('registry-data-changed', handleDataChanged);
+    return () => window.removeEventListener('registry-data-changed', handleDataChanged);
+  }, []);
 
   const value: ServerStatsContextType = {
     stats,
