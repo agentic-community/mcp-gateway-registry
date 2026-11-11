@@ -344,9 +344,9 @@ spec:
               {{- end }}
             # SSRF guard for the generic proxy (PROXY_PROFILE): an operator CIDR
             # may admit a reserved IPv4 address (e.g. Istio ServiceEntry VIPs in
-            # 240.240.0.0/16). Keep equal to registry.app.ssrfAllowedCidrs. #2018
+            # 240.240.0.0/16). global.ssrfAllowedCidrs (stack chart) wins over app.ssrfAllowedCidrs. #2018
             - name: SSRF_ALLOWED_CIDRS
-              value: {{ .Values.app.ssrfAllowedCidrs | default "" | quote }}
+              value: {{ .Values.global.ssrfAllowedCidrs | default .Values.app.ssrfAllowedCidrs | default "" | quote }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

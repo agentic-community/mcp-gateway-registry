@@ -190,7 +190,8 @@ app:
   egressForwardProxyEnabled: false
   # Comma-separated CIDR ranges that let the generic proxy's SSRF guard
   # (PROXY_PROFILE) reach a reserved IPv4 address, such as an Istio ServiceEntry
-  # VIP in 240.240.0.0/16. Keep equal to registry.app.ssrfAllowedCidrs. #2018
+  # VIP in 240.240.0.0/16. For a standalone install; under the stack chart set
+  # global.ssrfAllowedCidrs instead, which wins over this value. #2018
   ssrfAllowedCidrs: ""
 # Authentication Provider Configuration
 # Choose ONE provider: keycloak, entra, okta, auth0, cognito, or pingfederate

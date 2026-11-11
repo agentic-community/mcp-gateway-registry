@@ -74,9 +74,9 @@ spec:
             # SSRF guard: an operator CIDR may admit a reserved IPv4 address (e.g.
             # Istio ServiceEntry VIPs in 240.240.0.0/16). Set in env:, not the
             # http-pool ConfigMap, so an extraEnvFrom source cannot shadow it.
-            # Keep equal to registry.app.ssrfAllowedCidrs. #2018
+            # global.ssrfAllowedCidrs (stack chart) wins over app.ssrfAllowedCidrs. #2018
             - name: SSRF_ALLOWED_CIDRS
-              value: {{ .Values.app.ssrfAllowedCidrs | default "" | quote }}
+              value: {{ .Values.global.ssrfAllowedCidrs | default .Values.app.ssrfAllowedCidrs | default "" | quote }}
             {{- /* GitHub private repo auth (SKILL.md fetching) */}}
             {{- if .Values.app.githubAppId }}
             - name: GITHUB_APP_ID

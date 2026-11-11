@@ -371,6 +371,8 @@ app:
   #     wildcards, e.g. "obo-echo.<ns>.svc.cluster.local").
   # The cloud metadata address (169.254.169.254) is never permitted by either.
   ssrfAllowedHosts: ""
+  # For a standalone install. Under the stack chart set global.ssrfAllowedCidrs,
+  # which wins over this value and reaches auth-server and mcpgw too. #2018
   ssrfAllowedCidrs: ""
   # Forward-proxy egress for the SSRF-guarded clients (issue #1832). OFF by
   # default. Only needed where the pod has NO direct internet egress and all

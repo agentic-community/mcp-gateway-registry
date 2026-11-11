@@ -183,7 +183,10 @@ sanitizer that isn't called) is equivalent to no check.
   (`64:ff9b:1::a9fe:a9fe`). Pass only the operator's CIDRs to this check, never
   the exact `/32` added for a trusted hostname, and never let `allow_private`
   stand in for it. Every process that runs the guard (registry, auth-server,
-  mcpgw) must receive the same `SSRF_ALLOWED_CIDRS` value.
+  mcpgw) must receive the same `SSRF_ALLOWED_CIDRS` value. Feed a value like this
+  from one source per surface: in Helm, a `global.*` key the subcharts read first
+  (`.Values.global.X | default .Values.app.X`), as `secretKey` does, so a
+  per-subchart key cannot drift from it.
 - **Compare reserved env names case-insensitively.** pydantic-settings reads the
   environment with `case_sensitive=False`, so a Helm `extraEnv` entry named
   `ssrf_allowed_cidrs` overrides the chart-managed `SSRF_ALLOWED_CIDRS` in the

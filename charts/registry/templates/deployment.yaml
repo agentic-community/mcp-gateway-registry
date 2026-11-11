@@ -199,7 +199,7 @@ spec:
             - name: SSRF_ALLOWED_HOSTS
               value: {{ .Values.app.ssrfAllowedHosts | default "" | quote }}
             - name: SSRF_ALLOWED_CIDRS
-              value: {{ .Values.app.ssrfAllowedCidrs | default "" | quote }}
+              value: {{ .Values.global.ssrfAllowedCidrs | default .Values.app.ssrfAllowedCidrs | default "" | quote }}
             - name: CIMD_PUBLISHER_ENABLED
               value: {{ .Values.app.cimdPublisherEnabled | default false | toString | quote }}
             - name: CIMD_CACHE_TTL

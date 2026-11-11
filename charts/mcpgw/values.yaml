@@ -74,7 +74,8 @@ app:
   httpPoolConnectRetries: "1"
   # Comma-separated CIDR ranges that let mcpgw's egress guard reach a reserved
   # address, such as an Istio ServiceEntry VIP in 240.240.0.0/16. Private and
-  # loopback targets are already allowed. Keep equal to registry.app.ssrfAllowedCidrs.
+  # loopback targets are already allowed. For a standalone install; under the stack
+  # chart set global.ssrfAllowedCidrs instead, which wins over this value. #2018
   ssrfAllowedCidrs: ""
 # Service configuration
 service:
