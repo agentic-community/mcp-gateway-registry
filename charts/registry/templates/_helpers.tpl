@@ -95,6 +95,24 @@ true
 {{- end -}}
 
 {{/*
+Normalize an environment variable name for comparison: trimmed and upper-cased.
+
+The reserved check compares every extraEnv name through this helper, against
+a reserved list normalized the same way. Kubernetes env names are
+case-sensitive, but the services read some of them case-insensitively
+(pydantic-settings Settings uses case_sensitive=False), so
+`ssrf_allowed_cidrs` would otherwise slip past the reserved check for
+SSRF_ALLOWED_CIDRS and override the chart-managed value. The duplicate check
+does NOT use it. scripts/validate-extra-env.sh is stricter: it also removes
+whitespace inside a name.
+
+Call as: {{ include "registry.envNameKey" $name }}
+*/}}
+{{- define "registry.envNameKey" -}}
+{{- . | toString | trim | upper -}}
+{{- end -}}
+
+{{/*
 Validate .Values.extraEnv for the registry chart.
 
 Fails helm template render if any entry:
@@ -106,15 +124,21 @@ Fails helm template render if any entry:
 Call as: {{- include "registry.validateExtraEnv" . -}}
 */}}
 {{- define "registry.validateExtraEnv" -}}
-{{- $reserved := fromYamlArray (include "registry.reservedEnvNames" .) -}}
+{{- $reserved := list -}}
+{{- range (fromYamlArray (include "registry.reservedEnvNames" .)) -}}
+  {{- $reserved = append $reserved (include "registry.envNameKey" .) -}}
+{{- end -}}
 {{- $seen := dict -}}
 {{- range $i, $e := .Values.extraEnv -}}
   {{- if not $e.name -}}
     {{- fail (printf "registry.extraEnv[%d]: missing required 'name' field" $i) -}}
   {{- end -}}
-  {{- if has $e.name $reserved -}}
+  {{- $key := include "registry.envNameKey" $e.name -}}
+  {{- if has $key $reserved -}}
     {{- fail (printf "registry.extraEnv[%d]: %q is a reserved variable managed by the chart (via env: or envFrom from the chart's secrets/configmaps). Remove it from extraEnv. If a values.yaml field controls it (e.g. app.showSkillsTab for SHOW_SKILLS_TAB), set that instead; otherwise the value is managed by the chart's internal secrets and must not be overridden via extraEnv." $i $e.name) -}}
   {{- end -}}
+  {{- /* Duplicates compare the exact name: Kubernetes treats HTTPS_PROXY and
+         https_proxy as two variables, and proxy setups legitimately set both. */ -}}
   {{- if hasKey $seen $e.name -}}
     {{- fail (printf "registry.extraEnv[%d]: duplicate name %q (first seen at index %v)" $i $e.name (index $seen $e.name)) -}}
   {{- end -}}

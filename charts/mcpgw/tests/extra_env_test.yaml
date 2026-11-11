@@ -53,12 +53,13 @@ tests:
       # Index map:
       #   env[0] = NODE_NAME
       #   env[1] = HOST
-      #   env[2] = METRICS_LEGACY_HTTP_POST  (Issue #1122)
-      #   env[3] = OTEL_METRIC_EXPORT_INTERVAL_MS  (Issue #1122)
-      #   env[4] = OTEL_EXPORTER_PROMETHEUS_HOST   (Issue #1122)
-      #   env[5] = OTEL_EXPORTER_PROMETHEUS_PORT   (Issue #1122)
-      #   env[6] = MY_FLAG       (extraEnv[0])
-      #   env[7] = MY_SECRET_VAR (extraEnv[1])
+      #   env[2] = SSRF_ALLOWED_CIDRS  (Issue #2018, always rendered)
+      #   env[3] = METRICS_LEGACY_HTTP_POST  (Issue #1122)
+      #   env[4] = OTEL_METRIC_EXPORT_INTERVAL_MS  (Issue #1122)
+      #   env[5] = OTEL_EXPORTER_PROMETHEUS_HOST   (Issue #1122)
+      #   env[6] = OTEL_EXPORTER_PROMETHEUS_PORT   (Issue #1122)
+      #   env[7] = MY_FLAG       (extraEnv[0])
+      #   env[8] = MY_SECRET_VAR (extraEnv[1])
       - equal:
           path: spec.template.spec.containers[0].env[0].name
           value: NODE_NAME
@@ -67,12 +68,15 @@ tests:
           value: HOST
       - equal:
           path: spec.template.spec.containers[0].env[2].name
+          value: SSRF_ALLOWED_CIDRS
+      - equal:
+          path: spec.template.spec.containers[0].env[3].name
           value: METRICS_LEGACY_HTTP_POST
       - equal:
-          path: spec.template.spec.containers[0].env[6].name
+          path: spec.template.spec.containers[0].env[7].name
           value: MY_FLAG
       - equal:
-          path: spec.template.spec.containers[0].env[7].name
+          path: spec.template.spec.containers[0].env[8].name
           value: MY_SECRET_VAR
 
   - it: appends extraEnvFrom entries after chart-managed envFrom sources
@@ -121,6 +125,63 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].envFrom[4].configMapRef.name
           value: my-external-config
+
+  - it: renders SSRF_ALLOWED_CIDRS in env (empty by default, #2018)
+    set:
+      app.secretKey: test-key
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSRF_ALLOWED_CIDRS
+            value: ""
+
+  - it: renders app.ssrfAllowedCidrs in env (not envFrom) alongside extraEnvFrom
+    set:
+      app.secretKey: test-key
+      app.ssrfAllowedCidrs: "240.240.0.0/16"
+      extraEnvFrom:
+        - configMapRef:
+            name: my-overrides
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSRF_ALLOWED_CIDRS
+            value: "240.240.0.0/16"
+
+  - it: rejects a lowercase reserved name (ssrf_allowed_cidrs)
+    # Settings reads env case-insensitively, so a lowercase spelling would
+    # override the chart-managed SSRF_ALLOWED_CIDRS. Names compare upper-cased.
+    set:
+      app.secretKey: test-key
+      extraEnv:
+        - name: ssrf_allowed_cidrs
+          value: "0.0.0.0/0"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"ssrf_allowed_cidrs\" is a reserved variable"
+
+  - it: rejects a mixed-case reserved name with surrounding spaces
+    set:
+      app.secretKey: test-key
+      extraEnv:
+        - name: " Ssrf_Allowed_Cidrs "
+          value: "0.0.0.0/0"
+    asserts:
+      - failedTemplate:
+          errorPattern: "is a reserved variable"
+
+  - it: accepts names that differ only in case (HTTPS_PROXY and https_proxy)
+    set:
+      app.secretKey: test-key
+      extraEnv:
+        - name: HTTPS_PROXY
+          value: "http://proxy.example.test:3128"
+        - name: https_proxy
+          value: "http://proxy.example.test:3128"
+    asserts:
+      - notFailedTemplate: {}
 
   - it: fails when extraEnv contains a reserved name (HOST)
     set:

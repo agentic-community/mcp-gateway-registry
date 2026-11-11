@@ -24,6 +24,3 @@ data:
   EGRESS_HTTP_POOL_MAX_KEEPALIVE: {{ include "mcpgw.valueOrDefault" (list .Values.app.httpPoolMaxKeepalive "20") | quote }}
   EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS: {{ include "mcpgw.valueOrDefault" (list .Values.app.httpPoolKeepaliveExpirySeconds "30") | quote }}
   EGRESS_HTTP_POOL_CONNECT_RETRIES: {{ include "mcpgw.valueOrDefault" (list .Values.app.httpPoolConnectRetries "1") | quote }}
-  # SSRF guard: an operator CIDR may admit a reserved address (e.g. Istio
-  # ServiceEntry VIPs in 240.240.0.0/16). Keep equal to registry.app.ssrfAllowedCidrs. #2018
-  SSRF_ALLOWED_CIDRS: {{ .Values.app.ssrfAllowedCidrs | default "" | quote }}

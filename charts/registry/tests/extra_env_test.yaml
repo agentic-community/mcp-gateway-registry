@@ -361,6 +361,36 @@ tests:
           path: spec.template.spec.containers[0].envFrom[3].secretRef.name
           value: registry-secret
 
+  - it: rejects a lowercase reserved name (ssrf_allowed_cidrs)
+    # Settings reads env case-insensitively, so a lowercase spelling would
+    # override the chart-managed SSRF_ALLOWED_CIDRS. Names compare upper-cased.
+    set:
+      extraEnv:
+        - name: ssrf_allowed_cidrs
+          value: "0.0.0.0/0"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"ssrf_allowed_cidrs\" is a reserved variable"
+
+  - it: rejects a mixed-case reserved name with surrounding spaces
+    set:
+      extraEnv:
+        - name: " Ssrf_Allowed_Cidrs "
+          value: "0.0.0.0/0"
+    asserts:
+      - failedTemplate:
+          errorPattern: "is a reserved variable"
+
+  - it: accepts names that differ only in case (HTTPS_PROXY and https_proxy)
+    set:
+      extraEnv:
+        - name: HTTPS_PROXY
+          value: "http://proxy.example.test:3128"
+        - name: https_proxy
+          value: "http://proxy.example.test:3128"
+    asserts:
+      - notFailedTemplate: {}
+
   - it: fails when extraEnv contains an env-block reserved name (DEPLOYMENT_MODE)
     set:
       extraEnv:

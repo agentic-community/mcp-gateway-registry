@@ -662,6 +662,13 @@ module "ecs_service_auth" {
           name  = "EGRESS_HTTP_POOL_CONNECT_RETRIES"
           value = tostring(var.egress_http_pool_connect_retries)
         },
+        # SSRF guard for the generic proxy (PROXY_PROFILE): an operator CIDR may
+        # admit a reserved IPv4 address (e.g. Istio ServiceEntry VIPs in
+        # 240.240.0.0/16). Same value as the registry and mcpgw. #2018
+        {
+          name  = "SSRF_ALLOWED_CIDRS"
+          value = var.ssrf_allowed_cidrs
+        },
         # Forward-proxy egress for the SSRF-guarded clients (issue #1832). OFF by
         # default. HTTP_PROXY / HTTPS_PROXY / NO_PROXY are passed through the
         # *_extra_env variables, not here, because they are standard environment

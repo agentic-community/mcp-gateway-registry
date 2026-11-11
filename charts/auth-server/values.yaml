@@ -188,6 +188,10 @@ app:
   # the proxy, over plain HTTP and from the proxy's own network position.;
   # they are deliberately not chart-managed. See docs/forward-proxy-egress.md.
   egressForwardProxyEnabled: false
+  # Comma-separated CIDR ranges that let the generic proxy's SSRF guard
+  # (PROXY_PROFILE) reach a reserved IPv4 address, such as an Istio ServiceEntry
+  # VIP in 240.240.0.0/16. Keep equal to registry.app.ssrfAllowedCidrs. #2018
+  ssrfAllowedCidrs: ""
 # Authentication Provider Configuration
 # Choose ONE provider: keycloak, entra, okta, auth0, cognito, or pingfederate
 authProvider:

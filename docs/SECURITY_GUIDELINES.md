@@ -173,6 +173,32 @@ sanitizer that isn't called) is equivalent to no check.
   Alibaba ECS `100.100.100.200` — never allowlistable); unwrap scoped,
   IPv4-mapped, NAT64, 6to4, and Teredo forms before classification; require
   http/https. Fail closed. Do not create per-call-site `_is_safe_url` variants.
+- **Relax reserved space only for IPv4, and only from an operator range.** Istio
+  auto-allocates ServiceEntry addresses from `240.240.0.0/16`, which Python
+  classifies as reserved, so an operator `SSRF_ALLOWED_CIDRS` entry may admit a
+  reserved IPv4 address inside it (#2018). Exclude limited broadcast
+  `255.255.255.255`. Never relax reserved IPv6: IPv4-compatible `::a.b.c.d`, SIIT
+  `::ffff:0:a.b.c.d` and RFC 8215 local-use NAT64 `64:ff9b:1::/48` carry an IPv4
+  address the guard does not unwrap, so a broad `::/0` entry would reach IMDS
+  (`64:ff9b:1::a9fe:a9fe`). Pass only the operator's CIDRs to this check, never
+  the exact `/32` added for a trusted hostname, and never let `allow_private`
+  stand in for it. Every process that runs the guard (registry, auth-server,
+  mcpgw) must receive the same `SSRF_ALLOWED_CIDRS` value.
+- **Compare reserved env names case-insensitively.** pydantic-settings reads the
+  environment with `case_sensitive=False`, so a Helm `extraEnv` entry named
+  `ssrf_allowed_cidrs` overrides the chart-managed `SSRF_ALLOWED_CIDRS` in the
+  registry while mcpgw (`os.getenv`) ignores it. Each chart's `validateExtraEnv`
+  compares names through `<chart>.envNameKey` (trimmed, upper-cased) for the
+  reserved check. Keys inside an `extraEnvFrom` source or `app.existingSecret`
+  cannot be checked at render time: a lowercase `ssrf_allowed_cidrs` there sits
+  beside the chart's `SSRF_ALLOWED_CIDRS`, and which one pydantic keeps depends on
+  the order the kubelet writes the container's environment, which the operator
+  does not control. Never put a lowercase copy of a chart-managed name
+  in those sources. The duplicate check stays exact, because `HTTPS_PROXY` and
+  `https_proxy` are two variables and proxy setups set both. Feed a
+  security-relevant chart value through `env:`, not a chart ConfigMap read via
+  `envFrom`: a user `extraEnvFrom` source renders later and wins over `envFrom`,
+  but never over `env:`.
 - **Don't rely on the language runtime's `is_private` to cover reserved ranges —
   block them explicitly and pin the range in a test.** Ranges like CGNAT / shared
   address space (`100.64.0.0/10`, RFC 6598) are only classified private on newer

@@ -23,18 +23,10 @@ tests:
       - equal:
           path: data.EGRESS_HTTP_POOL_CONNECT_RETRIES
           value: "1"
-      - equal:
+      # SSRF_ALLOWED_CIDRS lives in the deployment env:, not here, so an
+      # extraEnvFrom source cannot shadow it (#2018).
+      - notExists:
           path: data.SSRF_ALLOWED_CIDRS
-          value: ""
-
-  - it: passes the operator SSRF CIDRs through for reserved ranges (#2018)
-    set:
-      app:
-        ssrfAllowedCidrs: "240.240.0.0/16"
-    asserts:
-      - equal:
-          path: data.SSRF_ALLOWED_CIDRS
-          value: "240.240.0.0/16"
 
   - it: honours overridden pool knobs
     set:

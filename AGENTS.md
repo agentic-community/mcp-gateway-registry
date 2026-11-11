@@ -324,6 +324,10 @@ working in those areas.
   RFC-1918/loopback/link-local/reserved/multicast and exact cloud/workload
   metadata endpoints (AWS plus Alibaba `100.100.100.200`), including scoped/
   mapped/NAT64/6to4/Teredo forms. Validate at registration AND pin at fetch time.
+  The one relaxation of reserved space: an operator `SSRF_ALLOWED_CIDRS` range
+  admits reserved IPv4 inside it (Istio's `240.240.0.0/16`), never
+  `255.255.255.255` and never reserved IPv6, which can carry an IPv4 the guard
+  does not unwrap. Hostname trust and `allow_private` never admit reserved.
   Credentialed OAuth token endpoints MUST use the HTTPS-only empty-allowlist
   `CREDENTIALED_OAUTH_PROFILE` at both points, never `PROXY_PROFILE`. Credential
   builders self-guard the exact derived destination before adding/decrypting any

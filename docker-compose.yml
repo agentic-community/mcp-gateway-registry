@@ -740,6 +740,10 @@ services:
       - EGRESS_HTTP_POOL_MAX_KEEPALIVE=${EGRESS_HTTP_POOL_MAX_KEEPALIVE:-20}
       - EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS=${EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS:-30}
       - EGRESS_HTTP_POOL_CONNECT_RETRIES=${EGRESS_HTTP_POOL_CONNECT_RETRIES:-1}
+      # SSRF guard for the generic proxy (PROXY_PROFILE): an operator CIDR may
+      # admit a reserved IPv4 address (e.g. Istio ServiceEntry VIPs in
+      # 240.240.0.0/16). Same value as the registry and mcpgw. #2018
+      - SSRF_ALLOWED_CIDRS=${SSRF_ALLOWED_CIDRS:-}
       # Forward-proxy egress for the SSRF-guarded clients (issue #1832). OFF by
       # default; enabling it relaxes IP-rebind pinning for targets that resolve
       # exclusively to public addresses. Set HTTP_PROXY / HTTPS_PROXY / NO_PROXY

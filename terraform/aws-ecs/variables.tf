@@ -1842,7 +1842,7 @@ variable "ssrf_allowed_hosts" {
 }
 
 variable "ssrf_allowed_cidrs" {
-  description = "Comma-separated CIDR ranges the SSRF guard accepts for MCP-server / A2A-agent upstreams even though they are private. A listed range also admits the reserved IPv4 addresses it contains (e.g. Istio ServiceEntry VIPs in 240.240.0.0/16), in the registry and in mcpgw. Cloud metadata/credential, link-local, unspecified and multicast addresses are never permitted."
+  description = "Comma-separated CIDR ranges the SSRF guard accepts for MCP-server / A2A-agent upstreams even though they are private. A listed range also admits the reserved IPv4 addresses it contains (e.g. Istio ServiceEntry VIPs in 240.240.0.0/16), in the registry, the auth-server generic proxy and mcpgw. Cloud metadata/credential, link-local, unspecified and multicast addresses are never permitted."
   type        = string
   default     = ""
 }
@@ -2188,10 +2188,11 @@ variable "registry_extra_env" {
           "GATEWAY_PROXY_PREFIX",
           "GATEWAY_GENERIC_STREAM_READ_TIMEOUT_SECONDS",
           "SEARCH_LOG_QUERY_TEXT",
+          "SSRF_ALLOWED_CIDRS",
         ], upper(trimspace(entry.name)))
       )
     ])
-    error_message = "registry_extra_env must not override Terraform-managed variables (AWS_EC2_METADATA_DISABLED, the canonical gateway_* generic-proxy variables, or SEARCH_LOG_QUERY_TEXT; use the matching Terraform variable instead)."
+    error_message = "registry_extra_env must not override Terraform-managed variables (AWS_EC2_METADATA_DISABLED, the canonical gateway_* generic-proxy variables, SEARCH_LOG_QUERY_TEXT, or SSRF_ALLOWED_CIDRS; use the matching Terraform variable instead)."
   }
 
   # Forward-proxy egress: NO_PROXY must exclude the cloud credential endpoints.
@@ -2247,9 +2248,10 @@ variable "auth_server_extra_env" {
         "GATEWAY_GENERIC_STREAM_MAX_DURATION_SECONDS",
         "GATEWAY_GENERIC_STREAM_MAX_BYTES",
         "AWS_EC2_METADATA_DISABLED",
+        "SSRF_ALLOWED_CIDRS",
       ], upper(trimspace(entry.name)))
     ])
-    error_message = "auth_server_extra_env must not override Terraform-managed generic-proxy or metadata-hardening variables; use the canonical variables instead."
+    error_message = "auth_server_extra_env must not override Terraform-managed generic-proxy, metadata-hardening or SSRF_ALLOWED_CIDRS variables; use the canonical variables instead."
   }
 
   # Forward-proxy egress: NO_PROXY must exclude the cloud credential endpoints.
@@ -2293,10 +2295,10 @@ variable "mcpgw_extra_env" {
   validation {
     condition = alltrue([
       for entry in var.mcpgw_extra_env : (
-        !contains(["SEARCH_LOG_QUERY_TEXT"], upper(trimspace(entry.name)))
+        !contains(["SEARCH_LOG_QUERY_TEXT", "SSRF_ALLOWED_CIDRS"], upper(trimspace(entry.name)))
       )
     ])
-    error_message = "mcpgw_extra_env must not override Terraform-managed variables (SEARCH_LOG_QUERY_TEXT; use the search_log_query_text variable instead)."
+    error_message = "mcpgw_extra_env must not override Terraform-managed variables (SEARCH_LOG_QUERY_TEXT, SSRF_ALLOWED_CIDRS; use the search_log_query_text / ssrf_allowed_cidrs variables instead)."
   }
 }
 
