@@ -83,12 +83,16 @@ async def _call_get_custom_entity(
     response: MagicMock | None = None,
     capture: dict | None = None,
 ) -> dict:
-    """Call get_custom_entity with a mocked HTTP client and registry headers.
+    """Call get_custom_entity with a mocked pooled client and registry headers.
+
+    The tool requests through the process-lifetime pooled client
+    (``servers/mcpgw/http_pool.py``), so the seam is ``shared_async_client``
+    plus ``client.request(method, url, ...)``.
 
     Args:
         path: Value passed to the tool.
         response: Mock response the registry returns (defaults to RECORD).
-        capture: If provided, populated with the requested "url".
+        capture: If provided, populated with the requested "method" and "url".
 
     Returns:
         The tool's result dict plus "_http_call_count".
@@ -96,19 +100,18 @@ async def _call_get_custom_entity(
     mock_response = response or _make_mock_response(RECORD)
     called = {"count": 0}
 
-    async def mock_get(url, **get_kwargs):
+    async def mock_request(method, url, **request_kwargs):
         called["count"] += 1
         if capture is not None:
+            capture["method"] = method
             capture["url"] = url
         return mock_response
 
     mock_client = AsyncMock()
-    mock_client.get = mock_get
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.request = mock_request
 
     with (
-        patch.object(mcpgw_server.httpx, "AsyncClient", return_value=mock_client),
+        patch.object(mcpgw_server, "shared_async_client", return_value=mock_client),
         patch.object(
             mcpgw_server,
             "_get_registry_headers",
@@ -117,6 +120,9 @@ async def _call_get_custom_entity(
     ):
         result = await mcpgw_server.get_custom_entity(path)
 
+    # A pooled client must never be closed by a request path: that would tear the
+    # pool down for every other concurrent caller.
+    mock_client.aclose.assert_not_awaited()
     result["_http_call_count"] = called["count"]
     return result
 
@@ -130,6 +136,7 @@ class TestGetCustomEntityValidPath:
 
         assert result["status"] == "success"
         assert result["record"]["attributes"] == RECORD["attributes"]
+        assert capture["method"] == "GET"
         assert capture["url"].endswith(f"/api/custom/data_product/{VALID_UUID}")
         assert result["_http_call_count"] == 1
 

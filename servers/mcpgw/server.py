@@ -1098,10 +1098,16 @@ async def get_custom_entity(
         headers = await _get_registry_headers(ctx)
         url = f"{REGISTRY_URL}/api/custom/{entity_type}/{record_uuid}"
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(url, headers=headers)
-            response.raise_for_status()
-            data = response.json()
+        response = await request_with_reconnect(
+            shared_async_client(),
+            "GET",
+            url,
+            headers=headers,
+            timeout=30.0,
+            on_reset=_registry_conn_reset,
+        )
+        response.raise_for_status()
+        data = response.json()
 
         return {
             "path": f"/{entity_type}/{record_uuid}",
