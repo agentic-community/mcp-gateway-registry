@@ -19,6 +19,8 @@ not reduced to ``child``, because two nested groups can share a leaf name and
 collapsing them would grant one group's scopes to the other.
 """
 
+from collections.abc import Iterable
+
 
 def normalize_group_name(name: str) -> str:
     """Return the canonical form of one group identifier.
@@ -88,3 +90,30 @@ def group_name_variants(groups: list[str]) -> list[str]:
         variants.add(f"/{canonical}")
         variants.add(group.strip())
     return sorted(variants)
+
+
+def groups_intersect(
+    user_groups: Iterable[str] | None,
+    allowed_groups: Iterable[str] | None,
+) -> bool:
+    """Return True when the two group lists share a group in canonical form.
+
+    Group-restricted visibility compares the caller's groups with a record's
+    ``allowed_groups``. The login filter stores canonical names in the session
+    (``team``), while an operator may have written ``/team`` into
+    ``allowed_groups`` (or the other way round), so an exact set intersection
+    would hide the record. Both sides are canonicalised first. Names that are
+    empty once canonicalised never match, so an empty or blank entry on either
+    side grants nothing.
+
+    Args:
+        user_groups: The caller's groups, from the session or token claim.
+        allowed_groups: The groups a record is restricted to.
+
+    Returns:
+        True if at least one group appears on both sides.
+    """
+    allowed = set(normalize_group_names(list(allowed_groups or [])))
+    if not allowed:
+        return False
+    return any(group in allowed for group in normalize_group_names(list(user_groups or [])))

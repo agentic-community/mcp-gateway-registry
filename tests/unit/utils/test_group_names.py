@@ -10,6 +10,7 @@ import pytest
 
 from registry.utils.group_names import (
     group_name_variants,
+    groups_intersect,
     normalize_group_name,
     normalize_group_names,
 )
@@ -93,3 +94,39 @@ class TestGroupNameVariants:
 
     def test_empties_removed(self):
         assert group_name_variants(["", "/", None, "x"]) == ["/x", "x"]  # type: ignore[list-item]
+
+
+class TestGroupsIntersect:
+    """Group-restricted visibility compares canonical names on both sides."""
+
+    def test_full_path_allowed_group_matches_bare_session_group(self):
+        """The login filter stores ``team``; an operator may have written ``/team``."""
+        assert groups_intersect(["team"], ["/team"]) is True
+
+    def test_bare_allowed_group_matches_full_path_claim(self):
+        assert groups_intersect(["/team"], ["team"]) is True
+
+    def test_disjoint_groups_do_not_match(self):
+        assert groups_intersect(["team"], ["/other"]) is False
+
+    def test_nested_path_does_not_match_its_leaf(self):
+        """``/org/team`` is a different group from ``team``."""
+        assert groups_intersect(["team"], ["/org/team"]) is False
+
+    def test_nested_path_matches_its_own_canonical_form(self):
+        assert groups_intersect(["org/team"], ["/org/team"]) is True
+
+    def test_case_must_match(self):
+        assert groups_intersect(["Team"], ["team"]) is False
+
+    def test_blank_entries_never_match(self):
+        """``""`` and ``"/"`` canonicalise to nothing and grant nothing."""
+        assert groups_intersect(["", "/"], ["/", " "]) is False
+
+    def test_none_and_empty_inputs_deny(self):
+        assert groups_intersect(None, ["team"]) is False
+        assert groups_intersect(["team"], None) is False
+        assert groups_intersect([], []) is False
+
+    def test_accepts_sets(self):
+        assert groups_intersect({"team"}, {"/team"}) is True

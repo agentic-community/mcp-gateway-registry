@@ -15,6 +15,7 @@ from typing import Any
 from fastapi import HTTPException
 
 from ..schemas.custom_entity_models import CustomEntityRecord
+from ..utils.group_names import group_name_variants, groups_intersect
 
 
 def _build_visibility_filter(
@@ -35,7 +36,12 @@ def _build_visibility_filter(
         "$or": [
             {"visibility": "public"},
             {"visibility": "private", "owner": username},
-            {"visibility": "group-restricted", "allowed_groups": {"$in": groups}},
+            # Every stored form of the caller's groups, so a record restricted
+            # to "/team" matches a session carrying "team" (issue #1689).
+            {
+                "visibility": "group-restricted",
+                "allowed_groups": {"$in": group_name_variants(groups)},
+            },
         ]
     }
 
@@ -58,8 +64,7 @@ def _user_can_view(
     if record.visibility == "private":
         return record.owner == user_context.get("username")
     if record.visibility == "group-restricted":
-        user_groups = set(user_context.get("groups", []) or [])
-        return bool(user_groups & set(record.allowed_groups))
+        return groups_intersect(user_context.get("groups", []), record.allowed_groups)
     return False  # deny-by-default for any unknown visibility
 
 

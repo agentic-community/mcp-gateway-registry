@@ -84,6 +84,7 @@ from ..services.skill_service import (
 from ..services.tool_validation_service import get_tool_validation_service
 from ..services.visibility import redact_proxy_backend_url
 from ..services.webhook_service import send_registration_webhook
+from ..utils.group_names import groups_intersect
 from ..utils.metadata import (
     flatten_metadata_to_text,
     parse_and_validate_metadata_fields,
@@ -1711,8 +1712,7 @@ def _user_can_access_skill(
         return skill.owner == user_context.get("username")
 
     if visibility == VisibilityEnum.GROUP:
-        user_groups = set(user_context.get("groups", []))
-        return bool(user_groups & set(skill.allowed_groups))
+        return groups_intersect(user_context.get("groups", []), skill.allowed_groups)
 
     return False
 
