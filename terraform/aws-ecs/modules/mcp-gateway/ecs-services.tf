@@ -561,6 +561,14 @@ module "ecs_service_auth" {
           name  = "GATEWAY_GENERIC_PROXY_ENABLED"
           value = tostring(var.gateway_generic_proxy_enabled)
         },
+        # Per-server PRM for every provider (ships disabled by default). Same
+        # value as the registry container: the auth-server accepts the
+        # per-server audience only where the registry advertises it
+        # (gympass/mcp-gateway-chart#931).
+        {
+          name  = "PER_SERVER_PRM_ALL_PROVIDERS"
+          value = tostring(var.per_server_prm_all_providers)
+        },
         {
           name  = "GENERIC_PROXY_TOKEN_TTL_SECONDS"
           value = tostring(var.generic_proxy_token_ttl_seconds)
@@ -1641,6 +1649,16 @@ module "ecs_service_registry" {
         {
           name  = "MCP_ADVERTISED_SCOPES"
           value = var.mcp_advertised_scopes
+        },
+        # Serve the per-server RFC 9728 PRM for EVERY server, on every
+        # provider (ships disabled by default = historical gating unchanged).
+        # Both-services setting: the registry serves the documents, the
+        # auth-server accepts the per-server token audience, and the module
+        # passes the same variable to both task definitions so they cannot
+        # drift (gympass/mcp-gateway-chart#931).
+        {
+          name  = "PER_SERVER_PRM_ALL_PROVIDERS"
+          value = tostring(var.per_server_prm_all_providers)
         },
         # Public OAuth client_id advertised in Connect configs for IDE login
         # (PR #1224). Public, not a secret; empty = static-token Connect config.

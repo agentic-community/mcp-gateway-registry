@@ -626,6 +626,21 @@ class Settings(BaseSettings):
             "to a client that may request them via DCR."
         ),
     )
+    per_server_prm_all_providers: bool = Field(
+        default=False,
+        description=(
+            "Serve the per-server RFC 9728 PRM "
+            "(`/.well-known/oauth-protected-resource/<server>/mcp`) for EVERY "
+            "registered server, on every auth provider and egress mode. Default "
+            "False keeps the historical gating (obo_exchange on any provider; "
+            "everything else only on Entra). Set True when spec-strict MCP "
+            "clients need the path-suffixed document against a lenient IdP "
+            "(e.g. Keycloak); enabling only ADDS documents, the root PRM stays "
+            "the fallback. Read by BOTH the registry and the auth server (the "
+            "auth server accepts the per-server token audience only when the "
+            "registry advertises it), so set the same value on both services."
+        ),
+    )
 
     # OpenTelemetry / OTLP settings (metrics-service)
     otel_otlp_endpoint: str | None = None  # OTLP HTTP endpoint (e.g. https://otlp.example.com)

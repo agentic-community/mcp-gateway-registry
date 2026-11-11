@@ -60,8 +60,9 @@ tests:
       #                 generic-proxy vars (auth-server-consumed)
       #   env[24] = EGRESS_FORWARD_PROXY_ENABLED   (issue #1832)
       #   env[25] = EGRESS_FORWARD_PROXY_CA_BUNDLE (issue #1832)
-      #   env[26] = MY_FLAG       (extraEnv[0])
-      #   env[27] = MY_SECRET_VAR (extraEnv[1])
+      #   env[26] = PER_SERVER_PRM_ALL_PROVIDERS (gympass/mcp-gateway-chart#931)
+      #   env[27] = MY_FLAG       (extraEnv[0])
+      #   env[28] = MY_SECRET_VAR (extraEnv[1])
       - equal:
           path: spec.template.spec.containers[0].env[0].name
           value: ENTRA_CLIENT_SECRET
@@ -94,11 +95,16 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].env[25].name
           value: EGRESS_FORWARD_PROXY_CA_BUNDLE
+      # Per-server PRM opt-in (gympass/mcp-gateway-chart#931), always rendered,
+      # immediately before the extraEnv append.
       - equal:
           path: spec.template.spec.containers[0].env[26].name
-          value: MY_FLAG
+          value: PER_SERVER_PRM_ALL_PROVIDERS
       - equal:
           path: spec.template.spec.containers[0].env[27].name
+          value: MY_FLAG
+      - equal:
+          path: spec.template.spec.containers[0].env[28].name
           value: MY_SECRET_VAR
 
   - it: enables Entra overage recovery with a 300-second positive cache by default
@@ -212,6 +218,37 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: "groupRecoveryEnabled must be a boolean"
+
+  - it: emits PER_SERVER_PRM_ALL_PROVIDERS false by default
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PER_SERVER_PRM_ALL_PROVIDERS
+            value: "false"
+
+  - it: emits PER_SERVER_PRM_ALL_PROVIDERS true when app.perServerPrmAllProviders is set
+    set:
+      app:
+        perServerPrmAllProviders: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PER_SERVER_PRM_ALL_PROVIDERS
+            value: "true"
+
+  # Chart-managed shared switch (gympass/mcp-gateway-chart#931): an operator
+  # must not shadow it via extraEnv, or the auth-server could disagree with
+  # the registry on which per-server audiences to accept.
+  - it: fails when extraEnv contains PER_SERVER_PRM_ALL_PROVIDERS
+    set:
+      extraEnv:
+        - name: PER_SERVER_PRM_ALL_PROVIDERS
+          value: "true"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"PER_SERVER_PRM_ALL_PROVIDERS\" is a reserved variable"
 
   - it: rejects a nonboolean browser User.Read switch
     set:

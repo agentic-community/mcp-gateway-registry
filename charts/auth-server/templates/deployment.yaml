@@ -342,6 +342,14 @@ spec:
               {{- else }}
               value: ""
               {{- end }}
+            # Per-server RFC 9728 PRM for every provider (opt-in; ships off).
+            # PER_SERVER_PRM_ALL_PROVIDERS is a SHARED setting: the registry
+            # serves the per-server documents, and the auth-server accepts the
+            # per-server token audience only when the registry advertises it.
+            # Both containers must see it, so it is set here too (mirrors the
+            # registry value; issue gympass/mcp-gateway-chart#931).
+            - name: PER_SERVER_PRM_ALL_PROVIDERS
+              value: {{ .Values.app.perServerPrmAllProviders | default false | toString | quote }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

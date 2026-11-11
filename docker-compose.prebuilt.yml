@@ -218,6 +218,9 @@ services:
       - IDE_OAUTH_CALLBACK_PORT=${IDE_OAUTH_CALLBACK_PORT:-0}
       # Scopes advertised in the PRM for IDE OAuth login.
       - MCP_ADVERTISED_SCOPES=${MCP_ADVERTISED_SCOPES:-}
+      # Per-server PRM for every provider (read by BOTH registry and auth-server;
+      # keep the same value in both blocks). Ships disabled by default.
+      - PER_SERVER_PRM_ALL_PROVIDERS=${PER_SERVER_PRM_ALL_PROVIDERS:-false}
       # Entra ID configuration
       - ENTRA_TENANT_ID=${ENTRA_TENANT_ID}
       - ENTRA_CLIENT_ID=${ENTRA_CLIENT_ID}
@@ -560,6 +563,9 @@ services:
       - GOOGLE_ENABLED=${GOOGLE_ENABLED:-false}
       # Gateway generic-proxy feature (auth-server-consumed): ships disabled by default
       - GATEWAY_GENERIC_PROXY_ENABLED=${GATEWAY_GENERIC_PROXY_ENABLED:-false}
+      # Per-server PRM for every provider: mirrors the registry block's entry
+      # (the auth-server accepts the audience the registry advertises).
+      - PER_SERVER_PRM_ALL_PROVIDERS=${PER_SERVER_PRM_ALL_PROVIDERS:-false}
       - GENERIC_PROXY_TOKEN_TTL_SECONDS=${GENERIC_PROXY_TOKEN_TTL_SECONDS:-30}
       - GENERIC_PROXY_MAX_BODY_BYTES=${GENERIC_PROXY_MAX_BODY_BYTES:-10485760}
       - GATEWAY_GENERIC_REQUIRE_BEARER_FOR_WRITES=${GATEWAY_GENERIC_REQUIRE_BEARER_FOR_WRITES:-true}

@@ -155,7 +155,9 @@ tests:
       # rendered) is env[62]; SECURITY_BLOCK_ON_SCAN_FAILURE (always rendered)
       # directly follows it;
       # the forward-proxy egress pair (issue #1832, always rendered) is
-      # env[57]/env[58]; user extraEnv entries are appended at the end.
+      # env[57]/env[58]; PER_SERVER_PRM_ALL_PROVIDERS
+      # (gympass/mcp-gateway-chart#931, always rendered) is env[59]; user
+      # extraEnv entries are appended at the end.
       #
       # The seven CIMD publisher vars (always rendered) sit at env[16]-env[22],
       # between SSRF_ALLOWED_CIDRS and A2A_REVERSE_PROXY_ENABLED, which is why
@@ -315,11 +317,16 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].env[58].name
           value: EGRESS_FORWARD_PROXY_CA_BUNDLE
+      # Per-server PRM opt-in (gympass/mcp-gateway-chart#931), always rendered,
+      # immediately before the extraEnv append.
       - equal:
           path: spec.template.spec.containers[0].env[59].name
-          value: MY_FLAG
+          value: PER_SERVER_PRM_ALL_PROVIDERS
       - equal:
           path: spec.template.spec.containers[0].env[60].name
+          value: MY_FLAG
+      - equal:
+          path: spec.template.spec.containers[0].env[61].name
           value: MY_SECRET_VAR
 
   - it: appends extraEnvFrom entries after chart-managed envFrom sources
@@ -708,6 +715,37 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: "\"MCP_ADVERTISED_SCOPES\" is a reserved variable"
+
+  - it: emits PER_SERVER_PRM_ALL_PROVIDERS false by default
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PER_SERVER_PRM_ALL_PROVIDERS
+            value: "false"
+
+  - it: emits PER_SERVER_PRM_ALL_PROVIDERS true when app.perServerPrmAllProviders is set
+    set:
+      app:
+        perServerPrmAllProviders: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PER_SERVER_PRM_ALL_PROVIDERS
+            value: "true"
+
+  # Chart-managed shared switch (gympass/mcp-gateway-chart#931): an operator
+  # must not shadow it via extraEnv, or the registry could advertise per-server
+  # PRMs whose audience the auth-server refuses.
+  - it: fails when extraEnv contains PER_SERVER_PRM_ALL_PROVIDERS
+    set:
+      extraEnv:
+        - name: PER_SERVER_PRM_ALL_PROVIDERS
+          value: "true"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"PER_SERVER_PRM_ALL_PROVIDERS\" is a reserved variable"
 
   - it: fails when extraEnv contains A2A_REVERSE_PROXY_ENABLED
     set:

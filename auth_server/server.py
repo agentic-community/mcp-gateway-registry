@@ -4157,6 +4157,10 @@ def _server_advertises_per_server_prm() -> bool:
     - OR egress auth is enabled -- covering ``obo_exchange`` (any provider) and
       the ``oauth_user`` 3LO ingress leg, whose ingress tokens are audienced to
       the per-server resource.
+    - OR ``per_server_prm_all_providers`` is on: the registry then advertises
+      a per-server PRM for EVERY server on every provider
+      (gympass/mcp-gateway-chart#931), so the per-server audience must be
+      accepted for every server too. Set the same env value on both services.
 
     When true, the per-server resource URL is a legitimate ingress ``aud`` for
     THIS request's path and must be accepted at ``/validate``; otherwise the
@@ -4168,6 +4172,12 @@ def _server_advertises_per_server_prm() -> bool:
     # `entra_forces_per_server_prm` is the shared source of truth mirrored by the
     # registry's `server_needs_per_server_prm` (keep the two in sync).
     from registry.auth.oauth_metadata import entra_forces_per_server_prm
+
+    # Opt-in first, mirroring the registry gate (gympass/mcp-gateway-chart#931):
+    # with the toggle on the registry advertises a per-server PRM for EVERY
+    # server, so the per-server audience must be accepted for every server too.
+    if getattr(settings, "per_server_prm_all_providers", False):
+        return True
 
     provider = os.environ.get("AUTH_PROVIDER", "") or getattr(settings, "auth_provider", "") or ""
     if entra_forces_per_server_prm(provider):
@@ -4286,6 +4296,16 @@ async def validate_request(request: Request):
 
     Raises:
         HTTPException: If the token is missing, invalid, or configuration is incomplete
+
+    This endpoint is nginx's auth_request target (``location = /validate``,
+    ``internal``); no browser or MCP client ever sees its response. nginx copies
+    ``WWW-Authenticate`` from a failed auth subrequest onto the client's 401, so
+    a bare ``Bearer`` challenge here would surface as a duplicate (or the only,
+    metadata-less) challenge in front of ``@auth_error``'s RFC 9728 §5.1
+    challenge. The 401s raised here therefore carry NO ``WWW-Authenticate``:
+    the single client-visible challenge is produced at the nginx error page
+    (``@auth_error``, or ``@ard_auth_error`` on the ARD surface). Client-facing
+    surfaces that 401 directly keep their challenges unchanged.
     """
 
     # Capture start time for MCP audit logging
@@ -4359,7 +4379,7 @@ async def validate_request(request: Request):
             return JSONResponse(
                 content={"detail": "Authorization must not duplicate the gateway credential"},
                 status_code=401,
-                headers={"WWW-Authenticate": "Bearer", "Connection": "close"},
+                headers={"Connection": "close"},
             )
 
         cookie_header = request.headers.get("Cookie", "")
@@ -4537,7 +4557,7 @@ async def validate_request(request: Request):
                 return JSONResponse(
                     content={"detail": "Authorization header required"},
                     status_code=401,
-                    headers={"WWW-Authenticate": "Bearer", "Connection": "close"},
+                    headers={"Connection": "close"},
                 )
 
             if not authorization.startswith("Bearer "):
@@ -4547,7 +4567,7 @@ async def validate_request(request: Request):
                 return JSONResponse(
                     content={"detail": "Authorization header must use Bearer scheme"},
                     status_code=401,
-                    headers={"WWW-Authenticate": "Bearer", "Connection": "close"},
+                    headers={"Connection": "close"},
                 )
 
             bearer_token = authorization[len("Bearer ") :].strip()
@@ -4758,7 +4778,7 @@ async def validate_request(request: Request):
                 raise HTTPException(
                     status_code=401,
                     detail="Missing or invalid Authorization header. Expected: Bearer <token> or valid session cookie",
-                    headers={"WWW-Authenticate": "Bearer", "Connection": "close"},
+                    headers={"Connection": "close"},
                 )
 
             # Extract token
@@ -4842,9 +4862,11 @@ async def validate_request(request: Request):
             except ValueError as e:
                 # ValueError from a provider's validate_token() indicates the
                 # token itself is bad: missing kid, signature mismatch, expired,
-                # wrong audience, etc. Per RFC 9728 §5.1 / MCP 2025-06-18, the
-                # client must see a 401 with WWW-Authenticate so its discovery
-                # flow can kick in. Returning 500 here was a pre-existing bug
+                # wrong audience, etc. The client must still see a 401 (not 500)
+                # so its discovery flow can kick in; the RFC 9728 §5.1
+                # WWW-Authenticate challenge is emitted by nginx @auth_error on
+                # the client's 401, not by this subrequest (see the endpoint
+                # docstring). Returning 500 here was a pre-existing bug
                 # that prevented Claude Code / Cursor from re-triggering the
                 # OAuth dance after a stale token (issue #989).
                 logger.warning(f"Token validation failed: {e}")
@@ -4853,7 +4875,7 @@ async def validate_request(request: Request):
                     # Generic detail: the exception can reveal issuer/audience/IdP
                     # config internals. The specifics are logged above.
                     detail="Token validation failed",
-                    headers={"WWW-Authenticate": "Bearer", "Connection": "close"},
+                    headers={"Connection": "close"},
                 )
             except Exception as e:
                 # Unexpected non-validation errors (network failure reaching
@@ -4882,7 +4904,7 @@ async def validate_request(request: Request):
                 raise HTTPException(
                     status_code=401,
                     detail="Invalid Entra group claims",
-                    headers={"WWW-Authenticate": "Bearer", "Connection": "close"},
+                    headers={"Connection": "close"},
                 ) from e
             except GraphGroupLookupError as e:
                 logger.warning("Entra bearer group recovery failed; reason=%s", e.reason)
@@ -5735,7 +5757,7 @@ async def validate_request(request: Request):
             # Generic detail: the ValueError can reveal token/IdP internals; it is
             # logged above.
             detail="Authentication failed",
-            headers={"WWW-Authenticate": "Bearer", "Connection": "close"},
+            headers={"Connection": "close"},
         )
     except HTTPException as e:
         # Keep the Graph-unavailable result distinct from invalid credentials

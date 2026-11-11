@@ -278,11 +278,26 @@ def server_needs_per_server_prm(egress_auth_mode: str | None) -> bool:
     servers, and the only one that incurs the per-connection-URL App ID URI
     registration cost.
 
+    Opt-in relaxation (issue gympass/mcp-gateway-chart#931): with
+    ``settings.per_server_prm_all_providers`` True, EVERY server gets a
+    per-server PRM regardless of provider and egress mode (checked FIRST,
+    before the rules above). Lenient IdPs tolerate the extra document (their
+    clients keep working off the root PRM), and spec-strict clients that
+    require the path-suffixed URL can then log in against any provider.
+    Enabling the setting only ADDS documents: servers already covered by the
+    rules above are unaffected, the root PRM stays unchanged as the fallback,
+    and disabling it restores exactly the unchanged behavior described above.
+
     The per-server PRM document's ``scopes_supported`` is likewise provider-
     dependent: Entra advertises ``<resource>/user_impersonation``, every other
     provider advertises ``derive_supported_scopes()`` (see
     ``get_oauth_protected_resource_for_server``).
     """
+    # Opt-in first: serve a per-server PRM for every server on every provider
+    # (gympass/mcp-gateway-chart#931). Below this point the historical gating
+    # stays exactly as before.
+    if settings.per_server_prm_all_providers:
+        return True
     if egress_auth_mode == "obo_exchange":
         return True
     if egress_auth_mode == "oauth_user":
@@ -432,6 +447,12 @@ async def get_oauth_protected_resource_for_server(
     Entra client could not log in to one at all: it would fall back to the
     bare-origin root PRM that Entra refuses.
 
+    Under the ``PER_SERVER_PRM_ALL_PROVIDERS`` opt-in
+    (gympass/mcp-gateway-chart#931) a registered server must additionally be
+    ENABLED: a disabled server has no nginx location and no 401 to discover
+    from, so it 404s here like a disabled virtual server. The historical
+    obo_exchange/Entra gating is unchanged in that respect.
+
     The advertised ``resource`` is the **per-server connection URL** (e.g.
     ``https://gw/github/mcp``). This is the ONLY value that satisfies all three
     constraints simultaneously:
@@ -488,6 +509,17 @@ async def get_oauth_protected_resource_for_server(
             needs_prm = info is not None and server_needs_per_server_prm(
                 info.get("egress_auth_mode")
             )
+            # gympass/mcp-gateway-chart#931: the all-providers opt-in is checked
+            # FIRST inside server_needs_per_server_prm, so with the toggle on it
+            # is what qualifies every server, disabled ones included. A disabled
+            # server has no nginx location and therefore no 401 for a client to
+            # discover the document from, so toggle-qualified servers must be
+            # enabled, the same gate the virtual branch applies. With the
+            # toggle off this block never runs and the historical
+            # obo_exchange/Entra gating stays byte-identical, disabled servers
+            # included.
+            if needs_prm and settings.per_server_prm_all_providers:
+                needs_prm = bool(info.get("is_enabled", False))
             append_mcp = info is not None and info.get("append_mcp_path") is not False
     except Exception:
         logger.exception("Per-server PRM: lookup failed for %s", normalized)

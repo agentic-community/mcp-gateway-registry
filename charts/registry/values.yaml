@@ -359,6 +359,16 @@ app:
   #
   # See docs/ai-coding-assistant-registry-integration.md for the rationale.
   mcpAdvertisedScopes: "openid profile email offline_access"
+  # Serve the per-server RFC 9728 PRM (/.well-known/oauth-protected-resource/<server>/mcp)
+  # for EVERY registered server, on every auth provider and egress mode.
+  # false (default) keeps the historical gating (obo_exchange on any provider;
+  # everything else only on Entra). Enable when spec-strict MCP clients need
+  # the path-suffixed document against a lenient IdP (e.g. Keycloak); enabling
+  # only ADDS documents, the root PRM stays the fallback. Shared with the
+  # auth-server chart: set auth-server.app.perServerPrmAllProviders to the
+  # same value, or the auth-server will refuse the per-server token audience
+  # these documents advertise (issue gympass/mcp-gateway-chart#931).
+  perServerPrmAllProviders: false
   # SSRF guard bypass for internal MCP-server upstreams. The health checker and
   # proxy validate each server's proxy_pass_url through the SSRF guard, which
   # blocks private/cluster IPs by default. Internal MCP servers live at private

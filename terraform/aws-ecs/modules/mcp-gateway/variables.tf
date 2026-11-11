@@ -1644,6 +1644,22 @@ variable "mcp_advertised_scopes" {
   default     = "profile email offline_access"
 }
 
+variable "per_server_prm_all_providers" {
+  description = <<-EOT
+    Serve the per-server RFC 9728 PRM (/.well-known/oauth-protected-resource/<server>/mcp)
+    for EVERY registered server, on every auth provider and egress mode.
+    Default false keeps the historical gating (obo_exchange on any provider;
+    everything else only on Entra). Set to true when spec-strict MCP clients
+    need the path-suffixed document against a lenient IdP (e.g. Keycloak);
+    enabling only ADDS documents, the root PRM stays the fallback. Read by
+    BOTH services: the registry serves the documents, the auth-server accepts
+    the per-server token audience; the module sets the same value on both
+    task definitions (gympass/mcp-gateway-chart#931).
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "ide_oauth_client_id" {
   description = <<-EOT
     Pre-registered PUBLIC OAuth client_id that IDEs (Cursor, Claude Code, Codex)

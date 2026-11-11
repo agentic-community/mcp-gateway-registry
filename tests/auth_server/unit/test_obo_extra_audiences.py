@@ -27,6 +27,9 @@ def _settings(*, auth_provider: str, egress_enabled: bool, registry_url: str = "
     s.auth_provider = auth_provider
     s.egress_auth_enabled = egress_enabled
     s.registry_url = registry_url
+    # Pin the opt-in: an unset MagicMock attribute is truthy and would flip the
+    # gympass/mcp-gateway-chart#931 toggle on for every test here.
+    s.per_server_prm_all_providers = False
     return s
 
 
@@ -63,6 +66,20 @@ class TestServerAdvertisesPerServerPrm:
         s = _settings(auth_provider="keycloak", egress_enabled=False)
         assert self._call(s, env={"AUTH_PROVIDER": "entra"}) is True
 
+    def test_toggle_on_non_entra_egress_off_true(self):
+        """gympass/mcp-gateway-chart#931: with the registry opt-in on, plain
+        servers on lenient IdPs advertise a per-server PRM too, so their
+        per-server audience must be accepted even with egress disabled."""
+        s = _settings(auth_provider="keycloak", egress_enabled=False)
+        s.per_server_prm_all_providers = True
+        assert self._call(s) is True
+
+    def test_toggle_off_stays_false_for_lenient_plain_servers(self):
+        """REGRESSION GUARD: the shipped default keeps the old truth table."""
+        s = _settings(auth_provider="keycloak", egress_enabled=False)
+        assert s.per_server_prm_all_providers is False
+        assert self._call(s) is False
+
 
 class TestOboExtraAudiences:
     """_obo_extra_audiences returns path-bound per-server resource audiences."""
@@ -95,6 +112,17 @@ class TestOboExtraAudiences:
             "/plain/mcp", s, env={"AUTH_SERVER_EXTERNAL_URL": "https://gw.example.com"}
         )
         assert auds == []
+
+    def test_toggle_on_lenient_plain_server_returns_audience(self):
+        """gympass/mcp-gateway-chart#931: with per_server_prm_all_providers on,
+        the Keycloak plain-server per-server aud must be accepted at /validate
+        (the toggle-ON counterpart of the egress-off Entra guard above)."""
+        s = _settings(auth_provider="keycloak", egress_enabled=False)
+        s.per_server_prm_all_providers = True
+        auds = self._call(
+            "/wellie/mcp", s, env={"AUTH_SERVER_EXTERNAL_URL": "https://gw.example.com"}
+        )
+        assert "https://gw.example.com/wellie/mcp" in auds
 
     def test_empty_without_server_context(self):
         s = _settings(auth_provider="entra", egress_enabled=False)

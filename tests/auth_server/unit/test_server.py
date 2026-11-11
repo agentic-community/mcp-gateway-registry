@@ -1278,6 +1278,36 @@ class TestValidateEndpoint:
         assert "Missing or invalid Authorization header" in response.json()["detail"]
 
     @patch("auth_server.server.get_auth_provider")
+    def test_validate_401_carries_no_www_authenticate(self, mock_get_provider, auth_env_vars):
+        """gympass/mcp-gateway-chart#931: /validate is nginx's auth_request
+        target, and nginx copies WWW-Authenticate from a failed auth subrequest
+        onto the client's 401. A bare ``Bearer`` challenge here therefore
+        surfaced as a duplicate (or the only, metadata-less) challenge in front
+        of @auth_error's RFC 9728 challenge, so the 401s raised here carry NO
+        WWW-Authenticate.
+
+        The client-facing direct 401 surfaces keep their challenges and stay
+        pinned elsewhere: the nginx @auth_error routing and the generated
+        per-server $mcp_resource_metadata overrides
+        (tests/unit/test_virtual_server_nginx.py,
+        tests/unit/core/test_nginx_service.py), the registry-side
+        WWWAuthenticateMiddleware (tests/unit/middleware/test_www_authenticate.py),
+        and the proxy pass-through of upstream challenges
+        (test_www_authenticate_and_retry_after_forwarded below).
+        """
+        # Arrange
+        import auth_server.server as server_module
+
+        client = TestClient(server_module.app)
+
+        # Act: representative 401 path: no Authorization header, no cookie
+        response = client.get("/validate")
+
+        # Assert
+        assert response.status_code == 401
+        assert "www-authenticate" not in {k.lower() for k in response.headers.keys()}
+
+    @patch("auth_server.server.get_auth_provider")
     def test_validate_with_session_cookie(
         self,
         mock_get_provider,
@@ -1336,9 +1366,13 @@ class TestValidateEndpoint:
         auth_env_vars,
     ):
         """A ValueError from the provider's validate_token() must surface as
-        401 with WWW-Authenticate, not 500. Pre-#989 this was a 500 which
-        prevented MCP discovery clients from re-triggering OAuth on a stale
-        token.
+        401, not 500. Pre-#989 this was a 500 which prevented MCP discovery
+        clients from re-triggering OAuth on a stale token.
+
+        The 401 carries no WWW-Authenticate: /validate is nginx's auth_request
+        target and nginx copies the header from a failed auth subrequest onto
+        the client's 401, so the RFC 9728 §5.1 challenge is emitted once at
+        @auth_error instead (gympass/mcp-gateway-chart#931).
 
         Regression test for the auth_server fix shipped alongside #989.
         """
@@ -1361,8 +1395,9 @@ class TestValidateEndpoint:
         )
 
         assert response.status_code == 401
-        assert "www-authenticate" in {k.lower() for k in response.headers.keys()}
-        assert response.headers["www-authenticate"].startswith("Bearer")
+        # New contract (#931): no challenge on the internal subrequest; nginx
+        # @auth_error owns the single client-visible WWW-Authenticate.
+        assert "www-authenticate" not in {k.lower() for k in response.headers.keys()}
 
 
 class TestConfigEndpoint:

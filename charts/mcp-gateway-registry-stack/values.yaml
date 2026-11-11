@@ -542,6 +542,13 @@ registry:
     # registry's own scopes config; see
     # docs/ai-coding-assistant-registry-integration.md.
     mcpAdvertisedScopes: "profile email offline_access"
+    # Per-server RFC 9728 PRM for every provider (issue gympass/mcp-gateway-chart#931).
+    # SHARED setting: keep equal to auth-server.app.perServerPrmAllProviders below.
+    # The registry serves the per-server documents; the auth-server accepts the
+    # per-server token audience only when they are advertised. Default false
+    # keeps the historical gating (obo_exchange on any provider; everything
+    # else only on Entra).
+    perServerPrmAllProviders: false
     # IDE OAuth login (PR #1224). Public client_id IDEs use for the gateway login
     # flow (empty = static-token Connect config; NOT a secret) and the fixed
     # loopback callback port for IdPs that match redirect_uri literally (Okta,
@@ -710,6 +717,12 @@ auth-server:
     toolFilterAuditLogLevel: "INFO" # Audit log level for tool-prune events (DEBUG, INFO, WARNING)
     internalTokenTtlSeconds: "30" # Token lifetime (seconds); the replay-window cap (min 5)
     internalTokenLeewaySeconds: "5" # Clock-skew leeway (seconds) on token exp/iat
+    # Per-server RFC 9728 PRM opt-in (issue gympass/mcp-gateway-chart#931). SHARED
+    # setting: keep equal to registry.app.perServerPrmAllProviders above. The
+    # auth-server accepts the per-server token audience only when the registry
+    # advertises the documents; a mismatch means clients discover a per-server
+    # resource whose audience validation refuses.
+    perServerPrmAllProviders: false
     # Gateway generic-proxy feature (auth-server-consumed). Only active when this
     # SHARED master switch is true AND the startup egress self-check passes. Keep
     # it in sync with registry.app.gatewayGenericProxyEnabled above. Deploy

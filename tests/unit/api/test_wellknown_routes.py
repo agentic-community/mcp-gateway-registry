@@ -335,11 +335,14 @@ class TestServerNeedsPerServerPrm:
     the fix that unblocks Entra IDE login for plain servers.
     """
 
-    def _gate(self, egress_auth_mode, auth_provider):
+    def _gate(self, egress_auth_mode, auth_provider, *, per_server_all=False):
         from registry.api.wellknown_routes import server_needs_per_server_prm
 
         mock_settings = MagicMock()
         mock_settings.auth_provider = auth_provider
+        # Pin the toggle explicitly: an unset MagicMock attribute is truthy and
+        # would silently flip the gympass/mcp-gateway-chart#931 opt-in on.
+        mock_settings.per_server_prm_all_providers = per_server_all
         with patch("registry.api.wellknown_routes.settings", mock_settings):
             return server_needs_per_server_prm(egress_auth_mode)
 
@@ -380,6 +383,201 @@ class TestServerNeedsPerServerPrm:
 
     def test_auth_provider_case_insensitive(self):
         assert self._gate("none", "Entra") is True
+
+    # --- gympass/mcp-gateway-chart#931 opt-in: per_server_prm_all_providers ---
+    def test_toggle_on_keycloak_plain_gets_per_server_prm(self):
+        """The opt-in: with PER_SERVER_PRM_ALL_PROVIDERS on, a plain Keycloak
+        server gets the per-server PRM spec-strict clients demand."""
+        assert self._gate("none", "keycloak", per_server_all=True) is True
+
+    def test_toggle_on_keycloak_oauth_user_gets_per_server_prm(self):
+        assert self._gate("oauth_user", "keycloak", per_server_all=True) is True
+
+    def test_toggle_on_cognito_plain_gets_per_server_prm(self):
+        assert self._gate("none", "cognito", per_server_all=True) is True
+
+    def test_toggle_on_entra_stays_true(self):
+        """Entra was already all-on; the toggle only ADDS, it never removes."""
+        assert self._gate("none", "entra", per_server_all=True) is True
+
+    def test_toggle_off_is_the_unchanged_default(self):
+        """REGRESSION GUARD: the shipped default (False) keeps every row of the
+        original truth table (already pinned by the tests above)."""
+        assert self._gate("none", "keycloak") is False
+        assert self._gate("oauth_user", "keycloak") is False
+        assert self._gate("obo_exchange", "keycloak") is True
+        assert self._gate("none", "entra") is True
+
+
+class TestPerServerPrmAllProvidersRoute:
+    """Route-level behavior with per_server_prm_all_providers on (issue
+    gympass/mcp-gateway-chart#931). Spec-strict MCP clients (Antigravity CLI)
+    derive the path-suffixed well-known URL from the connection URL and fail
+    against Keycloak-provider servers while it 404s. With the opt-in on those
+    servers serve the document; the Entra path stays byte-identical.
+    """
+
+    def _settings(self, auth_provider="keycloak"):
+        s = MagicMock()
+        s.registry_url = "https://gw.example.com"
+        s.mcp_https_required = True
+        s.mcp_resource_documentation_url = None
+        s.mcp_advertised_scopes = ""
+        s.auth_provider = auth_provider
+        s.per_server_prm_all_providers = True
+        return s
+
+    def _fetch(self, fake_provider, s, server, url_suffix):
+        # A stored server document always carries is_enabled (the DocumentDB
+        # repository defaults it to False at write), and the toggle-qualified
+        # non-virtual PRM branch requires it (gympass/mcp-gateway-chart#931).
+        # Fake servers here are ENABLED unless a test sets is_enabled itself.
+        if server is not None:
+            server = {"is_enabled": True, **server}
+        with (
+            patch(
+                "registry.api.wellknown_routes._get_active_auth_provider",
+                return_value=fake_provider,
+            ),
+            patch("registry.auth.oauth_metadata.settings", s),
+            patch("registry.api.wellknown_routes.settings", s),
+            patch(
+                "registry.api.wellknown_routes.server_service.get_server_info",
+                new=AsyncMock(return_value=server),
+            ),
+        ):
+            client = TestClient(_make_oauth_discovery_app(fake_provider))
+            return client.get(f"/.well-known/oauth-protected-resource/{url_suffix}")
+
+    def test_toggle_on_keycloak_oauth_user_serves_per_server_resource(self, fake_provider):
+        s = self._settings(auth_provider="keycloak")
+        s.per_server_prm_all_providers = True
+        server = {"path": "/github", "egress_auth_mode": "oauth_user"}
+        resp = self._fetch(fake_provider, s, server, "github/mcp")
+        assert resp.status_code == 200
+        assert resp.json()["resource"] == "https://gw.example.com/github/mcp"
+
+    def test_toggle_on_keycloak_plain_serves_per_server_resource(self, fake_provider):
+        s = self._settings(auth_provider="keycloak")
+        s.per_server_prm_all_providers = True
+        server = {"path": "/wellie", "egress_auth_mode": "none"}
+        resp = self._fetch(fake_provider, s, server, "wellie/mcp")
+        assert resp.status_code == 200
+        assert resp.json()["resource"] == "https://gw.example.com/wellie/mcp"
+
+    def test_toggle_on_keycloak_scopes_use_derive_supported_scopes(self, fake_provider):
+        """THE REGRESSION TRAP: the per-server document must NOT hardcode the
+        Entra <resource>/user_impersonation scope on Keycloak; it must carry the
+        provider-aware list the root PRM advertises (derive_supported_scopes)."""
+        s = self._settings(auth_provider="keycloak")
+        s.per_server_prm_all_providers = True
+        server = {"path": "/github", "egress_auth_mode": "oauth_user"}
+        with patch(
+            "registry.api.wellknown_routes.derive_supported_scopes",
+            new=AsyncMock(return_value=["openid", "email", "profile", "offline_access"]),
+        ):
+            resp = self._fetch(fake_provider, s, server, "github/mcp")
+        assert resp.status_code == 200
+        assert resp.json()["scopes_supported"] == [
+            "openid",
+            "email",
+            "profile",
+            "offline_access",
+        ]
+        assert "user_impersonation" not in resp.text
+
+    def test_toggle_on_keycloak_scopes_match_root_prm(self, fake_provider):
+        """Single-source check without mocks: per-server scopes == root PRM
+        scopes on the same provider + override."""
+        s = self._settings(auth_provider="keycloak")
+        s.per_server_prm_all_providers = True
+        s.mcp_advertised_scopes = "openid email"
+        server = {"path": "/wellie", "egress_auth_mode": "none"}
+        per_server = self._fetch(fake_provider, s, server, "wellie/mcp").json()
+        with (
+            patch(
+                "registry.api.wellknown_routes._get_active_auth_provider",
+                return_value=fake_provider,
+            ),
+            patch("registry.auth.oauth_metadata.settings", s),
+            patch("registry.api.wellknown_routes.settings", s),
+        ):
+            client = TestClient(_make_oauth_discovery_app(fake_provider))
+            root = client.get("/.well-known/oauth-protected-resource").json()
+        assert per_server["scopes_supported"] == root["scopes_supported"] == ["openid", "email"]
+        assert per_server["authorization_servers"] == root["authorization_servers"]
+
+    def test_toggle_on_entra_scopes_stay_user_impersonation(self, fake_provider):
+        """Entra byte-identical with the toggle on: the per-resource
+        user_impersonation scope is an App ID URI requirement, not a default."""
+        s = self._settings(auth_provider="entra")
+        s.per_server_prm_all_providers = True
+        server = {"path": "/plain", "egress_auth_mode": "none"}
+        resp = self._fetch(fake_provider, s, server, "plain/mcp")
+        assert resp.status_code == 200
+        assert resp.json()["scopes_supported"] == [
+            "https://gw.example.com/plain/mcp/user_impersonation"
+        ]
+
+    def test_toggle_off_keycloak_still_404s(self, fake_provider):
+        """REGRESSION GUARD: with the toggle off (shipped default) the Keycloak
+        404 fallback is unchanged."""
+        s = self._settings(auth_provider="keycloak")
+        s.per_server_prm_all_providers = False
+        server = {"path": "/wellie", "egress_auth_mode": "none"}
+        resp = self._fetch(fake_provider, s, server, "wellie/mcp")
+        assert resp.status_code == 404
+
+    def test_toggle_on_append_mcp_false_omits_suffix(self, fake_provider):
+        s = self._settings(auth_provider="keycloak")
+        s.per_server_prm_all_providers = True
+        server = {"path": "/root-ep", "egress_auth_mode": "none", "append_mcp_path": False}
+        resp = self._fetch(fake_provider, s, server, "root-ep")
+        assert resp.status_code == 200
+        assert resp.json()["resource"] == "https://gw.example.com/root-ep"
+
+    def test_toggle_on_disabled_server_404s(self, fake_provider):
+        """A DISABLED server has no nginx location and therefore no 401 for a
+        client to discover the per-server PRM from. With the all-providers
+        toggle on (the check that qualifies it) it must 404 like a disabled
+        virtual server (gympass/mcp-gateway-chart#931 review fix)."""
+        s = self._settings(auth_provider="keycloak")
+        s.per_server_prm_all_providers = True
+        server = {"path": "/wellie", "egress_auth_mode": "none", "is_enabled": False}
+        resp = self._fetch(fake_provider, s, server, "wellie/mcp")
+        assert resp.status_code == 404
+
+    def test_toggle_on_disabled_obo_server_404s(self, fake_provider):
+        """The toggle is checked FIRST inside server_needs_per_server_prm, so
+        with the toggle on it qualifies obo_exchange servers too and the
+        enabled requirement applies uniformly, matching the virtual branch's
+        is_enabled gate. Without the toggle the same server still serves, see
+        the toggle-off guard below."""
+        s = self._settings(auth_provider="keycloak")
+        s.per_server_prm_all_providers = True
+        server = {
+            "path": "/obo-echo",
+            "egress_auth_mode": "obo_exchange",
+            "is_enabled": False,
+        }
+        resp = self._fetch(fake_provider, s, server, "obo-echo/mcp")
+        assert resp.status_code == 404
+
+    def test_toggle_off_disabled_obo_server_still_serves(self, fake_provider):
+        """REGRESSION GUARD for the HISTORICAL path: with the toggle off
+        (shipped default), obo_exchange qualifies on the egress mode alone and
+        a DISABLED server keeps serving its per-server PRM, exactly as before
+        #931. Do not "fix" this path; the review mandates byte-identical."""
+        s = self._settings(auth_provider="keycloak")
+        s.per_server_prm_all_providers = False
+        server = {
+            "path": "/obo-echo",
+            "egress_auth_mode": "obo_exchange",
+            "is_enabled": False,
+        }
+        resp = self._fetch(fake_provider, s, server, "obo-echo/mcp")
+        assert resp.status_code == 200
+        assert resp.json()["resource"] == "https://gw.example.com/obo-echo/mcp"
 
 
 class TestOAuthAuthorizationServerEndpoint:
@@ -507,6 +705,11 @@ class TestPerServerOAuthProtectedResource:
         s.mcp_resource_documentation_url = None
         s.mcp_advertised_scopes = ""
         s.auth_provider = auth_provider
+        # Pin the toggle: an unset MagicMock attribute is truthy and would flip
+        # the gympass/mcp-gateway-chart#931 opt-in on for every test here.
+        # The virtual-server gate reads auth_provider only, so the pin is
+        # defense-in-depth on that side.
+        s.per_server_prm_all_providers = False
         return s
 
     def test_obo_server_returns_per_server_connection_url_resource(self, fake_provider):
@@ -813,6 +1016,11 @@ class TestVirtualServerPerServerPrm:
         s.mcp_resource_documentation_url = None
         s.mcp_advertised_scopes = ""
         s.auth_provider = auth_provider
+        # Pin the toggle: an unset MagicMock attribute is truthy and would flip
+        # the gympass/mcp-gateway-chart#931 opt-in on for every test here.
+        # The virtual-server gate reads auth_provider only, so the pin is
+        # defense-in-depth on that side.
+        s.per_server_prm_all_providers = False
         return s
 
     def _virtual_server(self, backend_paths, is_enabled=True):

@@ -527,6 +527,15 @@ spec:
               {{- else }}
               value: ""
               {{- end }}
+            # Per-server RFC 9728 PRM for EVERY server, all providers (opt-in;
+            # ships disabled = historical gating unchanged). Read by BOTH the
+            # registry (serves the documents) and the auth-server (accepts the
+            # per-server token audience). The auth-server chart mirrors this
+            # value, so set registry.app.perServerPrmAllProviders together
+            # with auth-server.app.perServerPrmAllProviders (issue
+            # gympass/mcp-gateway-chart#931).
+            - name: PER_SERVER_PRM_ALL_PROVIDERS
+              value: {{ .Values.app.perServerPrmAllProviders | default false | toString | quote }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

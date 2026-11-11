@@ -453,6 +453,9 @@ module "mcp_gateway" {
   ide_oauth_callback_port = var.ide_oauth_callback_port
   ide_connect_scope       = var.ide_connect_scope
 
+  # Per-server RFC 9728 PRM for all providers (ships disabled by default)
+  per_server_prm_all_providers = var.per_server_prm_all_providers
+
   # Extra environment variables for custom configuration (Issue #1000)
   registry_extra_env    = var.registry_extra_env
   auth_server_extra_env = var.auth_server_extra_env

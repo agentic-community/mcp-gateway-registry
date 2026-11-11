@@ -39,6 +39,12 @@ class TestPerServerPRMExceptionLeak:
         """Exception detail is generic, not reflecting internal error."""
         mock_settings.registry_url = "https://gw.example.com"
         mock_settings.mcp_https_required = True
+        # Pin the gympass/mcp-gateway-chart#931 opt-in: an unset MagicMock
+        # attribute is truthy and would silently flip per-server PRM for all
+        # providers on (and, with the enabled-gate on that path, 404 the fake
+        # server below). This test predates the toggle; keep it on the
+        # historical obo_exchange gating.
+        mock_settings.per_server_prm_all_providers = False
 
         # server_service returns a server that needs per-server PRM
         mock_svc.get_server_info = AsyncMock(

@@ -829,6 +829,58 @@ def test_obo_location_block_sets_per_server_resource_metadata(nginx_service):
 
 
 @pytest.mark.unit
+def test_per_server_prm_toggle_adds_override_for_lenient_plain_server(nginx_service):
+    """gympass/mcp-gateway-chart#931: with per_server_prm_all_providers on, a
+    plain server on a lenient IdP (Keycloak) also overrides
+    $mcp_resource_metadata with its per-server PRM, so spec-strict clients get
+    the path-qualified challenge instead of the gateway-wide one."""
+    import registry.api.wellknown_routes as wkr
+    import registry.core.nginx_service as ns
+
+    ns.settings.registry_url = "https://gw.example.com"
+    server_info = {
+        "proxy_pass_url": "http://localhost:8000/mcp",
+        "supported_transports": ["streamable-http"],
+        "egress_auth_mode": "none",
+    }
+
+    with (
+        patch.object(wkr.settings, "per_server_prm_all_providers", True),
+        patch.object(wkr.settings, "auth_provider", "keycloak"),
+    ):
+        blocks = nginx_service._generate_transport_location_blocks("/wellie", server_info)
+
+    assert len(blocks) == 1
+    assert "set $mcp_resource_metadata " in blocks[0]
+    assert "oauth-protected-resource/wellie" in blocks[0]
+
+
+@pytest.mark.unit
+def test_per_server_prm_toggle_off_keeps_lenient_plain_server_on_global_prm(nginx_service):
+    """REGRESSION GUARD: with the toggle off (the shipped default) a plain
+    Keycloak server's location must NOT override $mcp_resource_metadata; the
+    401 keeps pointing at the gateway-wide PRM (unchanged behavior)."""
+    import registry.api.wellknown_routes as wkr
+    import registry.core.nginx_service as ns
+
+    ns.settings.registry_url = "https://gw.example.com"
+    server_info = {
+        "proxy_pass_url": "http://localhost:8000/mcp",
+        "supported_transports": ["streamable-http"],
+        "egress_auth_mode": "none",
+    }
+
+    with (
+        patch.object(wkr.settings, "per_server_prm_all_providers", False),
+        patch.object(wkr.settings, "auth_provider", "keycloak"),
+    ):
+        blocks = nginx_service._generate_transport_location_blocks("/wellie", server_info)
+
+    assert len(blocks) == 1
+    assert "set $mcp_resource_metadata" not in blocks[0]
+
+
+@pytest.mark.unit
 def test_obo_location_block_sanitizes_hostile_path(nginx_service):
     """Defense-in-depth: a hostile persisted path (pre-validator legacy data) must
     not break out of the quoted `set $mcp_resource_metadata "..."` directive.

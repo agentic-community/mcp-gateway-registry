@@ -1252,6 +1252,15 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 # major IdPs ship with by default.
 # mcp_advertised_scopes = "profile email offline_access"
 
+# Serve the per-server RFC 9728 PRM (/.well-known/oauth-protected-resource/<server>/mcp)
+# for EVERY registered server, on every auth provider and egress mode. Default
+# false keeps the historical gating (obo_exchange on any provider; everything
+# else only on Entra). Set to true when spec-strict MCP clients need the
+# path-suffixed document against a lenient IdP (e.g. Keycloak). Passed to the
+# registry AND auth-server task definitions; both services must share the
+# value (gympass/mcp-gateway-chart#931).
+# per_server_prm_all_providers = false
+
 # Pre-registered PUBLIC OAuth client_id that IDEs (Cursor, Claude Code, Codex)
 # use to start the gateway login flow. When set, a server's Connect config
 # advertises this client_id and omits the static gateway token, so the IDE

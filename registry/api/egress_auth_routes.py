@@ -1647,7 +1647,10 @@ async def get_obo_identifier_uris(
     On Entra, every one of those URLs must be present in the gateway app's
     ``identifierUris`` list. This endpoint returns the exact set so the operator
     can keep Entra in sync as servers are added/removed -- the registry side is
-    automatic; only this list is manual.
+    automatic; only this list is manual. With
+    ``PER_SERVER_PRM_ALL_PROVIDERS`` enabled (gympass/mcp-gateway-chart#931) the
+    list also covers non-Entra providers' servers, since the opt-in advertises a
+    per-server PRM for every server on any provider.
 
     NOT gated on egress being enabled: on an Entra ingress-only deployment
     (egress off -- the default) plain servers still need per-server App ID URIs,
