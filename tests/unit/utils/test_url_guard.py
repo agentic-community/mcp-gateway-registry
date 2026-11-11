@@ -494,6 +494,53 @@ class TestAllowlists:
             with pytest.raises(UrlValidationError):
                 url_guard.validate_url(f"http://[{host}]/x", profile=url_guard.PROXY_PROFILE)
 
+    def test_proxy_profile_cidr_allowlist_permits_reserved_istio_range(self):
+        # #2018: Istio auto-allocates ServiceEntry VIPs from 240.240.0.0/16,
+        # which Python classifies as reserved. An operator CIDR must admit it.
+        with patch.object(url_guard, "settings", _settings(ssrf_allowed_cidrs="240.240.0.0/16")):
+            with patch.object(url_guard.socket, "getaddrinfo", _resolve_to("240.240.0.1")):
+                assert url_guard.validate_url(
+                    "http://mesh-svc.internal/mcp", profile=url_guard.PROXY_PROFILE
+                ) == ["240.240.0.1"]
+
+    def test_proxy_profile_reserved_outside_cidr_stays_denied(self):
+        with patch.object(url_guard, "settings", _settings(ssrf_allowed_cidrs="240.240.0.0/16")):
+            with patch.object(url_guard.socket, "getaddrinfo", _resolve_to("240.1.0.1")):
+                with pytest.raises(UrlValidationError):
+                    url_guard.validate_url(
+                        "http://other.internal/x", profile=url_guard.PROXY_PROFILE
+                    )
+
+    def test_proxy_profile_trusted_host_does_not_admit_reserved(self):
+        # The exact /32 synthesized for a trusted hostname must not reopen reserved.
+        with patch.object(url_guard, "settings", _settings(ssrf_allowed_hosts="mesh-svc.internal")):
+            with patch.object(url_guard.socket, "getaddrinfo", _resolve_to("240.240.0.1")):
+                with pytest.raises(UrlValidationError):
+                    url_guard.validate_url(
+                        "http://mesh-svc.internal/mcp", profile=url_guard.PROXY_PROFILE
+                    )
+
+    def test_proxy_profile_private_flag_does_not_admit_reserved(self):
+        with patch.object(
+            url_guard, "settings", _settings(gateway_proxy_allow_private_targets=True)
+        ):
+            with patch.object(url_guard.socket, "getaddrinfo", _resolve_to("240.240.0.1")):
+                with pytest.raises(UrlValidationError):
+                    url_guard.validate_url(
+                        "http://mesh-svc.internal/mcp", profile=url_guard.PROXY_PROFILE
+                    )
+
+    def test_reserved_literal_admitted_by_operator_cidr(self):
+        allowlist = url_guard._Allowlist(cidrs=(url_guard.ipaddress.ip_network("240.240.0.0/16"),))
+        assert url_guard._is_blocked_ip("240.240.0.1", allowlist) is False
+        assert url_guard._is_blocked_ip("240.1.0.1", allowlist) is True
+
+    def test_reserved_literal_not_admitted_by_trusted_hostname(self):
+        assert (
+            url_guard._is_blocked_ip("240.240.0.1", url_guard._Allowlist(), trusted_hostname=True)
+            is True
+        )
+
     def test_skill_allowlist_does_not_leak_into_proxy_profile(self):
         with patch.object(url_guard, "settings", _settings(github_extra_hosts="github.corp")):
             with patch.object(url_guard.socket, "getaddrinfo", _resolve_to("10.0.0.5")):
