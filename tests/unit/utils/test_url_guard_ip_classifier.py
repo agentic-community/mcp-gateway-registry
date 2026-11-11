@@ -175,6 +175,54 @@ class TestIpDenialReasonPrivateGate:
 
 
 @pytest.mark.unit
+class TestReservedOperatorCidr:
+    """#2018: only an operator SSRF_ALLOWED_CIDRS range may admit a reserved address."""
+
+    _ISTIO = (ipaddress.ip_network("240.240.0.0/16"),)
+
+    def test_reserved_inside_operator_cidr_is_allowed(self):
+        ip = ipaddress.ip_address("240.240.0.1")
+        assert _ip_denial_reason(ip, False, self._ISTIO, reserved_cidrs=self._ISTIO) is None
+
+    def test_reserved_outside_operator_cidr_is_denied(self):
+        ip = ipaddress.ip_address("240.1.0.1")
+        assert _ip_denial_reason(ip, False, self._ISTIO, reserved_cidrs=self._ISTIO) == "reserved"
+
+    def test_allowed_cidrs_alone_do_not_admit_reserved(self):
+        # allowed_cidrs carries the trusted-hostname /32; it must not reopen reserved.
+        ip = ipaddress.ip_address("240.240.0.1")
+        assert _ip_denial_reason(ip, True, (ipaddress.ip_network("240.240.0.1/32"),)) == "reserved"
+
+    def test_mapped_reserved_inside_operator_cidr_is_allowed(self):
+        ip = ipaddress.ip_address("::ffff:240.240.0.1")
+        assert _ip_denial_reason(ip, False, reserved_cidrs=self._ISTIO) is None
+
+    @pytest.mark.parametrize("ip", ["::169.254.169.254", "::a9fe:a9fe", "::10.0.0.1"])
+    def test_ipv4_compatible_never_relaxed(self, ip):
+        net = (ipaddress.ip_network("::/8"),)
+        assert (
+            _ip_denial_reason(ipaddress.ip_address(ip), True, net, reserved_cidrs=net) is not None
+        )
+
+    @pytest.mark.parametrize(
+        "ip,cidr",
+        [
+            ("169.254.169.254", "0.0.0.0/0"),
+            ("169.254.10.10", "169.254.0.0/16"),
+            ("224.0.0.1", "224.0.0.0/4"),
+            ("0.0.0.0", "0.0.0.0/0"),
+            ("fe80::1", "::/0"),
+            ("ff02::1", "::/0"),
+        ],
+    )
+    def test_hard_denied_categories_ignore_reserved_cidrs(self, ip, cidr):
+        net = (ipaddress.ip_network(cidr),)
+        assert (
+            _ip_denial_reason(ipaddress.ip_address(ip), True, net, reserved_cidrs=net) is not None
+        )
+
+
+@pytest.mark.unit
 class TestIpDenialReasonWrappedRelaxation:
     """allow_private relaxes an embedded-IPv4 wrapper by its unwrapped category."""
 
