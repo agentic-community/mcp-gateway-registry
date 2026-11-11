@@ -1864,7 +1864,7 @@ variable "ssrf_allowed_hosts" {
 }
 
 variable "ssrf_allowed_cidrs" {
-  description = "Comma-separated CIDR ranges the SSRF guard accepts for MCP-server / A2A-agent upstreams even though they are private. The cloud metadata address 169.254.169.254 is never permitted."
+  description = "Comma-separated CIDR ranges the SSRF guard accepts for MCP-server / A2A-agent upstreams even though they are private. A listed range also admits the reserved IPv4 addresses it contains (e.g. Istio ServiceEntry VIPs in 240.240.0.0/16), in the registry and in mcpgw. Cloud metadata/credential, link-local, unspecified and multicast addresses are never permitted."
   type        = string
   default     = ""
 }

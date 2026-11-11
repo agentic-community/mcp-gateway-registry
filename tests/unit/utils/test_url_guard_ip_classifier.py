@@ -197,6 +197,29 @@ class TestReservedOperatorCidr:
         ip = ipaddress.ip_address("::ffff:240.240.0.1")
         assert _ip_denial_reason(ip, False, reserved_cidrs=self._ISTIO) is None
 
+    @pytest.mark.parametrize(
+        "ip",
+        [
+            "64:ff9b:1::a9fe:a9fe",  # RFC 8215 local-use NAT64 embedding IMDS
+            "::ffff:0:a9fe:a9fe",  # SIIT IPv4-translated embedding IMDS
+            "::1:a9fe:a9fe",
+            "100::1",  # discard-only
+            "fe00::1",
+            "4000::1",
+        ],
+    )
+    @pytest.mark.parametrize("cidr", ["::/0", "::/8"])
+    def test_reserved_ipv6_never_relaxed_by_broad_cidr(self, ip, cidr):
+        net = (ipaddress.ip_network(cidr),)
+        assert (
+            _ip_denial_reason(ipaddress.ip_address(ip), True, net, reserved_cidrs=net) is not None
+        )
+
+    def test_limited_broadcast_never_relaxed(self):
+        net = (ipaddress.ip_network("0.0.0.0/0"),)
+        ip = ipaddress.ip_address("255.255.255.255")
+        assert _ip_denial_reason(ip, True, net, reserved_cidrs=net) == "reserved"
+
     @pytest.mark.parametrize("ip", ["::169.254.169.254", "::a9fe:a9fe", "::10.0.0.1"])
     def test_ipv4_compatible_never_relaxed(self, ip):
         net = (ipaddress.ip_network("::/8"),)

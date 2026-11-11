@@ -72,6 +72,10 @@ app:
   httpPoolMaxKeepalive: "20"
   httpPoolKeepaliveExpirySeconds: "30"
   httpPoolConnectRetries: "1"
+  # Comma-separated CIDR ranges that let mcpgw's egress guard reach a reserved
+  # address, such as an Istio ServiceEntry VIP in 240.240.0.0/16. Private and
+  # loopback targets are already allowed. Keep equal to registry.app.ssrfAllowedCidrs.
+  ssrfAllowedCidrs: ""
 # Service configuration
 service:
   type: ClusterIP

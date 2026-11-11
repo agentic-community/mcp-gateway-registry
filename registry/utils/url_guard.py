@@ -21,7 +21,7 @@ implementations (``skill_service._is_safe_url`` and
   non-canonical spelling.
 - Explicit host/CIDR allowlists can admit private, loopback, and CGNAT targets,
   but cloud/workload credential endpoints, link-local, unspecified, and
-  multicast destinations remain hard-denied. Reserved destinations (for example
+  multicast destinations remain hard-denied. Reserved IPv4 destinations (for example
   Istio's ``240.240.0.0/16`` ServiceEntry range) are admitted only by an
   operator ``SSRF_ALLOWED_CIDRS`` entry that contains them, never by hostname
   trust or ``allow_private``.
@@ -233,11 +233,29 @@ _TEREDO_PREFIX = ipaddress.ip_network("2001::/32")  # RFC 4380: client v4 in low
 # treat it like private-unicast: denied by default, relaxable with allow_private.
 _CGNAT_NET = ipaddress.ip_network("100.64.0.0/10")
 
-# Deprecated IPv4-compatible IPv6 (RFC 4291 2.5.5.1, ``::a.b.c.d``). Python
-# classifies it as reserved (inside ``::/8``) and the embedded IPv4 is NOT
-# unwrapped, so an operator CIDR must never relax it: ``::169.254.169.254``
-# would otherwise reopen IMDS behind a broad reserved-range allowlist entry.
-_IPV4_COMPAT_NET = ipaddress.ip_network("::/96")
+# IPv4 limited broadcast. Reserved, and never a legitimate egress target, so an
+# operator CIDR (even 0.0.0.0/0) must not relax it.
+_IPV4_BROADCAST = ipaddress.IPv4Address("255.255.255.255")
+
+
+def _operator_may_admit_reserved(
+    ip: ipaddress.IPv4Address | ipaddress.IPv6Address,
+    reserved_cidrs: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...],
+) -> bool:
+    """Return True if an operator CIDR admits this reserved address (#2018).
+
+    Only IPv4 reserved space (``240.0.0.0/4``, minus limited broadcast) is
+    relaxable. Reserved IPv6 is never relaxed: several reserved IPv6 ranges
+    carry an IPv4 address that is not unwrapped and category-checked (IPv4-
+    compatible ``::a.b.c.d``, SIIT ``::ffff:0:a.b.c.d``, RFC 8215 local-use
+    NAT64 ``64:ff9b:1::/48``), so a broad ``::/0`` or ``::/8`` entry would
+    otherwise reach IMDS. Embedded IPv4 forms that ARE unwrapped (mapped,
+    NAT64, 6to4, Teredo) arrive here as IPv4 and are judged as IPv4.
+    """
+    if not isinstance(ip, ipaddress.IPv4Address) or ip == _IPV4_BROADCAST:
+        return False
+    return any(ip in net for net in reserved_cidrs)
+
 
 # Cloud metadata and workload-identity credential endpoints. NEVER reachable:
 # not relaxable by ``allow_private`` NOR by an explicit CIDR/hostname allowlist.
@@ -383,9 +401,8 @@ def _ip_denial_reason(
     example Istio's auto-allocated ServiceEntry range ``240.240.0.0/16``).
     Callers must pass only operator-listed CIDRs here, never the exact ``/32``
     synthesized for a trusted hostname, so neither hostname trust nor
-    ``allow_private`` can reopen a reserved address. IPv4-compatible IPv6
-    (``::a.b.c.d``, inside ``::/96``) is never relaxed, because it embeds an IPv4
-    address that is not unwrapped and category-checked.
+    ``allow_private`` can reopen a reserved address. Only IPv4 reserved space is
+    relaxable; see ``_operator_may_admit_reserved``.
     """
     ip = _unwrap_embedded_ipv4(ip)
 
@@ -404,8 +421,7 @@ def _ip_denial_reason(
     if ip.is_loopback:
         return None if allow_private or explicitly_allowed else "loopback"
     if ip.is_reserved:
-        operator_allowed = ip not in _IPV4_COMPAT_NET and any(ip in net for net in reserved_cidrs)
-        return None if operator_allowed else "reserved"
+        return None if _operator_may_admit_reserved(ip, reserved_cidrs) else "reserved"
     if ip.is_private or (isinstance(ip, ipaddress.IPv4Address) and ip in _CGNAT_NET):
         return None if allow_private or explicitly_allowed else "private"
     return None
@@ -499,7 +515,7 @@ class _Allowlist:
     """A resolved set of hosts/CIDRs that relax the IP block.
 
     ``cidrs`` explicitly permit private, loopback, CGNAT, and (only for the
-    ranges they contain) reserved destinations. ``hosts`` is a post-resolution
+    ranges they contain) reserved IPv4 destinations. ``hosts`` is a post-resolution
     trust signal limited to private, loopback, and CGNAT. Hard-denied
     credential, link-local, unspecified, and multicast categories remain closed
     in both cases.

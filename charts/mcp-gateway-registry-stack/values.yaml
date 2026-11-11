@@ -671,6 +671,7 @@ mcpgw:
     httpPoolMaxKeepalive: "20" # Max idle keep-alive connections retained
     httpPoolKeepaliveExpirySeconds: "30" # Idle keep-alive lifetime (s); below LB idle timeout
     httpPoolConnectRetries: "1" # Transport-level connect retries
+    ssrfAllowedCidrs: "" # Reserved ranges mcpgw may reach (e.g. 240.240.0.0/16); keep equal to registry.app.ssrfAllowedCidrs
   nodeSelector: {}
   # Extra env vars / envFrom sources appended to the mcpgw container.
   # See charts/mcpgw/values.yaml for validation rules, reserved names,
