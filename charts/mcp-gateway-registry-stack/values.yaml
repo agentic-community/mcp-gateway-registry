@@ -699,6 +699,7 @@ auth-server:
     # exclusively to public addresses; internal targets keep their IP pin with no
     # extra configuration. See docs/forward-proxy-egress.md before turning it on.
     # egressForwardProxyEnabled: false
+    ssrfAllowedCidrs: "" # Reserved IPv4 ranges the generic proxy may reach (e.g. 240.240.0.0/16); keep equal to registry.app.ssrfAllowedCidrs
     replicas: 2 # set to > 1 replica for high availability
     # Session cookie Domain attribute. See registry.app.sessionCookieDomain
     # above for guidance — keep these two in sync.

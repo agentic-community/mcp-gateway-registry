@@ -60,8 +60,9 @@ tests:
       #                 generic-proxy vars (auth-server-consumed)
       #   env[24] = EGRESS_FORWARD_PROXY_ENABLED   (issue #1832)
       #   env[25] = EGRESS_FORWARD_PROXY_CA_BUNDLE (issue #1832)
-      #   env[26] = MY_FLAG       (extraEnv[0])
-      #   env[27] = MY_SECRET_VAR (extraEnv[1])
+      #   env[26] = SSRF_ALLOWED_CIDRS (issue #2018, always rendered)
+      #   env[27] = MY_FLAG       (extraEnv[0])
+      #   env[28] = MY_SECRET_VAR (extraEnv[1])
       - equal:
           path: spec.template.spec.containers[0].env[0].name
           value: ENTRA_CLIENT_SECRET
@@ -86,8 +87,8 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].env[23].name
           value: GATEWAY_GENERIC_STREAM_MAX_BYTES
-      # Forward-proxy egress pair (issue #1832), always rendered, immediately
-      # before the extraEnv append.
+      # Forward-proxy egress pair (issue #1832), always rendered, then
+      # SSRF_ALLOWED_CIDRS (issue #2018) immediately before the extraEnv append.
       - equal:
           path: spec.template.spec.containers[0].env[24].name
           value: EGRESS_FORWARD_PROXY_ENABLED
@@ -96,9 +97,12 @@ tests:
           value: EGRESS_FORWARD_PROXY_CA_BUNDLE
       - equal:
           path: spec.template.spec.containers[0].env[26].name
-          value: MY_FLAG
+          value: SSRF_ALLOWED_CIDRS
       - equal:
           path: spec.template.spec.containers[0].env[27].name
+          value: MY_FLAG
+      - equal:
+          path: spec.template.spec.containers[0].env[28].name
           value: MY_SECRET_VAR
 
   - it: enables Entra overage recovery with a 300-second positive cache by default
@@ -262,6 +266,55 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].envFrom[1].secretRef.name
           value: auth-server-secret
+
+  - it: renders SSRF_ALLOWED_CIDRS empty by default (#2018)
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSRF_ALLOWED_CIDRS
+            value: ""
+
+  - it: passes app.ssrfAllowedCidrs into SSRF_ALLOWED_CIDRS (#2018)
+    set:
+      app:
+        ssrfAllowedCidrs: "240.240.0.0/16"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSRF_ALLOWED_CIDRS
+            value: "240.240.0.0/16"
+
+  - it: rejects a lowercase reserved name (ssrf_allowed_cidrs)
+    # Settings reads env case-insensitively, so a lowercase spelling would
+    # override the chart-managed SSRF_ALLOWED_CIDRS. Names compare upper-cased.
+    set:
+      extraEnv:
+        - name: ssrf_allowed_cidrs
+          value: "0.0.0.0/0"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"ssrf_allowed_cidrs\" is a reserved variable"
+
+  - it: rejects a mixed-case reserved name with surrounding spaces
+    set:
+      extraEnv:
+        - name: " Ssrf_Allowed_Cidrs "
+          value: "0.0.0.0/0"
+    asserts:
+      - failedTemplate:
+          errorPattern: "is a reserved variable"
+
+  - it: accepts names that differ only in case (HTTPS_PROXY and https_proxy)
+    set:
+      extraEnv:
+        - name: HTTPS_PROXY
+          value: "http://proxy.example.test:3128"
+        - name: https_proxy
+          value: "http://proxy.example.test:3128"
+    asserts:
+      - notFailedTemplate: {}
 
   - it: fails when extraEnv contains an env-block reserved name (ENTRA_CLIENT_SECRET)
     set:

@@ -11391,9 +11391,12 @@ async def generic_proxy(
             # transport resolves + validates + PINS the connection IP inside the
             # transport call for the request AND every redirect hop, so a hostname
             # that rebinds to a private/metadata IP between registration and fetch
-            # is blocked at connect time. PROXY_PROFILE shares the same egress
-            # policy (incl. gateway_proxy_allow_private_targets) the registration
-            # guard uses, so fetch-time and register-time decisions agree.
+            # is blocked at connect time. PROXY_PROFILE is the same policy the
+            # registration guard uses, but it is built from THIS process's
+            # settings: every deploy surface passes SSRF_ALLOWED_CIDRS here (#2018),
+            # while SSRF_ALLOWED_HOSTS and gateway_proxy_allow_private_targets reach
+            # the registry only. A target admitted at registration by hostname or by
+            # that flag is therefore refused here (fails closed, 502).
             # follow_redirects=False (second-SSRF guard): a 30x is returned to the
             # client verbatim (Location forwarded via the allowlist); the next hop
             # re-enters the gateway and is re-authorized. Auto-following would

@@ -530,6 +530,42 @@ class TestAllowlists:
                         "http://mesh-svc.internal/mcp", profile=url_guard.PROXY_PROFILE
                     )
 
+    @pytest.mark.parametrize(
+        "profile_name",
+        [
+            "SKILL_PROFILE",
+            "FEDERATION_PROFILE",
+            "CREDENTIALED_OAUTH_PROFILE",
+            "ENTRA_GRAPH_PROFILE",
+            "EGRESS_UPSTREAM_PROFILE",
+        ],
+    )
+    def test_non_proxy_profiles_never_admit_reserved(self, profile_name):
+        # #2018: only PROXY_PROFILE (and the built-in tools profile that reuses
+        # it) may carry operator CIDRs. A credentialed or federation profile
+        # that gained them would reach reserved space, so pin it with every
+        # relaxation the settings offer turned on.
+        profile = getattr(url_guard, profile_name)
+        relaxed = _settings(
+            github_extra_hosts="mesh.internal",
+            ssrf_allowed_hosts="mesh.internal",
+            ssrf_allowed_cidrs="240.240.0.0/16,0.0.0.0/0",
+            gateway_proxy_allow_private_targets=True,
+            egress_oauth_trusted_idp_hosts="mesh.internal",
+        )
+        with patch.object(url_guard, "settings", relaxed):
+            allowlist = profile.allowlist_factory()
+            assert allowlist.cidrs == ()
+            assert (
+                url_guard._is_blocked_ip(
+                    "240.240.0.1",
+                    allowlist,
+                    trusted_hostname=True,
+                    allow_private=profile.allow_private,
+                )
+                is True
+            )
+
     def test_reserved_literal_admitted_by_operator_cidr(self):
         allowlist = url_guard._Allowlist(cidrs=(url_guard.ipaddress.ip_network("240.240.0.0/16"),))
         assert url_guard._is_blocked_ip("240.240.0.1", allowlist) is False
