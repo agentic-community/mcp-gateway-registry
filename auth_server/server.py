@@ -5068,7 +5068,14 @@ async def validate_request(request: Request):
             server_name_from_url,
         )
         existing_scopes = validation_result.get("scopes", []) or []
-        if user_groups and auth_method in ["keycloak", "entra", "cognito", "okta", "auth0"]:
+        if user_groups and auth_method in [
+            "keycloak",
+            "entra",
+            "cognito",
+            "okta",
+            "auth0",
+            "logto",
+        ]:
             # Map IdP groups to scopes using the group mappings (query DocumentDB)
             user_scopes = await map_groups_to_scopes(user_groups)
             # Log counts only: group names are organizational PII (Entra groups
