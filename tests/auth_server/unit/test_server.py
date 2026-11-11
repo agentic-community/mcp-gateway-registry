@@ -6,6 +6,7 @@ rate limiting, and helper functions.
 """
 
 import asyncio
+import json
 import logging
 import time
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -1328,6 +1329,10 @@ class TestValidateEndpoint:
             ),
             patch("auth_server.server.signer", test_signer),
             patch("session_store.resolve_session", _fake_resolve),
+            patch(
+                "auth_server.server._gateway_trusted_origins",
+                return_value=frozenset({"https://example.com"}),
+            ),
         ):
             client = TestClient(server_module.app)
 
@@ -1336,6 +1341,8 @@ class TestValidateEndpoint:
                 headers={
                     "Cookie": f"mcp_gateway_session={valid_session_cookie}",
                     "X-Original-URL": "https://example.com/test-server/mcp",
+                    "X-Original-Method": "POST",
+                    "Origin": "https://example.com",
                 },
             )
 
@@ -2628,8 +2635,18 @@ class TestOAuth2CallbackTokenStorage:
     # point of the server-side store is to keep the cookie small.
     COOKIE_SIZE_CEILING_BYTES = 512
 
-    def _call_oauth2_callback(self) -> tuple[dict, str]:
+    def _call_oauth2_callback(
+        self,
+        subject: str | None = "12345",
+        id_token: str | None = "mock-id-token",
+    ) -> tuple[dict, str]:
         """Drive the real oauth2_callback endpoint with create_session mocked.
+
+        Args:
+            subject: The subject map_user_info resolves, or None for none.
+            id_token: The id_token in the token response, or None to omit it.
+                A login whose token response carries an id_token is OIDC and
+                is refused without a subject.
 
         Returns (kwargs, session_cookie_value) so tests can assert what would
         have landed in the persistent record AND can verify the cookie value
@@ -2641,8 +2658,9 @@ class TestOAuth2CallbackTokenStorage:
             "access_token": "mock-access-token-value",
             "refresh_token": "mock-refresh-token-value",
             "expires_in": 3600,
-            "id_token": "mock-id-token",
         }
+        if id_token is not None:
+            mock_token_data["id_token"] = id_token
         mock_user_info = {
             "sub": "testuser",
             "email": "test@example.com",
@@ -2682,6 +2700,7 @@ class TestOAuth2CallbackTokenStorage:
                     "username": "testuser",
                     "email": "test@example.com",
                     "name": "Test User",
+                    "subject": subject,
                     "groups": [],
                 },
             ),
@@ -2703,10 +2722,11 @@ class TestOAuth2CallbackTokenStorage:
         return captured, session_cookie
 
     def test_login_without_subject_warns(self, caplog):
-        # The mocked map_user_info yields no subject: bearer tokens minted from
-        # this session will be refused at the egress vend, so say so at login.
+        # A GitHub login (no id_token) whose mapping yields no subject still
+        # logs in: bearer tokens minted from this session will be refused at the
+        # egress vend, so say so at login.
         with caplog.at_level("WARNING"):
-            kwargs, _cookie = self._call_oauth2_callback()
+            kwargs, _cookie = self._call_oauth2_callback(subject=None, id_token=None)
         assert kwargs["subject"] is None
         assert any("yielded no subject" in rec.getMessage() for rec in caplog.records)
 
@@ -3036,12 +3056,12 @@ class TestEntraCallbackGroups:
         assert session["groups"] == ["reader-role"]
         graph.assert_not_awaited()
 
-    def test_overage_session_refuses_unfiltered_group_header_overflow(self):
-        from providers.entra import GRAPH_GROUP_HEADER_MAX_BYTES
+    def test_overage_session_refuses_oversized_recovered_group_set(self):
+        from providers.entra import GRAPH_GROUP_MAX_BYTES
 
         claims = {"sub": "alice", "tid": "tenant", "oid": "alice", "hasgroups": True}
         response, created, session, graph = self._callback(
-            claims, graph_result=["x" * (GRAPH_GROUP_HEADER_MAX_BYTES + 1)]
+            claims, graph_result=["x" * (GRAPH_GROUP_MAX_BYTES + 1)]
         )
 
         assert response.status_code == 503
@@ -3152,7 +3172,7 @@ class TestEntraCallbackGroups:
                 )
 
         assert validated.status_code == 403, validated.text
-        assert "X-Groups" not in validated.headers
+        assert "X-Scopes" not in validated.headers
         local_fallback.assert_not_awaited()
 
     def test_non_entra_callback_preserves_configured_local_fallback(self):
@@ -3476,6 +3496,39 @@ class TestEntraBrowserOAuthCloudEndpoints:
         config = server.load_oauth2_config()
 
         assert config["providers"]["keycloak"]["enabled"] is True
+
+
+class TestOktaBrowserAuthorizationServer:
+    """The browser login uses the Okta authorization server the provider verifies against."""
+
+    @pytest.mark.parametrize("auth_server_id", ["", "default", "aus1example2345"])
+    def test_browser_endpoints_match_the_provider(self, monkeypatch, auth_server_id):
+        """An id_token from the login must come from the issuer the provider accepts.
+
+        With OKTA_AUTH_SERVER_ID set, the provider verifies tokens against that
+        custom authorization server. A login sent to the org server instead
+        returns an id_token whose issuer and signing keys the provider refuses,
+        so every login fails with "ID token verification failed".
+        """
+        from providers.okta import OktaProvider
+
+        from auth_server.server import load_oauth2_config
+
+        monkeypatch.setenv("OKTA_DOMAIN", "dev-123456.okta.com")
+        if auth_server_id:
+            monkeypatch.setenv("OKTA_AUTH_SERVER_ID", auth_server_id)
+        else:
+            monkeypatch.delenv("OKTA_AUTH_SERVER_ID", raising=False)
+
+        browser = load_oauth2_config()["providers"]["okta"]
+        provider = OktaProvider("dev-123456.okta.com", "test-client", "test-secret")
+
+        assert (
+            browser["auth_url"],
+            browser["token_url"],
+            browser["user_info_url"],
+            browser["logout_url"],
+        ) == (provider.auth_url, provider.token_url, provider.userinfo_url, provider.logout_url)
 
 
 class TestOAuth2PkceAndNonce:
@@ -4317,6 +4370,7 @@ def _mcp_proxy_token_headers(
     scopes: list[str] | None = None,
     audit_identity: dict | None = None,
     virtual_backend: bool = False,
+    obo_subject_sha256: str = "",
 ) -> dict:
     """Build the X-Internal-Token nginx would forward to /mcp-proxy.
 
@@ -4339,6 +4393,7 @@ def _mcp_proxy_token_headers(
         upstream_url=upstream_url,
         audit_identity=audit_identity,
         virtual_backend=virtual_backend,
+        obo_subject_sha256=obo_subject_sha256,
     )
     return {
         "X-Internal-Token": token,
@@ -4380,6 +4435,35 @@ def _obo_ingress_jwt(sub: str = "test-user") -> str:
     import jwt as _jwt
 
     return _jwt.encode({"sub": sub, "preferred_username": sub}, "test-secret", algorithm="HS256")
+
+
+_CONSENT_VEND: dict = {
+    "consent_required": True,
+    "connect_url": "https://gw.example.com/oauth2/egress/connect?server=%2Fgithub",
+    "request_state": "AEAD-blob",
+    "provider": "github",
+}
+
+
+def _modern_call(
+    url_capable: bool,
+) -> dict:
+    """A 2026-07-28 tools/call body, with or without URL elicitation declared."""
+    capabilities: dict = {"elicitation": {"url": {}}} if url_capable else {}
+    return {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "tools/call",
+        "params": {
+            "name": "search",
+            "arguments": {"q": "x"},
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientInfo": {"name": "t", "version": "1"},
+                "io.modelcontextprotocol/clientCapabilities": capabilities,
+            },
+        },
+    }
 
 
 def _patch_scope_repo_allow_all():
@@ -4490,6 +4574,44 @@ class TestMcpProxyEndpointHeaderPassthrough:
 
         assert response.status_code == 200
         assert response.headers.get("mcp-session-id") == "sess-filtered-002"
+
+    def test_filtered_json_tools_list_is_marked_private(self):
+        """A 2026-07-28 list result filtered per user must not stay cacheScope public."""
+        import auth_server.server as server_module
+
+        upstream_body = (
+            b'{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"t1"}],'
+            b'"resultType":"complete","cacheScope":"public","ttlMs":60000}}'
+        )
+        upstream_resp = _build_mock_upstream_response(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            body=upstream_body,
+        )
+
+        async def _no_filter(server_name, user_scopes, tools):
+            return tools
+
+        with (
+            _patch_httpx_async_client(upstream_resp),
+            _patch_scope_repo_allow_all(),
+            patch.object(server_module, "_read_mcp_filter_enabled", return_value=True),
+            patch.object(
+                server_module,
+                "filter_tools_list_response",
+                side_effect=_no_filter,
+            ),
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/office-docs",
+                json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+                headers=_mcp_proxy_token_headers(),
+            )
+
+        result = response.json()["result"]
+        assert result["cacheScope"] == "private"
+        assert result["ttlMs"] == 60000
 
     def test_session_id_forwarded_on_tools_list_non_json_fallback(self):
         """tools/list whose upstream body fails JSON parsing falls into
@@ -4613,7 +4735,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
             "provider": "github",
         }
 
-        async def _consent_vend(token, server):
+        async def _consent_vend(token, server, **_kwargs):
             return vend
 
         with (
@@ -4625,7 +4747,12 @@ class TestMcpProxyEndpointHeaderPassthrough:
             client = TestClient(server_module.app)
             response = client.post(
                 "/mcp-proxy/github",
-                json={"jsonrpc": "2.0", "id": 7, "method": "tools/call"},
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 7,
+                    "method": "tools/call",
+                    "params": {"name": "search"},
+                },
                 headers=_mcp_proxy_token_headers(server_name="github"),
             )
 
@@ -4654,7 +4781,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
             "provider": "github",
         }
 
-        async def _consent_vend(token, server):
+        async def _consent_vend(token, server, **_kwargs):
             return vend
 
         with (
@@ -4666,7 +4793,12 @@ class TestMcpProxyEndpointHeaderPassthrough:
             client = TestClient(server_module.app)
             response = client.post(
                 "/mcp-proxy/github",
-                json={"jsonrpc": "2.0", "id": 7, "method": "tools/call"},
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 7,
+                    "method": "tools/call",
+                    "params": {"name": "search"},
+                },
                 headers=_mcp_proxy_token_headers(server_name="github"),
             )
 
@@ -4686,6 +4818,157 @@ class TestMcpProxyEndpointHeaderPassthrough:
         assert "elicitationId=" in e["url"]
         assert "github" in e["message"]
 
+    def _post_tokenless_call(
+        self,
+        payload: dict,
+        use_elicitation: bool,
+        authorize: AsyncMock | None = None,
+    ) -> dict:
+        """POST a JSON-RPC body to an egress server whose user has no token."""
+        import auth_server.server as server_module
+
+        async def _consent_vend(token, server, **_kwargs):
+            return dict(_CONSENT_VEND)
+
+        authorize = authorize or AsyncMock(return_value=None)
+        with (
+            patch.object(server_module.settings, "egress_auth_enabled", True),
+            patch.object(server_module.settings, "egress_consent_use_elicitation", use_elicitation),
+            patch.object(server_module, "_vend_egress_token", _consent_vend),
+            patch.object(server_module, "_authorize_forwarded_mcp_body", authorize),
+            _patch_scope_repo_allow_all(),
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/github",
+                json=payload,
+                headers=_mcp_proxy_token_headers(server_name="github"),
+            )
+        assert response.status_code == 200
+        return response.json()
+
+    def test_modern_url_capable_client_gets_input_required(self):
+        """With elicitation on, a 2026-07-28 client that declared URL elicitation
+        gets the consent prompt as an input_required result, not -32042."""
+        body = self._post_tokenless_call(_modern_call(url_capable=True), use_elicitation=True)
+
+        result = body["result"]
+        assert result["resultType"] == "input_required"
+        prompt = result["inputRequests"]["egress_connect"]
+        assert prompt["method"] == "elicitation/create"
+        assert prompt["params"]["mode"] == "url"
+        assert prompt["params"]["url"].startswith(_CONSENT_VEND["connect_url"])
+        assert result["requestState"].startswith("mcpgw-egress-consent.")
+
+    @pytest.mark.parametrize(
+        ("payload", "use_elicitation", "expect"),
+        [
+            # Elicitation off (the default): every client keeps the isError result.
+            (lambda: _modern_call(url_capable=True), False, "baseline"),
+            # A 2026-07-28 client that did not declare URL elicitation keeps -32042.
+            (lambda: _modern_call(url_capable=False), True, "-32042"),
+            # A legacy request keeps -32042.
+            (
+                lambda: {
+                    "jsonrpc": "2.0",
+                    "id": 7,
+                    "method": "tools/call",
+                    "params": {"name": "search"},
+                },
+                True,
+                "-32042",
+            ),
+        ],
+    )
+    def test_other_requests_keep_todays_answer(self, payload, use_elicitation, expect):
+        body = self._post_tokenless_call(payload(), use_elicitation=use_elicitation)
+
+        if expect == "baseline":
+            assert body["result"]["isError"] is True
+            assert body["result"].get("resultType", "complete") == "complete"
+        else:
+            assert body["error"]["code"] == -32042
+
+    @pytest.mark.parametrize("answer", ["decline", "cancel"])
+    def test_declined_retry_ends_with_the_baseline_result(self, answer):
+        payload = _modern_call(url_capable=True)
+        payload["params"]["requestState"] = "mcpgw-egress-consent.abc"
+        payload["params"]["inputResponses"] = {"egress_connect": {"action": answer}}
+
+        body = self._post_tokenless_call(payload, use_elicitation=True)
+
+        assert body["result"]["isError"] is True
+        assert _CONSENT_VEND["connect_url"] in body["result"]["content"][0]["text"]
+
+    def test_accepted_retry_without_a_token_asks_again(self):
+        payload = _modern_call(url_capable=True)
+        payload["params"]["requestState"] = "mcpgw-egress-consent.abc"
+        payload["params"]["inputResponses"] = {"egress_connect": {"action": "accept"}}
+
+        body = self._post_tokenless_call(payload, use_elicitation=True)
+
+        assert body["result"]["resultType"] == "input_required"
+
+    def test_retry_fields_are_removed_before_authorization(self):
+        """The bytes authorized, and later forwarded, carry no gateway round-trip
+        fields, while the tool name and arguments stay."""
+        payload = _modern_call(url_capable=True)
+        payload["params"]["requestState"] = "mcpgw-egress-consent.abc"
+        payload["params"]["inputResponses"] = {"egress_connect": {"action": "accept"}}
+        authorize = AsyncMock(return_value=None)
+
+        self._post_tokenless_call(payload, use_elicitation=True, authorize=authorize)
+
+        forwarded = json.loads(authorize.call_args.args[1])
+        assert "requestState" not in forwarded["params"]
+        assert "inputResponses" not in forwarded["params"]
+        assert forwarded["params"]["name"] == "search"
+        assert forwarded["params"]["arguments"] == {"q": "x"}
+
+    def test_upstream_request_state_is_left_alone(self):
+        """A requestState the upstream issued is forwarded untouched."""
+        payload = _modern_call(url_capable=True)
+        payload["params"]["requestState"] = "upstream-state"
+        payload["params"]["inputResponses"] = {"q1": {"action": "accept"}}
+        authorize = AsyncMock(return_value=None)
+
+        self._post_tokenless_call(payload, use_elicitation=True, authorize=authorize)
+
+        forwarded = json.loads(authorize.call_args.args[1])
+        assert forwarded["params"]["requestState"] == "upstream-state"
+        assert forwarded["params"]["inputResponses"] == {"q1": {"action": "accept"}}
+
+    @pytest.mark.parametrize("method", ["tools/list", "ping"])
+    def test_pre_consent_local_results_are_complete_for_modern_clients(self, method):
+        payload = _modern_call(url_capable=False)
+        payload["method"] = method
+        payload["params"] = {"_meta": payload["params"]["_meta"]}
+
+        body = self._post_tokenless_call(payload, use_elicitation=False)
+
+        assert body["result"]["resultType"] == "complete"
+        if method == "tools/list":
+            # A list the gateway answers before consent is per user and changes
+            # the moment the user connects, so it is private and not reused.
+            assert body["result"]["cacheScope"] == "private"
+            assert body["result"]["ttlMs"] == 0
+        else:
+            assert "cacheScope" not in body["result"]
+
+    def test_baseline_consent_result_is_complete_for_modern_clients(self):
+        body = self._post_tokenless_call(_modern_call(url_capable=False), use_elicitation=False)
+
+        assert body["result"]["isError"] is True
+        assert body["result"]["resultType"] == "complete"
+
+    @pytest.mark.parametrize("method", ["tools/list", "ping", "tools/call"])
+    def test_legacy_requests_get_no_result_type(self, method):
+        payload = {"jsonrpc": "2.0", "id": 7, "method": method, "params": {"name": "search"}}
+
+        body = self._post_tokenless_call(payload, use_elicitation=False)
+
+        assert "resultType" not in body["result"]
+
     def test_egress_consent_answers_initialize_locally(self):
         """For an egress server with no vaulted token, the gateway must answer
         initialize LOCALLY (not proxy it). The upstream (e.g. GitHub) is itself an
@@ -4703,7 +4986,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
             "provider": "github",
         }
 
-        async def _consent_vend(token, server):
+        async def _consent_vend(token, server, **_kwargs):
             return vend
 
         with (
@@ -4746,7 +5029,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
             "provider": "github",
         }
 
-        async def _consent_vend(token, server):
+        async def _consent_vend(token, server, **_kwargs):
             return vend
 
         with (
@@ -4780,7 +5063,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
             "provider": "github",
         }
 
-        async def _consent_vend(token, server):
+        async def _consent_vend(token, server, **_kwargs):
             return vend
 
         with (
@@ -4888,7 +5171,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
         )
         vend_paths = []
 
-        async def vend(_token, registered_server):
+        async def vend(_token, registered_server, **_kwargs):
             vend_paths.append(registered_server)
             return {"access_token": "backend-token"}
 
@@ -4913,7 +5196,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
 
         seen: list[str] = []
 
-        async def vend(_token, registered_server):
+        async def vend(_token, registered_server, **_kwargs):
             seen.append(registered_server)
             return {"access_token": "nested-credential"}
 
@@ -5013,6 +5296,50 @@ class _FakeEntraProvider:
     token_url = "https://login.microsoftonline.com/t/oauth2/v2.0/token"
 
 
+def _keycloak_obo_provider():
+    """A real KeycloakProvider, its local test JWKS, and a signer for exchanged tokens.
+
+    The OBO engine verifies the token Keycloak returns through the provider
+    (signature, issuer, expiry, target audience) before forwarding it, so the
+    Keycloak pipeline tests need tokens that provider would accept. Returns
+    ``(provider, jwks, sign)`` where ``sign(audience)`` mints such a token.
+    """
+    import json as _json
+    import time as _time
+
+    import jwt as _jwt
+    from cryptography.hazmat.primitives.asymmetric import rsa as _rsa
+    from jwt.algorithms import RSAAlgorithm as _RSAAlgorithm
+
+    from auth_server.providers.keycloak import KeycloakProvider
+
+    provider = KeycloakProvider(
+        keycloak_url="https://kc.example.com",
+        realm="test-realm",
+        client_id="gateway-web",
+        client_secret="gw-secret",
+        m2m_client_id="gateway-m2m",
+    )
+    private_key = _rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public_jwk = _json.loads(_RSAAlgorithm.to_jwk(private_key.public_key()))
+    public_jwk.update({"kid": "obo-test-kid", "alg": "RS256", "use": "sig"})
+    jwks = {"keys": [public_jwk]}
+
+    def sign(audience: list[str]) -> str:
+        now = int(_time.time())
+        claims = {
+            "iss": provider.realm_url,
+            "aud": audience,
+            "sub": "test-user",
+            "azp": "gateway-web",
+            "iat": now,
+            "exp": now + 300,
+        }
+        return _jwt.encode(claims, private_key, algorithm="RS256", headers={"kid": "obo-test-kid"})
+
+    return provider, jwks, sign
+
+
 class TestMcpProxyOboExchange:
     """Phase 3 seam: obo_exchange branch in mcp_proxy.
 
@@ -5022,7 +5349,7 @@ class TestMcpProxyOboExchange:
     """
 
     @staticmethod
-    async def _obo_directive_vend(token, server):
+    async def _obo_directive_vend(token, server, **_kwargs):
         return {
             "mode": "obo_exchange",
             "obo_target_audience": "api://outlook-mcp-server",
@@ -5037,7 +5364,7 @@ class TestMcpProxyOboExchange:
         async def _fake_exchange(provider, subject_token, target_audience, scopes=None):
             assert subject_token == ingress_jwt
             assert target_audience == "api://outlook-mcp-server"
-            return "exchanged-obo-token"
+            return "exchanged-obo-token", 3600
 
         patch_httpx, captured = _capture_upstream_headers()
         with (
@@ -5087,6 +5414,111 @@ class TestMcpProxyOboExchange:
 
         return patch.object(server_module, "_emit_token_mint_audit", _record), emitted
 
+    class _FakeOboCache:
+        """Stands in for the lifespan-built OboTokenCache on the hop."""
+
+        def __init__(self, from_cache: bool):
+            self.calls = 0
+            self._from_cache = from_cache
+
+        async def get_or_exchange(self, **kwargs):
+            from auth_server.obo_token_cache import OboToken
+
+            self.calls += 1
+            return OboToken("cached-obo-token", from_cache=self._from_cache)
+
+    def _post_obo(self, server_module, *, hop_digest: str, ingress_jwt: str, cache, exchange):
+        """Drive one OBO tools/call through the hop with the given cache and digest."""
+        patch_httpx, captured = _capture_upstream_headers()
+        patch_audit, emitted = self._capture_mint_audit(server_module)
+        with (
+            patch.object(server_module.settings, "egress_auth_enabled", True),
+            patch.object(server_module, "_vend_egress_token", self._obo_directive_vend),
+            patch.object(server_module, "get_auth_provider", lambda *a, **k: _FakeEntraProvider()),
+            patch.object(server_module, "obo_exchange", exchange),
+            patch.object(server_module, "_obo_cache", cache),
+            patch.object(server_module, "_read_mcp_filter_enabled", return_value=False),
+            _patch_scope_repo_allow_all(),
+            patch_httpx,
+            patch_audit,
+        ):
+            response = TestClient(server_module.app).post(
+                "/mcp-proxy/outlook",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 7,
+                    "method": "tools/call",
+                    "params": {"name": "search"},
+                },
+                headers={
+                    **_mcp_proxy_token_headers(
+                        server_name="outlook", obo_subject_sha256=hop_digest
+                    ),
+                    "X-Authorization": f"Bearer {ingress_jwt}",
+                },
+            )
+        return response, captured, emitted
+
+    @pytest.mark.parametrize(
+        "hop_digest",
+        ["", "digest-of-a-different-token"],
+        ids=["no-verified-bearer", "digest-mismatch"],
+    )
+    def test_obo_cache_needs_the_bearer_validate_verified(self, hop_digest):
+        """A cookie-authenticated request carries no digest, and a forged bearer
+        does not match one, so the hop must exchange (the IdP checks the
+        assertion) instead of serving that user's cached token."""
+        import auth_server.server as server_module
+
+        ingress_jwt = _forged_ingress_jwt("test-user")
+        exchanged = {"n": 0}
+
+        async def _fake_exchange(provider, subject_token, target_audience, scopes=None):
+            exchanged["n"] += 1
+            return "exchanged-obo-token", 3600
+
+        cache = self._FakeOboCache(from_cache=True)
+        response, captured, emitted = self._post_obo(
+            server_module,
+            hop_digest=hop_digest,
+            ingress_jwt=ingress_jwt,
+            cache=cache,
+            exchange=_fake_exchange,
+        )
+
+        assert response.status_code == 200
+        assert cache.calls == 0
+        assert exchanged["n"] == 1
+        sent = {k.lower(): v for k, v in captured["headers"].items()}
+        assert sent["authorization"] == "Bearer exchanged-obo-token"
+        assert emitted[0]["token_path"] == "obo_exchange"
+
+    def test_obo_cache_hit_is_audited_as_obo_cache(self):
+        """With the verified-bearer digest the hop uses the cache, and a hit is
+        recorded as token_path=obo_cache because the IdP minted nothing."""
+        import auth_server.server as server_module
+
+        ingress_jwt = _obo_ingress_jwt("test-user")
+
+        async def _no_exchange(provider, subject_token, target_audience, scopes=None):
+            raise AssertionError("a cache hit must not exchange")
+
+        cache = self._FakeOboCache(from_cache=True)
+        response, captured, emitted = self._post_obo(
+            server_module,
+            hop_digest=server_module._obo_subject_digest(ingress_jwt),
+            ingress_jwt=ingress_jwt,
+            cache=cache,
+            exchange=_no_exchange,
+        )
+
+        assert response.status_code == 200
+        assert cache.calls == 1
+        sent = {k.lower(): v for k, v in captured["headers"].items()}
+        assert sent["authorization"] == "Bearer cached-obo-token"
+        assert emitted[0]["token_path"] == "obo_cache"
+        assert emitted[0]["outcome"] == "success"
+
     # The audit identity /validate would have signed into the hop token for an
     # Entra delegated caller, keyed on sub=test-user so the OBO principal binding passes.
     _SIGNED_AUDIT_IDENTITY = {
@@ -5107,7 +5539,7 @@ class TestMcpProxyOboExchange:
         ingress_jwt = _obo_ingress_jwt("test-user")
 
         async def _fake_exchange(provider, subject_token, target_audience, scopes=None):
-            return "exchanged-obo-token"
+            return "exchanged-obo-token", 3600
 
         patch_httpx, _ = _capture_upstream_headers()
         patch_audit, emitted = self._capture_mint_audit(server_module)
@@ -5173,7 +5605,7 @@ class TestMcpProxyOboExchange:
         )
 
         async def _fake_exchange(provider, subject_token, target_audience, scopes=None):
-            return "exchanged-obo-token"
+            return "exchanged-obo-token", 3600
 
         patch_httpx, _ = _capture_upstream_headers()
         patch_audit, emitted = self._capture_mint_audit(server_module)
@@ -5222,7 +5654,7 @@ class TestMcpProxyOboExchange:
         import auth_server.server as server_module
 
         async def _fake_exchange(provider, subject_token, target_audience, scopes=None):
-            return "exchanged-obo-token"
+            return "exchanged-obo-token", 3600
 
         patch_httpx, _ = _capture_upstream_headers()
         patch_audit, emitted = self._capture_mint_audit(server_module)
@@ -5267,7 +5699,7 @@ class TestMcpProxyOboExchange:
         forged_jwt = _forged_ingress_jwt("test-user", upn="ceo@example.com")
 
         async def _fake_exchange(provider, subject_token, target_audience, scopes=None):
-            return "exchanged-obo-token"
+            return "exchanged-obo-token", 3600
 
         patch_httpx, _ = _capture_upstream_headers()
         patch_audit, emitted = self._capture_mint_audit(server_module)
@@ -5326,7 +5758,7 @@ class TestMcpProxyOboExchange:
         ingress_jwt = _obo_ingress_jwt("test-user")
 
         async def _fake_exchange(provider, subject_token, target_audience, scopes=None):
-            return "exchanged-obo-token"
+            return "exchanged-obo-token", 3600
 
         patch_httpx, _ = _capture_upstream_headers()
         patch_audit, emitted = self._capture_mint_audit(server_module)
@@ -5379,7 +5811,7 @@ class TestMcpProxyOboExchange:
         ingress_jwt = _obo_ingress_jwt("test-user")
 
         async def _fake_exchange(provider, subject_token, target_audience, scopes=None):
-            return "exchanged-obo-token"
+            return "exchanged-obo-token", 3600
 
         patch_httpx, _ = _capture_upstream_headers()
         patch_audit, emitted = self._capture_mint_audit(server_module)
@@ -5459,7 +5891,7 @@ class TestMcpProxyOboExchange:
 
         async def _fake_exchange(provider, subject_token, target_audience, scopes=None):
             exchange_called["n"] += 1
-            return "should-not-be-reached"
+            return "should-not-be-reached", 3600
 
         # A JWT for a DIFFERENT principal than the internal token's sub (test-user).
         mismatched_jwt = _obo_ingress_jwt("attacker-user")
@@ -5700,6 +6132,124 @@ class TestMcpProxyOboExchange:
         sent = {k.lower(): v for k, v in captured["headers"].items()}
         assert sent["authorization"] == "Bearer real-exchanged-token"
 
+    @staticmethod
+    async def _keycloak_obo_directive_vend(token, server, **_kwargs):
+        return {
+            "mode": "obo_exchange",
+            "obo_target_audience": "finance-mcp-server",
+            "obo_scopes": [],
+        }
+
+    def _run_keycloak_obo(self, audience: list[str]):
+        """Drive /mcp-proxy through the REAL obo_exchange engine and a REAL
+        KeycloakProvider. The IdP token endpoint, the provider's JWKS (a local
+        test key) and the upstream are mocked, and the registry vend, auth
+        provider lookup, MCP filter and scope repository are patched as in the
+        Entra pipeline test. The exchanged token Keycloak "returns" carries
+        ``audience``. Returns (response, idp_post, captured, ingress_jwt,
+        exchanged_token).
+        """
+        import auth_server.server as server_module
+
+        provider, jwks, sign = _keycloak_obo_provider()
+        exchanged_token = sign(audience)
+
+        class _IdpResp:
+            status_code = 200
+
+            def json(self):
+                return {"access_token": exchanged_token}
+
+        idp_post = AsyncMock(return_value=_IdpResp())
+
+        upstream_resp = _build_mock_upstream_response(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            body=b'{"jsonrpc":"2.0","id":1,"result":{}}',
+        )
+        upstream_cm = AsyncMock()
+        upstream_cm.__aenter__ = AsyncMock(return_value=upstream_resp)
+        upstream_cm.__aexit__ = AsyncMock(return_value=False)
+        captured: dict = {}
+
+        def _stream(method, url, **kwargs):
+            captured["headers"] = kwargs.get("headers", {})
+            return upstream_cm
+
+        def _unified_client(*a, **k):
+            c = MagicMock()
+            c.post = idp_post  # engine's IdP token call (driven via post_with_reconnect)
+            c.stream = MagicMock(side_effect=_stream)  # upstream proxy stream
+            return c
+
+        ingress_jwt = _obo_ingress_jwt("test-user")
+
+        with (
+            patch.object(server_module.settings, "egress_auth_enabled", True),
+            patch.object(server_module, "_vend_egress_token", self._keycloak_obo_directive_vend),
+            patch.object(server_module, "get_auth_provider", lambda *a, **k: provider),
+            patch.object(provider, "get_jwks", return_value=jwks),
+            patch("registry.utils.url_guard.shared_guarded_async_client", _unified_client),
+            patch.object(server_module, "_read_mcp_filter_enabled", return_value=False),
+            _patch_scope_repo_allow_all(),
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/finance",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {"name": "get_balance"},
+                },
+                headers={
+                    **_mcp_proxy_token_headers(server_name="finance"),
+                    "X-Authorization": f"Bearer {ingress_jwt}",
+                },
+            )
+        return response, idp_post, captured, ingress_jwt, exchanged_token
+
+    def test_keycloak_obo_integration_real_exchange_only_idp_mocked(self):
+        """Keycloak twin of the Entra pipeline test: directive -> subject ->
+        RFC 8693 body -> exchange -> verification of the exchanged token ->
+        strip -> inject -> forward."""
+        response, idp_post, captured, ingress_jwt, exchanged = self._run_keycloak_obo(
+            ["finance-mcp-server"]
+        )
+
+        assert response.status_code == 200
+        # The engine built the RFC 8693 token-exchange body from the directive + subject.
+        idp_body = idp_post.call_args.kwargs["data"]
+        assert idp_body["grant_type"] == "urn:ietf:params:oauth:grant-type:token-exchange"
+        assert idp_body["subject_token"] == ingress_jwt
+        assert idp_body["subject_token_type"] == "urn:ietf:params:oauth:token-type:access_token"
+        assert idp_body["requested_token_type"] == "urn:ietf:params:oauth:token-type:access_token"
+        assert idp_body["audience"] == "finance-mcp-server"
+        # The verified exchanged token reached the upstream Authorization header,
+        # and the user's gateway credentials were stripped.
+        sent = {k.lower(): v for k, v in captured["headers"].items()}
+        assert sent["authorization"] == f"Bearer {exchanged}"
+        assert "x-authorization" not in sent
+        assert "cookie" not in sent
+        assert "x-internal-token" not in sent
+        assert all(ingress_jwt not in str(value) for value in sent.values())
+
+    def test_keycloak_obo_refuses_a_token_the_gateway_would_accept(self):
+        """An exchanged token that also carries ``mcp-gateway`` is never
+        forwarded: legacy Keycloak exchange keeps the audience client's
+        default-scope audiences, and the realm's ``basic`` scope adds
+        ``mcp-gateway``."""
+        response, _, captured, _, _ = self._run_keycloak_obo(["finance-mcp-server", "mcp-gateway"])
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["error"]["message"] == "obo_exchange_failed"
+        detail = body["error"]["data"]["detail"]
+        assert "would accept" in detail
+        # The caller is not told which gateway audiences the token carried.
+        assert "mcp-gateway" not in detail
+        assert "headers" not in captured, "the upstream must not be called"
+
 
 class TestMcpProxyPatMode:
     """pat egress mode in mcp_proxy.
@@ -5774,7 +6324,7 @@ class TestMcpProxyPatMode:
     def test_pat_hit_injects_and_strips_ingress_creds(self):
         import auth_server.server as server_module
 
-        async def _pat_vend(token, server):
+        async def _pat_vend(token, server, **_kwargs):
             return {"access_token": "ghp_the_pat"}
 
         patch_httpx, captured = _capture_upstream_headers()
@@ -5817,7 +6367,7 @@ class TestMcpProxyPatMode:
         client-supplied copy so only the gateway-injected value reaches upstream."""
         import auth_server.server as server_module
 
-        async def _pat_vend(token, server):
+        async def _pat_vend(token, server, **_kwargs):
             return {
                 "access_token": "glpat_the_pat",
                 "pat_header_name": "PRIVATE-TOKEN",
@@ -5862,7 +6412,7 @@ class TestMcpProxyPatMode:
     def test_pat_miss_is_terminal_no_forward(self):
         import auth_server.server as server_module
 
-        async def _pat_miss_vend(token, server):
+        async def _pat_miss_vend(token, server, **_kwargs):
             return {"consent_required": True, "mode": "pat"}
 
         patch_httpx, captured = _capture_upstream_headers()
@@ -5876,7 +6426,12 @@ class TestMcpProxyPatMode:
             client = TestClient(server_module.app)
             response = client.post(
                 "/mcp-proxy/github",
-                json={"jsonrpc": "2.0", "id": 9, "method": "tools/call"},
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 9,
+                    "method": "tools/call",
+                    "params": {"name": "search"},
+                },
                 headers=_mcp_proxy_token_headers(server_name="github"),
             )
 
@@ -7341,7 +7896,7 @@ class TestMcpProxyEgressUnavailable:
     def test_tools_call_returns_retryable_503(self):
         import auth_server.server as server_module
 
-        async def _boom(token, server):
+        async def _boom(token, server, **_kwargs):
             raise server_module.EgressVendUnavailable("registry returned 503")
 
         with (
@@ -7352,7 +7907,12 @@ class TestMcpProxyEgressUnavailable:
             client = TestClient(server_module.app)
             response = client.post(
                 "/mcp-proxy/github",
-                json={"jsonrpc": "2.0", "id": 9, "method": "tools/call"},
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 9,
+                    "method": "tools/call",
+                    "params": {"name": "search"},
+                },
                 headers=_mcp_proxy_token_headers(server_name="github"),
             )
 
@@ -7373,7 +7933,7 @@ class TestMcpProxyEgressUnavailable:
 
         vend_called = {"n": 0}
 
-        async def _boom(token, server):
+        async def _boom(token, server, **_kwargs):
             vend_called["n"] += 1
             raise server_module.EgressVendUnavailable("registry returned 503")
 

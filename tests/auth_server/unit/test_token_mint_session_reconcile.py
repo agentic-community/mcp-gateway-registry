@@ -95,7 +95,12 @@ class TestSessionReconciliation:
             "scopes": [],
             "session_id": "s1",
         }
-        session = {"username": "alice", "groups": ["developers"], "subject": "oidc-sub-abc"}
+        session = {
+            "username": "alice",
+            "groups": ["developers"],
+            "egress_user": "oidc-sub-abc",
+            "subject": "oidc-sub-abc",
+        }
         with (
             patch("session_store.resolve_session", AsyncMock(return_value=session)),
             patch(
@@ -106,7 +111,7 @@ class TestSessionReconciliation:
             groups, scopes, subject, resolved = await _reconcile_context_against_session(ctx)
         assert groups == ["developers"]
         assert scopes == ["srv/read"]
-        # The session's OIDC sub is returned as the canonical egress id.
+        # The session's stored vault key is returned as the canonical egress id.
         assert subject == "oidc-sub-abc"
         assert resolved is False
 

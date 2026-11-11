@@ -68,6 +68,8 @@ The two layers work as an AND:
 
 A user must pass **both** checks to see the agent.
 
+For browser sessions the groups in check 2 are the ones kept at login: only groups that a scope maps (or that `ALLOWED_IDP_GROUPS` lists). A group named only in `allowed_groups` therefore works for a bearer token but not in the browser. Map it to a scope with no `server_access` and no `ui_permissions`, which keeps the group without granting any access, so both behave the same. The [FAQ](faq/group-restricted-agent-visibility.md#idp-independence) has the details.
+
 ## Concrete Scenario
 
 ### Setup

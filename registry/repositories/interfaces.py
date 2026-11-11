@@ -1772,15 +1772,17 @@ class SkillRepositoryBase(ABC):
     async def list_by_paths(
         self,
         paths: list[str],
+        fields: list[str] | None = None,
     ) -> dict[str, dict[str, Any]]:
         """List skills whose _id is in the given set of paths.
 
         Returns raw documents (not ``SkillCard`` objects) for metadata
-        projection use cases where the full Pydantic parse is not needed
-        (Issue #1277).
+        projection and search-result enrichment, where the full Pydantic
+        parse is not needed (Issues #1277, #1952).
 
         Args:
             paths: Exact skill paths to fetch.
+            fields: Top-level fields to return. None returns the whole document.
 
         Returns:
             Dictionary mapping skill path to raw skill document for found paths.

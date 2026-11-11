@@ -48,44 +48,54 @@ The groups claim is configured on the application's Sign On tab using the legacy
 5. Set the name to `groups`, select **Matches regex**, and enter `.*`
 6. Click **Save**
 
-> **Note:** The Org Authorization Server and the "default" custom authorization server are different. This integration uses the Org Authorization Server, which natively supports the `groups` scope. Custom claims configured under Security → API → Authorization Servers → default will not apply to the Org Authorization Server.
+> **Note:** The Org Authorization Server and the "default" custom authorization server are different. Without `OKTA_AUTH_SERVER_ID`, this integration uses the Org Authorization Server, which natively supports the `groups` scope, and claims configured under Security → API → Authorization Servers → default do not apply. With `OKTA_AUTH_SERVER_ID` set, see Step 2a instead.
 
-## Step 2a: Custom Authorization Server (Optional - for M2M Tokens)
+## Step 2a: Custom Authorization Server (Optional)
 
-**When to use:** If you need M2M (machine-to-machine) service accounts with custom authorization rules, you may want to create a Custom Authorization Server instead of using the Org Authorization Server.
+You need a custom authorization server in two cases:
 
-**Key differences:**
+- MCP clients present their own Okta access token to the gateway, instead of a token generated in the registry UI. The
+  gateway checks an access token's signature, issuer and audience, and Okta's Org Authorization Server issues access
+  tokens for Okta's own APIs only, so the gateway refuses them.
+- M2M service accounts need custom claims or access policies.
 
-| Feature | Org Authorization Server | Custom Authorization Server |
-|---------|-------------------------|----------------------------|
-| Endpoint pattern | `/oauth2/v1/*` | `/oauth2/{authServerId}/v1/*` |
-| Built-in groups scope | ✅ Yes | ❌ No (must configure manually) |
-| Custom claims | ❌ Limited | ✅ Full control |
-| Custom access policies | ❌ No | ✅ Yes |
-| Best for | Interactive user login | M2M tokens with custom claims |
+When `OKTA_AUTH_SERVER_ID` is set, the gateway uses that server for the browser login as well as for token validation
+and its OAuth discovery metadata. The server therefore has to sign users in, not only issue tokens to clients.
+
+| Feature                           | Org Authorization Server   | Custom Authorization Server        |
+|-----------------------------------|----------------------------|------------------------------------|
+| Endpoint pattern                  | `/oauth2/v1/*`             | `/oauth2/{authServerId}/v1/*`      |
+| Built-in `groups` scope           | Yes                        | No (add it, step 4 below)          |
+| Groups claim                      | App's Sign On tab (Step 2) | Server's Claims tab (step 5 below) |
+| Access tokens the gateway accepts | No                         | Yes                                |
+| Custom access policies            | No                         | Yes                                |
 
 **Setup steps:**
 
-1. Go to **Security** → **API** → **Authorization Servers** → **Add Authorization Server**
-2. Configure:
-   - **Name**: `AI Registry` (or any descriptive name)
-   - **Audience**: `api://ai-registry` (this becomes the `aud` claim in tokens)
-   - **Description**: `Authorization server for MCP Gateway M2M tokens`
-3. Click **Save** and copy the **Issuer URI** (e.g., `https://dev-123456.okta.com/oauth2/aus1234567890abcdef`)
-4. Extract the authorization server ID from the URI: `aus1234567890abcdef`
-5. Configure the `groups` claim:
-   - Go to **Claims** tab → **Add Claim**
-   - **Name**: `groups`
-   - **Include in token type**: Access Token, ID Token
-   - **Value type**: Groups
-   - **Filter**: Matches regex `.*`
-   - **Include in**: Any scope
-6. Configure scopes (if needed):
-   - Go to **Scopes** tab
-   - The default scopes include `openid`, `profile`, `email`
-7. Set `OKTA_AUTH_SERVER_ID=aus1234567890abcdef` in your environment
+1. Go to **Security** → **API** → **Authorization Servers**. Use the `default` server, or click **Add Authorization
+   Server** and give it an audience such as `api://ai-registry`. The audience becomes the `aud` claim of every access
+   token the server issues.
+2. Copy the server's **Issuer URI**. `OKTA_AUTH_SERVER_ID` is the last segment of its path: `default` for
+   `https://dev-123456.okta.com/oauth2/default`, or an ID such as `aus1234567890abcdef` for a server you added. For the
+   default server use `default`, not the `aus…` ID the Okta API reports for it: the gateway builds the issuer it expects
+   from this value, and the default server's tokens say `iss: https://dev-123456.okta.com/oauth2/default`.
+3. On the **Access Policies** tab, add a policy assigned to the web app from Step 1 and to any M2M apps. Add a rule that
+   allows the **Authorization Code** grant (and **Client Credentials** for M2M apps) for the groups that use the
+   gateway. A server without a policy issues no tokens.
+4. On the **Scopes** tab, add a scope named `groups`. The gateway's login requests `openid email profile groups`, and a
+   custom server refuses the whole sign-in ("One or more scopes are not configured for the authorization server") when
+   one of them is missing.
+5. On the **Claims** tab, add a claim named `groups`: **Include in token type** Access Token, **Value type** Groups, *
+   *Filter** Matches regex `.*`, **Include in** Any scope. Add a second `groups` claim with the same settings for **ID
+   Token**, **Always**. The login reads groups from the ID token, and the gateway maps an MCP client's access-token
+   groups to scopes.
+6. Set `OKTA_AUTH_SERVER_ID` to the value from step 2, and set `OKTA_M2M_ALLOWED_AUDIENCES` to the server's audience (
+   `api://default` for the default server). The gateway accepts an access token only when its `aud` is one of its own
+   client IDs or is listed in `OKTA_M2M_ALLOWED_AUDIENCES`. Despite its name, that setting applies to user access tokens
+   as well as M2M tokens.
 
-> **Important:** When using a custom authorization server, M2M tokens will have the audience set to your API identifier (e.g., `api://ai-registry`), not the client ID. The auth server automatically handles this validation.
+The Group Claims configured in Step 2 apply only to the Org Authorization Server. Once `OKTA_AUTH_SERVER_ID` is set,
+groups come from the claims in step 5.
 
 **Groups enrichment for M2M tokens:**
 
@@ -255,7 +265,8 @@ Only required if you need IAM operations (user/group management through the regi
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `OKTA_AUTH_SERVER_ID` | Optional | Custom authorization server ID from Step 2a (e.g., `aus1234567890abcdef`). If not set, uses Org Authorization Server. |
+| `OKTA_AUTH_SERVER_ID` | Optional | Custom authorization server from Step 2a: the last segment of its Issuer URI (`default`, or an ID such as `aus1234567890abcdef`). The browser login and token validation both use it. If not set, both use the Org Authorization Server. |
+| `OKTA_M2M_ALLOWED_AUDIENCES` | With `OKTA_AUTH_SERVER_ID` | Comma- or space-separated `aud` values the gateway accepts on Okta access tokens besides its own client IDs. Set it to the custom server's audience (for example `api://default`). Applies to user access tokens as well as M2M tokens. Empty accepts only the client IDs. |
 | `OKTA_M2M_CLIENT_ID` | Optional | Separate M2M client ID (defaults to `OKTA_CLIENT_ID`) |
 | `OKTA_M2M_CLIENT_SECRET` | Optional | Separate M2M client secret (defaults to `OKTA_CLIENT_SECRET`) |
 | `OKTA_API_TOKEN` | For IAM | Admin API token from Step 4 (required for user/group management) |
@@ -275,7 +286,7 @@ OKTA_CLIENT_SECRET=your-client-secret-here
 # OKTA_API_TOKEN=your-api-token-here
 ```
 
-### Advanced Setup (Custom Authorization Server for M2M)
+### Advanced Setup (Custom Authorization Server)
 
 ```bash
 # .env or docker-compose environment
@@ -284,8 +295,10 @@ OKTA_DOMAIN=dev-123456.okta.com
 OKTA_CLIENT_ID=0oa1234567890abcdef
 OKTA_CLIENT_SECRET=your-client-secret-here
 
-# Custom authorization server for M2M tokens
-OKTA_AUTH_SERVER_ID=aus1234567890abcdef
+# Custom authorization server (Step 2a): the last segment of its Issuer URI
+OKTA_AUTH_SERVER_ID=default
+# The server's audience, so the gateway accepts its access tokens
+OKTA_M2M_ALLOWED_AUDIENCES=api://default
 
 # Optional: Separate M2M credentials
 OKTA_M2M_CLIENT_ID=0oa0987654321fedcba
@@ -306,7 +319,8 @@ okta_client_secret     = "your-client-secret-here"
 okta_m2m_client_id     = "0oa0987654321fedcba"
 okta_m2m_client_secret = "your-m2m-secret-here"
 okta_api_token         = "your-api-token-here"
-okta_auth_server_id    = "aus1234567890abcdef"  # Optional - for custom auth server
+okta_auth_server_id    = "default"  # Optional - custom auth server, last segment of its Issuer URI
+okta_m2m_allowed_audiences = "api://default"  # Required with okta_auth_server_id: the server's audience
 
 # Ensure other providers are disabled
 entra_enabled = false
@@ -343,6 +357,28 @@ The application automatically constructs OAuth2 endpoints based on your configur
 - `OKTA_AUTH_SERVER_ID=aus1234567890abcdef`
 - JWKS URL: `https://dev-123456.okta.com/oauth2/aus1234567890abcdef/v1/keys`
 
+The browser login takes its endpoints from the same table, so the ID token it receives comes from the issuer the gateway
+verifies.
+
+## How the Gateway Identifies an Okta User
+
+With per-user egress (`EGRESS_AUTH_ENABLED=true`), the gateway stores each user's connections to upstream services under
+an account ID that never changes, and audit records name the same ID as `identity.subject`. Which claim carries that ID
+depends on the token:
+
+| Token                                    | Claim the gateway uses      | Why                                                                                                                                                                                        |
+|------------------------------------------|-----------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| ID token from the browser login          | `sub`                       | In an Okta ID token, `sub` is the user ID (`00u…`).                                                                                                                                        |
+| User access token an MCP client presents | `uid`                       | In an Okta access token, `sub` is the user's login, often an email address. An admin can edit a login or give it to another user. `uid` is the same user ID the ID token carries in `sub`. |
+| Client-credentials (M2M) token           | `sub`, when it equals `cid` | The token has no `uid` because Okta issues it to the client itself.                                                                                                                        |
+
+A user access token without a usable `uid` gets no key, and the gateway refuses to hand it a stored credential rather
+than fall back to the login. Audit records still show the login as `identity.username`.
+
+Because the browser login and the access token resolve to the same user ID, a user's MCP clients can use the connections
+that user made in the browser. When a login moves from one user to another, the second user gets none of the first
+user's connections, even though their access tokens carry the same `sub`.
+
 ## Verifying Your Setup
 
 Test the JWKS endpoint:
@@ -360,16 +396,55 @@ curl -X POST https://dev-123456.okta.com/oauth2/v1/token \
   -u "CLIENT_ID:CLIENT_SECRET"
 ```
 
+### Test the Per-User Identity
+
+This test checks that the gateway keys a user's stored connections on the Okta user ID and not on the login. It needs
+the custom authorization server from Step 2a, per-user egress turned on, an MCP server with per-user egress configured (
+see [Egress Credential Vault](egress-credential-vault.md); any upstream provider works), and two Okta users in a group
+that can use that server.
+
+A token generated in the registry UI does not exercise this path, because the gateway writes the user's key into that
+token itself. The test needs access tokens that Okta issues.
+
+1. Sign in to the registry as user A and connect the server, from Connected Accounts or the connect link a tool returns.
+2. Get an access token for user A from the custom authorization server (
+   `https://{OKTA_DOMAIN}/oauth2/{OKTA_AUTH_SERVER_ID}/v1/authorize`, then `/v1/token`) with the Authorization Code flow
+   and PKCE, using the web app from Step 1 or any OIDC app the server's access policy allows. Decode it and check three
+   claims: `sub` is the login, `uid` is the user ID, and `aud` is listed in `OKTA_M2M_ALLOWED_AUDIENCES`.
+3. Call one of the server's tools through the gateway with `Authorization: Bearer <user A's access token>`. The tool
+   runs without asking user A to connect, because the token's `uid` matches the ID token `sub` the connection was stored
+   under.
+4. In Okta, change user A's username. Create user B with user A's old username, and put user B in the same group. Get a
+   new access token for each user.
+5. Call the tool with user B's token. It asks user B to connect, although user B's token carries the same `sub` as user
+   A's tokens before the rename.
+6. Call the tool with user A's new token. It still runs.
+7. Check the audit records for those calls. `identity.subject` shows each user's ID (the access token `uid`), and
+   `identity.username` shows the login, so two calls with the same username are recorded under two subjects.
+
 ## Troubleshooting
 
 **"Permission Required" error after login**
 Your Okta groups don't match the group names in the scope configuration (the `mcp_scopes` collection). Create groups in Okta that match (e.g., `registry-admins`) and assign your user to them. See Step 3.
 
 **Groups not appearing in tokens**
-The groups claim must be configured on the app's Sign On tab under "Show legacy configuration", not on the Authorization Server's Claims tab. See Step 2. Also verify your user is assigned to at least one group.
+Without `OKTA_AUTH_SERVER_ID`, the groups claim must be configured on the app's Sign On tab under "Show legacy
+configuration" (Step 2); claims on an authorization server's Claims tab do not apply. With `OKTA_AUTH_SERVER_ID` set, it
+is the other way round: add the `groups` claims to that server (Step 2a, step 5). Also verify your user is assigned to
+at least one group.
 
 **"One or more scopes are not configured" error**
-This happens when using the default custom authorization server (`/oauth2/default/v1/*`) instead of the Org Authorization Server (`/oauth2/v1/*`). The Org Authorization Server has a built-in `groups` scope. Verify your endpoints use `/oauth2/v1/*`.
+The login requests the `groups` scope, which only the Org Authorization Server defines on its own. With
+`OKTA_AUTH_SERVER_ID` set, add a `groups` scope to that server (Step 2a, step 4).
+
+**Every login fails with "ID token verification failed" after setting `OKTA_AUTH_SERVER_ID`**
+The auth-server log names the cause, for example
+`id_token issuer 'https://dev-123456.okta.com' is not in the expected issuer allowlist`. Two causes are common:
+
+- `OKTA_AUTH_SERVER_ID` names the default server by its `aus…` ID. Set it to `default`, the last segment of the server's
+  Issuer URI.
+- The gateway runs a release whose login still used the Org Authorization Server while token validation used the custom
+  one. Upgrade, or unset `OKTA_AUTH_SERVER_ID` until you do.
 
 **Can't find Client Secret after app creation**
 Regenerate it: App → General tab → Client Credentials → Edit → Regenerate Secret.
@@ -395,8 +470,10 @@ curl https://dev-123456.okta.com/oauth2/v1/keys
 curl https://dev-123456.okta.com/oauth2/aus1234567890abcdef/v1/keys
 ```
 
-**"Audience doesn't match" error for M2M tokens**
-When using a custom authorization server, M2M tokens have `aud` set to your API identifier (e.g., `api://ai-registry`), not the client ID. This is expected behavior. The auth server automatically handles this validation when `OKTA_AUTH_SERVER_ID` is configured.
+**"Audience doesn't match" error for access tokens from a custom authorization server**
+A custom authorization server sets `aud` to its own audience (for example `api://default` or `api://ai-registry`), not
+to the client ID. The gateway accepts that value only when it is listed in `OKTA_M2M_ALLOWED_AUDIENCES`, for user access
+tokens and M2M tokens alike.
 
 **M2M token returns 0 servers despite valid groups**
 Check that groups are being mapped to scopes:

@@ -114,7 +114,7 @@ with built-in security, discovery, and governance.
 |  | GET /validate         |------> AUTH SERVER (8888)               |
 |  | (internal subrequest) |<------ Returns: allow/deny              |
 |  |                       |        + X-User                         |
-|  |                       |        + X-Groups                       |
+|  |                       |        + X-Internal-Token-Registry      |
 |  |                       |        + X-Scopes                       |
 |  +-----------+-----------+                                         |
 |              |                         Supports:                    |
@@ -223,7 +223,7 @@ REQUEST LIFECYCLE: Tool Call via Gateway
    | a) auth_request -> GET /validate                                |
    |    Auth Server validates JWT signature (HS256 self-signed       |
    |    or RS256 from IdP), checks expiry, extracts claims          |
-   |    Returns: X-User, X-Groups (JSON array), X-Scopes            |
+   |    Returns: X-User, X-Scopes, signed registry token (groups)   |
    |                                                                 |
    | b) Scope enforcement (Lua):                                     |
    |    - Load user scopes from X-Scopes header                     |

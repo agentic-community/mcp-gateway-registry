@@ -1,0 +1,12 @@
+{
+  "server_name": "pingmcp (dual era)",
+  "description": "pingmcp test server that speaks MCP 2026-07-28 and the legacy handshake revisions on one endpoint. Used for MCP protocol compatibility testing. Source: https://github.com/aarora79/pingmcp",
+  "path": "/pingmcp-dual/",
+  "proxy_pass_url": "http://pingmcp-dual:8100/",
+  "supported_transports": ["streamable-http"],
+  "auth_scheme": "none",
+  "tags": ["mcp", "testing", "protocol", "compatibility", "pingmcp"],
+  "license": "Apache-2.0",
+  "status": "active",
+  "visibility": "public"
+}

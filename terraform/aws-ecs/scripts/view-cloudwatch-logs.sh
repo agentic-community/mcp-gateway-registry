@@ -241,13 +241,20 @@ _tail_logs() {
         return 1
     fi
 
+    # Pass the filter as a single argument so spaces, braces and globs survive.
+    # The [@]+ guard keeps the empty case working under set -u on bash < 4.4.
+    local filter_args=()
+    if [[ -n "$FILTER_PATTERN" ]]; then
+        filter_args=(--filter-pattern "$FILTER_PATTERN")
+    fi
+
     if [[ "$follow" == "true" ]]; then
         # Real-time tailing
         aws logs tail "$log_group" \
             --follow \
             --since "${MINUTES}m" \
             --region "$AWS_REGION" \
-            $(if [[ -n "$FILTER_PATTERN" ]]; then echo "--filter-pattern $FILTER_PATTERN"; fi) \
+            ${filter_args[@]+"${filter_args[@]}"} \
             2>&1 | while read -r message; do
             if ! _should_exclude_log "$message"; then
                 echo "$message"
@@ -263,7 +270,7 @@ _tail_logs() {
             --start-time "$start_time" \
             --end-time "$end_time" \
             --region "$AWS_REGION" \
-            $(if [[ -n "$FILTER_PATTERN" ]]; then echo "--filter-pattern $FILTER_PATTERN"; fi) \
+            ${filter_args[@]+"${filter_args[@]}"} \
             --query 'events[*].[timestamp, message]' \
             --output text \
             2>/dev/null | while read -r timestamp message; do

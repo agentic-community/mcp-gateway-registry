@@ -180,8 +180,16 @@ Response example:
 | Status | Meaning |
 |--------|---------|
 | Healthy (green) | SKILL.md is accessible |
-| Unhealthy (red) | SKILL.md fetch failed |
+| Unhealthy (red) | SKILL.md was gone (404 or 410) or blocked by the SSRF guard at the last check |
 | Unknown (yellow) | Not yet checked |
+
+The registry records health in two places. Neither stores a failure that may pass on its own. The health check above sends a HEAD request to the SKILL.md URL, and retries with a GET when the server answers HEAD with 405 or 501. It always returns what it saw. It stores the skill as healthy when SKILL.md is reachable and as unhealthy when the URL answers 404 or 410 or the SSRF guard blocks it. A rate limit, server error or timeout is reported but leaves the stored status unchanged, because any user who can view the skill can run the check and could otherwise hide it from agents by repeating the check until the source rate-limits the registry.
+
+The content endpoint (`GET /api/skills/{path}/content`, which the `get_skill_content` MCP tool calls) also records what its own SKILL.md read saw. A successful read marks an unhealthy or unknown skill healthy, and a 404 or 410 marks it unhealthy; it writes only when the status changes. A failed read of a companion resource file does not change health.
+
+Skills with inline SKILL.md content, such as those federated from AgentCore, are healthy without a network request, because the registry serves their content from its database. They report `unknown` until the first health check or content read, which marks them healthy. Earlier releases probed these skills over HTTP and could store `unhealthy` for them; on startup the registry resets any such value to `unknown`.
+
+Semantic search (`POST /api/search/semantic`, and the `search_registry` MCP tool built on it) and `GET /api/skills` both return `health_status` and `last_checked_time` for each skill, read from the same record the UI shows. Clients that pick skills automatically can skip entries whose `health_status` is `unhealthy`. `unknown` means nobody has checked or read the skill yet, which is not a failure.
 
 ## Rating Skills
 
@@ -247,6 +255,41 @@ Response example:
   "url": "https://raw.githubusercontent.com/org/repo/main/skills/pdf-processing/SKILL.md"
 }
 ```
+
+### Fetch Companion Resources
+
+A skill's `resource_manifest` lists its companion files under `references`, `scripts`, `agents` and `assets`. Fetch one by passing its manifest path as `resource`:
+
+```bash
+curl -H "Authorization: Bearer <token>" \
+  "https://your-registry.com/api/skills/pdf-processing/content?resource=assets/report-template.md"
+```
+
+The response is always JSON. Text files, including text assets such as templates and schemas, come back in `content`:
+
+```json
+{
+  "content": "# Report\n\nSummary: {{summary}}\n",
+  "size_bytes": 31,
+  "path": "assets/report-template.md",
+  "type": "asset",
+  "url": "https://raw.githubusercontent.com/org/repo/main/skills/pdf-processing/assets/report-template.md"
+}
+```
+
+An asset that is not UTF-8 text (an image, a font, or a file containing NUL bytes) comes back as base64 in `content_base64`, with `"encoding": "base64"` and no `content` field. The registry decides from the file's bytes, so the same path can switch shape if the upstream file is re-saved in another encoding. Branch on `encoding`, not on the path:
+
+```bash
+curl -s -H "Authorization: Bearer <token>" \
+  "https://your-registry.com/api/skills/pdf-processing/content?resource=assets/logo.png" \
+  | jq -r '.content_base64' | base64 --decode > logo.png
+```
+
+References, scripts and agents always come back in `content`, with any invalid UTF-8 bytes replaced by U+FFFD. The mcpgw `get_skill_content` tool returns text the same way, and for a base64 asset returns only its metadata unless the caller passes `include_binary=True`. For any companion resource, text or binary, the tool also returns a `content_type` guessed from the path. A text resource with an unknown extension defaults to `text/plain`, and a binary one to `application/octet-stream`.
+
+`size_bytes` is the byte length of the file as fetched from its host. For a text resource whose invalid bytes were replaced, it can differ from the UTF-8 length of `content`.
+
+`content` is the registrant's text as written, so it can contain control characters such as ANSI escape sequences. Escape or strip them before printing `content` to a terminal.
 
 ## Tool Validation
 
@@ -364,6 +407,7 @@ See [Cursor Agent Skills Documentation](https://cursor.com/docs/context/skills) 
 1. **Check URL**: Verify the SKILL.md file is accessible in a browser
 2. **Repository access**: Ensure the repository is public or accessible
 3. **Raw URL**: The registry uses raw URLs; verify raw content is accessible
+4. **Recheck**: After fixing the URL, run the health check or fetch the skill's content once; either one clears the unhealthy status
 
 ### Rating Not Saved
 

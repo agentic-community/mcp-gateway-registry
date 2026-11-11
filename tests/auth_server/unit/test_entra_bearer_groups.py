@@ -14,6 +14,9 @@ from auth_server.providers.entra import EntraIdProvider, GraphGroupLookupError
 
 pytestmark = [pytest.mark.unit, pytest.mark.auth]
 
+# obo_exchange returns (access_token, expires_in); mocks must match that contract.
+_OBO_RESULT = ("graph-token", 3599)
+
 
 @pytest.fixture(autouse=True)
 def _isolated_memberships(monkeypatch):
@@ -224,7 +227,7 @@ def test_signed_scp_does_not_add_scopes_when_groups_map(bearer_client, recovered
     with (
         patch.object(provider, "get_jwks", return_value={"keys": [jwk]}),
         patch(
-            "providers.entra.obo_exchange", new_callable=AsyncMock, return_value="graph-token"
+            "providers.entra.obo_exchange", new_callable=AsyncMock, return_value=_OBO_RESULT
         ) as exchange,
         patch.object(
             type(provider),
@@ -262,7 +265,7 @@ def test_validate_recovers_verified_delegated_groups_before_scope_mapping(bearer
     provider.validate_token = MagicMock(return_value=_verified_result(claims))
     with (
         patch(
-            "providers.entra.obo_exchange", new_callable=AsyncMock, return_value="graph-token"
+            "providers.entra.obo_exchange", new_callable=AsyncMock, return_value=_OBO_RESULT
         ) as obo,
         patch.object(
             type(provider),
@@ -276,7 +279,6 @@ def test_validate_recovers_verified_delegated_groups_before_scope_mapping(bearer
     assert response.status_code == 200, response.text
     assert response.json()["scopes"] == ["read:servers"]
     assert response.json()["groups"] == ["nested-parent"]
-    assert response.headers["X-Groups"] == "nested-parent"
     assert response.headers["X-Scopes"] == "read:servers"
     obo.assert_awaited_once_with(
         provider,
@@ -304,13 +306,13 @@ def test_validate_maps_transitive_graph_membership_to_scope(bearer_client):
     )
     graph_client.__aenter__.return_value = graph_client
     with (
-        patch("providers.entra.obo_exchange", new_callable=AsyncMock, return_value="graph-token"),
+        patch("providers.entra.obo_exchange", new_callable=AsyncMock, return_value=_OBO_RESULT),
         patch("providers.entra.guarded_async_client", return_value=graph_client),
     ):
         response = _validate(client)
 
     assert response.status_code == 200, response.text
-    assert response.headers["X-Groups"] == "nested-parent"
+    assert response.json()["groups"] == ["nested-parent"]
     assert response.json()["scopes"] == ["read:servers"]
     graph_client.get.assert_awaited_once()
     assert (
@@ -320,12 +322,12 @@ def test_validate_maps_transitive_graph_membership_to_scope(bearer_client):
     assert graph_client.get.await_args.kwargs["headers"]["Authorization"] == "Bearer graph-token"
 
 
-def test_validate_filters_hundreds_of_graph_groups_before_mapping_or_header(bearer_client):
+def test_validate_filters_hundreds_of_graph_groups_before_mapping_or_token(bearer_client):
     client, provider, repo = bearer_client
     provider.validate_token = MagicMock(return_value=_verified_result(_delegated(hasgroups=True)))
     recovered = [f"unmapped-{i}" for i in range(350)] + ["nested-parent"]
     with (
-        patch("providers.entra.obo_exchange", new_callable=AsyncMock, return_value="graph-token"),
+        patch("providers.entra.obo_exchange", new_callable=AsyncMock, return_value=_OBO_RESULT),
         patch.object(
             type(provider), "fetch_groups_via_graph", new_callable=AsyncMock, return_value=recovered
         ),
@@ -333,20 +335,19 @@ def test_validate_filters_hundreds_of_graph_groups_before_mapping_or_header(bear
         response = _validate(client)
 
     assert response.status_code == 200, response.text
-    assert response.headers["X-Groups"] == "nested-parent"
     assert response.json()["groups"] == ["nested-parent"]
     assert response.json()["scopes"] == ["read:servers"]
     assert repo.get_group_mappings_bulk.await_args.args[0] == ["nested-parent"]
 
 
-def test_validate_denies_recovered_group_header_overflow(bearer_client):
-    from providers.entra import GRAPH_GROUP_HEADER_MAX_BYTES
+def test_validate_denies_oversized_recovered_group_set(bearer_client):
+    from providers.entra import GRAPH_GROUP_MAX_BYTES
 
     client, provider, repo = bearer_client
     provider.validate_token = MagicMock(return_value=_verified_result(_delegated(hasgroups=True)))
-    oversized = ["nested-parent", "x" * (GRAPH_GROUP_HEADER_MAX_BYTES + 1)]
+    oversized = ["nested-parent", "x" * (GRAPH_GROUP_MAX_BYTES + 1)]
     with (
-        patch("providers.entra.obo_exchange", new_callable=AsyncMock, return_value="graph-token"),
+        patch("providers.entra.obo_exchange", new_callable=AsyncMock, return_value=_OBO_RESULT),
         patch.object(
             type(provider), "fetch_groups_via_graph", new_callable=AsyncMock, return_value=oversized
         ),
@@ -355,7 +356,7 @@ def test_validate_denies_recovered_group_header_overflow(bearer_client):
         response = _validate(client)
 
     assert response.status_code == 503
-    assert "X-Groups" not in response.headers
+    assert "X-Scopes" not in response.headers
     repo.get_group_mappings_bulk.assert_not_awaited()
 
 
@@ -363,7 +364,7 @@ def test_empty_graph_membership_never_uses_m2m_enrichment(bearer_client):
     client, provider, repo = bearer_client
     provider.validate_token = MagicMock(return_value=_verified_result(_delegated(hasgroups=True)))
     with (
-        patch("providers.entra.obo_exchange", new_callable=AsyncMock, return_value="graph-token"),
+        patch("providers.entra.obo_exchange", new_callable=AsyncMock, return_value=_OBO_RESULT),
         patch.object(
             type(provider), "fetch_groups_via_graph", new_callable=AsyncMock, return_value=[]
         ) as graph,
@@ -399,7 +400,7 @@ def test_graph_memberships_override_configured_stale_user_fallback(bearer_client
             new_callable=AsyncMock,
             return_value=["m2m-role"],
         ) as local_fallback,
-        patch("providers.entra.obo_exchange", new_callable=AsyncMock, return_value="graph-token"),
+        patch("providers.entra.obo_exchange", new_callable=AsyncMock, return_value=_OBO_RESULT),
         patch.object(
             type(provider),
             "fetch_groups_via_graph",
@@ -415,10 +416,9 @@ def test_graph_memberships_override_configured_stale_user_fallback(bearer_client
         assert response.status_code == 200, response.text
         assert response.json()["groups"] == graph_result
         assert response.json()["scopes"] == ["read:servers"]
-        assert response.headers["X-Groups"] == "nested-parent"
     else:
         assert response.status_code == 403, response.text
-        assert "X-Groups" not in response.headers
+        assert "X-Scopes" not in response.headers
         repo.get_group_mappings_bulk.assert_not_awaited()
 
 
@@ -459,7 +459,7 @@ def test_validate_denies_recovered_groups_when_scope_mappings_unavailable(bearer
     else:
         repo.get_all_mapped_group_names.side_effect = RuntimeError("database unavailable")
     with (
-        patch("providers.entra.obo_exchange", new_callable=AsyncMock, return_value="graph-token"),
+        patch("providers.entra.obo_exchange", new_callable=AsyncMock, return_value=_OBO_RESULT),
         patch.object(
             type(provider),
             "fetch_groups_via_graph",
@@ -470,7 +470,7 @@ def test_validate_denies_recovered_groups_when_scope_mappings_unavailable(bearer
         response = _validate(client)
     assert response.status_code == 503
     assert response.headers["X-Entra-Group-Lookup-Unavailable"] == "1"
-    assert "X-Groups" not in response.headers
+    assert "X-Scopes" not in response.headers
     repo.get_group_mappings_bulk.assert_not_awaited()
 
 
@@ -496,7 +496,7 @@ def test_disabled_recovery_never_uses_stale_group_claims(
     if expected:
         assert response.json()["groups"] == expected
     else:
-        assert "X-Groups" not in response.headers
+        assert "X-Scopes" not in response.headers
     obo.assert_not_awaited()
     graph.assert_not_awaited()
 
@@ -521,9 +521,85 @@ def test_validate_does_not_look_up_inline_or_machine_roles(bearer_client, claims
 
     assert response.status_code == 200, response.text
     assert response.json()["scopes"] == ["read:servers"]
-    assert response.headers["X-Groups"] == claims.get("groups", claims.get("roles"))[0]
+    assert response.json()["groups"] == claims.get("groups", claims.get("roles"))
     obo.assert_not_awaited()
     graph.assert_not_awaited()
+
+
+def test_validate_carries_large_inline_group_set_once_in_registry_token(bearer_client):
+    """Issue #1939: a 200-group inline token must reach the registry unfiltered.
+
+    Group-restricted visibility matches allowed_groups against these groups, so
+    they are not trimmed to scope-mapped ones. Among the response headers, which
+    nginx reads into a fixed buffer, they travel once, in the signed registry
+    token, not again in an X-Groups header that doubled the auth_request
+    response past that buffer. (The JSON body, which nginx discards, also lists
+    them.)
+    """
+    from registry.core.config import settings
+
+    client, provider, _repo = bearer_client
+    inline = ["inline-allowed"] + [f"00000000-0000-4000-8000-{i:012d}" for i in range(199)]
+    provider.validate_token = MagicMock(return_value=_verified_result(_delegated(groups=inline)))
+
+    response = client.get(
+        "/validate",
+        headers={
+            "Authorization": "Bearer incoming-entra-token",
+            "X-Original-URL": "https://example.com/test-server/mcp",
+            "X-Registry-Api-Auth": "1",
+            "X-Validate-Source-Secret": settings.auth_server_nginx_marker_secret,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert "X-Groups" not in response.headers
+    token = response.headers["X-Internal-Token-Registry"]
+    assert jwt.decode(token, options={"verify_signature": False})["groups"] == inline
+    # Entra caps inline groups at 200. Sent once, they need under a quarter of the
+    # 64k /validate buffer and would fit even nginx's 16k http-level default; a
+    # second copy (the old X-Groups header) pushed this response to about 18 KB.
+    header_bytes = sum(len(k) + len(v) for k, v in response.headers.items())
+    assert header_bytes < 16 * 1024
+
+
+def test_validate_refuses_an_oversized_inline_group_set_once(bearer_client, caplog):
+    """Issue #1939: a registry token over the mint cap fails /validate with the
+    specific 500, logged once with the hashed caller, never re-wrapped as a
+    generic "Internal validation error"."""
+    import logging
+
+    from registry.core.config import settings
+
+    client, provider, _repo = bearer_client
+    inline = ["inline-allowed"] + [f"00000000-0000-4000-8000-{i:012d}" for i in range(1000)]
+    provider.validate_token = MagicMock(return_value=_verified_result(_delegated(groups=inline)))
+
+    with caplog.at_level(logging.ERROR):
+        response = client.get(
+            "/validate",
+            headers={
+                "Authorization": "Bearer incoming-entra-token",
+                "X-Original-URL": "https://example.com/test-server/mcp",
+                "X-Registry-Api-Auth": "1",
+                "X-Validate-Source-Secret": settings.auth_server_nginx_marker_secret,
+            },
+        )
+
+    # Only /validate's own lines count: unrelated loggers (the audit sink) may also
+    # write errors while the test client shuts down.
+    validate_errors = [
+        r.getMessage()
+        for r in caplog.records
+        if r.levelno >= logging.ERROR
+        and ("/validate" in r.getMessage() or "during validation" in r.getMessage())
+    ]
+    assert (response.status_code, response.json()["detail"]) == (
+        500,
+        "Authorization token too large",
+    )
+    assert len(validate_errors) == 1, validate_errors
+    assert "refusing an oversized internal token for user=user_" in validate_errors[0]
 
 
 def test_validate_self_signed_token_never_enters_graph_path(bearer_client):
@@ -556,7 +632,7 @@ def test_validate_self_signed_token_never_enters_graph_path(bearer_client):
 
     assert response.status_code == 200, response.text
     assert response.headers["X-Auth-Method"] == "self_signed"
-    assert response.headers["X-Groups"] == "inline-allowed"
+    assert response.json()["groups"] == ["inline-allowed"]
     obo.assert_not_awaited()
     graph.assert_not_awaited()
     provider.validate_token.assert_not_called()
@@ -586,7 +662,7 @@ def test_consent_failure_retries_only_after_short_cache_or_new_token(bearer_clie
     ]
     assert exchange.await_count == 3
     assert all(
-        "X-Groups" not in response.headers for response in (first, second, new_token, after_ttl)
+        "X-Scopes" not in response.headers for response in (first, second, new_token, after_ttl)
     )
 
 
@@ -601,10 +677,10 @@ def test_validate_denies_failed_recovery_and_retries_next_request(bearer_client,
 
     client, provider, _repo = bearer_client
     provider.validate_token = MagicMock(side_effect=lambda *_a, **_kw: _verified_result(claims))
-    obo = AsyncMock(return_value="graph-token")
+    obo = AsyncMock(return_value=_OBO_RESULT)
     graph = AsyncMock(return_value=["nested-parent"])
     if failure == "obo":
-        obo.side_effect = [OboExchangeError("IdP unavailable"), "graph-token"]
+        obo.side_effect = [OboExchangeError("IdP unavailable"), _OBO_RESULT]
     else:
         from providers.entra import GraphGroupLookupError as RuntimeGraphGroupLookupError
 
@@ -619,11 +695,10 @@ def test_validate_denies_failed_recovery_and_retries_next_request(bearer_client,
     assert denied.status_code == 503, denied.text
     assert denied.headers["X-Entra-Group-Lookup-Unavailable"] == "1"
     assert "X-Scopes" not in denied.headers
-    assert "X-Groups" not in denied.headers
     assert accepted.status_code == 200, accepted.text
     assert "X-Entra-Group-Lookup-Unavailable" not in accepted.headers
     assert accepted.json()["scopes"] == ["read:servers"]
-    assert accepted.headers["X-Groups"] == "nested-parent"
+    assert accepted.json()["groups"] == ["nested-parent"]
     assert obo.await_count == 2
     assert graph.await_count == (1 if failure == "obo" else 2)
 
@@ -652,7 +727,7 @@ def test_invalid_bearer_group_claim_returns_401_without_graph(bearer_client):
         response = _validate(client)
 
     assert response.status_code == 401
-    assert "X-Groups" not in response.headers
+    assert "X-Scopes" not in response.headers
     exchange.assert_not_awaited()
 
 
@@ -714,7 +789,7 @@ async def test_concurrent_same_token_misses_share_one_obo_and_graph_lookup(entra
     async def wait_for_exchange(*_args, **_kwargs):
         ready.set()
         await release.wait()
-        return "graph-token"
+        return _OBO_RESULT
 
     with (
         patch(
@@ -761,7 +836,7 @@ async def test_concurrent_distinct_tokens_do_not_share_obo_failure(entra_provide
         await release.wait()
         if subject_token == "old-token":
             raise OboConsentRequired("consent required")
-        return "graph-token"
+        return _OBO_RESULT
 
     with (
         patch(
@@ -804,7 +879,7 @@ async def test_stalled_graph_exchange_times_out_without_caching_failure(
         call_count += 1
         if call_count == 1:
             await stalled_exchange(*args, **kwargs)
-        return "graph-token"
+        return _OBO_RESULT
 
     result = _verified_result(_delegated(hasgroups=True))
     with (
@@ -834,7 +909,7 @@ async def test_cached_graph_memberships_keep_each_token_app_roles(entra_provider
         patch(
             "auth_server.providers.entra.obo_exchange",
             new_callable=AsyncMock,
-            return_value="graph-token",
+            return_value=_OBO_RESULT,
         ) as exchange,
         patch.object(
             EntraIdProvider,
@@ -870,7 +945,7 @@ async def test_denied_token_cannot_borrow_other_tokens_cached_memberships(entra_
     async def exchange(*_args, subject_token, **_kwargs):
         if subject_token == "denied-token":
             raise OboConsentRequired("consent required")
-        return "graph-token"
+        return _OBO_RESULT
 
     with (
         patch(
@@ -908,7 +983,7 @@ async def test_browser_cached_membership_requires_each_bearer_token_obo(entra_pr
         patch(
             "auth_server.providers.entra.obo_exchange",
             new_callable=AsyncMock,
-            return_value="graph-token",
+            return_value=_OBO_RESULT,
         ) as obo,
         patch.object(
             EntraIdProvider,
@@ -941,7 +1016,7 @@ async def test_graph_proxy_does_not_change_obo_resource(monkeypatch):
         patch(
             "auth_server.providers.entra.obo_exchange",
             new_callable=AsyncMock,
-            return_value="graph-token",
+            return_value=_OBO_RESULT,
         ) as exchange,
         patch.object(
             EntraIdProvider, "fetch_groups_via_graph", new_callable=AsyncMock, return_value=[]
@@ -977,7 +1052,7 @@ async def test_graph_proxy_obo_uses_sovereign_login_resource(
         patch(
             "auth_server.providers.entra.obo_exchange",
             new_callable=AsyncMock,
-            return_value="graph-token",
+            return_value=_OBO_RESULT,
         ) as exchange,
         patch.object(
             EntraIdProvider, "fetch_groups_via_graph", new_callable=AsyncMock, return_value=[]
@@ -1009,7 +1084,7 @@ async def test_membership_cache_isolated_by_verified_tenant_and_object(entra_pro
         patch(
             "auth_server.providers.entra.obo_exchange",
             new_callable=AsyncMock,
-            return_value="graph-token",
+            return_value=_OBO_RESULT,
         ) as obo,
         patch("auth_server.providers.entra.guarded_async_client", return_value=graph_client),
     ):
@@ -1032,9 +1107,9 @@ async def test_membership_cache_isolated_by_verified_tenant_and_object(entra_pro
 async def test_transient_failed_recovery_is_not_cached(entra_provider, failure):
     from egress_obo import OboExchangeError
 
-    obo = AsyncMock(return_value="graph-token")
+    obo = AsyncMock(return_value=_OBO_RESULT)
     if failure == "obo":
-        obo.side_effect = [OboExchangeError("IdP unavailable"), "graph-token"]
+        obo.side_effect = [OboExchangeError("IdP unavailable"), _OBO_RESULT]
     graph_client = AsyncMock()
     graph_client.get.side_effect = (
         [
@@ -1067,3 +1142,41 @@ async def test_transient_failed_recovery_is_not_cached(entra_provider, failure):
 
     assert obo.await_count == 2
     assert graph_client.get.await_count == (1 if failure == "obo" else 2)
+
+
+@pytest.mark.asyncio
+async def test_graph_lookup_sends_token_from_real_obo_exchange(entra_provider, monkeypatch):
+    """Run the real obo_exchange so its return contract cannot drift from this caller.
+
+    Only the IdP token endpoint and Graph are faked. Mocking obo_exchange itself
+    hid #2009: the mocks kept returning a bare string after the real function
+    began returning (access_token, expires_in), and the tuple reached Graph.
+    """
+    idp_client = MagicMock()
+    idp_client.post = AsyncMock(
+        return_value=httpx.Response(
+            200,
+            json={"access_token": "exchanged-graph-token", "expires_in": 3599},
+            request=httpx.Request("POST", entra_provider.token_url),
+        )
+    )
+    monkeypatch.setattr(
+        "registry.utils.url_guard.shared_guarded_async_client",
+        lambda **_kwargs: idp_client,
+    )
+    graph_client = AsyncMock()
+    graph_client.get.return_value = httpx.Response(
+        200,
+        json={"value": [{"@odata.type": "#microsoft.graph.group", "id": "nested-parent"}]},
+        request=httpx.Request("GET", "https://graph.microsoft.com/v1.0/me/transitiveMemberOf"),
+    )
+    graph_client.__aenter__.return_value = graph_client
+    with patch("auth_server.providers.entra.guarded_async_client", return_value=graph_client):
+        groups = await entra_provider.recover_bearer_groups(
+            _verified_result(_delegated()), "ingress-token"
+        )
+
+    assert groups == ["nested-parent"]
+    assert graph_client.get.await_args.kwargs["headers"]["Authorization"] == (
+        "Bearer exchanged-graph-token"
+    )

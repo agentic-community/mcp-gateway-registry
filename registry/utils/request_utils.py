@@ -116,3 +116,28 @@ def get_client_ip(request: Request) -> str:
             return peer
 
     return "unknown"
+
+
+def is_request_https(request: Request) -> bool:
+    """Return True when the browser reached the gateway over HTTPS.
+
+    Mirrors ``auth_server.server.is_request_https``, which decides the Secure
+    flag of the cookies the auth server sets, so a cookie the registry sets
+    follows the same rule. TLS usually ends at a load balancer or CloudFront,
+    so the forwarded protocol headers are checked before the request's own
+    scheme. A browser drops a Secure cookie set over plain HTTP, so the flag is
+    only worth sending when this is True. A spoofed header only changes the
+    flag on the response to the request that carried it.
+
+    Args:
+        request: The incoming request.
+
+    Returns:
+        True if ``X-Cloudfront-Forwarded-Proto`` or ``X-Forwarded-Proto`` is
+        ``https``, or the request scheme is ``https``.
+    """
+    if request.headers.get("x-cloudfront-forwarded-proto", "").lower() == "https":
+        return True
+    if request.headers.get("x-forwarded-proto", "").lower() == "https":
+        return True
+    return request.url.scheme == "https"

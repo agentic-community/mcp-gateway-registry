@@ -65,7 +65,7 @@ registry_management.py server-search --query "tools" --metadata-fields "owner"
 - **Nested paths** use dots: `config.region` returns `{"config": {"region": ...}}`.
 - **Ancestor wins:** if you request both `config` and `config.region`, you get the full `config` subtree (the ancestor already includes the descendant).
 - **Missing paths are dropped silently**, not errored — so you can request a superset of fields across a heterogeneous result set.
-- **Backward compatible:** leaving `metadata_fields` off returns full metadata exactly as before.
+- **Backward compatible on the REST API:** leaving `metadata_fields` off a REST call returns full metadata exactly as before. The mcpgw MCP tools (`list_services`, `list_agents`, `list_skills`, `search_registry`) are the exception: they return no metadata unless you name the keys, because their results go straight into a model's context.
 
 ## What gets rejected (HTTP 422)
 

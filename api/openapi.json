@@ -3,7 +3,7 @@
   "info": {
     "title": "MCP Gateway Registry",
     "description": "A registry and management system for Model Context Protocol (MCP) servers",
-    "version": "1.33.0"
+    "version": "1.37.0"
   },
   "paths": {
     "/api/version": {
@@ -993,7 +993,7 @@
     "/api/oauth2/egress/callback": {
       "get": {
         "summary": "Egress Callback",
-        "description": "Provider redirect target. No ingress auth -- the signed+encrypted state is\nthe authority. Verifies state (TTL + single-use + account-swap), exchanges the\ncode, and stores the token. Reached via nginx -> registry (no /validate).",
+        "description": "Provider redirect target. No ingress auth -- the signed+encrypted state is\nthe authority. Verifies state (TTL + single-use + account-swap), exchanges the\ncode, and stores the token. Reached via nginx -> registry (no /validate).\n\n``iss`` is the RFC 9207 issuer the provider names in its reply. It is checked\nagainst the server's ``expected_issuer`` when one is configured.",
         "operationId": "egress_callback_api_oauth2_egress_callback_get",
         "parameters": [
           {
@@ -1014,6 +1014,16 @@
               "type": "string",
               "default": "",
               "title": "State"
+            }
+          },
+          {
+            "name": "iss",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Iss"
             }
           }
         ],
@@ -2626,7 +2636,7 @@
           "Server Management"
         ],
         "summary": "Register Service Api",
-        "description": "Register a service via JWT Bearer Token authentication (External API).\n\nSupports both deployment types:\n- Remote (default): proxy_pass_url required, registry proxies HTTP requests.\n- Local: local_runtime JSON required (admin-only). Registry stores the\n  launch recipe for stdio MCP servers; it does NOT execute the server.\n\n**Authentication:** JWT Bearer token (via nginx X-User header)\n**Authorization:** Requires valid JWT token. Local registration requires admin.\n\n**Request body (form data):**\n- `name` (required): Service name\n- `description` (required): Service description\n- `path` (required): Service path (e.g., /myservice)\n- `deployment` (optional): 'remote' (default) or 'local'\n- `proxy_pass_url` (required for remote): Proxy URL (e.g., http://localhost:8000)\n- `local_runtime` (required for local): JSON-encoded launch recipe\n- `tags` (optional): Comma-separated tags\n- `num_tools` (optional): Number of tools\n- `license` (optional): License name\n- `overwrite` (optional): Overwrite if exists (boolean, default true)\n- `auth_scheme` (optional): Auth scheme (none, bearer, api_key). Forced to 'none' for local.\n- `auth_credential` (optional): Plaintext credential (encrypted before storage)\n- `mcp_endpoint` (optional): Full URL for custom MCP endpoint (remote only)\n- `sse_endpoint` (optional): Full URL for custom SSE endpoint (remote only)\n- `metadata` (optional): JSON string of custom metadata\n- `version` (optional): Server version (e.g., v1.0.0)\n- `status` (optional): Lifecycle status (active, deprecated, draft, beta)\n- `oauth_client_id` (optional): Per-server public OAuth client_id advertised in\n  the Connect config so IDEs run the OAuth/PKCE login instead of embedding a\n  static token. Overrides the registry-wide IDE_OAUTH_CLIENT_ID default.\n- `append_mcp_path` (optional, bool): Force/suppress the trailing '/mcp' transport\n  segment on the gateway Connect URL. Omit to auto-detect from proxy_pass_url;\n  set false for root-endpoint servers (e.g. AWS Knowledge) that serve MCP at the\n  server path itself.\n\n**Example (remote):**\n```bash\ncurl -X POST https://registry.example.com/api/servers/register \\\n  -H \"Authorization: Bearer $JWT_TOKEN\" \\\n  -F \"name=My Service\" \\\n  -F \"description=My MCP Service\" \\\n  -F \"path=/myservice\" \\\n  -F \"proxy_pass_url=http://localhost:8000\"\n```\n\n**Example (local):**\n```bash\ncurl -X POST https://registry.example.com/api/servers/register \\\n  -H \"Authorization: Bearer $JWT_TOKEN\" \\\n  -F \"name=My Local MCP\" \\\n  -F \"description=Stdio MCP server\" \\\n  -F \"path=/my-local-mcp\" \\\n  -F \"deployment=local\" \\\n  -F 'local_runtime={\"type\":\"npx\",\"package\":\"@acme/mcp\",\"version\":\"1.0.0\",\"args\":[],\"env\":{},\"required_env\":[\"API_KEY\"]}'\n```",
+        "description": "Register a service via JWT Bearer Token authentication (External API).\n\nSupports both deployment types:\n- Remote (default): proxy_pass_url required, registry proxies HTTP requests.\n- Local: local_runtime JSON required (admin-only). Registry stores the\n  launch recipe for stdio MCP servers; it does NOT execute the server.\n\n**The registered server comes back disabled.** `register_server` (the shared\nservice method this and every other registration route calls) persists a new\nserver with `is_enabled` defaulting to `False`\n(`registry/repositories/documentdb/server_repository.py`), so it is excluded\nfrom default search results and the gateway route until enabled. Call\n`POST /api/servers/toggle` (or use the Dashboard's toggle switch) to enable\nit. The one route that auto-enables on registration is the legacy, internal\n`POST /api/internal/register`, used only by mcpgw-server.\n\n**Authentication:** JWT Bearer token (via nginx X-User header)\n**Authorization:** Requires valid JWT token. Local registration requires admin.\n\n**Request body (form data):**\n- `name` (required): Service name\n- `description` (required): Service description\n- `path` (required): Service path (e.g., /myservice)\n- `deployment` (optional): 'remote' (default) or 'local'\n- `proxy_pass_url` (required for remote): Proxy URL (e.g., http://localhost:8000)\n- `local_runtime` (required for local): JSON-encoded launch recipe\n- `tags` (optional): Comma-separated tags\n- `num_tools` (optional): Number of tools\n- `license` (optional): License name\n- `overwrite` (optional): Overwrite if exists (boolean, default true)\n- `auth_scheme` (optional): Auth scheme (none, bearer, api_key). Forced to 'none' for local.\n- `auth_credential` (optional): Plaintext credential (encrypted before storage)\n- `mcp_endpoint` (optional): Full URL for custom MCP endpoint (remote only)\n- `sse_endpoint` (optional): Full URL for custom SSE endpoint (remote only)\n- `metadata` (optional): JSON string of custom metadata\n- `version` (optional): Server version (e.g., v1.0.0)\n- `status` (optional): Lifecycle status (active, deprecated, draft, beta)\n- `oauth_client_id` (optional): Per-server public OAuth client_id advertised in\n  the Connect config so IDEs run the OAuth/PKCE login instead of embedding a\n  static token. Overrides the registry-wide IDE_OAUTH_CLIENT_ID default.\n- `append_mcp_path` (optional, bool): Force/suppress the trailing '/mcp' transport\n  segment on the gateway Connect URL. Omit to auto-detect from proxy_pass_url;\n  set false for root-endpoint servers (e.g. AWS Knowledge) that serve MCP at the\n  server path itself.\n\n**Example (remote):**\n```bash\ncurl -X POST https://registry.example.com/api/servers/register \\\n  -H \"Authorization: Bearer $JWT_TOKEN\" \\\n  -F \"name=My Service\" \\\n  -F \"description=My MCP Service\" \\\n  -F \"path=/myservice\" \\\n  -F \"proxy_pass_url=http://localhost:8000\"\n```\n\n**Example (local):**\n```bash\ncurl -X POST https://registry.example.com/api/servers/register \\\n  -H \"Authorization: Bearer $JWT_TOKEN\" \\\n  -F \"name=My Local MCP\" \\\n  -F \"description=Stdio MCP server\" \\\n  -F \"path=/my-local-mcp\" \\\n  -F \"deployment=local\" \\\n  -F 'local_runtime={\"type\":\"npx\",\"package\":\"@acme/mcp\",\"version\":\"1.0.0\",\"args\":[],\"env\":{},\"required_env\":[\"API_KEY\"]}'\n```",
         "operationId": "register_service_api_api_servers_register_post",
         "requestBody": {
           "content": {
@@ -7564,7 +7574,7 @@
           "skills"
         ],
         "summary": "Check skill health",
-        "description": "Check skill health by performing HEAD request to SKILL.md URL.\n\nReturns health status, HTTP status code, and response time.",
+        "description": "Check skill health by performing HEAD request to SKILL.md URL.\n\nRetries with a GET when the server answers HEAD with 405 or 501. Returns\nhealth status, HTTP status code, and response time. Stores the result as\nthe skill's ``health_status`` only when it is conclusive: reachable, gone\n(404 or 410), or blocked by the SSRF guard. A rate limit, server error or\ntimeout is reported but leaves the stored status unchanged.",
         "operationId": "check_skill_health_api_skills__skill_path__health_get",
         "parameters": [
           {
@@ -7617,7 +7627,7 @@
           "skills"
         ],
         "summary": "Get SKILL.md content",
-        "description": "Fetch skill content.\n\nWithout ``resource``: returns SKILL.md markdown and the resource manifest.\nWith ``resource``: returns the content of the specified companion file\n(validated against the stored manifest to prevent path traversal).",
+        "description": "Fetch skill content.\n\nWithout ``resource``: returns SKILL.md markdown and the resource manifest.\nWith ``resource``: returns the content of the specified companion file\n(validated against the stored manifest to prevent path traversal).\n``reference``, ``script`` and ``agent`` resources are returned as text in\n``content`` (invalid bytes are replaced, not rejected). ``asset`` resources\nthat are valid UTF-8 with no NUL bytes (templates, schemas, data files) are\nalso returned as text in ``content``, byte-exact. Other assets are returned\nas base64 in ``content_base64`` with ``encoding: \"base64\"``. The asset shape\ndepends on the file's bytes, so clients must branch on ``encoding`` rather\nthan on the path. Every resource response includes ``size_bytes``, the byte\nlength of the file as fetched upstream. Every branch returns JSON, so an\nattacker-controlled extension or body can never select an executable\nresponse content type.\n\nA SKILL.md read also updates the skill's ``health_status``: a successful\nread, or serving inline content, marks a skill that is not already healthy\nas healthy, and a 404 or 410 from the SKILL.md URL marks a skill that is\nnot already unhealthy as unhealthy. Other failures, and companion resource\nreads, leave it unchanged.",
         "operationId": "get_skill_content_api_skills__skill_path__content_get",
         "parameters": [
           {
@@ -10275,7 +10285,7 @@
           "Egress OAuth Facade"
         ],
         "summary": "Egress Connect",
-        "description": "Session-verified front door for MCP URL-mode elicitation.\n\nThis is the ``url`` the MCP client opens (verbatim, with user consent) when\nthe gateway returns an ``elicitation/create`` ``mode: \"url\"`` for an egress\nserver the user has not connected yet. It takes NO client-side OAuth\nparameters (no ``redirect_uri``/PKCE/``response_type`` and no Dynamic Client\nRegistration) -- the CLIENT performs no OAuth at all, so this works with\nproviders like Entra that do not support RFC 7591 DCR.\n\nFlow:\n  1. If the browser has no gateway session, bounce through Keycloak login and\n     return here (so the opener is always an authenticated principal).\n  2. Verify the session principal is a per-user identity. This is the\n     elicitation anti-phishing requirement: the user who OPENS the URL must\n     be a real authenticated user, and the provider-leg AEAD state binds the\n     token write to THIS principal -- a stolen connect URL opened by a\n     different user cannot bind a token to the elicited user.\n  3. 302 the browser to the provider consent (``build_consent_url``). The\n     existing ``/oauth2/egress/callback`` stores the token and shows the\n     close-tab page; the client then retries the original tool call (same\n     bearer) and the vend now HITs.",
+        "description": "Session-verified front door for MCP URL-mode elicitation.\n\nThis is the ``url`` the MCP client opens (verbatim, with user consent) when\nthe gateway returns an ``elicitation/create`` ``mode: \"url\"`` for an egress\nserver the user has not connected yet. It takes NO client-side OAuth\nparameters (no ``redirect_uri``/PKCE/``response_type`` and no Dynamic Client\nRegistration) -- the CLIENT performs no OAuth at all, so this works with\nproviders like Entra that do not support RFC 7591 DCR.\n\nFlow:\n  1. If the browser has no gateway session, bounce through the gateway login\n     (configured provider) and return here (so the opener is always an authenticated principal).\n  2. Verify the session principal is a per-user identity. This is the\n     elicitation anti-phishing requirement: the user who OPENS the URL must\n     be a real authenticated user, and the provider-leg AEAD state binds the\n     token write to THIS principal -- a stolen connect URL opened by a\n     different user cannot bind a token to the elicited user.\n  3. 302 the browser to the provider consent (``build_consent_url``). The\n     existing ``/oauth2/egress/callback`` stores the token and shows the\n     close-tab page; the client then retries the original tool call (same\n     bearer) and the vend now HITs.",
         "operationId": "egress_connect_oauth2_egress_connect_get",
         "parameters": [
           {
@@ -15348,7 +15358,7 @@
           "Discovery"
         ],
         "summary": "Get Oauth Protected Resource For Server",
-        "description": "Per-server RFC 9728 PRM (path-aware discovery).\n\nSpec-compliant MCP clients (Claude Code, etc.) try the path-suffixed\nwell-known URL first, derived from the per-server connection URL. We serve a\ndocument only for servers that need it (see ``server_needs_per_server_prm``):\n``obo_exchange`` on any provider, ``oauth_user`` on Entra, and -- on Entra --\n**every server including plain ones** (issue #990). Everything else --\nincluding Keycloak/Cognito/Okta/Auth0 plain and 3LO servers, which work with\nthe gateway-wide root PRM -- 404s here so the client falls back to the global\nPRM (unchanged behavior).\n\nA ``/virtual/<id>`` path resolves against the virtual-server collection\ninstead, gated by :func:`virtual_server_needs_per_server_prm`. A virtual\nserver is an MCP connection endpoint like any other, so without this an\nEntra client could not log in to one at all: it would fall back to the\nbare-origin root PRM that Entra refuses.\n\nThe advertised ``resource`` is the **per-server connection URL** (e.g.\n``https://gw/github/mcp``). This is the ONLY value that satisfies all three\nconstraints simultaneously:\n  - RFC 9728 \u00a73.3: the client only accepts a PRM ``resource`` equal to the\n    connection URL it is accessing (or the origin); a made-up shared path is\n    rejected.\n  - RFC 8707 canonicalization: a bare origin gets a trailing ``/`` on the\n    wire, which Entra App ID URIs cannot match -- a path-qualified per-server\n    URL is sent verbatim.\n  - Entra: the sent ``resource`` must equal a registered App ID URI exactly.\nThe trade-off (Entra only): each such server's per-server URL must be an App\nID URI on the gateway app (operator maintains the ``identifierUris`` list;\nsee GET /api/egress/obo-identifier-uris for the exact list to register).\nOn Entra this applies to EVERY server (issue #990), not just the egress\nmodes. The registry side is fully dynamic -- derived from the server entry,\nno per-server env config. Lenient IdPs (Keycloak/Cognito/Okta/Auth0) do not\nhit these constraints; their plain servers keep using the gateway-wide PRM\nand this per-server PRM is what makes Entra ingress login work.",
+        "description": "Per-server RFC 9728 PRM (path-aware discovery).\n\nSpec-compliant MCP clients (Claude Code, etc.) try the path-suffixed\nwell-known URL first, derived from the per-server connection URL. We serve a\ndocument only for servers that need it (see ``server_needs_per_server_prm``):\n``obo_exchange`` on any provider, ``oauth_user`` on Entra, and -- on Entra --\n**every server including plain ones** (issue #990). Everything else --\nincluding Keycloak/Cognito/Okta/Auth0 plain and 3LO servers, which work with\nthe gateway-wide root PRM -- 404s here so the client falls back to the global\nPRM (unchanged behavior).\n\nA ``/virtual/<id>`` path resolves against the virtual-server collection\ninstead, gated by :func:`virtual_server_needs_per_server_prm`. A virtual\nserver is an MCP connection endpoint like any other, so without this an\nEntra client could not log in to one at all: it would fall back to the\nbare-origin root PRM that Entra refuses.\n\nThe advertised ``resource`` is the **per-server connection URL** (e.g.\n``https://gw/github/mcp``). This is the ONLY value that satisfies all three\nconstraints simultaneously:\n  - RFC 9728 \u00a73.3: the client only accepts a PRM ``resource`` equal to the\n    connection URL it is accessing (or the origin); a made-up shared path is\n    rejected.\n  - RFC 8707 canonicalization: a bare origin gets a trailing ``/`` on the\n    wire, which Entra App ID URIs cannot match -- a path-qualified per-server\n    URL is sent verbatim.\n  - Entra: the sent ``resource`` must equal a registered App ID URI exactly.\nThe trade-off (Entra only): each such server's per-server URL must be an App\nID URI on the gateway app (operator maintains the ``identifierUris`` list;\nsee GET /api/egress/obo-identifier-uris for the exact list to register).\nOn Entra this applies to EVERY server (issue #990), not just the egress\nmodes. The registry side is fully dynamic -- derived from the server entry,\nno per-server env config. Lenient IdPs (Keycloak/Cognito/Okta/Auth0) do not\nhit these constraints; their plain servers keep using the gateway-wide PRM\nand this per-server PRM is what makes Entra ingress login work.\n\n``scopes_supported`` is provider-dependent. On Entra it is the per-resource\n``<resource>/user_impersonation`` scope (exposed on the gateway app). On every\nother provider it is :func:`derive_supported_scopes`, the same IdP-universal\nlist the global PRM advertises (honouring ``MCP_ADVERTISED_SCOPES``), because\nscope-validating IdPs such as Keycloak reject an unknown\n``<resource>/user_impersonation`` scope at the authorize endpoint with\n``invalid_scope`` (observed on Keycloak 26.2.0), which would block IDE login to\n``obo_exchange`` servers before the token exchange is ever reached. The\n``resource`` stays the per-server connection URL on all providers.",
         "operationId": "get_oauth_protected_resource_for_server__well_known_oauth_protected_resource__server_path__get",
         "parameters": [
           {
@@ -20284,6 +20294,17 @@
             ],
             "title": "Custom Resource"
           },
+          "expected_issuer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Issuer"
+          },
           "target_audience": {
             "anyOf": [
               {
@@ -20294,6 +20315,11 @@
               }
             ],
             "title": "Target Audience"
+          },
+          "list_tools_before_consent": {
+            "type": "boolean",
+            "title": "List Tools Before Consent",
+            "default": false
           }
         },
         "type": "object",
@@ -20351,6 +20377,12 @@
           "server_path": {
             "type": "string",
             "title": "Server Path"
+          },
+          "include_pre_consent_tools": {
+            "type": "boolean",
+            "title": "Include Pre Consent Tools",
+            "description": "Set by the mcp-proxy hop on a direct-route tools/list. Asks the registry to return the server's stored tools on a consent miss when the server opted in (egress_list_tools_before_consent). A hint only: the registry still decides from the verified token's route binding and the stored opt-in.",
+            "default": false
           }
         },
         "type": "object",
@@ -20378,17 +20410,6 @@
             "title": "Consent Required",
             "default": false
           },
-          "authorize_url": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Authorize Url"
-          },
           "connect_url": {
             "anyOf": [
               {
@@ -20399,7 +20420,7 @@
               }
             ],
             "title": "Connect Url",
-            "description": "Session-verified gateway front door for MCP URL-mode elicitation (``GET /oauth2/egress/connect?server=<path>``). The mcp_proxy hop puts this in the ``elicitation/create`` ``url`` field. Unlike ``authorize_url`` (the provider-direct URL), this route re-verifies the opener's gateway session against the elicited principal (anti-phishing) and needs NO client-side OAuth/DCR -- so it works with providers like Entra that do not support RFC 7591 DCR."
+            "description": "Session-verified gateway front door for MCP URL-mode elicitation (``GET /oauth2/egress/connect?server=<path>``). The mcp_proxy hop puts this in the ``elicitation/create`` ``url`` field. This route re-verifies the opener's gateway session against the elicited principal (anti-phishing), binds the consent to the opener's browser, and needs NO client-side OAuth/DCR -- so it works with providers like Entra that do not support RFC 7591 DCR."
           },
           "request_state": {
             "anyOf": [
@@ -20487,11 +20508,27 @@
             ],
             "title": "Pat Value Prefix",
             "description": "pat: value prefix before the PAT (e.g. 'Bearer ' or '' for a bare token)."
+          },
+          "pre_consent_tools": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pre Consent Tools",
+            "description": "MCP tool entries (name, description, inputSchema) from the selected version's stored tool_list, blocked tools removed. Set only on a consent miss when the request asked, the route is direct and the server opted in. Not filtered by the caller's tool grants: the mcp-proxy hop applies those."
           }
         },
         "type": "object",
         "title": "EgressTokenResponse",
-        "description": "Vend result. ``access_token`` is None on a clean miss (consent required).\n\nOn a consent-required miss for a properly egress-configured server, the\nregistry builds the provider ``authorize_url`` so mcp_proxy can return it to\nthe caller (the user clicks it to connect). ``authorize_url`` is None when\nthe server isn't egress-configured / the caller isn't a per-user principal\n(nothing to connect)."
+        "description": "Vend result. ``access_token`` is None on a clean miss (consent required).\n\nOn a consent-required miss for a properly egress-configured server, the\nregistry returns ``connect_url`` so mcp_proxy can send the user to connect.\nNo provider authorize URL is returned: a consent must start in the browser\nthat finishes it, and the vend has no browser. ``connect_url`` is None when\nthe server isn't egress-configured / the caller isn't a per-user principal\n(nothing to connect)."
       },
       "ErrorResponse": {
         "properties": {
@@ -22144,6 +22181,18 @@
               }
             ],
             "title": "Custom Resource"
+          },
+          "expected_issuer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Issuer",
+            "description": "Optional RFC 9207 issuer identifier of the provider's authorization server. When set, the egress OAuth callback rejects a sign-in reply whose iss names a different issuer. Empty keeps the callback as before."
           }
         },
         "type": "object",
@@ -24715,7 +24764,7 @@
           "description"
         ],
         "title": "ServerUpdateRequest",
-        "description": "Full-replacement body for PUT /api/servers/{path}.\n\nOnly mutable metadata fields are accepted. Identity anchors and\nserver-managed fields must not appear; supplying them is a 422.\n\nSize caps (from LLD Should-fix #3):\n    - server_name <= 256 chars\n    - description <= 4096 chars\n    - tags <= 50 entries, each <= 64 chars\n    - external_tags <= 50 entries, each <= 64 chars\n    - metadata <= 64 KB serialised JSON\n    These caps protect downstream code (DocumentDB document size,\n    embedding text budget, UI rendering). NOTE: POST /register\n    does not currently enforce these caps; a follow-up issue\n    will add them there for consistency.\n\nVisibility & access control:\n    `visibility` and `allowed_groups` are deliberately mutable. The\n    owner of a server can change these at any time (same authority\n    they have at registration time). The handler enforces an\n    ownership check before this body is applied, so non-owners\n    cannot mutate them via this endpoint. See the LLD Threat\n    Model section for the full reasoning.\n\nAuth/credential fields:\n    `auth_scheme`, `auth_credential`, `auth_header_name`,\n    `custom_headers`, and `custom_header_names` are intentionally\n    absent. Use PATCH /api/servers/{path}/auth-credential instead.\n\nLocal-deployment fields:\n    `deployment` and `local_runtime` are in\n    SERVER_REGISTRANT_ONLY_FIELDS and rejected with 422. To change\n    a local server's launch recipe today, re-register with\n    overwrite=true. A dedicated endpoint is planned for the future."
+        "description": "Full-replacement body for PUT /api/servers/{path}.\n\nOnly mutable metadata fields are accepted. Identity anchors and\nserver-managed fields must not appear; supplying them is a 422.\n\nSize caps (from LLD Should-fix #3):\n    - server_name <= 256 chars\n    - description <= 4096 chars\n    - tags <= 50 entries, each <= 64 chars\n    - external_tags <= 50 entries, each <= 64 chars\n    - metadata <= 10,240 bytes as compact UTF-8 JSON, nested at\n      most 8 levels deep (registry/utils/metadata_limits.py)\n    These caps protect downstream code (DocumentDB document size,\n    embedding text budget, UI rendering, model context). The\n    metadata caps are shared with every server, agent and skill\n    registration path (issue #1811).\n\nVisibility & access control:\n    `visibility` and `allowed_groups` are deliberately mutable. The\n    owner of a server can change these at any time (same authority\n    they have at registration time). The handler enforces an\n    ownership check before this body is applied, so non-owners\n    cannot mutate them via this endpoint. See the LLD Threat\n    Model section for the full reasoning.\n\nAuth/credential fields:\n    `auth_scheme`, `auth_credential`, `auth_header_name`,\n    `custom_headers`, and `custom_header_names` are intentionally\n    absent. Use PATCH /api/servers/{path}/auth-credential instead.\n\nLocal-deployment fields:\n    `deployment` and `local_runtime` are in\n    SERVER_REGISTRANT_ONLY_FIELDS and rejected with 422. To change\n    a local server's launch recipe today, re-register with\n    overwrite=true. A dedicated endpoint is planned for the future."
       },
       "SetDefaultVersion": {
         "properties": {

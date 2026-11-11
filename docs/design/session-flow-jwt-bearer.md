@@ -48,7 +48,8 @@ everything that does NOT use a browser session cookie.
             |                         |   proxy_set_header X-User, etc.
             |  X-User, X-Username,    |
             |  X-Client-Id, X-Scopes, |
-            |  X-Auth-Method, X-Groups|
+            |  X-Auth-Method,         |
+            |  X-Internal-Token-Reg.  |
             +-------------------------+
                                       |
                                       v
@@ -221,7 +222,7 @@ response onto the upstream request:
 | `X-Client-Id` | string | auth-server | registry | OAuth client_id (or `federation-static` / static-key name for non-OAuth tokens). |
 | `X-Scopes` | string (space-separated) | auth-server | registry | Pre-computed scopes for this principal. Format: `"scope1 scope2 scope3"`. Empty string is allowed. |
 | `X-Auth-Method` | string | auth-server | registry | One of: `cognito`, `keycloak`, `okta`, `auth0`, `entra`, `self_signed`, `network-trusted`, `federation-static`, or the static-key's configured method. Used by audit logging and by the unified user-context derivation. |
-| `X-Groups` | string (space-separated) | auth-server | registry | IdP groups (for OAuth tokens) or roles (for Entra M2M). Empty if the principal has no groups. |
+| `X-Internal-Token-Registry` | signed JWT | auth-server | registry | Identity assertion the registry verifies, carrying `sub`, `session_id`, `groups`, `auth_method` and `client_id`. A session-backed caller's token carries no groups, because the registry reads them from the session store. The groups travel only here: `/validate` sends no `X-Groups` header, because a second copy pushed the auth_request response past the nginx buffer for users in about 180 groups (#1939). The auth server mints this token only when nginx also sends the `X-Validate-Source-Secret` marker. |
 | `X-Server-Name` | string | auth-server | registry | The server the request was validated for (extracted from `X-Original-URL`). |
 | `X-Tool-Name` | string | auth-server | registry | The tool name when the URL targets a specific tool (used by #1026 tool-level access control). |
 
@@ -240,13 +241,42 @@ This used to be silent; #1055 added the warning. The default is preserved for
 backward compatibility but operators are expected to fix the upstream
 config.
 
-### 4.2 Why X-Groups, not synthesized from X-Scopes
+### 4.2 Where the groups come from
 
 Before #1042 the header path would synthesize groups from scope strings if
 `X-Groups` was missing. That heuristic produced different admin verdicts
 between the cookie path and the header path for the same user (#933). It's
-gone. Today, if `X-Groups` is missing, groups are simply empty and admin
-status is derived purely from the auth-server-computed scopes in `X-Scopes`.
+gone. The registry now reads groups only from the verified
+`X-Internal-Token-Registry` claims (or the session store for cookie callers),
+and `/validate` no longer emits `X-Groups` at all.
+
+nginx reads the `/validate` response into a 64 KiB buffer (`proxy_buffer_size`
+in each `location = /validate` block). A bearer's inline groups are bounded by
+the 32 KiB inbound header limit (`large_client_header_buffers`): a 32 KiB JWT
+holds about 24 KiB of claims JSON, and re-encoding the groups into the registry
+token lands near 32 KiB at most. That holds for any identity provider, including
+Keycloak and Okta, which do not cap inline groups the way Entra does. Groups from
+server-side sources (`REGISTRY_API_KEYS` entries and the MongoDB `idp_m2m_clients`
+and `idp_user_groups` enrichment) are not bounded by nginx. The auth server therefore
+refuses to mint any internal token over 40 KiB (`INTERNAL_TOKEN_MAX_BYTES`), and it
+checks the whole `/validate` response too: headers over 60 KiB in total (for example a
+large token plus a large `X-Scopes`) are refused. Both cases make `/validate` answer
+500, so the client sees a server error rather than a 401 that looks like a bad
+credential, and the auth server logs the sizes and counts involved.
+
+The limit is two-sided. nginx forwards the registry token to the registry as a
+request header, which uvicorn accepts at this size only because `uvicorn[standard]`
+selects the httptools parser; uvicorn's h11 parser rejects request headers over
+16 KiB by default. Browser sessions already avoid this: since #971 their groups live
+in the server-side session store, so their token carries none. Bearer callers have no
+session row; making their token constant-size would need the same server-side
+approach for them, which no issue tracks yet.
+
+nginx allocates the 64 KiB header buffer for each auth check in flight, so 1,000
+concurrent requests hold about 64 MiB for it, against 16 MiB with the old 16 KiB
+buffer. The `/validate` body is a small JSON object that normally fits in the same
+buffer, so the two 64 KiB body buffers are rarely used; nginx's
+`proxy_busy_buffers_size` rule is what sets their count.
 
 ---
 
@@ -305,7 +335,7 @@ no-access context. Federation static tokens use a separate routing path
 
 - Requires `X-User-Pool-Id` and `X-Client-Id` headers from nginx.
 - Validates against the user pool's JWKS endpoint.
-- `cognito:groups` claim populates `X-Groups`.
+- The `cognito:groups` claim populates the `groups` claim of `X-Internal-Token-Registry`.
 
 ### 6.3 Keycloak / Okta / Auth0
 

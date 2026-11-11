@@ -114,6 +114,7 @@ async def create_session(
     provider: str,
     auth_method: str,
     max_age_seconds: int,
+    egress_user: str,
     id_token: str | None = None,
     subject: str | None = None,
     entra_graph_groups_resolved: bool = False,
@@ -128,15 +129,20 @@ async def create_session(
         provider: OAuth provider key (e.g. "keycloak", "entra").
         auth_method: Always "oauth2" today.
         max_age_seconds: Session lifetime — drives the TTL document field.
+        egress_user: The session's per-user egress vault key, computed once at
+            login: the account id, or for a provider allowed to log in without
+            one, the namespaced username fallback key. Every reader of the
+            session's key reads this field through
+            ``registry.egress_auth.session_vault_user.session_vault_user_id``,
+            so the auth server and the registry cannot key one session apart.
+            ``""`` when the login owns no vault bucket.
         id_token: Optional OIDC id_token, encrypted at rest. Required for
             SSO logout via id_token_hint; only pass None when the IdP did
             not return one.
-        subject: The OIDC ``sub`` claim from the id_token. Persisted so the
-            per-user egress vault can key on a stable subject that is present in
-            BOTH id_tokens and access_tokens across providers — unlike
-            ``username`` (preferred_username), which some IdPs (e.g. Entra) omit
-            from access tokens, causing the browser-consent and bearer-vend paths
-            to key on different identities. See canonical_egress_user.
+        subject: The account id (an OIDC ``sub``, or the provider's
+            ``subject_claim``). Persisted for the audit identity and for a
+            registry from an earlier release, which keys the vault on it; this
+            release keys on ``egress_user``.
         entra_graph_groups_resolved: Whether Entra Graph confirmed membership at
             login, including an empty result. Prevents local fallback from
             replacing the verified result on later session-cookie requests.
@@ -156,6 +162,7 @@ async def create_session(
         "groups": groups,
         "provider": provider,
         "auth_method": auth_method,
+        "egress_user": egress_user,
         "created_at": now,
         "expires_at": expires_at,
     }
@@ -206,10 +213,11 @@ async def resolve_session(session_id: str) -> dict[str, Any] | None:
         "groups": doc.get("groups", []),
         "provider": doc.get("provider"),
         "auth_method": doc.get("auth_method"),
-        # OIDC sub, when the callback persisted it. The egress vault keys on this
-        # stable subject (present in id_tokens and access_tokens) rather than
-        # username, so the browser-consent and bearer-vend paths agree. See
-        # canonical_egress_user.
+        # The vault key computed at login. Read only through
+        # session_vault_user_id; a session stored before the field existed
+        # projects None here and owns no vault key.
+        "egress_user": doc.get("egress_user"),
+        # OIDC sub, when the callback persisted it.
         "subject": doc.get("subject"),
         "entra_graph_groups_resolved": doc.get("entra_graph_groups_resolved") is True,
     }

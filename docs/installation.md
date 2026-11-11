@@ -248,9 +248,9 @@ Scope it to the rows above with specific ARNs, and set `http-tokens=required` so
 
 4. **Install Dependencies**
    ```bash
-   # Install uv (Python package manager)
-   curl -LsSf https://astral.sh/uv/install.sh | sh
-   source $HOME/.local/bin/env
+   # Install uv (Python package manager). macOS: brew install uv
+   sudo apt-get install -y pipx && pipx install uv==0.13.5 && pipx ensurepath
+   export PATH="$HOME/.local/bin:$PATH"
    uv venv --python 3.14 && source .venv/bin/activate
 
    # Install Docker

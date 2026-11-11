@@ -48,6 +48,73 @@ export interface PatStatus {
   expired: boolean;
 }
 
+/** The server edit form fields that make up an egress config request. */
+export interface EgressConfigFormFields {
+  egress_auth_mode: 'none' | 'oauth_user' | 'obo_exchange' | 'pat';
+  egress_provider: string;
+  egress_client_id: string;
+  egress_client_secret: string;
+  egress_scopes: string;
+  egress_custom_authorize_url: string;
+  egress_custom_token_url: string;
+  egress_custom_token_auth_style: string;
+  egress_custom_resource: string;
+  egress_expected_issuer: string;
+  egress_target_audience: string;
+  egress_list_tools_before_consent: boolean;
+}
+
+/** Egress modes whose users have a pre-consent state that can list stored tools. */
+export const LIST_BEFORE_CONSENT_MODES: ReadonlyArray<string> = ['oauth_user', 'pat'];
+
+/**
+ * Build the body for POST /api/servers/{path}/egress-auth from the edit form.
+ *
+ * The request replaces the whole egress config, so a field this function leaves
+ * out is reset on the server. Every mode goes through here so that a new field
+ * (such as list_tools_before_consent, issue #1986) cannot be missed in one mode.
+ */
+export function buildEgressConfigBody(form: EgressConfigFormFields): Record<string, unknown> {
+  const mode = form.egress_auth_mode;
+  const scopes = form.egress_scopes
+    .split(/[,\s]+/)
+    .map(s => s.trim())
+    .filter(Boolean);
+  if (mode === 'obo_exchange') {
+    return {
+      egress_auth_mode: 'obo_exchange',
+      target_audience: form.egress_target_audience.trim(),
+      scopes,
+    };
+  }
+  if (mode === 'oauth_user') {
+    return {
+      egress_auth_mode: 'oauth_user',
+      egress_provider: form.egress_provider.trim(),
+      client_id: form.egress_client_id.trim(),
+      // Blank secret on edit keeps the stored one (backend semantics).
+      client_secret: form.egress_client_secret || undefined,
+      scopes,
+      custom_authorize_url: form.egress_custom_authorize_url || undefined,
+      custom_token_url: form.egress_custom_token_url || undefined,
+      custom_token_auth_style: form.egress_custom_token_auth_style || undefined,
+      custom_resource: form.egress_custom_resource || undefined,
+      expected_issuer: form.egress_expected_issuer || undefined,
+      list_tools_before_consent: form.egress_list_tools_before_consent,
+    };
+  }
+  if (mode === 'pat') {
+    // The inject header is inherited from Backend Authentication at vend time,
+    // so it is not sent here.
+    return {
+      egress_auth_mode: 'pat',
+      egress_provider: form.egress_provider.trim(),
+      list_tools_before_consent: form.egress_list_tools_before_consent,
+    };
+  }
+  return { egress_auth_mode: 'none' };
+}
+
 async function csrfHeaders(): Promise<Record<string, string>> {
   const headers: Record<string, string> = {};
   try {

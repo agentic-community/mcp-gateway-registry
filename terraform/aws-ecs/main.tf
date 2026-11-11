@@ -35,8 +35,13 @@ module "mcp_gateway" {
   # Internal auth-server URL (override for Cloud Map / Service Connect FQDNs)
   auth_server_url = var.auth_server_url
 
-  # ALB logging
-  alb_logs_bucket = aws_s3_bucket.alb_logs.id
+  # Make ALB logging wait for the bucket policy while keeping unrelated data
+  # source reads available during planning.
+  # Older state has no wait triggers, so refresh-only runs need the bucket fallback.
+  alb_logs_bucket = try(
+    time_sleep.wait_for_bucket_policy.triggers.alb_logs_bucket,
+    aws_s3_bucket.alb_logs.id,
+  )
 
   # ECS configuration
   ecs_cluster_arn         = module.ecs_cluster.arn
@@ -465,6 +470,9 @@ module "mcp_gateway" {
   egress_http_pool_keepalive_expiry_seconds = var.egress_http_pool_keepalive_expiry_seconds
   egress_http_pool_connect_retries          = var.egress_http_pool_connect_retries
   egress_obo_allowed_audiences              = var.egress_obo_allowed_audiences
+  egress_obo_cache_enabled                  = var.egress_obo_cache_enabled
+  egress_obo_cache_max_ttl_seconds          = var.egress_obo_cache_max_ttl_seconds
+  egress_obo_cache_expiry_skew_seconds      = var.egress_obo_cache_expiry_skew_seconds
   egress_oauth_trusted_idp_hosts            = var.egress_oauth_trusted_idp_hosts
   egress_registry_internal_url              = var.egress_registry_internal_url
   egress_nginx_marker_secret                = var.egress_nginx_marker_secret
@@ -508,12 +516,14 @@ resource "terraform_data" "mongodb_backend_uri_required" {
 # CloudFront Configuration Warnings
 # =============================================================================
 
-# Warning for dual ingress configuration (both CloudFront and custom domain)
+# Print Mode 3 access information for CloudFront with a custom domain.
+# Use the domain as the trigger to rerun the notice when its URL changes
+# and avoid replacing this resource on unchanged plans.
 resource "null_resource" "dual_ingress_warning" {
   count = var.enable_cloudfront && var.enable_route53_dns ? 1 : 0
 
   triggers = {
-    always_run = timestamp()
+    root_domain = local.root_domain
   }
 
   provisioner "local-exec" {

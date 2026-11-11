@@ -79,6 +79,11 @@ from ..utils.metadata import (
     parse_and_validate_metadata_fields,
     project_metadata,
 )
+from ..utils.metadata_limits import (
+    MetadataLimitError,
+    parse_metadata_json,
+    validate_metadata_limits,
+)
 from ._etag_utils import parse_if_match, updated_ms, weak_etag_for_timestamp
 
 logger = logging.getLogger(__name__)
@@ -366,6 +371,41 @@ def _coerce_metadata_to_dict(parsed_metadata: Any, path: str) -> dict[str, Any]:
         type(parsed_metadata).__name__,
     )
     return {}
+
+
+def _metadata_limit_violation(
+    metadata: dict[str, Any],
+    path: str,
+) -> str | None:
+    """Return why ``metadata`` breaks the shared limits, or None if it fits.
+
+    The form-based registration and edit routes parse metadata from a JSON
+    string, so no Pydantic model sees it. Each calls this and answers 422 with
+    the returned message (issue #1811). Decoding failures that are really limit
+    violations come from ``_metadata_decode_violation`` instead.
+
+    Args:
+        metadata: The parsed metadata document.
+        path: Server path, for the log line.
+
+    Returns:
+        The error message naming the broken limit, or None.
+    """
+    try:
+        validate_metadata_limits(metadata)
+    except MetadataLimitError as e:
+        logger.warning("metadata for %s rejected: %s", path, e)
+        return str(e)
+    return None
+
+
+def _metadata_decode_violation(
+    error: MetadataLimitError,
+    path: str,
+) -> str:
+    """Log and return the message for metadata JSON too deep to decode (#1811)."""
+    logger.warning("metadata for %s rejected while decoding: %s", path, error)
+    return str(error)
 
 
 async def _apply_tool_visibility(
@@ -1867,12 +1907,21 @@ async def register_service(
         try:
             import json
 
-            parsed_metadata = json.loads(metadata)
+            parsed_metadata = parse_metadata_json(metadata)
             server_entry["metadata"] = _coerce_metadata_to_dict(parsed_metadata, path)
         except json.JSONDecodeError:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid JSON in metadata field",
+            )
+        except MetadataLimitError as e:
+            limit_error = _metadata_decode_violation(e, path)
+        else:
+            limit_error = _metadata_limit_violation(server_entry["metadata"], path)
+        if limit_error:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=limit_error,
             )
 
     # Registration gate check (admission control, issue #809)
@@ -2178,12 +2227,23 @@ async def internal_register_service(
         server_entry["auth_header_name"] = auth_header_name
     if metadata:
         try:
-            parsed_metadata = json.loads(metadata) if isinstance(metadata, str) else metadata
+            parsed_metadata = (
+                parse_metadata_json(metadata) if isinstance(metadata, str) else metadata
+            )
             server_entry["metadata"] = _coerce_metadata_to_dict(parsed_metadata, path)
         except json.JSONDecodeError:
             return JSONResponse(
                 status_code=400,
                 content={"error": "Invalid metadata", "reason": "metadata must be valid JSON"},
+            )
+        except MetadataLimitError as e:
+            limit_error = _metadata_decode_violation(e, path)
+        else:
+            limit_error = _metadata_limit_violation(server_entry["metadata"], path)
+        if limit_error:
+            return JSONResponse(
+                status_code=422,
+                content={"error": "Invalid metadata", "reason": limit_error},
             )
 
     # Registration gate check (admission control, issue #809)
@@ -2899,11 +2959,23 @@ async def edit_server_submit(
         try:
             import json
 
-            updated_server_entry["metadata"] = json.loads(metadata)
+            updated_server_entry["metadata"] = parse_metadata_json(metadata)
         except json.JSONDecodeError:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid JSON in metadata field",
+            )
+        except MetadataLimitError as e:
+            limit_error = _metadata_decode_violation(e, service_path)
+        else:
+            limit_error = _metadata_limit_violation(
+                updated_server_entry["metadata"],
+                service_path,
+            )
+        if limit_error:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=limit_error,
             )
 
     # Registration gate check (admission control, issue #809)
@@ -4614,7 +4686,9 @@ async def register_service_api(
     # Normalize metadata before admission control so the gate evaluates what is stored.
     if metadata:
         try:
-            parsed_metadata = json.loads(metadata) if isinstance(metadata, str) else metadata
+            parsed_metadata = (
+                parse_metadata_json(metadata) if isinstance(metadata, str) else metadata
+            )
             server_entry["metadata"] = _coerce_metadata_to_dict(parsed_metadata, path)
         except json.JSONDecodeError:
             return JSONResponse(
@@ -4623,6 +4697,19 @@ async def register_service_api(
                     "error": "Invalid metadata",
                     "reason": "metadata must be valid JSON",
                     "detail": "Provide metadata as a JSON string",
+                },
+            )
+        except MetadataLimitError as e:
+            limit_error = _metadata_decode_violation(e, path)
+        else:
+            limit_error = _metadata_limit_violation(server_entry["metadata"], path)
+        if limit_error:
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "error": "Invalid metadata",
+                    "reason": limit_error,
+                    "detail": "Reduce the metadata to fit the limit and register again",
                 },
             )
 
@@ -5196,6 +5283,7 @@ def _oauth_discovery_view(server: dict) -> dict:
         "custom_scope_separator": oauth.get("custom_scope_separator"),
         "custom_token_auth_style": oauth.get("custom_token_auth_style"),
         "custom_resource": oauth.get("custom_resource"),
+        "expected_issuer": oauth.get("expected_issuer"),
     }
 
 
@@ -5260,7 +5348,7 @@ async def put_server_oauth_discovery(
     Owner-or-admin only; CSRF protected. ``client_secret`` blank keeps stored.
     An existing designation is preserved -- see below.
     """
-    from ..egress_auth.service import canonical_auth_method, is_per_user_auth_method
+    from ..egress_auth.service import vault_principal
     from .egress_auth_routes import build_oauth_provider_config
 
     set_audit_action(
@@ -5314,11 +5402,11 @@ async def put_server_oauth_discovery(
             content={"error": "OAuth 2.1 discovery is not applicable to local servers"},
         )
 
-    # Record the caller's canonical vault principal. Must match what the consent
+    # Record the caller's vault principal. Must match what the consent
     # (/oauth2/egress/connect?purpose=discovery) and vend paths key on:
-    # auth_method + egress_user (OIDC sub, else username).
+    # canonical auth_method + the auth-server's egress_user (vault_principal).
     #
-    # CANONICALIZE. Every vault write folds per-user IdP method names (keycloak, jwt,
+    # CANONICAL. Every vault write folds per-user IdP method names (keycloak, jwt,
     # self_signed, ...) into the single `oauth2` bucket so consent-write and vend-read
     # agree. A browser caller already reports `oauth2`, but a bearer/IdP-JWT caller
     # carries the raw claim straight through -- storing that verbatim designates an
@@ -5326,9 +5414,8 @@ async def put_server_oauth_discovery(
     # principal-mismatch guard on the consent route then refuses the browser consent
     # that would have fixed it. Designating over the API must land in the same bucket
     # the consent will write to.
-    auth_method = canonical_auth_method({"method": user_context.get("auth_method") or ""})
-    user_id = user_context.get("egress_user") or user_context.get("username") or ""
-    if not is_per_user_auth_method(auth_method) or not user_id:
+    principal = vault_principal(user_context)
+    if principal is None:
         return JSONResponse(
             status_code=403,
             content={
@@ -5336,6 +5423,7 @@ async def put_server_oauth_discovery(
                 "reason": "Only a per-user (e.g. oauth2) principal can be a discovery identity",
             },
         )
+    auth_method, user_id = principal
 
     # Build (validate + encrypt) this server's OWN discovery OAuth provider config
     # -- self-contained under Backend Auth, no egress_oauth dependency. Blank
@@ -5351,6 +5439,7 @@ async def put_server_oauth_discovery(
         custom_scope_separator=body.custom_scope_separator,
         custom_token_auth_style=body.custom_token_auth_style,
         custom_resource=body.custom_resource,
+        expected_issuer=body.expected_issuer,
         prior_secret_encrypted=prior.get("client_secret_encrypted"),
     )
     oauth_cfg["updated_at"] = datetime.now(UTC).isoformat()

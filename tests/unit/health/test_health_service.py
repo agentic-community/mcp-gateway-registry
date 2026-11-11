@@ -1970,3 +1970,405 @@ async def test_probe_mcp_endpoint_does_not_read_body_on_200(health_service):
 
     response.aread.assert_not_called()
     assert result.status_code == 200
+
+
+# =============================================================================
+# MCP 2026-07-28: server/discover probe before the legacy initialize + ping
+# =============================================================================
+
+from registry.health.service import (  # noqa: E402
+    LEGACY_MCP_ERA_CACHE_SECONDS,
+    MODERN_MCP_PROTOCOL_VERSION,
+    _is_modern_mcp_answer,
+    _parse_jsonrpc_response,
+)
+
+DISCOVER_RESULT = (
+    b'{"jsonrpc":"2.0","id":"health-discover","result":'
+    b'{"supportedVersions":["2026-07-28"],"capabilities":{"tools":{}},"resultType":"complete"}}'
+)
+LEGACY_METHOD_NOT_FOUND = (
+    b'{"jsonrpc":"2.0","id":"health-discover","error":{"code":-32601,"message":"Method not found"}}'
+)
+
+
+class _StreamedResponse:
+    """A streamed httpx response stand-in that yields the given chunks."""
+
+    def __init__(
+        self,
+        status_code: int,
+        chunks: list[bytes],
+    ):
+        self.status_code = status_code
+        self._chunks = chunks
+        self.chunks_read = 0
+
+    async def aiter_bytes(self):
+        for chunk in self._chunks:
+            self.chunks_read += 1
+            yield chunk
+
+
+def _stream_ctx(response: _StreamedResponse) -> MagicMock:
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=response)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    return ctx
+
+
+class TestModernMcpAnswerParsing:
+    """Recognizing a 2026-07-28 server from its server/discover answer."""
+
+    def test_parses_plain_json(self):
+        assert _parse_jsonrpc_response(DISCOVER_RESULT)["result"]["supportedVersions"] == [
+            "2026-07-28"
+        ]
+
+    def test_parses_sse_framed_answer(self):
+        body = b"event: message\ndata: " + DISCOVER_RESULT + b"\n\n"
+
+        assert _parse_jsonrpc_response(body)["id"] == "health-discover"
+
+    def test_unparseable_body_is_none(self):
+        assert _parse_jsonrpc_response(b"<html>502 Bad Gateway</html>") is None
+        assert _parse_jsonrpc_response(b'{"truncated":') is None
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            {"result": {"supportedVersions": ["2026-07-28"]}},
+            {"error": {"code": -32022, "message": "Unsupported protocol version"}},
+            {"error": {"code": -32020, "message": "Header mismatch"}},
+            {"error": {"code": -32021, "message": "Missing required client capability"}},
+        ],
+    )
+    def test_modern_answers(self, message):
+        assert _is_modern_mcp_answer(message) is True
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            None,
+            {"error": {"code": -32601, "message": "Method not found"}},
+            {"error": {"code": -32600, "message": "Bad Request: No valid session ID"}},
+            {"error": "plain string error"},
+            {"result": {}},
+            {"result": {"supportedVersions": []}},
+            {"result": {"supportedVersions": [2026]}},
+        ],
+    )
+    def test_non_modern_answers(self, message):
+        assert _is_modern_mcp_answer(message) is False
+
+
+class TestProbeServerDiscover:
+    """The probe sends a valid modern request and never decides 'unhealthy' alone."""
+
+    @pytest.mark.asyncio
+    async def test_sends_modern_headers_and_meta(self, health_service):
+        import json
+
+        client = MagicMock()
+        client.stream = MagicMock(
+            return_value=_stream_ctx(_StreamedResponse(200, [DISCOVER_RESULT]))
+        )
+
+        result = await health_service._probe_server_discover(
+            client, "https://h.example/mcp", {"Authorization": "Bearer t"}
+        )
+
+        assert result is True
+        call = client.stream.call_args
+        headers = call.kwargs["headers"]
+        assert headers["MCP-Protocol-Version"] == MODERN_MCP_PROTOCOL_VERSION
+        assert headers["Mcp-Method"] == "server/discover"
+        assert headers["Authorization"] == "Bearer t"
+        body = json.loads(call.kwargs["content"])
+        assert body["method"] == "server/discover"
+        meta = body["params"]["_meta"]
+        assert meta["io.modelcontextprotocol/protocolVersion"] == MODERN_MCP_PROTOCOL_VERSION
+
+    @pytest.mark.asyncio
+    async def test_stops_reading_at_first_complete_answer(self, health_service):
+        """An SSE response that stays open after the answer does not hold the probe."""
+        response = _StreamedResponse(
+            200, [b"data: " + DISCOVER_RESULT + b"\n\n", b": keep-alive\n", b": keep-alive\n"]
+        )
+        client = MagicMock()
+        client.stream = MagicMock(return_value=_stream_ctx(response))
+
+        assert await health_service._probe_server_discover(client, "https://h.example/mcp", {})
+        assert response.chunks_read == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", [401, 403])
+    async def test_auth_failure_falls_back_without_reading_body(self, health_service, status):
+        response = _StreamedResponse(status, [DISCOVER_RESULT])
+        client = MagicMock()
+        client.stream = MagicMock(return_value=_stream_ctx(response))
+
+        assert (
+            await health_service._probe_server_discover(client, "https://h.example/mcp", {})
+            is False
+        )
+        assert response.chunks_read == 0
+
+    @pytest.mark.asyncio
+    async def test_legacy_answer_falls_back(self, health_service):
+        client = MagicMock()
+        client.stream = MagicMock(
+            return_value=_stream_ctx(_StreamedResponse(200, [LEGACY_METHOD_NOT_FOUND]))
+        )
+
+        assert (
+            await health_service._probe_server_discover(client, "https://h.example/mcp", {})
+            is False
+        )
+
+    @pytest.mark.asyncio
+    async def test_connection_error_falls_back(self, health_service):
+        client = MagicMock()
+        client.stream = MagicMock(side_effect=httpx.ConnectError("refused"))
+
+        assert (
+            await health_service._probe_server_discover(client, "https://h.example/mcp", {})
+            is False
+        )
+
+
+class TestTransportAwareModernProbe:
+    """The streamable-http health path tries server/discover before initialize."""
+
+    @pytest.mark.asyncio
+    async def test_modern_server_is_healthy_without_initialize(
+        self, health_service, mock_server_info
+    ):
+        initialize = AsyncMock(return_value="unused")
+        with (
+            patch("registry.health.service.validate_url", return_value=["93.184.216.34"]),
+            patch.object(health_service, "_probe_server_discover", AsyncMock(return_value=True)),
+            patch.object(health_service, "_initialize_mcp_session", initialize),
+        ):
+            is_healthy, status = await health_service._check_server_endpoint_transport_aware(
+                MagicMock(), "http://localhost:8000/mcp", mock_server_info
+            )
+
+        assert (is_healthy, status) == (True, HealthStatus.HEALTHY)
+        initialize.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_legacy_server_still_uses_initialize_and_ping(
+        self, health_service, mock_server_info
+    ):
+        initialize = AsyncMock(return_value="session-123")
+        ping_response = MagicMock(status_code=200)
+        with (
+            patch("registry.health.service.validate_url", return_value=["93.184.216.34"]),
+            patch.object(health_service, "_probe_server_discover", AsyncMock(return_value=False)),
+            patch.object(health_service, "_initialize_mcp_session", initialize),
+            patch.object(
+                health_service, "_probe_mcp_endpoint", AsyncMock(return_value=ping_response)
+            ),
+        ):
+            is_healthy, status = await health_service._check_server_endpoint_transport_aware(
+                MagicMock(), "http://localhost:8000/mcp", mock_server_info
+            )
+
+        assert (is_healthy, status) == (True, HealthStatus.HEALTHY)
+        initialize.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_ssrf_block_happens_before_discover_probe(self, health_service, mock_server_info):
+        """A blocked URL never reaches the new probe, so no credential is sent."""
+        from registry.exceptions import UrlValidationError
+
+        discover = AsyncMock(return_value=True)
+        with (
+            patch(
+                "registry.health.service.validate_url",
+                side_effect=UrlValidationError("http://10.0.0.5/mcp", "private address"),
+            ),
+            patch.object(health_service, "_probe_server_discover", discover),
+        ):
+            is_healthy, status = await health_service._check_server_endpoint_transport_aware(
+                MagicMock(), "http://10.0.0.5/mcp", mock_server_info
+            )
+
+        assert is_healthy is False
+        assert status == HealthStatus.UNHEALTHY_URL_BLOCKED
+        discover.assert_not_called()
+
+
+def _legacy_client() -> MagicMock:
+    """A client whose every server/discover gets the handshake-era -32601."""
+    client = MagicMock()
+    client.stream = MagicMock(
+        side_effect=lambda *a, **k: _stream_ctx(_StreamedResponse(200, [LEGACY_METHOD_NOT_FOUND]))
+    )
+    return client
+
+
+class TestLegacyEraCache:
+    """A handshake-era answer is remembered, so checks skip server/discover."""
+
+    ENDPOINT = "https://h.example/mcp"
+
+    @pytest.mark.asyncio
+    async def test_legacy_answer_skips_the_next_probe(self, health_service):
+        client = _legacy_client()
+
+        first = await health_service._probe_server_discover(client, self.ENDPOINT, {}, "/srv")
+        second = await health_service._probe_server_discover(client, self.ENDPOINT, {}, "/srv")
+
+        assert (first, second) == (False, False)
+        assert client.stream.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_no_answer_is_remembered(self, health_service):
+        """A server that never answers server/discover costs one timeout per hour."""
+        client = MagicMock()
+        client.stream = MagicMock(side_effect=httpx.ReadTimeout("slow"))
+
+        await health_service._probe_server_discover(client, self.ENDPOINT, {}, "/srv")
+        await health_service._probe_server_discover(client, self.ENDPOINT, {}, "/srv")
+
+        assert client.stream.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_modern_answer_is_not_remembered(self, health_service):
+        client = MagicMock()
+        client.stream = MagicMock(
+            side_effect=lambda *a, **k: _stream_ctx(_StreamedResponse(200, [DISCOVER_RESULT]))
+        )
+
+        await health_service._probe_server_discover(client, self.ENDPOINT, {}, "/srv")
+        assert await health_service._probe_server_discover(client, self.ENDPOINT, {}, "/srv")
+
+        assert client.stream.call_count == 2
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", [401, 403])
+    async def test_auth_failure_is_not_remembered(self, health_service, status):
+        client = MagicMock()
+        client.stream = MagicMock(
+            side_effect=lambda *a, **k: _stream_ctx(_StreamedResponse(status, []))
+        )
+
+        await health_service._probe_server_discover(client, self.ENDPOINT, {}, "/srv")
+        await health_service._probe_server_discover(client, self.ENDPOINT, {}, "/srv")
+
+        assert client.stream.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_entry_expires(self, health_service):
+        client = _legacy_client()
+        now = 1_000_000.0
+
+        with patch("registry.health.service.time", return_value=now):
+            await health_service._probe_server_discover(client, self.ENDPOINT, {}, "/srv")
+        later = now + LEGACY_MCP_ERA_CACHE_SECONDS
+        with patch("registry.health.service.time", return_value=later):
+            await health_service._probe_server_discover(client, self.ENDPOINT, {}, "/srv")
+
+        assert client.stream.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_changed_endpoint_probes_again(self, health_service):
+        client = _legacy_client()
+
+        await health_service._probe_server_discover(client, self.ENDPOINT, {}, "/srv")
+        await health_service._probe_server_discover(client, "https://new.example/mcp", {}, "/srv")
+
+        assert client.stream.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_without_server_path_nothing_is_cached(self, health_service):
+        client = _legacy_client()
+
+        await health_service._probe_server_discover(client, self.ENDPOINT, {})
+        await health_service._probe_server_discover(client, self.ENDPOINT, {})
+
+        assert client.stream.call_count == 2
+        assert health_service._legacy_mcp_endpoints == {}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("result", "kept"),
+        [((True, HealthStatus.HEALTHY), True), ((False, "unhealthy: status 500"), False)],
+    )
+    async def test_unhealthy_result_forgets_the_entry(
+        self, health_service, mock_server_info, result, kept
+    ):
+        """A modern server that was down at its first probe is not stuck as legacy."""
+        path = "/test-server"
+        server_info = {**mock_server_info, "path": path}
+        health_service._remember_legacy_endpoint(path, self.ENDPOINT)
+
+        with patch.object(
+            health_service, "_check_transport_endpoints", AsyncMock(return_value=result)
+        ):
+            got = await health_service._check_server_endpoint_transport_aware(
+                MagicMock(), "http://localhost:8000/mcp", server_info
+            )
+
+        assert got == result
+        assert (path in health_service._legacy_mcp_endpoints) is kept
+
+    @pytest.mark.asyncio
+    async def test_health_path_passes_the_server_path(self, health_service, mock_server_info):
+        server_info = {**mock_server_info, "path": "/test-server"}
+        discover = AsyncMock(return_value=True)
+        with (
+            patch("registry.health.service.validate_url", return_value=["93.184.216.34"]),
+            patch.object(health_service, "_probe_server_discover", discover),
+        ):
+            await health_service._check_server_endpoint_transport_aware(
+                MagicMock(), "http://localhost:8000/mcp", server_info
+            )
+
+        assert discover.call_args.kwargs["server_path"] == "/test-server"
+
+
+class TestUnresolvedHostLabel:
+    """A host that does not resolve is reported as such, not as an SSRF block."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("reason", "expected"),
+        [
+            ("DNS resolution failed: [Errno -2] Name or service not known", "host"),
+            ("DNS resolution timed out", "host"),
+            ("resolves to private address 10.0.0.5", "blocked"),
+        ],
+    )
+    async def test_status_names_the_cause(self, health_service, mock_server_info, reason, expected):
+        from registry.exceptions import UrlValidationError
+
+        with patch(
+            "registry.health.service.validate_url",
+            side_effect=UrlValidationError("http://gone:8000/mcp", reason),
+        ):
+            is_healthy, status = await health_service._check_server_endpoint_transport_aware(
+                MagicMock(), "http://gone:8000/mcp", mock_server_info
+            )
+
+        assert is_healthy is False
+        if expected == "host":
+            assert status == HealthStatus.UNHEALTHY_HOST_NOT_RESOLVED
+        else:
+            assert status == HealthStatus.UNHEALTHY_URL_BLOCKED
+
+    def test_unhealthy_label_keeps_the_route_gate_closed(self):
+        assert not HealthStatus.is_healthy(HealthStatus.UNHEALTHY_HOST_NOT_RESOLVED)
+
+    def test_url_guard_reason_still_matches_the_prefix(self):
+        """Pins the url_guard wording the label depends on, with a real lookup."""
+        from registry.exceptions import UrlValidationError
+        from registry.health.service import DNS_FAILURE_REASON_PREFIX
+        from registry.utils.url_guard import PROXY_PROFILE, validate_url
+
+        with pytest.raises(UrlValidationError) as info:
+            validate_url("https://no-such-host.invalid/mcp", profile=PROXY_PROFILE)
+
+        assert info.value.reason.startswith(DNS_FAILURE_REASON_PREFIX)

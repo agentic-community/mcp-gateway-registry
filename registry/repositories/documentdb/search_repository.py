@@ -195,6 +195,48 @@ def _format_custom_result(
     }
 
 
+def _format_skill_result(
+    doc: dict[str, Any],
+    relevance_score: float,
+) -> dict[str, Any]:
+    """Format a skill search hit into its result entry.
+
+    Shared by every search path (vector, client-side, lexical) so the skill
+    fields cannot drift between them. Health is deliberately absent: the
+    search route reads it from the skills collection, the single store a
+    health check writes to (issue #1952).
+
+    Args:
+        doc: Search-index document for the skill.
+        relevance_score: Score assigned by the calling search path.
+
+    Returns:
+        Skill result entry consumed by the semantic search route and by ARD
+        search, which publishes ``updated_at`` as the catalog entry's
+        last-modified time without a per-hit database read.
+    """
+    metadata = doc.get("metadata") or {}
+    return {
+        "entity_type": "skill",
+        "path": doc.get("path"),
+        "skill_name": doc.get("name"),
+        "description": doc.get("description"),
+        "tags": doc.get("tags", []),
+        "skill_md_url": metadata.get("skill_md_url"),
+        "skill_md_raw_url": metadata.get("skill_md_raw_url"),
+        "version": metadata.get("version"),
+        "author": metadata.get("author"),
+        "visibility": doc.get("visibility", "public"),
+        "allowed_groups": doc.get("allowed_groups", []),
+        "owner": doc.get("owner"),
+        "is_enabled": doc.get("is_enabled", False),
+        "status": doc.get("status", "active"),
+        "relevance_score": relevance_score,
+        "match_context": doc.get("description"),
+        "updated_at": doc.get("indexed_at"),
+    }
+
+
 def _distribute_results(
     scored_results: list[tuple[dict, float]],
     max_results: int,
@@ -1329,10 +1371,6 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             "visibility": visibility_value,
             "allowed_groups": skill.allowed_groups or [],
             "owner": skill.owner,
-            "health_status": skill.health_status,
-            "last_checked_time": skill.last_checked_time.isoformat()
-            if skill.last_checked_time
-            else None,
             "status": getattr(skill, "status", "active"),
             "text_for_embedding": text_for_embedding,
             "content_hash": content_hash,
@@ -2020,8 +2058,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                     "visibility": 1,
                     "owner": 1,
                     "allowed_groups": 1,
-                    "health_status": 1,
-                    "last_checked_time": 1,
+                    "indexed_at": 1,
                     "embedding": 1,
                 },
             )
@@ -2236,25 +2273,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                     grouped_results["tools"].append(result_entry)
 
                 elif entity_type == "skill":
-                    metadata = doc.get("metadata", {})
-                    result_entry = {
-                        "entity_type": "skill",
-                        "path": doc.get("path"),
-                        "skill_name": doc.get("name"),
-                        "description": doc.get("description"),
-                        "tags": doc.get("tags", []),
-                        "skill_md_url": metadata.get("skill_md_url"),
-                        "version": metadata.get("version"),
-                        "author": metadata.get("author"),
-                        "visibility": doc.get("visibility", "public"),
-                        "allowed_groups": doc.get("allowed_groups", []),
-                        "owner": doc.get("owner"),
-                        "is_enabled": doc.get("is_enabled", False),
-                        "status": doc.get("status", "active"),
-                        "relevance_score": relevance_score,
-                        "match_context": doc.get("description"),
-                    }
-                    grouped_results["skills"].append(result_entry)
+                    grouped_results["skills"].append(_format_skill_result(doc, relevance_score))
 
                 elif entity_type == "virtual_server":
                     metadata = doc.get("metadata", {})
@@ -2520,25 +2539,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                 grouped_results["tools"].append(result_entry)
 
             elif entity_type == "skill":
-                metadata = doc.get("metadata", {})
-                result_entry = {
-                    "entity_type": "skill",
-                    "path": doc.get("path"),
-                    "skill_name": doc.get("name"),
-                    "description": doc.get("description"),
-                    "tags": doc.get("tags", []),
-                    "skill_md_url": metadata.get("skill_md_url"),
-                    "version": metadata.get("version"),
-                    "author": metadata.get("author"),
-                    "visibility": doc.get("visibility", "public"),
-                    "allowed_groups": doc.get("allowed_groups", []),
-                    "owner": doc.get("owner"),
-                    "is_enabled": doc.get("is_enabled", False),
-                    "status": doc.get("status", "active"),
-                    "relevance_score": relevance_score,
-                    "match_context": doc.get("description"),
-                }
-                grouped_results["skills"].append(result_entry)
+                grouped_results["skills"].append(_format_skill_result(doc, relevance_score))
 
             elif entity_type == "virtual_server":
                 metadata = doc.get("metadata", {})
@@ -3009,25 +3010,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                     grouped_results["tools"].append(result_entry)
 
                 elif entity_type == "skill":
-                    metadata = doc.get("metadata", {})
-                    result_entry = {
-                        "entity_type": "skill",
-                        "path": doc.get("path"),
-                        "skill_name": doc.get("name"),
-                        "description": doc.get("description"),
-                        "tags": doc.get("tags", []),
-                        "skill_md_url": metadata.get("skill_md_url"),
-                        "version": metadata.get("version"),
-                        "author": metadata.get("author"),
-                        "visibility": doc.get("visibility", "public"),
-                        "allowed_groups": doc.get("allowed_groups", []),
-                        "owner": doc.get("owner"),
-                        "is_enabled": doc.get("is_enabled", False),
-                        "status": doc.get("status", "active"),
-                        "relevance_score": relevance_score,
-                        "match_context": doc.get("description"),
-                    }
-                    grouped_results["skills"].append(result_entry)
+                    grouped_results["skills"].append(_format_skill_result(doc, relevance_score))
 
                 elif entity_type == "virtual_server":
                     metadata = doc.get("metadata", {})

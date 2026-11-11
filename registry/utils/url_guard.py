@@ -720,6 +720,27 @@ def _forward_proxy_ssl_context() -> ssl.SSLContext | bool:
     return context
 
 
+@lru_cache(maxsize=1)
+def egress_ssl_context() -> ssl.SSLContext:
+    """Return the TLS trust for outbound clients that are not httpx, such as httpx2.
+
+    The MCP SDK 2.x talks through httpx2, whose default context reads only the
+    operating system trust store. The registry image ships none, so every HTTPS
+    MCP server failed certificate verification. This context gives httpx2 the
+    trust the rest of the registry has: certifi, any OS store, and the
+    forward-proxy CA bundle when one is configured (same rules as
+    _forward_proxy_ssl_context, which this reuses). Cached so callers that key a
+    pool on the context get one pool.
+    """
+    proxy_context = _forward_proxy_ssl_context()
+    if isinstance(proxy_context, ssl.SSLContext):
+        return proxy_context
+    context = ssl.create_default_context(cafile=certifi.where())
+    # Additive: picks up an OS-provided store as well, where one exists.
+    context.load_default_certs()
+    return context
+
+
 def _no_proxy_matches(
     patterns: tuple[str, ...],
     hostname: str,
@@ -2233,9 +2254,9 @@ def shared_guarded_async_client(
                     guard_profile=profile,
                     verify=verify,
                     retries=_get_settings().egress_http_pool_connect_retries,
+                    limits=_pool_limits(),
                 ),
                 timeout=_DEFAULT_TIMEOUT_SECONDS,
-                limits=_pool_limits(),
             )
         )
         _shared_guarded_clients[key] = client
@@ -2265,9 +2286,9 @@ def shared_plain_async_client() -> httpx.AsyncClient:
             httpx.AsyncClient(
                 transport=PlainProxyRoutedAsyncTransport(
                     retries=_get_settings().egress_http_pool_connect_retries,
+                    limits=_pool_limits(),
                 ),
                 timeout=_DEFAULT_TIMEOUT_SECONDS,
-                limits=_pool_limits(),
             )
         )
     return _shared_plain_client

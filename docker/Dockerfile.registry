@@ -150,6 +150,10 @@ COPY --chown=appuser:appuser docker/lua/ /app/docker/lua/
 # Invoked daily by the registry entrypoint's background loop.
 COPY docker/logrotate-nginx.conf /etc/logrotate.d/nginx-mcp
 
+# Error page for the templates' `error_page 502 /502.html`. Without it nginx
+# turns every 502 (backend startup, auth-server failure) into a 404 (issue #1939).
+COPY docker/502.html /usr/share/nginx/html/502.html
+
 # Copy entrypoint early (rarely changes)
 COPY --chown=appuser:appuser docker/registry-entrypoint.sh /app/registry-entrypoint.sh
 RUN chmod +x /app/registry-entrypoint.sh

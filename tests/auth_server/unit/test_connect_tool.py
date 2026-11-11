@@ -115,7 +115,7 @@ def _proxy_patches(vend: dict | None):
     """
     import auth_server.server as server_module
 
-    async def _vend(token, server):
+    async def _vend(token, server, **_kwargs):
         return vend
 
     plain_client = MagicMock(side_effect=AssertionError("forwarded with the plain client"))
@@ -201,7 +201,7 @@ class TestPreConsentLocalAnswers:
 
         tool = server_module._connect_tool_definition("github", "GitHub")
         resp = server_module._pre_consent_local_response(
-            "tools/list", 1, {"method": "tools/list"}, "oauth", connect_tool=tool
+            "tools/list", 1, {"method": "tools/list"}, "oauth", listed_tools=[tool]
         )
         tools = json.loads(resp.body)["result"]["tools"]
         assert [t["name"] for t in tools] == ["connect_mcpgw_github"]
@@ -245,7 +245,7 @@ class TestPreConsentLocalAnswers:
 
         tool = server_module._connect_tool_definition("github", "GitHub")
         resp = server_module._pre_consent_local_response(
-            "resources/list", 1, {"method": "resources/list"}, "oauth", connect_tool=tool
+            "resources/list", 1, {"method": "resources/list"}, "oauth", listed_tools=[tool]
         )
         assert json.loads(resp.body)["result"]["resources"] == []
 

@@ -46,6 +46,15 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from cloud_labels import DECLINED_LABEL
+from forecast_trend import (
+    FORECAST_RATE_TOLERANCE,
+    FORECAST_TREND_AHEAD,
+    FORECAST_TREND_BEHIND,
+    forecast_trend_from_rates,
+)
+from version_labels import is_release_version
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s,p%(process)s,{%(filename)s:%(lineno)d},%(levelname)s,%(message)s",
@@ -339,7 +348,7 @@ def _build_version_adoption_table(
     ]
     for r in rows:
         lines.append(
-            f"| `{r['version']}` | {r['type'].title()} | {r['events']:,} | "
+            f"| `{r['version']}` | {r['type']} | {r['events']:,} | "
             f"{r['percentage']} | {r['instances']} | {r['instance_percentage']} |"
         )
     return "\n".join(lines)
@@ -389,8 +398,8 @@ def _build_feature_adoption_table(
     if not rows:
         return "| (no data) | | |"
     lines = [
-        "| Feature | Enabled | Rate |",
-        "|---------|--------:|-----:|",
+        "| Feature | Instances | % of Fleet |",
+        "|---------|----------:|-----------:|",
     ]
     for r in rows:
         lines.append(f"| {r['feature']} | {r['enabled']:,} | {r['rate']} |")
@@ -577,9 +586,8 @@ def _build_detection_by_version_narrative(
         return sum(int(row.get(m, 0)) for m in methods) / total * 100
 
     # Identify "release" versions (skip the "other" rollup, dev branches, sha-only refs)
-    is_release_re = re.compile(r"^v?\d+\.\d+\.\d+(?:-p\d+)?$")
     releases = [
-        r for r in rows if is_release_re.match(r.get("version", "")) and int(r.get("total", 0)) >= 5
+        r for r in rows if is_release_version(r.get("version", "")) and int(r.get("total", 0)) >= 5
     ]
 
     if not releases:
@@ -714,7 +722,8 @@ def _build_architecture_patterns(
             )
 
     # 5. Surprising survivor: longest-running customer NOT on AWS
-    non_aws = [c for c in customers if c.get("cloud") not in ("aws", "unknown")]
+    # declined is an operator's Dismiss on the cloud banner, not a cloud.
+    non_aws = [c for c in customers if c.get("cloud") not in ("aws", "unknown", DECLINED_LABEL)]
     if non_aws:
         longest_non_aws = max(non_aws, key=lambda i: i.get("events", 0))
         bullets.append(
@@ -929,19 +938,21 @@ def _build_template_vars(
     today_count = forecast.get("today", {}).get("installs", total_instances)
     target = forecast.get("target", DEFAULT_FORECAST_TARGET)
     remaining = target - today_count
-    if recent_rate > linear_rate:
+    forecast_trend = forecast_trend_from_rates(recent_rate, linear_rate)
+    tol_pct = round(FORECAST_RATE_TOLERANCE * 100)
+    if forecast_trend == FORECAST_TREND_AHEAD:
         forecast_narrative = (
-            f"Recent pace is ahead of the 14-day OLS slope, indicating sustained acceleration. "
+            f"Recent pace is more than {tol_pct}% ahead of the 14-day OLS slope, so installs are accelerating. "
             f"**{remaining} installs from the {target:,}-install milestone.**"
         )
-    elif recent_rate < linear_rate * 0.85:
+    elif forecast_trend == FORECAST_TREND_BEHIND:
         forecast_narrative = (
-            f"Recent pace is behind the 14-day OLS slope, indicating a slowdown. "
+            f"Recent pace is more than {tol_pct}% behind the 14-day OLS slope, so installs are slowing. "
             f"**{remaining} installs from the {target:,}-install milestone.**"
         )
     else:
         forecast_narrative = (
-            f"Recent pace and 14-day OLS are converged. "
+            f"Recent pace and the 14-day OLS slope agree within {tol_pct}%. "
             f"**{remaining} installs from the {target:,}-install milestone.**"
         )
 
@@ -1100,6 +1111,7 @@ def _build_template_vars(
         "forecast_recent_eta": recent_eta,
         "forecast_target": f"{target:,}",
         "forecast_narrative": forecast_narrative,
+        "forecast_trend": forecast_trend,
         # LTV
         "yesterday_label": ltv_yesterday.get("date", "?"),
         "ltv_yesterday_proven": f"${ltv_yesterday.get('proven', {}).get('total_usd', 0):,.2f}",

@@ -26,8 +26,8 @@ class ServerInfo(BaseModel):
         None,
         description=(
             "Free-form metadata the registrant attached to the server, e.g. ownership "
-            "or provenance. Returned in full by the list API unless the caller narrows "
-            "it with metadata_fields"
+            "or provenance. Null unless the caller names the keys to return with "
+            "metadata_fields"
         ),
     )
 
@@ -55,6 +55,13 @@ class SkillInfo(BaseModel):
     tags: list[str] = Field(default_factory=list, description="Skill tags")
     target_agents: list[str] = Field(default_factory=list, description="Target agent platforms")
     created_at: str | None = Field(None, description="Creation timestamp")
+    health_status: str | None = Field(
+        None,
+        description="Result of the last SKILL.md reachability check: healthy, unhealthy, or unknown",
+    )
+    last_checked_time: str | None = Field(
+        None, description="When the registry last observed SKILL.md reachability"
+    )
     metadata: dict[str, Any] | None = Field(
         None,
         description=(

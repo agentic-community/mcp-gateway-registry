@@ -6,6 +6,7 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from ..common.log_redaction import redact_headers, redact_mapping
 from ..core.config import settings
+from ..egress_auth.session_vault_user import session_vault_user_id
 from ..utils.group_names import normalize_group_name, normalize_group_names
 from .access_resolver import (
     get_user_accessible_tools,  # noqa: F401 - re-exported for external callers
@@ -567,6 +568,12 @@ async def _derive_user_context(
     `auth_method == "federation-static"` short-circuits to a no-access
     context (federation static tokens get scoped access via separate routing,
     not registry-side derivation).
+
+    `egress_user` is passed through unchanged, never replaced by `username`:
+    the auth-server computed it (the session's key stored at login, which
+    `enhanced_auth` reads through `session_vault_user_id`, or the
+    `_canonical_egress_user` claim on an internal token), and an empty value
+    marks a caller that owns no per-user vault bucket.
     """
     if auth_method == "federation-static":
         return {
@@ -577,7 +584,7 @@ async def _derive_user_context(
             "scopes": scopes,
             "auth_method": auth_method,
             "provider": provider,
-            "egress_user": egress_user or username,
+            "egress_user": egress_user,
             "session_id": session_id,
             "accessible_servers": [],
             "accessible_tools": {},
@@ -603,10 +610,10 @@ async def _derive_user_context(
         "scopes": scopes,
         "auth_method": auth_method,
         "provider": provider,
-        # egress_user is the canonical per-user egress vault id (OIDC sub when
-        # available, else username). The consent-write path keys the vault on
+        # egress_user is the canonical per-user egress vault id, resolved before
+        # this point (see the docstring). The consent-write path keys the vault on
         # it so it matches the vend path's egress_user claim. See #933.
-        "egress_user": egress_user or username,
+        "egress_user": egress_user,
         # session_id is the opaque server-side identifier — used by template
         # callers to mint CSRF tokens via generate_csrf_token(session_id).
         "session_id": session_id,
@@ -699,8 +706,9 @@ async def _context_from_internal_token(
             provider=session_data.get("provider", "local"),
             session_id=session_id,
             client_id=claims.get("client_id") or "",
-            # The auth_server stamps the canonical egress user (OIDC sub) into
-            # the token; prefer it so the consent-write vault key matches vend.
+            # The auth_server stamps the session's vault key into the token
+            # (_canonical_egress_user, which reads the session through
+            # session_vault_user_id); use it as is so consent-write matches vend.
             egress_user=claims.get("egress_user") or "",
             # Human-readable email for audit records (from the session or claim).
             email=session_data.get("email") or claims.get("email") or "",
@@ -746,10 +754,12 @@ async def enhanced_auth(
         auth_method=auth_method,
         provider=session_data.get("provider", "local"),
         session_id=session_data.get("session_id"),
-        # Canonical egress vault id (OIDC sub persisted at login). Keeps the
-        # consent-write path (which reaches enhanced_auth via the callback's
-        # cookie, no internal token) keyed the same as the vend path. See #933.
-        egress_user=session_data.get("subject") or "",
+        # The vault key the auth_server stored on the session at login, read
+        # through the same session_vault_user_id the auth_server's
+        # _canonical_egress_user uses for this session. This path has no
+        # internal token (the consent callback and /oauth2/egress/connect
+        # resolve the cookie directly). See #933.
+        egress_user=session_vault_user_id(session_data),
         # Human-readable email for audit records (session store persists it).
         email=session_data.get("email") or "",
     )
@@ -759,6 +769,40 @@ async def enhanced_auth(
 
     logger.debug(f"Enhanced auth context for {username}: {redact_mapping(user_context)}")
     return user_context
+
+
+async def browser_session_context(
+    request: Request,
+) -> dict[str, Any] | None:
+    """Resolve the browser session the request's own session cookie names.
+
+    For routes that act only for a signed-in browser: starting or completing an
+    egress consent (initiate, ``/oauth2/egress/connect`` and the consent
+    callback). It reads the session cookie and resolves it with
+    ``enhanced_auth`` against the session store, and nothing else: an
+    ``X-Internal-Token-Registry``, a bearer and the identity headers are never
+    read, so a caller holding a token, real or forged, but no session cookie
+    gets no browser context.
+
+    Args:
+        request: The incoming request.
+
+    Returns:
+        The session's user context, or None when the request carries no
+        session cookie or it does not resolve to a live OAuth2 session.
+
+    Raises:
+        Exception: Any error other than the 401 ``enhanced_auth`` raises for an
+            unresolvable session (a failing scope lookup, for example)
+            propagates, so the caller can tell an outage from "not signed in".
+    """
+    session = request.cookies.get(settings.session_cookie_name)
+    if not session:
+        return None
+    try:
+        return await enhanced_auth(request, session)
+    except HTTPException:
+        return None
 
 
 async def nginx_proxied_auth(
@@ -773,7 +817,6 @@ async def nginx_proxied_auth(
         str | None, Header(alias="X-Auth-Method", include_in_schema=False)
     ] = None,
     x_client_id: Annotated[str | None, Header(alias="X-Client-Id", include_in_schema=False)] = None,
-    x_groups: Annotated[str | None, Header(alias="X-Groups", include_in_schema=False)] = None,
     x_internal_token: Annotated[
         str | None, Header(alias="X-Internal-Token-Registry", include_in_schema=False)
     ] = None,
@@ -838,8 +881,10 @@ async def nginx_proxied_auth(
     if _api_auth_request_enabled() and (x_user or x_username):
         logger.warning(
             "nginx-proxied auth: identity headers present without a valid "
-            "X-Internal-Token-Registry while auth_request is enabled; rejecting "
-            "(forged-header attempt or misconfigured nginx)."
+            "X-Internal-Token-Registry while auth_request is enabled; rejecting. "
+            "Causes: a forged-header attempt, a misconfigured nginx, or an "
+            "AUTH_SERVER_NGINX_MARKER_SECRET mismatch between registry and auth_server "
+            "(auth_server logs 'nginx marker missing/mismatched')."
         )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

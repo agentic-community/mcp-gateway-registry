@@ -162,7 +162,7 @@ For any failed check, display the install instructions:
 |-------|----------------|
 | DOCKER_FAIL | "Install Docker Desktop from https://www.docker.com/products/docker-desktop/ then start it and wait for the whale icon in the menu bar" |
 | PYTHON_TOO_OLD | `uv python install 3.14` — the project requires Python >=3.14 (`pyproject.toml`), and Phase 5 (`uv sync`) fails with `No interpreter found for Python >=3.14` otherwise. `uv` manages this interpreter itself, so the system `python3` is left untouched (it may stay on 3.13 or older). |
-| UV_FAIL | `curl -LsSf https://astral.sh/uv/install.sh \| sh` — then restart your terminal |
+| UV_FAIL | `brew install uv` |
 | NODE_FAIL | `brew install node@20` or download from https://nodejs.org/ |
 | GIT_FAIL | `xcode-select --install` |
 | JQ_FAIL | `brew install jq` |

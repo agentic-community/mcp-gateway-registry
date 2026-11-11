@@ -2271,6 +2271,8 @@ def cmd_egress_configure(args: argparse.Namespace) -> int:
             custom_scope_separator=args.custom_scope_separator,
             custom_token_auth_style=args.custom_token_auth_style,
             custom_resource=args.custom_resource,
+            expected_issuer=args.expected_issuer,
+            list_tools_before_consent=args.list_tools_before_consent,
         )
         print(json.dumps(response, indent=2, default=str))
         return 0
@@ -7167,6 +7169,18 @@ Examples:
     egress_configure_parser.add_argument(
         "--custom-resource",
         help="RFC 8707 resource indicator, sent on authorize and token requests (custom only)",
+    )
+    egress_configure_parser.add_argument(
+        "--expected-issuer",
+        help="RFC 9207 issuer of the provider's authorization server (any provider). "
+        "When set, the OAuth callback rejects a reply whose iss names another issuer",
+    )
+    egress_configure_parser.add_argument(
+        "--list-tools-before-consent",
+        action="store_true",
+        help="oauth_user and pat only: list the server's stored tools on a direct-route "
+        "tools/list before a user connects, for clients that only call tools an admin "
+        "enabled ahead of time. Omitting it turns it off",
     )
 
     # Get egress config command

@@ -1129,15 +1129,16 @@ class TestEnhancedAuth:
         assert context["is_admin"] is False
 
     @pytest.mark.asyncio
-    async def test_enhanced_auth_egress_user_is_persisted_subject(
+    async def test_enhanced_auth_egress_user_is_the_account_id_stored_at_login(
         self,
         mock_signer: URLSafeTimedSerializer,
         mock_session_store,
         mock_scopes_config: dict[str, Any],
     ):
         """The cookie path (reached by the egress OAuth callback) must expose the
-        persisted OIDC sub as egress_user, so the consent-write vault key matches
-        the vend path's egress_user claim even when username is an email. See #933.
+        account id the login stored as egress_user, so the consent-write vault key
+        matches the vend path's egress_user claim even when username is an email.
+        See #933.
         """
         mock_session_store.next_value = {
             "session_id": "sid-1",
@@ -1145,6 +1146,7 @@ class TestEnhancedAuth:
             "auth_method": "oauth2",
             "provider": "entra",
             "groups": ["registry-users-lob1"],
+            "egress_user": "entra-oid-sub-123",
             "subject": "entra-oid-sub-123",
         }
         session_cookie = _make_session_cookie(mock_signer)
@@ -1157,21 +1159,23 @@ class TestEnhancedAuth:
         assert context["username"] == "alice@contoso.com"
 
     @pytest.mark.asyncio
-    async def test_enhanced_auth_egress_user_falls_back_to_username(
+    async def test_enhanced_auth_egress_user_is_the_key_stored_at_login(
         self,
         mock_signer: URLSafeTimedSerializer,
         mock_session_store,
         mock_scopes_config: dict[str, Any],
     ):
-        """A session with no persisted subject (non-OIDC / pre-fix login) keeps its
-        prior vault bucket by falling back to username.
+        """A session with no subject (a non-OIDC login that mapped none) keys on
+        the username fallback key the auth server stored at login, not on one
+        rebuilt from the session's current provider and username.
         """
         mock_session_store.next_value = {
             "session_id": "sid-1",
             "username": "oauth_user",
             "auth_method": "oauth2",
-            "provider": "cognito",
+            "provider": "google",
             "groups": ["registry-users-lob1"],
+            "egress_user": "name:github:oauth_user",
         }
         session_cookie = _make_session_cookie(mock_signer)
         mock_request = Mock(spec=Request)
@@ -1179,7 +1183,39 @@ class TestEnhancedAuth:
 
         context = await enhanced_auth(request=mock_request, session=session_cookie)
 
-        assert context["egress_user"] == "oauth_user"
+        assert context["egress_user"] == "name:github:oauth_user"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("subject", [None, "entra-oid-sub-123"], ids=["no-subject", "subject"])
+    async def test_enhanced_auth_session_without_a_stored_key_has_no_egress_user(
+        self,
+        mock_signer: URLSafeTimedSerializer,
+        mock_session_store,
+        mock_scopes_config: dict[str, Any],
+        subject: str | None,
+    ):
+        """A session record without egress_user (one created before the login
+        stored it) owns no vault key until the user signs in again, whatever its
+        subject: the cookie path neither falls back to the subject nor rebuilds a
+        key from the provider and username.
+        """
+        session_record = {
+            "session_id": "sid-1",
+            "username": "oauth_user",
+            "auth_method": "oauth2",
+            "provider": "github",
+            "groups": ["registry-users-lob1"],
+        }
+        if subject is not None:
+            session_record["subject"] = subject
+        mock_session_store.next_value = session_record
+        session_cookie = _make_session_cookie(mock_signer)
+        mock_request = Mock(spec=Request)
+        mock_request.state = Mock()
+
+        context = await enhanced_auth(request=mock_request, session=session_cookie)
+
+        assert context["egress_user"] == ""
 
     @pytest.mark.asyncio
     async def test_enhanced_auth_no_session(self):
@@ -1225,7 +1261,6 @@ class TestNginxProxiedAuth:
             x_username="attacker",
             x_scopes="mcp-registry-admin",
             x_auth_method="keycloak",
-            x_groups="registry-admins",
             x_internal_token=token,
         )
 
@@ -1253,7 +1288,6 @@ class TestNginxProxiedAuth:
                 x_username="attacker",
                 x_scopes="mcp-registry-admin",
                 x_auth_method="keycloak",
-                x_groups="registry-admins",
                 x_internal_token=None,
             )
         assert exc.value.status_code == 401
@@ -1274,7 +1308,6 @@ class TestNginxProxiedAuth:
                 x_username="attacker",
                 x_scopes="mcp-registry-admin",
                 x_auth_method="keycloak",
-                x_groups="registry-admins",
                 x_internal_token=bad_token,
             )
         assert exc.value.status_code == 401
@@ -1304,7 +1337,6 @@ class TestNginxProxiedAuth:
             x_username="attacker",
             x_scopes="mcp-registry-admin",
             x_auth_method="keycloak",
-            x_groups="registry-admins",
             x_internal_token=None,
         )
         assert context["username"] == "session_user"  # from cookie, not forged header

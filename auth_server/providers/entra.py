@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import json
 import logging
 import os
 import time
@@ -95,10 +96,27 @@ def _group_cache_ttl_seconds() -> int:
     return ttl
 
 
-# nginx's 16 KiB auth_request response contains both X-Groups and a registry
-# token that base64-encodes the same list, plus other auth headers. Keep the
-# group portion under 4 KiB so the combined headers have headroom.
-GRAPH_GROUP_HEADER_MAX_BYTES = 4096
+# Budget for Entra memberships recovered from Microsoft Graph, measured as the
+# JSON list a registry token encodes. Graph can return thousands of groups, and
+# at login the filtered list is stored in the session and resolved on every
+# request, so a runaway membership is refused rather than truncated (which would
+# drop arbitrary grants). 8 KiB is about 200 GUIDs after the scope-mapping filter,
+# the same count Entra itself places inline in a token, so a recovered set gets
+# the same room as an inline one; either fits well inside the 64 KiB /validate
+# buffer and the auth server's 40 KiB token cap.
+GRAPH_GROUP_MAX_BYTES: int = 8 * 1024
+
+
+def graph_group_bytes(groups: list[str]) -> int:
+    """Size of ``groups`` as the JSON list a registry token encodes.
+
+    Args:
+        groups: Group IDs recovered from Microsoft Graph.
+
+    Returns:
+        The UTF-8 byte length of ``json.dumps(groups)``.
+    """
+    return len(json.dumps(groups).encode("utf-8"))
 
 
 class GraphGroupLookupError(Exception):
@@ -333,9 +351,7 @@ class EntraIdProvider(AuthProvider):
         )
         self.application_id_uri = raw_app_id_uri.rstrip("/") if raw_app_id_uri else None
 
-        # JWKS cache
-        self._jwks_cache: dict[str, Any] | None = None
-        self._jwks_cache_time: float = 0
+        # JWKS cache TTL. The cache itself is shared per jwks_url on AuthProvider.
         self._jwks_cache_ttl: int = 3600  # 1 hour
 
         # The fetch endpoint can be a private TLS reverse proxy; the OAuth
@@ -581,9 +597,6 @@ class EntraIdProvider(AuthProvider):
             except Exception as e:
                 logger.debug(f"Not a self-signed token: {e}")
 
-            # Get JWKS for validation
-            jwks = self.get_jwks()
-
             # Decode token header to get key ID
             unverified_header = jwt.get_unverified_header(token)
             kid = unverified_header.get("kid")
@@ -591,15 +604,8 @@ class EntraIdProvider(AuthProvider):
             if not kid:
                 raise ValueError("Token missing 'kid' in header")
 
-            # Find matching key
-            signing_key = None
-            for key in jwks.get("keys", []):
-                if key.get("kid") == kid:
-                    from jwt import PyJWK
-
-                    signing_key = PyJWK(key).key
-                    break
-
+            # Find the matching key; refetches the JWKS once if the IdP rotated keys
+            signing_key = self._find_jwks_signing_key(kid)
             if not signing_key:
                 raise ValueError(f"No matching key found for kid: {kid}")
 
@@ -942,7 +948,7 @@ class EntraIdProvider(AuthProvider):
             # nginx closes /validate at ten seconds; cap the whole OBO and
             # paginated Graph chain to leave room for scope mapping and signing.
             async with asyncio.timeout(GRAPH_GROUP_LOOKUP_TIMEOUT_SECONDS):
-                graph_token = await obo_exchange(
+                graph_token, _ = await obo_exchange(
                     idp_provider,
                     subject_token=access_token,
                     target_audience=graph_resource,

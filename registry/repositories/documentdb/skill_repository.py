@@ -50,6 +50,42 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+async def _reset_inline_skill_health(
+    collection: AsyncIOMotorCollection,
+    collection_name: str,
+) -> None:
+    """Clear the unhealthy status that HEAD probes wrongly gave inline skills.
+
+    Before issue #1952 the health check sent HEAD to an inline skill's
+    ``skill_md_url`` (the registry's own GET-only content route), got 405, and
+    stored ``unhealthy`` although the content route serves the skill from the
+    database. The check no longer probes inline skills; this resets the values
+    it left behind to ``unknown``. A skill whose inline content is empty is not
+    inline: the content route fetches its URL, so a probe result stands.
+    Idempotent, and expected to touch ~0 rows after the first run. Mirrors
+    backfill_missing_id: a failure is logged, never raised, so it cannot block
+    startup.
+    """
+    try:
+        result = await collection.update_many(
+            {
+                # null also matches a missing field, so this selects exactly the
+                # documents where ``if skill.skill_md_content`` is true.
+                "skill_md_content": {"$nin": [None, ""]},
+                "health_status": "unhealthy",
+            },
+            {"$set": {"health_status": "unknown", "last_checked_time": None}},
+        )
+        if result.modified_count:
+            logger.info(
+                "Reset health on %d inline %s documents",
+                result.modified_count,
+                collection_name,
+            )
+    except Exception as exc:
+        logger.warning("Inline skill health reset failed on %s: %s", collection_name, exc)
+
+
 def _skill_to_document(
     skill: SkillCard,
 ) -> dict[str, Any]:
@@ -148,6 +184,7 @@ class DocumentDBSkillRepository(SkillRepositoryBase):
             # partial index so the build never fails on legacy rows.
             await backfill_missing_id(collection, self._collection_name)
             await ensure_unique_id_index(collection, self._collection_name)
+            await _reset_inline_skill_health(collection, self._collection_name)
             return self._collection
 
     async def ensure_indexes(self) -> None:
@@ -293,6 +330,7 @@ class DocumentDBSkillRepository(SkillRepositoryBase):
     async def list_by_paths(
         self,
         paths: list[str],
+        fields: list[str] | None = None,
     ) -> dict[str, dict[str, Any]]:
         """List skills whose _id is in the given set of paths.
 
@@ -301,6 +339,7 @@ class DocumentDBSkillRepository(SkillRepositoryBase):
 
         Args:
             paths: Exact skill paths to fetch.
+            fields: Top-level fields to return. None returns the whole document.
 
         Returns:
             Dictionary mapping skill path to raw skill document for found paths.
@@ -310,8 +349,10 @@ class DocumentDBSkillRepository(SkillRepositoryBase):
 
         await self.ensure_indexes()
         collection = await self._get_collection()
+        # An empty projection means "everything" to MongoDB, so map [] to _id only.
+        projection = (dict.fromkeys(fields, 1) or {"_id": 1}) if fields is not None else None
         try:
-            cursor = collection.find({"_id": {"$in": paths}})
+            cursor = collection.find({"_id": {"$in": paths}}, projection)
             skills: dict[str, dict[str, Any]] = {}
             async for doc in cursor:
                 path = doc.pop("_id")

@@ -382,6 +382,8 @@ Outputs:
 
 Embed the chart in the report's **Install Forecast** section. Include a table showing both model ETAs and daily rates. This section should come after Version Adoption and before Customer Infra Spend.
 
+**Note**: Run this after Step 6. The series is one point per `metrics-*.json` snapshot, so today's point exists only once the analysis has written `metrics-YYYY-MM-DD.json`. Run earlier, the forecast silently uses the previous report's install count.
+
 ### Step 5e: Generate Adoption Funnel Chart
 
 Visualize the conversion funnel from total installs through retention stages to confirmed-alive. Reads the metrics JSON (for lifetime buckets) and optionally the liveness JSON (for confirmed-alive count).
@@ -539,7 +541,14 @@ The computed data is written to the JSON output under the `internal_installs` ke
 
 Every script that computes customer-only numbers also treats an instance as internal when its latest non-empty `internal_only_deployment` telemetry value is true (release 1.24.5 onwards). The shared helper `internal_instances.py` applies both sources, so the allowlist and the telemetry flag count the same way in every script. If the allowlist file does not exist, only the telemetry flag marks instances as internal.
 
-Cloud tables and charts show `cloud=unknown` with `cloud_detection_method=operator_declined` as `declined`, through the shared helper `cloud_labels.py`, so an operator who chose Dismiss on the admin banner is not counted as a detection miss.
+Cloud tables and charts show `cloud=unknown` with `cloud_detection_method=operator_declined` as `declined`, through the shared helper `cloud_labels.py`, so an operator who chose Dismiss on the admin banner is not counted as a detection miss. Rules that pick a non-AWS cloud, such as the "surprising survivor" architecture pattern, skip `declined` as well as `unknown`.
+
+Two more shared helpers keep sections consistent:
+
+- `version_labels.py` decides whether a version is a clean release tag (`^v?MAJOR.MINOR.PATCH(-pN)?$`). The Version Adoption table, the Community vs Internal split, and the Cloud Detection narrative all use it, so a commit hash or fork build is labeled `Build` everywhere rather than `Release` in one section.
+- `forecast_trend.py` classifies the 7-day install pace against the 14-day OLS slope as ahead, behind, or converged, with a 15% tolerance. The Install Forecast narrative and the forecast recommendations both call it, so the two cannot contradict each other.
+
+The Feature Adoption table counts unique instances (each instance's latest non-empty value), not events. The GitHub growth recommendation fires only above 5 stars or 2 forks per day, measured over the actual gap since the previous report.
 
 When writing the report:
 

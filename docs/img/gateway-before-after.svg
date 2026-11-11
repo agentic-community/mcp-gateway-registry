@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 362" role="img" aria-labelledby="ba-title ba-desc">
+<title id="ba-title">Before and after the MCP Gateway and Registry</title>
+<desc id="ba-desc">Without a gateway, every developer and agent connects to every MCP server on its own, with its own credentials. With the gateway, each client connects once to the MCP Gateway and Registry, which authorizes, routes, and audits calls to MCP servers, A2A agents, and skills.</desc>
+<style>
+  .box { fill: none; stroke: #52615f; stroke-width: 1.25; }
+  .hub { fill: #0f766e; fill-opacity: 0.12; stroke: #0f766e; stroke-width: 2; }
+  .ln { fill: none; stroke: #52615f; stroke-width: 1.25; }
+  .tip { fill: #52615f; }
+  .rule { stroke: #e4e0d0; stroke-width: 1; stroke-dasharray: 4 4; }
+  text { font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif; }
+  .t { font-size: 13px; font-weight: 600; fill: #1d2b2a; }
+  .s { font-size: 11.5px; fill: #52615f; }
+  .note { font-size: 12.5px; fill: #38494a; }
+  .h { font-size: 12px; font-weight: 600; letter-spacing: 0.06em; }
+  .warn { fill: #a3311f; }
+  .acc { fill: #0f766e; }
+  @media (prefers-color-scheme: dark) {
+    .box, .ln { stroke: #9fb2b0; }
+    .tip, .s { fill: #9fb2b0; }
+    .hub { fill: #4fd1c1; stroke: #4fd1c1; }
+    .rule { stroke: #2a3a3b; }
+    .t { fill: #e8efee; }
+    .note { fill: #c3d1cf; }
+    .warn { fill: #ef9a8a; }
+    .acc { fill: #4fd1c1; }
+  }
+</style>
+<defs>
+  <marker id="ba-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+    <path class="tip" d="M0 0L10 5L0 10z"/>
+  </marker>
+</defs>
+
+<!-- Before: every client wires every server -->
+<text class="h warn" x="20" y="30">WITHOUT A GATEWAY</text>
+<g class="ln">
+  <path d="M140 92L308 68" marker-end="url(#ba-arrow)"/>
+  <path d="M140 92L308 116" marker-end="url(#ba-arrow)"/>
+  <path d="M140 92L308 164" marker-end="url(#ba-arrow)"/>
+  <path d="M140 164L308 68" marker-end="url(#ba-arrow)"/>
+  <path d="M140 164L308 212" marker-end="url(#ba-arrow)"/>
+  <path d="M140 164L308 260" marker-end="url(#ba-arrow)"/>
+  <path d="M140 236L308 116" marker-end="url(#ba-arrow)"/>
+  <path d="M140 236L308 164" marker-end="url(#ba-arrow)"/>
+  <path d="M140 236L308 260" marker-end="url(#ba-arrow)"/>
+</g>
+<rect class="box" x="20" y="74" width="120" height="36" rx="7"/>
+<text class="t" x="80" y="96.5" text-anchor="middle">Developer 1</text>
+<rect class="box" x="20" y="146" width="120" height="36" rx="7"/>
+<text class="t" x="80" y="168.5" text-anchor="middle">Developer 2</text>
+<rect class="box" x="20" y="218" width="120" height="36" rx="7"/>
+<text class="t" x="80" y="240.5" text-anchor="middle">AI agent</text>
+<rect class="box" x="310" y="52" width="130" height="32" rx="7"/>
+<text class="t" x="375" y="72.5" text-anchor="middle">MCP server A</text>
+<rect class="box" x="310" y="100" width="130" height="32" rx="7"/>
+<text class="t" x="375" y="120.5" text-anchor="middle">MCP server B</text>
+<rect class="box" x="310" y="148" width="130" height="32" rx="7"/>
+<text class="t" x="375" y="168.5" text-anchor="middle">MCP server C</text>
+<rect class="box" x="310" y="196" width="130" height="32" rx="7"/>
+<text class="t" x="375" y="216.5" text-anchor="middle">MCP server D</text>
+<rect class="box" x="310" y="244" width="130" height="32" rx="7"/>
+<text class="t" x="375" y="264.5" text-anchor="middle">MCP server E</text>
+<text class="s" x="80" y="128" text-anchor="middle">own credentials</text>
+<text class="s" x="80" y="200" text-anchor="middle">own credentials</text>
+<text class="s" x="80" y="272" text-anchor="middle">own credentials</text>
+<text class="note" x="20" y="310">Every client wires every server it uses.</text>
+<text class="note" x="20" y="330">Tokens sit in dotfiles on every laptop.</text>
+<text class="note" x="20" y="350">No shared inventory, access control, or audit trail.</text>
+
+<line class="rule" x1="475" y1="16" x2="475" y2="350"/>
+
+<!-- After: one governed entry point -->
+<text class="h acc" x="496" y="30">WITH THE MCP GATEWAY &amp; REGISTRY</text>
+<g class="ln">
+  <path d="M640 92L664 142" marker-end="url(#ba-arrow)"/>
+  <path d="M640 164H664" marker-end="url(#ba-arrow)"/>
+  <path d="M640 236L664 186" marker-end="url(#ba-arrow)"/>
+  <path d="M796 142L818 92" marker-end="url(#ba-arrow)"/>
+  <path d="M796 164H818" marker-end="url(#ba-arrow)"/>
+  <path d="M796 186L818 236" marker-end="url(#ba-arrow)"/>
+</g>
+<rect class="box" x="496" y="74" width="144" height="36" rx="7"/>
+<text class="t" x="568" y="96.5" text-anchor="middle">Developers</text>
+<rect class="box" x="496" y="146" width="144" height="36" rx="7"/>
+<text class="t" x="568" y="168.5" text-anchor="middle">AI agents</text>
+<rect class="box" x="496" y="218" width="144" height="36" rx="7"/>
+<text class="t" x="568" y="240.5" text-anchor="middle">Coding assistants</text>
+<rect class="hub" x="666" y="114" width="130" height="100" rx="7"/>
+<text class="t" x="731" y="150" text-anchor="middle">MCP Gateway</text>
+<text class="t" x="731" y="167" text-anchor="middle">&amp; Registry</text>
+<text class="s" x="731" y="187" text-anchor="middle">auth, routing,</text>
+<text class="s" x="731" y="202" text-anchor="middle">discovery, audit</text>
+<rect class="box" x="820" y="74" width="120" height="36" rx="7"/>
+<text class="t" x="880" y="96.5" text-anchor="middle">MCP servers</text>
+<rect class="box" x="820" y="146" width="120" height="36" rx="7"/>
+<text class="t" x="880" y="168.5" text-anchor="middle">A2A agents</text>
+<rect class="box" x="820" y="218" width="120" height="36" rx="7"/>
+<text class="t" x="880" y="240.5" text-anchor="middle">Skills</text>
+<text class="note" x="496" y="310">Each client connects once, to one entry point.</text>
+<text class="note" x="496" y="330">Per-user tokens are vaulted and injected on egress.</text>
+<text class="note" x="496" y="350">Every call is authorized, routed, and audited.</text>
+</svg>

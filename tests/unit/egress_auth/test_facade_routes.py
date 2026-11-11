@@ -9,12 +9,14 @@ session-cookie forwarding regression, and the resource-param parsing.
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 import registry.api.egress_oauth_facade_routes as facade
 
 REGISTRY_URL = "https://gw.example.com"
 USER = {
     "username": "alice",
+    "egress_user": "sub-alice",
     "auth_method": "oauth2",
     "client_id": "web",
     "groups": ["mcp-registry-user"],
@@ -56,15 +58,14 @@ def client(monkeypatch):
 
         monkeypatch.setattr(facade.server_service, "get_server_info", _get_server_info)
 
-        # /connect reads the session via _optional_session -> nginx_proxied_auth
-        # (called with session=<cookie>). None user_context simulates no gateway
-        # session (login bounce).
-        async def _session(request, session=None):
+        # /connect reads the session via _optional_session -> browser_session_context.
+        # None user_context simulates no gateway session (login bounce).
+        async def _session(request):
             if user_context is None:
                 raise RuntimeError("no session")
             return user_context
 
-        monkeypatch.setattr(facade, "nginx_proxied_auth", _session)
+        monkeypatch.setattr(facade, "browser_session_context", _session)
 
         class _Svc:
             async def build_consent_url(self, **kwargs):
@@ -84,13 +85,11 @@ def client(monkeypatch):
 
 @pytest.mark.unit
 class TestOptionalSession:
-    """Regression: _optional_session MUST read the session cookie off the request
-    and pass it explicitly to nginx_proxied_auth. nginx_proxied_auth's `session`
-    is a FastAPI Cookie(...) param only populated by dependency injection; calling
-    it directly without passing the cookie always sees session=None -> the login
-    loop (the live bug)."""
+    """Regression: _optional_session MUST resolve the session cookie the request
+    carries. Reading the session from a dependency parameter that only injection
+    populates always saw no session -> the login loop (the live bug)."""
 
-    async def test_passes_request_cookie_to_nginx_proxied_auth(self, monkeypatch):
+    async def test_resolves_the_request_cookie(self, monkeypatch):
         monkeypatch.setattr(facade.settings, "session_cookie_name", "mcp_gateway_session")
         seen = {}
 
@@ -98,25 +97,35 @@ class TestOptionalSession:
             seen["session"] = session
             return {"username": "alice", "auth_method": "oauth2"}
 
-        monkeypatch.setattr(facade, "nginx_proxied_auth", _fake)
+        monkeypatch.setattr("registry.auth.dependencies.enhanced_auth", _fake)
 
-        class _Req:
-            cookies = {"mcp_gateway_session": "the-cookie-value"}
+        request = Request(
+            {
+                "type": "http",
+                "headers": [(b"cookie", b"mcp_gateway_session=the-cookie-value")],
+            }
+        )
 
-        ctx = await facade._optional_session(_Req())
+        ctx = await facade._optional_session(request)
         assert ctx["username"] == "alice"
-        assert seen["session"] == "the-cookie-value"  # extracted + forwarded
+        assert seen["session"] == "the-cookie-value"  # extracted + resolved
 
     async def test_returns_none_when_auth_raises(self, monkeypatch):
+        monkeypatch.setattr(facade.settings, "session_cookie_name", "mcp_gateway_session")
+
         async def _raise(request, session=None):
-            raise RuntimeError("no session")
+            raise RuntimeError("session store down")
 
-        monkeypatch.setattr(facade, "nginx_proxied_auth", _raise)
+        monkeypatch.setattr("registry.auth.dependencies.enhanced_auth", _raise)
 
-        class _Req:
-            cookies = {}
+        request = Request(
+            {
+                "type": "http",
+                "headers": [(b"cookie", b"mcp_gateway_session=the-cookie-value")],
+            }
+        )
 
-        assert await facade._optional_session(_Req()) is None
+        assert await facade._optional_session(request) is None
 
 
 @pytest.mark.unit
@@ -272,10 +281,10 @@ class TestConnectDiscovery:
                 },
                 # A designation must exist before consent: connecting first would vault
                 # an entry nothing reads, which then blocks this principal's own egress
-                # consent for the same provider+server. USER has no egress_user, so the
-                # canonical principal is (oauth2, username).
+                # consent for the same provider+server. USER's canonical principal is
+                # (oauth2, egress_user).
                 "auth_method": "oauth2",
-                "user_id": "alice",
+                "user_id": "sub-alice",
                 "designated_by": "alice",
             },
         }

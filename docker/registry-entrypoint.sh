@@ -399,7 +399,8 @@ while [ $WAIT_TIME -lt $MAX_WAIT ]; do
            ! grep -q "{{ANTHROPIC_API_VERSION}}" "/etc/nginx/conf.d/nginx_rev_proxy.conf" && \
            ! grep -q "{{LOCATION_BLOCKS}}" "/etc/nginx/conf.d/nginx_rev_proxy.conf" && \
            ! grep -q "{{VIRTUAL_SERVER_BLOCKS}}" "/etc/nginx/conf.d/nginx_rev_proxy.conf" && \
-           ! grep -q "{{MCP_RESOURCE_METADATA_URL}}" "/etc/nginx/conf.d/nginx_rev_proxy.conf"; then
+           ! grep -q "{{MCP_RESOURCE_METADATA_URL}}" "/etc/nginx/conf.d/nginx_rev_proxy.conf" && \
+           ! grep -q "{{NGINX_MARKER_SECRET}}" "/etc/nginx/conf.d/nginx_rev_proxy.conf"; then
             echo "Nginx configuration generated successfully"
             break
         fi

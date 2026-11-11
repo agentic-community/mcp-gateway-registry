@@ -1,9 +1,12 @@
-"""Auth-server egress mint-path tests: canonical auth_method + nginx marker.
+"""Auth-server egress mint-path tests: canonical egress user + nginx marker.
 
-These exercise the two auth_server-side guards:
-- _canonical_auth_method: cookie path 'session_cookie' -> session record 'oauth2'.
+These exercise the auth_server-side guards:
+- _canonical_egress_user: one vault key per human on every token path.
 - _attach_mcp_proxy_token: only mints the egress-capable token when the nginx
   marker matches (when configured); the auth_method claim is stamped.
+
+``canonical_auth_method`` lives in ``registry.egress_auth.service`` and is
+tested in ``tests/unit/egress_auth/test_service.py``.
 """
 
 import jwt as pyjwt
@@ -35,44 +38,6 @@ def _secret_key(monkeypatch):
 
 
 @pytest.mark.unit
-class TestCanonicalAuthMethod:
-    def test_cookie_maps_to_session_record_value(self):
-        vr = {"method": "session_cookie", "data": {"auth_method": "oauth2"}}
-        assert server._canonical_auth_method(vr) == "oauth2"
-
-    def test_cookie_defaults_oauth2(self):
-        assert server._canonical_auth_method({"method": "session_cookie", "data": {}}) == "oauth2"
-
-    def test_idp_provider_methods_canonicalize_to_oauth2(self):
-        # A bearer issued directly by the per-user IdP (what a DCR client like
-        # Claude Code / Codex presents) reports the provider name as `method`. It
-        # MUST fold into the same `oauth2` bucket the cookie-consent path wrote --
-        # otherwise the DCR vend misses the vault and the user loops on consent.
-        for method in ("keycloak", "entra", "cognito", "okta", "auth0", "pingfederate"):
-            assert server._canonical_auth_method({"method": method}) == "oauth2", method
-
-    def test_network_trusted_passthrough(self):
-        # Non-per-user methods are NOT folded -- they pass through so the vend's
-        # is_per_user_auth_method() check still rejects them.
-        assert server._canonical_auth_method({"method": "network-trusted"}) == "network-trusted"
-        assert server._canonical_auth_method({"method": "federation-static"}) == "federation-static"
-        assert server._canonical_auth_method({"method": "future-unknown"}) == "future-unknown"
-
-    def test_self_signed_maps_to_inner_auth_method_claim(self):
-        # A self-signed JWT (UI 'generate token', or the egress OAuth-facade
-        # /token mint) reports method='self_signed' (the FORMAT) but carries the
-        # principal's auth_method as an inner claim. The vault keys on the
-        # principal method, so this MUST canonicalize to the claim -- else a user
-        # who consents via a cookie session (bucket 'oauth2') and vends with a
-        # minted token (would-be bucket 'self_signed') loops on consent forever.
-        vr = {"method": "self_signed", "data": {"auth_method": "oauth2"}}
-        assert server._canonical_auth_method(vr) == "oauth2"
-
-    def test_self_signed_defaults_oauth2_when_claim_absent(self):
-        assert server._canonical_auth_method({"method": "self_signed", "data": {}}) == "oauth2"
-
-
-@pytest.mark.unit
 class TestCanonicalEgressUserPaths:
     """The per-user egress vault id must resolve identically on the consent-write
     (cookie) and vend (bearer) paths, or the vaulted token is written under one
@@ -89,13 +54,18 @@ class TestCanonicalEgressUserPaths:
         vr = {"username": "alice@example.com", "data": {"sub": "00000000-sub-alice"}}
         assert server._canonical_egress_user(vr) == "00000000-sub-alice"
 
-    def test_cookie_uses_persisted_subject(self):
-        # Consent-write path: the session carries the sub persisted at login as
-        # ``subject`` (create_session), NOT ``sub``. It must resolve the same value.
+    def test_cookie_uses_the_account_id_stored_at_login(self):
+        # Consent-write path: the login stores the account id on the session as
+        # ``egress_user`` (create_session), NOT ``sub``. It must resolve the same
+        # value as the bearer's sub.
         vr = {
             "method": "session_cookie",
             "username": "alice@example.com",
-            "data": {"subject": "00000000-sub-alice", "auth_method": "oauth2"},
+            "data": {
+                "egress_user": "00000000-sub-alice",
+                "subject": "00000000-sub-alice",
+                "auth_method": "oauth2",
+            },
         }
         assert server._canonical_egress_user(vr) == "00000000-sub-alice"
 
@@ -106,7 +76,11 @@ class TestCanonicalEgressUserPaths:
         cookie_vr = {
             "method": "session_cookie",
             "username": "alice@contoso.com",  # from preferred_username / email
-            "data": {"subject": "entra-oid-sub-123", "auth_method": "oauth2"},
+            "data": {
+                "egress_user": "entra-oid-sub-123",
+                "subject": "entra-oid-sub-123",
+                "auth_method": "oauth2",
+            },
         }
         bearer_vr = {
             "username": "entra-oid-sub-123",  # access token lacks preferred_username
@@ -114,10 +88,32 @@ class TestCanonicalEgressUserPaths:
         }
         assert server._canonical_egress_user(cookie_vr) == server._canonical_egress_user(bearer_vr)
 
-    def test_falls_back_to_username_when_no_sub(self):
-        # Non-OIDC callers (no sub anywhere) keep their pre-existing bucket.
-        vr = {"username": "svc-account", "data": {}}
-        assert server._canonical_egress_user(vr) == "svc-account"
+    def test_session_uses_the_key_stored_at_login(self):
+        # A session with no subject (a non-OIDC login that mapped none) keys on
+        # the username fallback key the callback stored, whatever its provider
+        # and username fields say now.
+        vr = {
+            "method": "session_cookie",
+            "username": "svc-account",
+            "data": {
+                "provider": "google",
+                "username": "svc-account",
+                "egress_user": "name:github:svc-account",
+            },
+        }
+        assert server._canonical_egress_user(vr) == "name:github:svc-account"
+
+    @pytest.mark.parametrize("subject", [None, "00000000-sub-alice"], ids=["no-subject", "subject"])
+    def test_session_without_a_stored_key_has_no_key_whatever_its_subject(self, subject):
+        # A session record without ``egress_user`` (one created before the login
+        # stored it) owns no bucket until the user signs in again: the cookie
+        # path neither falls back to its subject nor rebuilds a key from its
+        # provider and username.
+        data = {"provider": "github", "username": "svc-account"}
+        if subject is not None:
+            data["subject"] = subject
+        vr = {"method": "session_cookie", "username": "svc-account", "data": data}
+        assert server._canonical_egress_user(vr) == ""
 
     def test_empty_when_nothing_present(self):
         assert server._canonical_egress_user({}) == ""
@@ -191,8 +187,7 @@ class TestCanonicalEgressUserPaths:
 
     def test_non_self_signed_oidc_chain_unchanged(self):
         # REGRESSION: the fail-closed rule is scoped to self_signed. An IdP-issued
-        # bearer / cookie session still resolves data.sub then data.subject, byte
-        # for byte as before.
+        # bearer still resolves data.sub, and a cookie session its stored key.
         bearer_vr = {
             "method": "keycloak",
             "username": "alice@example.com",
@@ -201,17 +196,18 @@ class TestCanonicalEgressUserPaths:
         cookie_vr = {
             "method": "session_cookie",
             "username": "alice@example.com",
-            "data": {"subject": "oidc-1", "auth_method": "oauth2"},
+            "data": {"egress_user": "oidc-1", "subject": "oidc-1", "auth_method": "oauth2"},
         }
         assert server._canonical_egress_user(bearer_vr) == "oidc-1"
         assert server._canonical_egress_user(cookie_vr) == "oidc-1"
 
-    def test_non_oidc_caller_still_falls_back_to_username(self):
-        # REGRESSION: a non-OIDC, non-self-signed caller with no sub anywhere keeps
-        # its pre-existing username bucket -- documented behavior that must not
-        # change (only the self_signed case changes).
-        vr = {"method": "network-trusted", "username": "svc-account", "data": {}}
-        assert server._canonical_egress_user(vr) == "svc-account"
+    def test_non_session_caller_without_sub_has_no_key(self):
+        # A non-session, non-self-signed caller with no sub anywhere carries only
+        # its login, which an IdP may let another account hold later, so it
+        # owns no bucket. Only a session gets a username fallback key, stored at
+        # login.
+        vr = {"method": "keycloak", "username": "svc-account", "data": {}}
+        assert server._canonical_egress_user(vr) == ""
 
 
 @pytest.mark.unit
@@ -304,7 +300,11 @@ class TestAuditIdentityDisplay:
             "method": "session_cookie",
             "username": "alice@contoso.com",
             "email": "alice@contoso.com",
-            "data": {"subject": "entra-oid-sub-123", "auth_method": "oauth2"},
+            "data": {
+                "egress_user": "entra-oid-sub-123",
+                "subject": "entra-oid-sub-123",
+                "auth_method": "oauth2",
+            },
         }
         assert server._audit_identity_display(vr) == "alice@contoso.com"
         assert server._canonical_egress_user(vr) == "entra-oid-sub-123"
@@ -812,10 +812,9 @@ class TestAttachMcpProxyTokenMarker:
         )
         assert "X-Internal-Token" not in resp.headers
 
-    def test_empty_marker_mints_unconditionally(self, monkeypatch):
-        # Function-level fallback only: an empty marker is rejected at startup
-        # (Settings.__init__), so this state is unreachable in a running server.
-        # Kept to pin the helper's branch behavior.
+    def test_empty_marker_does_not_mint(self, monkeypatch):
+        # An empty marker is rejected at startup (Settings.__init__); the helper
+        # still refuses on its own rather than minting for any caller.
         monkeypatch.setattr(server.settings, "auth_server_nginx_marker_secret", "")
         resp = _FakeResponse()
         server._attach_mcp_proxy_token(
@@ -826,10 +825,7 @@ class TestAttachMcpProxyTokenMarker:
             server_name="github-mcp",
             auth_method="oauth2",
         )
-        claims = _decode(resp.headers["X-Internal-Token"])
-        assert claims["sub"] == "alice"
-        assert claims["auth_method"] == "oauth2"
-        assert claims["upstream_url"] == "https://u/mcp"
+        assert "X-Internal-Token" not in resp.headers
 
     def test_marker_enabled_and_matching_mints(self, monkeypatch):
         monkeypatch.setattr(server.settings, "auth_server_nginx_marker_secret", "s3cret")
@@ -951,10 +947,12 @@ class TestAttachMcpProxyTokenMarker:
     def test_egress_user_claim_is_stamped(self, monkeypatch):
         # The vend path reads egress_user off this token to key the vault, so the
         # canonical per-user id must ride along even when it differs from subject.
-        monkeypatch.setattr(server.settings, "auth_server_nginx_marker_secret", "")
+        monkeypatch.setattr(server.settings, "auth_server_nginx_marker_secret", "s3cret")
         resp = _FakeResponse()
         server._attach_mcp_proxy_token(
-            _FakeRequest({"X-Resolved-Upstream": "https://u/mcp"}),
+            _FakeRequest(
+                {"X-Resolved-Upstream": "https://u/mcp", "X-Validate-Source-Secret": "s3cret"}
+            ),
             resp,
             subject="alice@example.com",
             scopes=[],
@@ -969,7 +967,7 @@ class TestAttachMcpProxyTokenMarker:
         # The mcp-proxy hop attributes its OBO mint record from this claim. It is
         # signed here precisely so that hop never has to read identity from the
         # raw ingress header, which /validate may not have verified at all.
-        monkeypatch.setattr(server.settings, "auth_server_nginx_marker_secret", "")
+        monkeypatch.setattr(server.settings, "auth_server_nginx_marker_secret", "s3cret")
         vr = {
             "username": "00000000-sub-alice",
             "data": {
@@ -981,7 +979,9 @@ class TestAttachMcpProxyTokenMarker:
         }
         resp = _FakeResponse()
         server._attach_mcp_proxy_token(
-            _FakeRequest({"X-Resolved-Upstream": "https://u/mcp"}),
+            _FakeRequest(
+                {"X-Resolved-Upstream": "https://u/mcp", "X-Validate-Source-Secret": "s3cret"}
+            ),
             resp,
             subject="00000000-sub-alice",
             scopes=[],
@@ -1004,7 +1004,7 @@ class TestAttachMcpProxyTokenMarker:
         # written under one id and looked up under another -- a permanent vend miss
         # presenting as "0 tools" and a re-consent prompt. Mint with and without
         # the audit claim and require the vault-keying claims to be identical.
-        monkeypatch.setattr(server.settings, "auth_server_nginx_marker_secret", "")
+        monkeypatch.setattr(server.settings, "auth_server_nginx_marker_secret", "s3cret")
         vr = {
             "method": server.AUTH_METHOD_SELF_SIGNED,
             "username": "alice",
@@ -1017,7 +1017,9 @@ class TestAttachMcpProxyTokenMarker:
         ):
             resp = _FakeResponse()
             server._attach_mcp_proxy_token(
-                _FakeRequest({"X-Resolved-Upstream": "https://u/mcp"}),
+                _FakeRequest(
+                    {"X-Resolved-Upstream": "https://u/mcp", "X-Validate-Source-Secret": "s3cret"}
+                ),
                 resp,
                 subject="alice",
                 scopes=["repo"],
@@ -1042,10 +1044,12 @@ class TestAttachMcpProxyTokenMarker:
         # machine credential with no IdP claims and pass no audit identity, so the
         # response header nginx copies must not be padded with an empty claim.
         # Deleting the guard would sign `"audit_identity": null` on those paths.
-        monkeypatch.setattr(server.settings, "auth_server_nginx_marker_secret", "")
+        monkeypatch.setattr(server.settings, "auth_server_nginx_marker_secret", "s3cret")
         resp = _FakeResponse()
         server._attach_mcp_proxy_token(
-            _FakeRequest({"X-Resolved-Upstream": "https://u/mcp"}),
+            _FakeRequest(
+                {"X-Resolved-Upstream": "https://u/mcp", "X-Validate-Source-Secret": "s3cret"}
+            ),
             resp,
             subject="federation-peer",
             scopes=[],
@@ -1089,6 +1093,113 @@ class TestCanonicalEgressUser:
         vr = {"data": {"sub": "oidc-sub-idp"}}
         assert server._canonical_egress_user(vr) == "oidc-sub-idp"
 
-    def test_username_fallback_preserves_non_oidc_behavior(self):
-        vr = {"data": {}, "username": "svc-account"}
-        assert server._canonical_egress_user(vr) == "svc-account"
+
+_MARKER = "verified-marker-for-test"
+
+
+def _provider_returning(method: str):
+    """A provider whose validate_token accepts any bearer as the given IdP method."""
+    from auth_server.providers.base import AuthProvider
+
+    class _Provider:
+        recover_bearer_groups = AuthProvider.recover_bearer_groups
+        is_delegated_user = AuthProvider.is_delegated_user
+
+        def validate_token(self, token: str, extra_audiences=None) -> dict:
+            return {
+                "valid": True,
+                "username": "alice@example.com",
+                "groups": ["backend-group"],
+                "scopes": [],
+                "client_id": "ide-client",
+                "method": method,
+                "data": {"sub": "oidc-sub-alice"},
+            }
+
+        def get_provider_info(self) -> dict:
+            return {"provider_type": method}
+
+    return _Provider()
+
+
+@pytest.mark.unit
+class TestValidateSignsOboSubjectDigest:
+    """/validate signs the digest of the bearer it verified with an OBO-capable
+    IdP into the hop token, and nothing else. The hop serves an OBO token from
+    its cache only when the subject token matches that digest, so a missing
+    digest on the cookie path is what keeps a stolen cookie plus a forged
+    bearer from reading the user's cached token.
+    """
+
+    _BEARER = "opaque-idp-token"
+
+    def _hop_claims(self, *, provider, cookie_result=None) -> dict:
+        import os
+        from unittest.mock import AsyncMock, patch
+
+        from fastapi.testclient import TestClient
+
+        repo = AsyncMock()
+        repo.get_group_mappings_bulk.return_value = ["backend-only"]
+        repo.get_server_scopes.return_value = [
+            {"server": "github", "methods": ["tools/list"], "tools": []}
+        ]
+        headers = {
+            "Authorization": f"Bearer {self._BEARER}",
+            "X-Original-URL": "https://example.com/github/mcp",
+            "X-Body": '{"jsonrpc":"2.0","id":1,"method":"tools/list"}',
+            "X-Resolved-Upstream": "https://api.githubcopilot.com/mcp",
+            "X-Validate-Source-Secret": _MARKER,
+        }
+        if cookie_result is not None:
+            headers["Cookie"] = "mcp_gateway_session=signed-session-value"
+            # A browser sends Origin on a POST; the gateway refuses a cookie
+            # request from any other origin (issue #1996).
+            headers["X-Original-Method"] = "POST"
+            headers["Origin"] = "https://example.com"
+        with (
+            patch(
+                "auth_server.server._gateway_trusted_origins",
+                return_value=frozenset({"https://example.com"}),
+            ),
+            patch("auth_server.server.get_scope_repository", return_value=repo),
+            patch("auth_server.server.get_auth_provider", return_value=provider),
+            patch(
+                "auth_server.server.validate_session_cookie",
+                AsyncMock(return_value=cookie_result),
+            ),
+            patch.object(server.settings, "auth_server_nginx_marker_secret", _MARKER),
+        ):
+            response = TestClient(server.app).get("/validate", headers=headers)
+        assert response.status_code == 200, response.text
+        return pyjwt.decode(
+            response.headers["X-Internal-Token"],
+            os.environ["SECRET_KEY"],
+            algorithms=["HS256"],
+            options={"verify_aud": False, "verify_iss": False},
+        )
+
+    @pytest.mark.parametrize("method", ["entra", "keycloak"])
+    def test_obo_idp_bearer_signs_its_digest(self, method):
+        claims = self._hop_claims(provider=_provider_returning(method))
+        assert claims["obo_subject_sha256"] == server._obo_subject_digest(self._BEARER)
+
+    def test_non_obo_idp_bearer_signs_no_digest(self):
+        claims = self._hop_claims(provider=_provider_returning("cognito"))
+        assert "obo_subject_sha256" not in claims
+
+    def test_cookie_request_signs_no_digest_even_with_a_bearer(self):
+        # The cookie wins at /validate, so the bearer header is never verified.
+        cookie_result = {
+            "valid": True,
+            "username": "alice@example.com",
+            "scopes": ["backend-only"],
+            "method": "session_cookie",
+            "groups": ["backend-group"],
+            "client_id": "",
+            "data": {"auth_method": "oauth2", "subject": "oidc-sub-alice"},
+        }
+        claims = self._hop_claims(
+            provider=_provider_returning("entra"), cookie_result=cookie_result
+        )
+        assert "obo_subject_sha256" not in claims

@@ -95,6 +95,9 @@ const MCP_METHODS = [
   'tools/call',
   'resources/list',
   'resources/templates/list',
+  'resources/read',
+  'prompts/list',
+  'prompts/get',
 ];
 
 const HTTP_VERBS = ['GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE', 'http:*'];

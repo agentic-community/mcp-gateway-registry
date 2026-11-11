@@ -643,6 +643,32 @@ def _reset_url_guard_allowlist_caches():
 
 
 @pytest.fixture(autouse=True)
+def _reset_shared_jwks_cache():
+    """Clear the class-level JWKS and discovery caches on AuthProvider around every test.
+
+    The cache is keyed by jwks_url and shared across provider instances, and
+    tests reuse the same fake IdP URLs, so a JWKS (or a kid-miss refresh
+    timestamp) cached by one test would leak into the next on the same xdist
+    worker. Tests import the providers as both ``auth_server.providers.base``
+    and ``providers.base``, which are two separate module objects, so clear
+    whichever copies are loaded rather than importing either.
+    """
+
+    def _clear() -> None:
+        for name in ("auth_server.providers.base", "providers.base"):
+            module = sys.modules.get(name)
+            if module is not None:
+                module.AuthProvider._clear_shared_jwks_cache()
+                module.AuthProvider._clear_shared_discovery_cache()
+
+    _clear()
+    try:
+        yield
+    finally:
+        _clear()
+
+
+@pytest.fixture(autouse=True)
 def mock_all_repositories(
     mock_scope_repository,
     mock_server_repository,

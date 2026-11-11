@@ -14,6 +14,7 @@ import {
   LABEL,
 } from '../../formFields';
 import Button from '../../Button';
+import { LIST_BEFORE_CONSENT_MODES } from '../../../utils/egressAuth';
 
 /**
  * Shape of the server edit form state. Owned by the Dashboard (kept as state
@@ -56,8 +57,11 @@ export interface ServerEditForm {
   // 'post_body' | 'basic_header' | 'none' — 'none' is a public client (no secret, PKCE only)
   egress_custom_token_auth_style: string;
   egress_custom_resource: string; // RFC 8707 resource indicator (optional)
+  egress_expected_issuer: string; // RFC 9207 issuer of the provider (optional)
   // obo_exchange (same-IdP OBO hop 1) field:
   egress_target_audience: string;
+  // oauth_user and pat: list stored tools before a user connects (issue #1986).
+  egress_list_tools_before_consent: boolean;
   // Discovery Identity (OAuth 2.1): the registry borrows a connected admin
   // account for its OWN headless health checks / tool discovery against an
   // OAuth 2.1 server. An INDEPENDENT flag, orthogonal to auth_scheme (a server
@@ -73,6 +77,7 @@ export interface ServerEditForm {
   // 'post_body' | 'basic_header' | 'none' — 'none' is a public client (PKCE only)
   oauth_discovery_custom_token_auth_style: string;
   oauth_discovery_custom_resource: string; // RFC 8707 resource indicator (optional)
+  oauth_discovery_expected_issuer: string; // RFC 9207 issuer of the provider (optional)
   // pat inject header config (admin). Blank = server defaults (Authorization / Bearer).
 }
 
@@ -125,6 +130,7 @@ const ServerEditModal: React.FC<ServerEditModalProps> = ({
       f.oauth_discovery_custom_scope_separator,
       f.oauth_discovery_custom_token_auth_style,
       f.oauth_discovery_custom_resource,
+      f.oauth_discovery_expected_issuer,
     ]);
   const [savedDiscoverySnapshot] = React.useState(() => discoverySnapshot(form));
   const discoveryDirty = discoverySnapshot(form) !== savedDiscoverySnapshot;
@@ -398,6 +404,36 @@ const ServerEditModal: React.FC<ServerEditModalProps> = ({
                     <option value="pat">Per-user PAT / API key</option>
                   </select>
                 </div>
+                {LIST_BEFORE_CONSENT_MODES.includes(form.egress_auth_mode) && (
+                  <div>
+                    <label className="flex items-center gap-2 cursor-pointer text-sm text-gray-900 dark:text-white">
+                      <input
+                        type="checkbox"
+                        checked={form.egress_list_tools_before_consent}
+                        onChange={(e) =>
+                          setForm((prev) => ({
+                            ...prev,
+                            egress_list_tools_before_consent: e.target.checked,
+                          }))
+                        }
+                        className="h-4 w-4 rounded border-gray-300"
+                      />
+                      List this server&apos;s tools before a user connects
+                    </label>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                      For clients that only call tools an admin enabled ahead of time. A user
+                      who has not connected sees the stored tool list, and calling a tool
+                      returns the connect instructions.
+                    </p>
+                    {form.egress_list_tools_before_consent && form.num_tools === 0 && (
+                      <p className="text-xs text-amber-700 dark:text-amber-400 mt-1">
+                        This server has no stored tools yet, so users will still see only the
+                        connect step. Add a tool list at registration or designate a discovery
+                        identity.
+                      </p>
+                    )}
+                  </div>
+                )}
                 {form.egress_auth_mode === 'obo_exchange' && (
                   <div>
                     <label className={LABEL}>Target Audience</label>
@@ -593,6 +629,26 @@ const ServerEditModal: React.FC<ServerEditModalProps> = ({
                         </div>
                       </>
                     )}
+                    <div>
+                      <label className={LABEL}>Expected issuer (RFC 9207, optional)</label>
+                      <input
+                        type="text"
+                        value={form.egress_expected_issuer}
+                        onChange={(e) =>
+                          setForm((prev) => ({
+                            ...prev,
+                            egress_expected_issuer: e.target.value,
+                          }))
+                        }
+                        placeholder="https://idp.example"
+                        className={FIELD}
+                      />
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                        The issuer the provider names in its sign-in reply. When set, a
+                        reply naming a different issuer is refused. Leave blank if the
+                        provider does not publish one.
+                      </p>
+                    </div>
                   </>
                 )}
               </div>

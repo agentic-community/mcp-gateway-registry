@@ -41,19 +41,19 @@ variable "task_execution_role_arn" {
 variable "registry_image_uri" {
   description = "Container image URI for registry service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/registry:1.34.0"
+  default     = "public.ecr.aws/p3v1o3c6/registry:1.36.0"
 }
 
 variable "auth_server_image_uri" {
   description = "Container image URI for auth server service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/auth-server:1.34.0"
+  default     = "public.ecr.aws/p3v1o3c6/auth-server:1.36.0"
 }
 
 variable "mcpgw_image_uri" {
   description = "Container image URI for mcpgw service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/mcpgw:1.34.0"
+  default     = "public.ecr.aws/p3v1o3c6/mcpgw:1.36.0"
 }
 
 variable "enable_demo_servers" {
@@ -2085,6 +2085,29 @@ variable "egress_obo_allowed_audiences" {
   default     = ""
 }
 
+variable "egress_obo_cache_enabled" {
+  description = <<-EOT
+    Opt-in: cache exchanged OBO tokens in the per-user SecretStore so repeated
+    calls by the same principal to the same audience reuse a still-valid token
+    instead of re-exchanging. Default off preserves the stateless per-request
+    exchange.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "egress_obo_cache_max_ttl_seconds" {
+  description = "Hard cap (seconds) on the OBO cache reuse window, applied below the token's real expiry. Bounds revocation/conditional-access re-evaluation latency on cache hits."
+  type        = number
+  default     = 300
+}
+
+variable "egress_obo_cache_expiry_skew_seconds" {
+  description = "Never reuse a cached OBO token within this many seconds of its expiry. Must be < EGRESS_OBO_CACHE_MAX_TTL_SECONDS."
+  type        = number
+  default     = 30
+}
+
 variable "egress_oauth_trusted_idp_hosts" {
   description = <<-EOT
     Optional comma-separated hostnames of operator-controlled OAuth/OIDC identity
@@ -2109,10 +2132,15 @@ variable "egress_registry_internal_url" {
 }
 
 variable "egress_nginx_marker_secret" {
-  description = "Optional override for the nginx marker secret shared by registry + auth-server. Empty auto-generates a strong value (stored in Secrets Manager). The marker is required unconditionally -- both services refuse to start without it."
+  description = "Optional override for the nginx marker secret shared by registry + auth-server. Empty auto-generates a strong value (stored in Secrets Manager). The marker is required unconditionally; both services refuse to start without it. It must contain only printable ASCII characters other than '$' (no spaces), because the registry renders it into the nginx config and nginx sends it as a header."
   type        = string
   default     = ""
   sensitive   = true
+
+  validation {
+    condition     = var.egress_nginx_marker_secret == "" || can(regex("^[!-#%-~]+$", var.egress_nginx_marker_secret))
+    error_message = "egress_nginx_marker_secret must contain only printable ASCII characters other than '$' (no spaces): the registry renders it into the nginx config and nginx sends it as a header."
+  }
 }
 
 variable "egress_secrets_manager_kms_key_id" {
@@ -2128,7 +2156,7 @@ variable "egress_secrets_manager_path_prefix" {
 }
 
 variable "egress_credential_encryption_key" {
-  description = "Optional AES-256-GCM key (registry-only) used to encrypt per-user egress credentials at rest before they reach Secrets Manager / OpenBao. Empty disables encryption (legacy plaintext); existing deployments keep working unchanged. Never auto-generated."
+  description = "Optional AES-256-GCM key used to encrypt per-user egress credentials at rest before they reach Secrets Manager / OpenBao. Injected into the registry task, and also into the auth-server task when egress_obo_cache_enabled is true (encrypts cached OBO tokens). Empty disables encryption (legacy plaintext); existing deployments keep working unchanged. Never auto-generated."
   type        = string
   default     = ""
   sensitive   = true

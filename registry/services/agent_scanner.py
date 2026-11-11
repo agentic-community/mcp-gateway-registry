@@ -30,6 +30,15 @@ logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 OUTPUT_DIR = PROJECT_ROOT / "agent_security_scans"
 
+# a2a-scanner (pinned commit 8f6e27f) prints its full JSON result to stdout and
+# then exits 1 when its in-memory result holds a HIGH-severity finding. That count
+# is printed as "high_severity_count". The severities printed per finding come
+# from the scanner's threat taxonomy and can differ from the in-memory one (a HIGH
+# finding may print as MEDIUM or CRITICAL). An uncaught scanner error also exits 1,
+# but with a traceback and no JSON, so the exit code alone cannot tell the two apart.
+A2A_SCANNER_FINDINGS_EXIT_CODE: int = 1
+A2A_SCANNER_BLOCKING_SEVERITIES: frozenset[str] = frozenset({"high", "critical"})
+
 
 def _drop_none_values(
     value: Any,
@@ -52,6 +61,108 @@ def _drop_none_values(
     if isinstance(value, list):
         return [_drop_none_values(item) for item in value if item is not None]
     return value
+
+
+def _parse_a2a_scanner_stdout(
+    stdout: str,
+) -> Any:
+    """Parse the JSON the a2a-scanner CLI prints to stdout.
+
+    Strips ANSI color codes, then tries a direct json.loads and falls back to the
+    first line that starts a JSON object or array. Raises ValueError when no JSON
+    can be found or parsed.
+    """
+    stdout = stdout.strip()
+
+    # Remove ANSI color codes
+    ansi_escape = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+    stdout = ansi_escape.sub("", stdout)
+
+    # Try to parse as JSON directly
+    try:
+        return json.loads(stdout)
+    except json.JSONDecodeError:
+        # If direct parse fails, try to find JSON in output
+        json_start = -1
+        for i in range(len(stdout) - 1):
+            if stdout[i] == "{" and (i == 0 or stdout[i - 1] in "\n\r"):
+                json_start = i
+                break
+
+        if json_start == -1:
+            # Try array format
+            for i in range(len(stdout) - 1):
+                if stdout[i] == "[" and (i == 0 or stdout[i - 1] in "\n\r"):
+                    json_start = i
+                    break
+
+        if json_start == -1:
+            raise ValueError("No JSON found in A2A scanner output")
+
+        json_str = stdout[json_start:]
+        return json.loads(json_str)
+
+
+def _build_a2a_raw_output(
+    scan_results: Any,
+) -> dict:
+    """Wrap parsed a2a-scanner results in the raw_output shape the registry stores."""
+    raw_output: dict = {
+        "analysis_results": {},
+        "scan_results": scan_results,
+    }
+
+    # Extract findings and organize by analyzer
+    if isinstance(scan_results, dict):
+        findings = scan_results.get("findings", [])
+        # Findings is always a list from a2a-scanner
+        for finding in findings:
+            analyzer_name = finding.get("analyzer", "unknown")
+            if analyzer_name not in raw_output["analysis_results"]:
+                raw_output["analysis_results"][analyzer_name] = {"findings": []}
+            raw_output["analysis_results"][analyzer_name]["findings"].append(finding)
+
+    return raw_output
+
+
+def _scanner_high_severity_count(
+    scan_results: Any,
+) -> int | None:
+    """Return the scanner's own "high_severity_count", or None when unusable.
+
+    The count is the predicate the scanner uses for its exit-1 decision. A missing
+    key, a non-integer value, and a bool (an int subclass in Python) are all unusable.
+    """
+    if not isinstance(scan_results, dict):
+        return None
+    count = scan_results.get("high_severity_count")
+    if isinstance(count, bool) or not isinstance(count, int):
+        return None
+    return count
+
+
+def _has_blocking_findings(
+    scan_results: Any,
+) -> bool:
+    """Return True when parsed scanner results show the scanner found a HIGH issue.
+
+    Uses the scanner's own "high_severity_count" when it is usable. Falls back to
+    looking for a HIGH or CRITICAL severity in the printed findings only when the
+    count is absent or unusable (older scanner output).
+    """
+    if not isinstance(scan_results, dict):
+        return False
+    high_count = _scanner_high_severity_count(scan_results)
+    if high_count is not None:
+        return high_count > 0
+    findings = scan_results.get("findings")
+    if not isinstance(findings, list):
+        return False
+    return any(
+        isinstance(finding, dict)
+        and str(finding.get("severity", "")).lower() in A2A_SCANNER_BLOCKING_SEVERITIES
+        for finding in findings
+    )
 
 
 class AgentScannerService:
@@ -252,13 +363,14 @@ class AgentScannerService:
             if api_key:
                 env["AZURE_OPENAI_API_KEY"] = api_key
 
-            # Run scanner with timeout
+            # Run scanner with timeout. check=False because the scanner exits 1 after
+            # printing a complete result that holds a HIGH finding (see below).
             try:
                 result = subprocess.run(  # nosec B603 - args are hardcoded flags and validated config values
                     cmd,
                     capture_output=True,
                     text=True,
-                    check=True,
+                    check=False,
                     env=env,
                     timeout=timeout,
                 )
@@ -266,52 +378,32 @@ class AgentScannerService:
                 # Log raw output for debugging
                 logger.debug(f"Raw A2A scanner stdout:\n{result.stdout[:500]}")
 
+                if result.returncode == A2A_SCANNER_FINDINGS_EXIT_CODE:
+                    # Exit 1 is how the scanner reports a completed scan with a HIGH
+                    # finding (its high_severity_count). Accept it only when stdout
+                    # carries that result; an uncaught scanner error also exits 1
+                    # but prints no JSON.
+                    try:
+                        scan_results = _parse_a2a_scanner_stdout(result.stdout)
+                    except ValueError:
+                        scan_results = None
+                    if _has_blocking_findings(scan_results):
+                        logger.warning(
+                            f"A2A scanner exited {result.returncode} after reporting "
+                            f"high-severity findings for {agent_path}; "
+                            "treating it as a completed scan"
+                        )
+                        return _build_a2a_raw_output(scan_results)
+                if result.returncode != 0:
+                    logger.error(f"A2A scanner command failed with exit code {result.returncode}")
+                    logger.error(f"stderr: {result.stderr}")
+                    raise RuntimeError(f"Agent security scanner failed: {result.stderr}")
+
                 # Parse JSON output - scanner outputs JSON
-                stdout = result.stdout.strip()
-
-                # Remove ANSI color codes
-                ansi_escape = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
-                stdout = ansi_escape.sub("", stdout)
-
-                # Try to parse as JSON directly
-                try:
-                    scan_results = json.loads(stdout)
-                except json.JSONDecodeError:
-                    # If direct parse fails, try to find JSON in output
-                    json_start = -1
-                    for i in range(len(stdout) - 1):
-                        if stdout[i] == "{" and (i == 0 or stdout[i - 1] in "\n\r"):
-                            json_start = i
-                            break
-
-                    if json_start == -1:
-                        # Try array format
-                        for i in range(len(stdout) - 1):
-                            if stdout[i] == "[" and (i == 0 or stdout[i - 1] in "\n\r"):
-                                json_start = i
-                                break
-
-                    if json_start == -1:
-                        raise ValueError("No JSON found in A2A scanner output")
-
-                    json_str = stdout[json_start:]
-                    scan_results = json.loads(json_str)
+                scan_results = _parse_a2a_scanner_stdout(result.stdout)
 
                 # Wrap in expected format with analysis_results
-                raw_output = {
-                    "analysis_results": {},
-                    "scan_results": scan_results,
-                }
-
-                # Extract findings and organize by analyzer
-                if isinstance(scan_results, dict):
-                    findings = scan_results.get("findings", [])
-                    # Findings is always a list from a2a-scanner
-                    for finding in findings:
-                        analyzer_name = finding.get("analyzer", "unknown")
-                        if analyzer_name not in raw_output["analysis_results"]:
-                            raw_output["analysis_results"][analyzer_name] = {"findings": []}
-                        raw_output["analysis_results"][analyzer_name]["findings"].append(finding)
+                raw_output = _build_a2a_raw_output(scan_results)
 
                 logger.debug(
                     f"A2A scanner output:\n{json.dumps(raw_output, indent=2, default=str)}"
@@ -321,10 +413,6 @@ class AgentScannerService:
             except subprocess.TimeoutExpired as e:
                 logger.error(f"A2A scanner command timed out after {timeout} seconds")
                 raise RuntimeError(f"Agent security scan timed out after {timeout} seconds") from e
-            except subprocess.CalledProcessError as e:
-                logger.error(f"A2A scanner command failed with exit code {e.returncode}")
-                logger.error(f"stderr: {e.stderr}")
-                raise RuntimeError(f"Agent security scanner failed: {e.stderr}") from e
 
         finally:
             # Clean up temporary file
@@ -361,6 +449,14 @@ class AgentScannerService:
                         medium_count += 1
                     elif severity == "low":
                         low_count += 1
+
+        # The scanner decides its exit code from its in-memory HIGH count, while the
+        # severities printed per finding come from its threat taxonomy and can read
+        # MEDIUM for a finding the scanner counted as HIGH. Never report fewer HIGH
+        # findings than the scanner counted. It is 0 for a scan that exited 0.
+        scanner_high_count = _scanner_high_severity_count(raw_output.get("scan_results"))
+        if scanner_high_count is not None:
+            high_count = max(high_count, scanner_high_count)
 
         # Determine if safe: no critical or high severity issues
         is_safe = critical_count == 0 and high_count == 0

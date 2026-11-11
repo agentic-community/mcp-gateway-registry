@@ -139,11 +139,17 @@ source .venv/bin/activate
 # hardens the tier-3 fallback. HTTPS/OAuth detection reads X-Forwarded-Proto from
 # the header directly, so it is unaffected. ::1 covers BIND_HOST=:: dual-stack.
 FORWARDED_ALLOW_IPS="127.0.0.1,::1"
+# nginx sends each MCP request body to /validate and /mcp-proxy in the X-Body header,
+# and accepts bodies up to MCP_MAX_REQUEST_BODY_SIZE (1m, registry/core/nginx_service.py).
+# uvicorn's default limit for the whole request head is 16 KiB, which would reject any
+# body over about 16 KB. 2 MiB fits a 1 MiB X-Body plus the other headers (a JWT can
+# reach 32 KiB). Raise both together.
+H11_MAX_INCOMPLETE_EVENT_SIZE=2097152
 if [ -n "${OTEL_EXPORTER_OTLP_ENDPOINT}" ] && command -v opentelemetry-instrument >/dev/null 2>&1; then
     echo "Using OTEL_EXPORTER_OTLP_ENDPOINT at ${OTEL_EXPORTER_OTLP_ENDPOINT}"
-    UVICORN_CMD="opentelemetry-instrument uvicorn server:app --host $BIND_HOST --port $AUTH_LISTEN_PORT --proxy-headers --forwarded-allow-ips=$FORWARDED_ALLOW_IPS"
+    UVICORN_CMD="opentelemetry-instrument uvicorn server:app --host $BIND_HOST --port $AUTH_LISTEN_PORT --proxy-headers --forwarded-allow-ips=$FORWARDED_ALLOW_IPS --h11-max-incomplete-event-size=$H11_MAX_INCOMPLETE_EVENT_SIZE"
 else
     echo "OTEL_EXPORTER_OTLP_ENDPOINT not found, not using OTEL"
-    UVICORN_CMD="uvicorn server:app --host $BIND_HOST --port $AUTH_LISTEN_PORT --proxy-headers --forwarded-allow-ips=$FORWARDED_ALLOW_IPS"
+    UVICORN_CMD="uvicorn server:app --host $BIND_HOST --port $AUTH_LISTEN_PORT --proxy-headers --forwarded-allow-ips=$FORWARDED_ALLOW_IPS --h11-max-incomplete-event-size=$H11_MAX_INCOMPLETE_EVENT_SIZE"
 fi
 exec $UVICORN_CMD

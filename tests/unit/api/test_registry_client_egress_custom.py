@@ -94,12 +94,14 @@ class TestConfigureEgressAuthCustomFields:
                 custom_scope_separator=",",
                 custom_token_auth_style="basic_header",
                 custom_resource="https://api.example.com/mcp",
+                expected_issuer="https://login.salesforce.com",
             )
 
         body = _sent_body(mock_req)
         assert body["custom_scope_separator"] == ","
         assert body["custom_token_auth_style"] == "basic_header"
         assert body["custom_resource"] == "https://api.example.com/mcp"
+        assert body["expected_issuer"] == "https://login.salesforce.com"
 
     def test_custom_fields_omitted_when_not_supplied(
         self,
@@ -171,6 +173,8 @@ class TestEgressConfigureCommandWiring:
             "custom_scope_separator": None,
             "custom_token_auth_style": None,
             "custom_resource": None,
+            "expected_issuer": None,
+            "list_tools_before_consent": False,
         }
         base.update(overrides)
         return SimpleNamespace(**base)
@@ -187,6 +191,7 @@ class TestEgressConfigureCommandWiring:
             custom_scope_separator=",",
             custom_token_auth_style="basic_header",
             custom_resource="https://api.example.com/mcp",
+            expected_issuer="https://login.salesforce.com",
         )
 
         with patch.object(registry_management, "_create_client", return_value=mock_client):
@@ -199,6 +204,7 @@ class TestEgressConfigureCommandWiring:
         assert kwargs["custom_scope_separator"] == ","
         assert kwargs["custom_token_auth_style"] == "basic_header"
         assert kwargs["custom_resource"] == "https://api.example.com/mcp"
+        assert kwargs["expected_issuer"] == "https://login.salesforce.com"
         # Pre-existing args must still be forwarded.
         assert kwargs["mode"] == "oauth_user"
         assert kwargs["provider"] == "custom"
@@ -217,3 +223,42 @@ class TestEgressConfigureCommandWiring:
         assert rc == 0
         kwargs = mock_client.configure_egress_auth.call_args.kwargs
         assert all(kwargs[k] is None for k in kwargs if k.startswith("custom_"))
+        assert kwargs["expected_issuer"] is None
+
+    def test_command_forwards_list_tools_before_consent(self) -> None:
+        """--list-tools-before-consent reaches the client (issue #1986)."""
+        import registry_management
+
+        mock_client = MagicMock()
+        mock_client.configure_egress_auth.return_value = {}
+        args = self._args(mode="pat", provider="github", list_tools_before_consent=True)
+
+        with patch.object(registry_management, "_create_client", return_value=mock_client):
+            rc = registry_management.cmd_egress_configure(args)
+
+        assert rc == 0
+        assert mock_client.configure_egress_auth.call_args.kwargs["list_tools_before_consent"]
+
+
+class TestListToolsBeforeConsentClient:
+    """The client always sends list_tools_before_consent (issue #1986)."""
+
+    @pytest.mark.parametrize("value", [True, False])
+    def test_value_is_sent(
+        self,
+        client: RegistryClient,
+        value: bool,
+    ) -> None:
+        """The request replaces the whole config, so False is sent explicitly too."""
+        response = MagicMock()
+        response.json.return_value = {}
+
+        with patch.object(client, "_make_request", return_value=response) as mock_req:
+            client.configure_egress_auth(
+                server_path="/github",
+                mode="pat",
+                provider="github",
+                list_tools_before_consent=value,
+            )
+
+        assert _sent_body(mock_req)["list_tools_before_consent"] is value

@@ -9,8 +9,13 @@ storage_backend whenever the feature is enabled, so the repo is always present.
 
 import logging
 
+from pymongo.errors import PyMongoError
+
 from registry.core.config import settings
-from registry.egress_auth.service import EgressAuthService
+from registry.egress_auth.service import (
+    EgressAuthService,
+    ReplayGuardUnavailable,
+)
 from registry.secrets.factory import get_secret_store
 
 logger = logging.getLogger(__name__)
@@ -25,7 +30,17 @@ class _MongoReplayGuard:
         self._repo = repo
 
     async def check_and_consume(self, nonce: str, ttl_seconds: int) -> bool:
-        return await self._repo.consume_nonce(nonce, ttl_seconds)
+        """Record ``nonce`` as used; see ``ReplayGuard``.
+
+        Raises:
+            ReplayGuardUnavailable: The database failed, so the nonce may be live.
+        """
+        try:
+            return await self._repo.consume_nonce(nonce, ttl_seconds)
+        except PyMongoError as exc:
+            raise ReplayGuardUnavailable(
+                f"replay store failed recording a state nonce: {type(exc).__name__}"
+            ) from exc
 
 
 class _MongoLeaseManager:
@@ -81,7 +96,38 @@ def get_egress_auth_service() -> EgressAuthService:
     return _egress_service
 
 
+_lease_manager = None
+
+
+def get_egress_lease_manager():
+    """Return the cross-replica single-flight lease manager (Mongo-backed).
+
+    Reused by the auth-server OBO token cache. Falls back to an
+    in-process lease (per-replica single-flight only) when the Mongo operational
+    repo is unavailable, so the cache still functions in single-replica/dev.
+    """
+    global _lease_manager
+    if _lease_manager is not None:
+        return _lease_manager
+    try:
+        from registry.repositories.documentdb.egress_operational_repository import (
+            EgressOperationalRepository,
+        )
+
+        _lease_manager = _MongoLeaseManager(EgressOperationalRepository())
+    except Exception as exc:  # pragma: no cover - dev/file-backend fallback
+        from registry.egress_auth.service import _InProcessLeaseManager
+
+        logger.warning(
+            "Egress operational repo unavailable (%s); OBO cache single-flight is per-replica only",
+            exc,
+        )
+        _lease_manager = _InProcessLeaseManager()
+    return _lease_manager
+
+
 def reset_egress_auth_service() -> None:
-    """Reset the singleton. USE ONLY IN TESTS."""
-    global _egress_service
+    """Reset the singletons. USE ONLY IN TESTS."""
+    global _egress_service, _lease_manager
     _egress_service = None
+    _lease_manager = None

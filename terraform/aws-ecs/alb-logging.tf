@@ -140,13 +140,17 @@ resource "aws_s3_bucket_policy" "alb_logs" {
 }
 
 
-# Wait for S3 bucket policy propagation before enabling ALB logging
-# AWS S3 bucket policies can take up to 15-30 seconds to propagate
-# Without this delay, ALBs may fail to enable logging due to permission check failures
+# Allow the S3 bucket policy to propagate before the ALBs check log-write access.
+# Expose the bucket name through triggers so ALB logging depends on this delay.
+# Policy-only updates leave triggers unchanged, so they do not rerun the delay.
 resource "time_sleep" "wait_for_bucket_policy" {
   depends_on = [aws_s3_bucket_policy.alb_logs]
 
   create_duration = "30s"
+
+  triggers = {
+    alb_logs_bucket = aws_s3_bucket.alb_logs.id
+  }
 }
 
 

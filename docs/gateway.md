@@ -17,7 +17,7 @@ The gateway collapses all of that into one data plane. A client authenticates on
 
 ### MCP server traffic
 
-MCP clients (Claude Code, Cursor, custom agents, CI jobs) connect to the gateway rather than directly to individual MCP servers. The gateway terminates the connection, authenticates the caller, authorizes the specific server (and, where configured, the specific tool), and reverse-proxies the request to the registered backend. To the client it looks like one endpoint that exposes many servers; to each backend it looks like a single trusted caller.
+MCP clients (Claude Code, Cursor, custom agents, CI jobs) connect to the gateway rather than directly to individual MCP servers. The gateway terminates the connection, authenticates the caller, authorizes the specific server (and, where configured, the specific tool), and reverse-proxies the request to the registered backend. To the client it looks like one endpoint that exposes many servers; to each backend it looks like a single trusted caller. The gateway serves MCP 2026-07-28 clients and earlier clients on the same URLs; see [MCP 2026-07-28 support](mcp-2026-07-28-migration.md).
 
 ### A2A agent traffic
 
@@ -79,3 +79,4 @@ The registry decides *what the policy is*; the gateway *enforces it on every cal
 - [Egress authentication design](design/egress-auth-design.md)
 - [Keycloak MCP client guide (DCR + OAuth)](keycloak-mcp-clients.md)
 - [Unified configuration reference](unified-parameter-reference.md)
+- [MCP 2026-07-28 support](mcp-2026-07-28-migration.md)

@@ -18,6 +18,9 @@ class HealthStatus(str, Enum):
     UNHEALTHY_ENDPOINT_CHECK_FAILED = "unhealthy: endpoint check failed"
     UNHEALTHY_MISSING_PROXY_URL = "unhealthy: missing proxy URL"
     UNHEALTHY_URL_BLOCKED = "unhealthy: url blocked by SSRF guard"
+    # The guard fails closed when the host does not resolve (a stopped container,
+    # a typo, a DNS outage). Same result, but the cause is not the allowlist.
+    UNHEALTHY_HOST_NOT_RESOLVED = "unhealthy: host could not be resolved"
     CHECKING = "checking"
     UNKNOWN = "unknown"
     LOCAL = "local"

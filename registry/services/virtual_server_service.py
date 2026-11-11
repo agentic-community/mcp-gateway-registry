@@ -41,6 +41,7 @@ from ..services.rating_service import (
 )
 from ..services.visibility import user_can_access_server_from_doc
 from ..utils.path_utils import make_version_id
+from ..utils.tool_schema import stored_input_schema
 
 # Configure logging
 logging.basicConfig(
@@ -774,7 +775,7 @@ class VirtualServerService:
 
             # Build resolved tool
             description = mapping.description_override or tool_meta.get("description", "")
-            input_schema = tool_meta.get("inputSchema", {})
+            input_schema = stored_input_schema(tool_meta)
 
             resolved.append(
                 ResolvedTool(
