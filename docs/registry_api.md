@@ -248,7 +248,7 @@ Provides real-time updates on the health status of all registered services.
 
 **URL:** `/api/health/ws/health_status`
 **Protocol:** WebSocket
-**Authentication:** The session cookie, sent in the handshake's `Cookie` header. A browser sends it on a same-origin WebSocket by itself. The endpoint never reads a session from the URL query string, because URLs are written to access logs.
+**Authentication:** The session cookie, sent in the handshake's `Cookie` header. A browser sends it on a same-origin WebSocket by itself. The endpoint never reads a session from the URL query string, because URLs are written to access logs. Without a valid session cookie, or with the cookie sent twice, the server refuses the handshake with HTTP 403.
 **Response:** JSON messages with health status updates
 
 **Example using websocat:**

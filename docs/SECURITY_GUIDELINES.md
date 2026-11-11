@@ -710,6 +710,15 @@ sanitizer that isn't called) is equivalent to no check.
   wherever the deployment needs no shared cookie domain. Never record the
   `Cookie` header, including through OpenTelemetry header capture ([Cookie
   Security Design](design/cookie-security-design.md#duplicate-session-cookies)).
+- **Renaming or rescoping a credential cookie leaves the old copy live.** Turning
+  on the `__Host-` prefix renamed the session cookie, but the old one, still on
+  the parent `Domain`, kept reaching every sibling host until it expired, and its
+  value was a signed id for a session that stayed live. The value alone was
+  enough: replayed under the new name, it passed the signature check. When a
+  change renames or narrows a credential cookie, bind the signature to the
+  cookie's name (`session_cookie_signing_salt`), so a value signed for one name
+  fails under another, and tell operators to end the old sessions on the server
+  ([Cookie Security Design](design/cookie-security-design.md#session-cookie-host-prefix)).
 - **Bind the OAuth2/OIDC authorization-code flow to the specific login.** A valid
   signature is necessary but not sufficient — a correctly-signed id_token minted
   for a different login can be replayed/injected. Send a per-login `nonce` on the

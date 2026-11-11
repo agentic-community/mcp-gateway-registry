@@ -1191,7 +1191,10 @@ curl -X GET https://registry.example.com/api/servers/my-server \
 
 **Purpose:** Real-time health status updates via WebSocket
 
-**Authentication:** Session cookie required, sent in the handshake's `Cookie` header. A browser sends it on a same-origin WebSocket by itself. The endpoint never reads a session from the URL query string, because URLs are written to access logs.
+**Authentication:** Session cookie required, sent in the handshake's `Cookie` header. A browser sends it on a
+same-origin WebSocket by itself. The endpoint never reads a session from the URL query string, because URLs are written
+to access logs. Without a valid session cookie, or with the cookie sent twice, the server refuses the handshake with
+HTTP 403.
 
 **Messages:** Periodic health status broadcasts
 

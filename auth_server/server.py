@@ -2353,8 +2353,13 @@ async def validate_session_cookie(cookie_value: str) -> dict[str, Any]:
     try:
         # The cookie carries only an opaque session_id; the full record lives
         # server-side. SESSION_MAX_AGE_SECONDS bounds the signature's age, as
-        # in the registry.
-        payload = signer.loads(cookie_value, max_age=settings.session_max_age_seconds)
+        # in the registry, and with the __Host- prefix the salt names the
+        # cookie, so a value signed for another cookie name is refused.
+        payload = signer.loads(
+            cookie_value,
+            max_age=settings.session_max_age_seconds,
+            salt=settings.session_cookie_signing_salt,
+        )
 
         # Reject legacy dict-payload cookies (forces re-login post-rollout).
         if not isinstance(payload, str):
@@ -7790,7 +7795,7 @@ async def oauth2_callback(
             subject=mapped_user.get("subject"),
             entra_graph_groups_resolved=entra_graph_groups_resolved,
         )
-        registry_session = signer.dumps(session_id)
+        registry_session = signer.dumps(session_id, salt=settings.session_cookie_signing_salt)
 
         # Redirect to registry with session cookie
         redirect_url = temp_session_data.get(

@@ -203,7 +203,7 @@ tests:
       - failedTemplate:
           errorPattern: "registry.app.sessionCookieDomain is registry.example.com but global.sessionCookieDomain is .example.com"
 
-  - it: refuses an auth-server cookie domain override when the global is empty
+  - it: accepts a cookie domain override equal to the domain the stack derives
     templates:
       - templates/validate-values.yaml
     set:
@@ -213,8 +213,35 @@ tests:
         app:
           sessionCookieDomain: ".example.com"
     asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: refuses a cookie domain override that differs from the domain the stack derives
+    templates:
+      - templates/validate-values.yaml
+    set:
+      global:
+        domain: example.com
+      auth-server:
+        app:
+          sessionCookieDomain: ".other.example.com"
+    asserts:
       - failedTemplate:
-          errorPattern: "auth-server.app.sessionCookieDomain is .example.com but global.sessionCookieDomain is empty"
+          errorPattern: "auth-server.app.sessionCookieDomain is .other.example.com but global.sessionCookieDomain is empty, so the stack renders .example.com from global.domain"
+
+  - it: refuses a cookie domain override when the __Host- prefix renders no Domain
+    templates:
+      - templates/validate-values.yaml
+    set:
+      global:
+        domain: example.com
+        sessionCookieHostPrefix: true
+      registry:
+        app:
+          sessionCookieDomain: ".example.com"
+    asserts:
+      - failedTemplate:
+          errorPattern: "registry.app.sessionCookieDomain is .example.com but global.sessionCookieHostPrefix is true, so the stack renders no Domain"
 
   - it: accepts cookie domain overrides that match the global
     templates:

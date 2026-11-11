@@ -118,8 +118,12 @@ domain leaves the browser two cookies, which both services refuse, so the user
 is signed out on every request. Both subcharts render each setting from
 global.<setting>, so the stack requires the globals, and a differing override
 is ignored by the subcharts and would read as if it took effect, so name it
-instead. An empty override is a subchart default (app.sessionCookieDomain
-ships empty) and is ignored. The registry has no app key for the Secure flag.
+instead. An override is compared with the value the subcharts render: for the
+cookie domain that is global.sessionCookieDomain, ".<global.domain>" when that
+global is empty, and no Domain at all with global.sessionCookieHostPrefix, so
+an override equal to the rendered domain is accepted. An empty override is a
+subchart default (app.sessionCookieDomain ships empty) and is ignored. The
+registry has no app key for the Secure flag.
 */}}
 {{- define "mcp-gateway-registry-stack.validateSessionSettings" -}}
 {{- $checks := list (list "registry" "sessionMaxAgeSeconds" "SESSION_MAX_AGE_SECONDS") (list "auth-server" "sessionMaxAgeSeconds" "SESSION_MAX_AGE_SECONDS") (list "auth-server" "sessionCookieSecure" "SESSION_COOKIE_SECURE") (list "registry" "sessionCookieHostPrefix" "SESSION_COOKIE_HOST_PREFIX") (list "auth-server" "sessionCookieHostPrefix" "SESSION_COOKIE_HOST_PREFIX") (list "registry" "sessionCookieDomain" "SESSION_COOKIE_DOMAIN") (list "auth-server" "sessionCookieDomain" "SESSION_COOKIE_DOMAIN") -}}
@@ -132,11 +136,22 @@ ships empty) and is ignored. The registry has no app key for the Secure flag.
 {{- fail (printf "global.%s is not set. The stack sets %s for the registry and the auth-server from global.%s, so the two cannot disagree. Set global.%s." $key $envName $key $key) -}}
 {{- end -}}
 {{- $globalText := include "mcp-gateway-registry-stack.valueString" $global -}}
+{{- $renderedText := $globalText -}}
+{{- $rendered := printf "global.%s is %s" $key ($globalText | default "empty") -}}
+{{- if eq $key "sessionCookieDomain" -}}
+{{- if eq (toString $.Values.global.sessionCookieHostPrefix) "true" -}}
+{{- $renderedText = "" -}}
+{{- $rendered = "global.sessionCookieHostPrefix is true, so the stack renders no Domain" -}}
+{{- else if eq $globalText "" -}}
+{{- $renderedText = printf ".%s" ($.Values.global.domain | default "localhost") -}}
+{{- $rendered = printf "global.sessionCookieDomain is empty, so the stack renders %s from global.domain" $renderedText -}}
+{{- end -}}
+{{- end -}}
 {{- $override := dig "app" $key nil (index $.Values $chart | default dict) -}}
 {{- if not (kindIs "invalid" $override) -}}
 {{- $overrideText := include "mcp-gateway-registry-stack.valueString" $override -}}
-{{- if and (ne $overrideText "") (ne $overrideText $globalText) -}}
-{{- fail (printf "%s.app.%s is %s but global.%s is %s. The stack sets %s for the registry and the auth-server from global.%s only, so the two cannot disagree. Remove %s.app.%s and set global.%s." $chart $key $overrideText $key ($globalText | default "empty") $envName $key $chart $key $key) -}}
+{{- if and (ne $overrideText "") (ne $overrideText $renderedText) -}}
+{{- fail (printf "%s.app.%s is %s but %s. The stack sets %s for the registry and the auth-server from the globals only, so the two cannot disagree. Remove %s.app.%s and set global.%s." $chart $key $overrideText $rendered $envName $chart $key $key) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
