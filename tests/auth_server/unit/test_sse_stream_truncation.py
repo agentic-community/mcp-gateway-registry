@@ -34,7 +34,7 @@ pytestmark = pytest.mark.unit
 TRUNCATED = "peer closed connection without sending complete message body (incomplete chunked read)"
 
 EVENT_ONE = b'id: 1\ndata: {"jsonrpc":"2.0"}\n\n'
-EVENT_TWO = b'id: 2\ndata: {"result":{"content":[]}}\n\n'
+EVENT_TWO = b'id: 2\ndata: {"jsonrpc":"2.0","id":1,"result":{"content":[]}}\n\n'
 PARTIAL_TAIL = b'id: 3\ndata: {"res'
 
 SERVER_NAME = "office-docs"
@@ -244,3 +244,87 @@ class TestMcpProxyHandlesTruncatedStream:
 
         assert response.status_code == 200
         assert response.content == EVENT_ONE + EVENT_TWO
+
+    def test_fails_when_only_notifications_completed(self):
+        """A cut after a notification but before the response is not an answer."""
+        notification = b'data: {"jsonrpc":"2.0","method":"notifications/progress"}\n\n'
+        upstream = _build_upstream_response(
+            headers={"content-type": "text/event-stream"},
+            chunks=[notification],
+            then=httpx.RemoteProtocolError(TRUNCATED),
+        )
+
+        response = self._post(upstream)
+
+        assert response.status_code == 502
+        assert response.json()["detail"] == "Upstream MCP server error"
+
+
+class _CutByteStream(httpx.AsyncByteStream):
+    """A real httpx body stream that yields its parts, then drops the connection.
+
+    Args:
+        parts: Body bytes to yield before the cut.
+    """
+
+    def __init__(
+        self,
+        parts: list[bytes],
+    ) -> None:
+        self._parts = parts
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        for part in self._parts:
+            yield part
+        raise httpx.RemoteProtocolError(TRUNCATED)
+
+
+class TestReadBoundedWithRealHttpx:
+    """`_read_bounded` keeps the bytes a real httpx stream delivered before a cut.
+
+    The `_StreamingResponse` stand-in above skips httpx's own chunking. A
+    `chunk_size` on `aiter_bytes` makes httpx hold bytes back until a chunk
+    fills, and a cut then loses them, so this class goes through a real
+    `httpx.Response` built by `httpx.MockTransport`.
+    """
+
+    async def test_keeps_an_event_shorter_than_any_chunk_size(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=_CutByteStream([EVENT_TWO]),
+            )
+
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as client:
+            async with client.stream("POST", UPSTREAM_URL) as response:
+                with pytest.raises(server._UpstreamStreamTruncated) as caught:
+                    await server._read_bounded(
+                        response,
+                        1_000_000,
+                        partial_on_truncation=True,
+                    )
+
+        assert caught.value.partial == EVENT_TWO
+
+
+class TestHasJsonrpcResponse:
+    """Only an event with an `id` and a `result` or `error` counts as an answer."""
+
+    def test_result_event_is_a_response(self):
+        assert server._has_jsonrpc_response(EVENT_TWO) is True
+
+    def test_error_event_is_a_response(self):
+        body = b'data: {"jsonrpc":"2.0","id":7,"error":{"code":-32603,"message":"x"}}\n\n'
+        assert server._has_jsonrpc_response(body) is True
+
+    def test_notification_is_not_a_response(self):
+        body = b'data: {"jsonrpc":"2.0","method":"notifications/progress"}\n\n'
+        assert server._has_jsonrpc_response(body) is False
+
+    def test_result_without_id_is_not_a_response(self):
+        assert server._has_jsonrpc_response(EVENT_ONE) is False
+
+    def test_unparseable_data_is_skipped(self):
+        assert server._has_jsonrpc_response(b"data: {not json\n\n") is False
