@@ -7,13 +7,15 @@ chat client renders. The tool carries ``_meta.ui.resourceUri`` with a
 The registry never renders these pages. It only records which tools have one,
 so the UI can mark servers that ship an MCP App. Spec (stable 2026-01-26):
 https://github.com/modelcontextprotocol/ext-apps/blob/main/specification/2026-01-26/apps.mdx
+
+This module must not import the MCP SDK (``mcp``). The auth server imports the
+registry's search repository, which uses these helpers, and the auth-server
+image does not install the SDK. The client extension that does need the SDK
+lives in registry/core/mcp_client.py.
 """
 
 import logging
 from typing import Any
-
-from mcp.client.extension import ClientExtension
-from mcp.types import Tool
 
 logger = logging.getLogger(__name__)
 
@@ -85,27 +87,8 @@ def _ui_block(
     return {}
 
 
-class _McpAppsUiExtension(ClientExtension):
-    """Declares MCP Apps support when the registry connects to a server."""
-
-    identifier = MCP_APPS_EXTENSION_ID
-
-    def settings(self) -> dict[str, Any]:
-        """Advertise the one page format the spec defines."""
-        return {"mimeTypes": [MCP_APPS_MIME_TYPE]}
-
-
-def mcp_apps_client_extensions() -> list[ClientExtension]:
-    """Return the client extensions the registry declares during discovery.
-
-    Returns:
-        A list holding the MCP Apps UI extension.
-    """
-    return [_McpAppsUiExtension()]
-
-
 def tool_ui_fields(
-    tool: Tool,
+    tool: Any,
 ) -> dict[str, Any]:
     """Pull the MCP Apps fields from one SDK tool.
 
@@ -113,7 +96,9 @@ def tool_ui_fields(
     comes from the backend and is never stored.
 
     Args:
-        tool: A tool returned by tools/list.
+        tool: A tool returned by tools/list (an SDK ``mcp.types.Tool``). Typed
+            loosely so this module does not import the MCP SDK; see the module
+            docstring.
 
     Returns:
         {"ui_resource_uri": ..., "ui_visibility": [...]} when the tool has a

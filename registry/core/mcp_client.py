@@ -22,6 +22,7 @@ from typing import (
 
 import httpx2
 from mcp import Client
+from mcp.client.extension import ClientExtension
 from mcp.client.sse import sse_client
 from mcp.client.streamable_http import streamable_http_client
 from mcp.types import (
@@ -34,7 +35,8 @@ from ..common.log_redaction import redact_url
 from .backend_oauth import RESOLVED_BEARER_KEY as _BACKEND_OAUTH_TOKEN_KEY
 from .backend_oauth import with_bearer as _with_backend_oauth
 from .mcp_apps import (
-    mcp_apps_client_extensions,
+    MCP_APPS_EXTENSION_ID,
+    MCP_APPS_MIME_TYPE,
     tool_ui_fields,
 )
 
@@ -61,6 +63,26 @@ MCP_DISCOVERY_CLIENT_VERSION: str = "2.0.0"
 # falls back to initialize. The HTTP+SSE transport predates 2026-07-28, so it
 # always uses the handshake.
 _TransportMode = Literal["auto", "legacy"]
+
+
+class _McpAppsUiExtension(ClientExtension):
+    """Declares MCP Apps support when the registry connects to a server.
+
+    A server that follows the MCP Apps spec lists its UI tools only to a client
+    that declares this extension. Kept here, not in mcp_apps.py, because it
+    needs the MCP SDK and mcp_apps.py must stay importable without it.
+    """
+
+    identifier = MCP_APPS_EXTENSION_ID
+
+    def settings(self) -> dict[str, Any]:
+        """Advertise the one page format the spec defines."""
+        return {"mimeTypes": [MCP_APPS_MIME_TYPE]}
+
+
+def _mcp_apps_client_extensions() -> list[ClientExtension]:
+    """Return the client extensions the registry declares during discovery."""
+    return [_McpAppsUiExtension()]
 
 
 def _assert_mcp_url_fetchable(
@@ -212,7 +234,7 @@ async def _discover_tools(
             name=MCP_DISCOVERY_CLIENT_NAME,
             version=MCP_DISCOVERY_CLIENT_VERSION,
         ),
-        extensions=mcp_apps_client_extensions(),
+        extensions=_mcp_apps_client_extensions(),
     )
     async with asyncio.timeout(MCP_DISCOVERY_TIMEOUT_SECONDS):
         async with client:

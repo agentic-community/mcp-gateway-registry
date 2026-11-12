@@ -11,12 +11,14 @@ from registry.core.mcp_apps import (
     count_mcp_app_tools,
     is_model_visible,
     mcp_app_signature,
-    mcp_apps_client_extensions,
     model_visible_tools,
     stored_ui_resource_uri,
     tool_ui_fields,
 )
-from registry.core.mcp_client import _extract_tool_details
+from registry.core.mcp_client import (
+    _extract_tool_details,
+    _mcp_apps_client_extensions,
+)
 
 
 def _tool(
@@ -164,7 +166,7 @@ class TestDiscoveryIntegration:
 
     def test_client_advertises_mcp_apps_extension(self):
         """The SDK client built with our extensions advertises the UI capability."""
-        client = Client("http://127.0.0.1:1/mcp", extensions=mcp_apps_client_extensions())
+        client = Client("http://127.0.0.1:1/mcp", extensions=_mcp_apps_client_extensions())
 
         assert client._folded_extensions.ad == {
             MCP_APPS_EXTENSION_ID: {"mimeTypes": [MCP_APPS_MIME_TYPE]},
