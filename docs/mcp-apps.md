@@ -86,6 +86,8 @@ The public origin comes from configuration, never from request headers: `AUTH_SE
 - A deployment reachable under more than one host name: the value matches the first configured origin only.
 - A deployment that serves MCP routes under a path prefix: the origin drops the path, so the hash does not match.
 
+Claude keeps a copy of each page it has fetched. A user who saw "There was a problem displaying content" before this rewrite was deployed may keep seeing it, because Claude shows the stored copy without asking the gateway for the page again. To make Claude fetch a fresh copy, remove the connector and add it again, and if that is not enough, add it under a URL Claude has not seen, for example with `?v=2` appended. The auth-server log line `mcp_proxy: rewrote MCP Apps ui.domain` confirms that a fresh copy went out.
+
 After the rewrite the page runs under a different sandbox origin than the backend chose. A page that relies on that exact origin, for example for an OAuth callback or a CORS allowlist on the backend's own API, may need its backend to accept the gateway-derived origin as well.
 
 ### Servers that store state per MCP session
