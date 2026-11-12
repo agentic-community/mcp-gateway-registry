@@ -21554,6 +21554,18 @@
             ],
             "title": "Inputschema",
             "description": "JSON Schema for tool input parameters"
+          },
+          "ui_resource_uri": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ui Resource Uri",
+            "description": "MCP Apps: the ui:// page this tool opens in clients that support MCP Apps. Read it with resources/read on the same server. None when the tool has no page."
           }
         },
         "type": "object",
@@ -26371,6 +26383,18 @@
             ],
             "title": "Endpoint Url",
             "description": "URL for agents to connect to the parent MCP server"
+          },
+          "ui_resource_uri": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ui Resource Uri",
+            "description": "MCP Apps: the ui:// page this tool opens in clients that support MCP Apps. Read it with resources/read on server_path. None when the tool has no page."
           }
         },
         "type": "object",

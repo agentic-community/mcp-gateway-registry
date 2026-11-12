@@ -669,6 +669,56 @@ class TestGetServersJSON:
         assert len(server["tool_list"]) == 2
         assert server["num_tools"] == 2
 
+    def _mcp_app_server_page(self) -> tuple[dict, int]:
+        """One server whose stored MCP App count (5) disagrees with its tool list (1)."""
+        return (
+            {
+                "/budget": {
+                    "server_name": "Budget",
+                    "description": "Test",
+                    "tags": [],
+                    "num_tools": 2,
+                    "num_mcp_app_tools": 5,
+                    "license": "MIT",
+                    "proxy_pass_url": "http://localhost:8080",
+                    "tool_list": [
+                        {
+                            "name": "open_budget",
+                            "description": "Open",
+                            "ui_resource_uri": "ui://budget/view.html",
+                            "ui_visibility": ["model", "app"],
+                        },
+                        {"name": "plain", "description": "No page"},
+                    ],
+                }
+            },
+            1,
+        )
+
+    def test_include_tools_false_returns_stored_mcp_app_count(
+        self, test_client_admin, mock_server_service
+    ):
+        """Without the tool list, the badge count is the one the health check stored."""
+        mock_server_service.get_servers_paginated = AsyncMock(
+            return_value=self._mcp_app_server_page()
+        )
+
+        response = test_client_admin.get("/api/servers?include_tools=false")
+
+        assert response.json()["servers"][0]["num_mcp_app_tools"] == 5
+
+    def test_include_tools_true_recounts_mcp_app_tools(
+        self, test_client_admin, mock_server_service
+    ):
+        """With the tool list loaded, the count comes from the tools the caller can see."""
+        mock_server_service.get_servers_paginated = AsyncMock(
+            return_value=self._mcp_app_server_page()
+        )
+
+        response = test_client_admin.get("/api/servers")
+
+        assert response.json()["servers"][0]["num_mcp_app_tools"] == 1
+
     def test_status_filter_returns_only_matching(self, test_client_admin, mock_server_service):
         """?status=beta returns only beta servers (Issue #1330). Forces fallback path."""
         mock_server_service.get_all_servers = AsyncMock(

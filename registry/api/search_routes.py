@@ -58,6 +58,13 @@ class MatchingToolResult(BaseModel):
     inputSchema: dict | None = Field(
         default=None, description="JSON Schema for tool input parameters"
     )
+    ui_resource_uri: str | None = Field(
+        default=None,
+        description=(
+            "MCP Apps: the ui:// page this tool opens in clients that support MCP Apps. "
+            "Read it with resources/read on the same server. None when the tool has no page."
+        ),
+    )
 
 
 class SyncMetadata(BaseModel):
@@ -280,6 +287,13 @@ class ToolSearchResult(BaseModel):
     # Endpoint URL for the parent MCP server
     endpoint_url: str | None = Field(
         default=None, description="URL for agents to connect to the parent MCP server"
+    )
+    ui_resource_uri: str | None = Field(
+        default=None,
+        description=(
+            "MCP Apps: the ui:// page this tool opens in clients that support MCP Apps. "
+            "Read it with resources/read on server_path. None when the tool has no page."
+        ),
     )
 
 
@@ -851,6 +865,7 @@ async def semantic_search(
                 description=tool.get("description"),
                 relevance_score=tool["relevance_score"],
                 match_context=tool.get("match_context"),
+                ui_resource_uri=tool.get("ui_resource_uri"),
             )
             for tool in allowed_matching
         ]
@@ -1007,6 +1022,7 @@ async def semantic_search(
                 similarity_score=tool.get("similarity_score"),
                 match_context=tool.get("match_context"),
                 endpoint_url=tool_endpoint_url,
+                ui_resource_uri=tool.get("ui_resource_uri"),
             )
         )
 

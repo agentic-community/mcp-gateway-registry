@@ -45,6 +45,8 @@ interface Server {
   } | null;
   status?: 'healthy' | 'healthy-auth-expired' | 'unhealthy' | 'unknown' | 'local';
   num_tools?: number;
+  // MCP Apps: tools that open an interactive page in the chat client.
+  num_mcp_app_tools?: number;
   type: 'server' | 'agent';
   proxy_pass_url?: string;
   // ARD discovery imports (#1296): URL to the source registry's server.json
@@ -278,6 +280,7 @@ export const ServerStatsProvider: React.FC<ServerStatsProviderProps> = ({ childr
           security_scan: serverInfo.security_scan ?? null,
           status: mapHealthStatus(serverInfo.health_status || 'unknown'),
           num_tools: serverInfo.num_tools || 0,
+          num_mcp_app_tools: serverInfo.num_mcp_app_tools || 0,
           type: 'server' as const,
           proxy_pass_url: serverInfo.proxy_pass_url || '',
           version: serverInfo.version,

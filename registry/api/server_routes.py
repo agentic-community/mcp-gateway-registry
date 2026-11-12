@@ -39,6 +39,7 @@ from ..auth.tool_filter import filter_tools_for_user
 from ..common.log_redaction import redact_mapping, redact_url
 from ..constants import VALID_AUTH_SCHEMES, DeploymentType, HealthStatus
 from ..core.config import DeploymentMode, settings
+from ..core.mcp_apps import count_mcp_app_tools
 from ..core.metrics import ASSET_ID_SUPPLIED_TOTAL
 from ..core.schemas import (
     AuthCredentialUpdateRequest,
@@ -462,6 +463,7 @@ async def _apply_tool_visibility(
     server_info["tool_list"] = filtered
     # Keep the badge/count consistent with what is actually rendered.
     server_info["num_tools"] = len(filtered)
+    server_info["num_mcp_app_tools"] = count_mcp_app_tools(filtered)
 
 
 async def _build_versions_list(
@@ -1130,9 +1132,13 @@ async def get_servers_json(
                 # listed (marked), so it still counts; the UI greys it instead of
                 # implying the server lost a tool.
                 _num_tools = len(_filtered_tools)
+                # Same rule for the MCP App badge: count only the UI tools this
+                # user can see, so the badge matches the tools modal.
+                _num_mcp_app_tools = count_mcp_app_tools(_filtered_tools)
             else:
                 _filtered_tools = []
                 _num_tools = server_info.get("num_tools", 0)
+                _num_mcp_app_tools = server_info.get("num_mcp_app_tools", 0)
             service_data.append(
                 {
                     "id": server_info.get("id"),
@@ -1143,6 +1149,9 @@ async def get_servers_json(
                     "is_enabled": is_enabled,
                     "tags": server_info.get("tags", []),
                     "num_tools": _num_tools,
+                    # MCP Apps: tools that open an interactive page. Per-user when
+                    # the tool list was loaded, else the count the health check stored.
+                    "num_mcp_app_tools": _num_mcp_app_tools,
                     "license": server_info.get("license", "N/A"),
                     "health_status": normalized_status,
                     "last_checked_iso": health_data["last_checked_iso"],
@@ -3495,6 +3504,7 @@ async def get_service_tools(
             updated_server_info = server_info.copy()
             updated_server_info["tool_list"] = tool_list
             updated_server_info["num_tools"] = new_tool_count
+            updated_server_info["num_mcp_app_tools"] = count_mcp_app_tools(tool_list)
 
             # Save updated server info
             success = await server_service.update_server(service_path, updated_server_info)
@@ -4594,6 +4604,7 @@ async def register_service_api(
         "path": path,
         "tags": tag_list,
         "num_tools": len(tool_list) if tool_list else num_tools,
+        "num_mcp_app_tools": count_mcp_app_tools(tool_list),
         "license": license_str,
         "tool_list": tool_list,
         "deployment": deployment,

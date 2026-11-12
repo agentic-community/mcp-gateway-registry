@@ -15,6 +15,7 @@ This document provides a comprehensive overview of the MCP Gateway & Registry so
 - **Custom Entity Types**: Admins define schema-driven catalog types at runtime (e.g. LLM prompts, model cards, workflows) with typed fields; users create records via API or a dynamically-rendered UI tab, with lexical + semantic search, ratings, visibility controls, and pagination
 - **Server & Agent Rating System**: 5-star rating widget with aggregate scoring, one rating per user, and rotating buffer
 - **Health Monitoring**: Built-in health checks and status monitoring for all registered services
+- **MCP Apps**: Servers whose tools open an interactive page in the chat client show an MCP APP badge, and direct routes pass the extension through to hosts such as Claude. See [MCP Apps](mcp-apps.md)
 - **Scalable Architecture**: Docker-based deployment with horizontal scaling support
 
 ## Agent Registry & A2A Communication

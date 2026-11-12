@@ -37,6 +37,7 @@ INTERNAL_FIELDS: list[str] = [
     "server_name",
     "tags",
     "num_tools",
+    "num_mcp_app_tools",
     "license",
     "deployment",
     "registered_by",

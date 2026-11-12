@@ -119,6 +119,8 @@ export interface Server {
   } | null;
   status?: 'healthy' | 'healthy-auth-expired' | 'unhealthy' | 'unknown' | 'local';
   num_tools?: number;
+  // MCP Apps: tools that open an interactive page in the chat client.
+  num_mcp_app_tools?: number;
   proxy_pass_url?: string;
   mcp_endpoint?: string;
   // Local-server fields
@@ -179,6 +181,18 @@ interface ServerCardProps {
   onEgressChanged?: () => void;
 }
 
+/**
+ * True when a tool opens an MCP App page. Checks the ui:// scheme rather than
+ * trusting the field, because a registration request can supply its own tool
+ * list (the backend applies the same rule in registry/core/mcp_apps.py).
+ */
+function hasMcpAppPage(tool: { ui_resource_uri?: string }): boolean {
+  return typeof tool.ui_resource_uri === 'string'
+    && tool.ui_resource_uri.startsWith('ui://')
+    && tool.ui_resource_uri.length > 'ui://'.length;
+}
+
+
 interface Tool {
   name: string;
   description?: string;
@@ -188,6 +202,10 @@ interface Tool {
   blocked?: boolean;
   block_reason?: string | null;
   block_source?: string | null;
+  // MCP Apps: the ui:// page this tool opens, and who may call the tool
+  // ("model", "app", or both). Absent for a tool without a page.
+  ui_resource_uri?: string;
+  ui_visibility?: string[];
 }
 
 
@@ -484,6 +502,7 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
           status: normalizeHealthStatus(serverData.health_status),
           last_checked_time: serverData.last_checked_iso,
           num_tools: serverData.num_tools,
+          num_mcp_app_tools: serverData.num_mcp_app_tools,
           proxy_pass_url: serverData.proxy_pass_url,
           mcp_endpoint: serverData.mcp_endpoint,
           version: serverData.version,
@@ -629,6 +648,15 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
                 )}
                 {server.official && (
                   <Badge tone="purple">OFFICIAL</Badge>
+                )}
+                {(server.num_mcp_app_tools || 0) > 0 && (
+                  <Badge
+                    tone="blue"
+                    bordered
+                    title={`MCP App: ${server.num_mcp_app_tools} tool(s) open an interactive page in clients that support MCP Apps`}
+                  >
+                    MCP APP
+                  </Badge>
                 )}
                 {isAnthropicServer && (
                   <span className="px-2 py-0.5 text-xs font-semibold bg-gradient-to-r from-purple-100 to-purple-100 text-purple-700 dark:from-purple-900/30 dark:to-purple-900/30 dark:text-purple-300 rounded-full flex-shrink-0 border border-purple-200 dark:border-purple-600">
@@ -1044,6 +1072,27 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
                               <span className="text-xs font-semibold uppercase tracking-wide px-2 py-0.5 rounded bg-danger-100 text-danger-800 dark:bg-danger-900 dark:text-danger-200 no-underline">
                                 Blocked
                               </span>
+                            )}
+                            {hasMcpAppPage(tool) && (
+                              <Badge
+                                tone="blue"
+                                shape="square"
+                                bordered
+                                className="no-underline"
+                                title={`Opens the MCP App page ${tool.ui_resource_uri}`}
+                              >
+                                MCP APP
+                              </Badge>
+                            )}
+                            {hasMcpAppPage(tool) && !(tool.ui_visibility || []).includes('model') && (
+                              <Badge
+                                tone="gray"
+                                shape="square"
+                                className="no-underline"
+                                title="Only the MCP App page can call this tool; the model does not see it"
+                              >
+                                APP ONLY
+                              </Badge>
                             )}
                           </h4>
                         {canToggle && !isArdDiscovery && (

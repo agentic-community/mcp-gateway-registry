@@ -1517,6 +1517,41 @@ class TestToolCatalogService:
         assert "get_ticket" in tool_names
 
     @pytest.mark.asyncio
+    async def test_catalog_omits_app_only_mcp_app_tools(
+        self, catalog_service, mock_server_repo, admin_context
+    ):
+        """A tool only an MCP App page may call is not offered to the virtual-server picker.
+
+        A virtual server's tools/list is read by the model, and the MCP Apps spec
+        hides ui_visibility=["app"] tools from the model.
+        """
+        mock_server_repo.list_all.return_value = {
+            "/budget": {
+                "server_name": "Budget",
+                "tool_list": [
+                    {
+                        "name": "open_budget",
+                        "description": "Open the budget",
+                        "ui_resource_uri": "ui://budget/view.html",
+                        "ui_visibility": ["model", "app"],
+                    },
+                    {
+                        "name": "save_budget",
+                        "description": "Called by the page",
+                        "ui_resource_uri": "ui://budget/view.html",
+                        "ui_visibility": ["app"],
+                    },
+                    {"name": "plain", "description": "No page"},
+                ],
+            },
+        }
+        mock_server_repo.get_state.return_value = True
+
+        catalog = await catalog_service.get_tool_catalog(user_context=admin_context)
+
+        assert sorted(entry.tool_name for entry in catalog) == ["open_budget", "plain"]
+
+    @pytest.mark.asyncio
     async def test_catalog_filters_disabled_servers(
         self, catalog_service, mock_server_repo, admin_context
     ):

@@ -22,6 +22,10 @@ from ..core.backend_oauth import RESOLVED_BEARER_KEY as _BACKEND_OAUTH_TOKEN_KEY
 from ..core.backend_oauth import with_bearer as _with_backend_oauth
 from ..core.config import settings
 from ..core.endpoint_utils import get_endpoint_url_from_server_info
+from ..core.mcp_apps import (
+    count_mcp_app_tools,
+    mcp_app_signature,
+)
 from ..exceptions import UrlValidationError
 from ..utils.url_guard import (
     BUILTIN_AIREGISTRY_TOOLS_PROFILE,
@@ -1696,10 +1700,17 @@ class HealthMonitoringService:
                             f"{current_mcp_version} -> {new_mcp_version}"
                         )
 
+                    # A tool can gain or lose an MCP App page without the count
+                    # changing. Comparing the UI signature also backfills servers
+                    # stored before the registry recorded UI pages.
+                    ui_changed = mcp_app_signature(current_tool_list) != mcp_app_signature(
+                        tool_list
+                    )
                     needs_update = (
                         current_tool_count != new_tool_count
                         or not current_tool_list
                         or current_mcp_version != new_mcp_version
+                        or ui_changed
                     )
 
                     if needs_update:
@@ -1710,7 +1721,8 @@ class HealthMonitoringService:
                         updated_server_info = current_server_info.copy()
                         updated_server_info["tool_list"] = tool_list
                         updated_server_info["num_tools"] = new_tool_count
-                        discovered_fields = ["tool_list", "num_tools"]
+                        updated_server_info["num_mcp_app_tools"] = count_mcp_app_tools(tool_list)
+                        discovered_fields = ["tool_list", "num_tools", "num_mcp_app_tools"]
 
                         # Store MCP server info if available
                         if mcp_server_info:
