@@ -162,6 +162,9 @@ class ServerDetail(BaseModel):
     url: str = Field(..., description="Service URL")
     is_enabled: bool = Field(..., description="Whether service is enabled")
     num_tools: int = Field(..., description="Number of tools")
+    num_mcp_app_tools: int = Field(
+        default=0, description="Number of tools that open an MCP App page"
+    )
     health_status: str = Field(..., description="Health status")
     last_health_check: datetime | None = Field(None, description="Last health check timestamp")
     status: str = Field(
@@ -186,6 +189,9 @@ class ServerDetailResponse(BaseModel):
     proxy_pass_url: str | None = Field(None, description="Backend URL")
     tags: list[str] = Field(default_factory=list, description="Server tags")
     num_tools: int = Field(default=0, description="Number of tools")
+    num_mcp_app_tools: int = Field(
+        default=0, description="Number of tools that open an MCP App page"
+    )
     tool_list: list[dict[str, Any]] = Field(default_factory=list, description="Tool definitions")
     is_enabled: bool = Field(default=False, description="Whether server is enabled")
     health_status: str | None = Field(None, description="Health status")
@@ -197,7 +203,7 @@ class ServerDetailResponse(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    @field_validator("num_tools", mode="before")
+    @field_validator("num_tools", "num_mcp_app_tools", mode="before")
     @classmethod
     def _default_num_tools(cls, value: Any) -> Any:
         """Coerce a null num_tools to 0.

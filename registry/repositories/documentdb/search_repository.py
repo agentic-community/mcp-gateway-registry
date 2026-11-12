@@ -9,6 +9,10 @@ from typing import Any
 from motor.motor_asyncio import AsyncIOMotorCollection
 
 from ...core.config import embedding_config, settings
+from ...core.mcp_apps import (
+    model_visible_tools,
+    stored_ui_resource_uri,
+)
 from ...schemas.agent_models import AgentCard
 from ...utils.embedding_text import EmbeddingText
 from ...utils.embeddings_provider import default_retry_max_input_chars
@@ -507,6 +511,57 @@ def _score_tool_relevance(
     score = min(1.0, score) * 0.7 + token_coverage * 0.3
 
     return round(min(1.0, score), 4)
+
+
+def _mcp_app_hash_suffix(
+    tools: list[dict[str, Any]],
+) -> str:
+    """Return the MCP Apps page addresses as text to add to a content hash.
+
+    Empty when no tool has a page, so a server without an MCP App keeps the
+    hash it had before page addresses were indexed and is not re-embedded.
+
+    Args:
+        tools: The tools that will be indexed for the server.
+
+    Returns:
+        "" or a line listing "name=ui://..." pairs in sorted order.
+    """
+    pairs: list[str] = []
+    for tool in tools:
+        uri = stored_ui_resource_uri(tool)
+        if uri:
+            pairs.append(f"{tool.get('name', '')}={uri}")
+    if not pairs:
+        return ""
+    return "\nmcp-apps:" + ",".join(sorted(pairs))
+
+
+def _attach_ui_resource_uris(
+    matching_tools: list[dict[str, Any]],
+    indexed_tools: list[dict[str, Any]],
+) -> None:
+    """Copy each indexed tool's MCP Apps page address onto its matching entry.
+
+    The search pipelines build matching_tools from name and description only.
+    An agent that finds a tool also needs to know whether it opens an MCP App
+    page, so the address is added here, in place, when the indexed tool has one.
+
+    Args:
+        matching_tools: Matching tool entries, each with a tool_name.
+        indexed_tools: The server document's indexed tools.
+    """
+    uri_by_name: dict[str, str] = {}
+    for tool in indexed_tools or []:
+        uri = tool.get("ui_resource_uri")
+        if uri:
+            uri_by_name[tool.get("name", "")] = uri
+    if not uri_by_name:
+        return
+    for tool in matching_tools or []:
+        uri = uri_by_name.get(tool.get("tool_name", ""))
+        if uri:
+            tool["ui_resource_uri"] = uri
 
 
 def _grade_matching_tools(
@@ -1109,7 +1164,11 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         if tags:
             embedding_text.head.append("Tags: " + ", ".join(tags))
 
-        for tool in server_info.get("tool_list") or []:
+        # Search feeds model-facing discovery (search_registry,
+        # intelligent_tool_finder), so tools that only an MCP App page may call
+        # are not indexed.
+        searchable_tools = model_visible_tools(server_info.get("tool_list"))
+        for tool in searchable_tools:
             embedding_text.items.append((tool.get("name") or "", tool.get("description") or ""))
 
         # Include custom metadata key-value pairs in embedding text
@@ -1119,7 +1178,11 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                 embedding_text.tail.append(f"{key}: {value}")
 
         text_for_embedding = embedding_text.full()
-        content_hash = hashlib.sha256(text_for_embedding.encode()).hexdigest()[:16]
+        # The page addresses are stored on the indexed tools but are not part of
+        # the embedding text, so they join the hash. Otherwise a startup reindex
+        # (skip_if_unchanged) keeps an entry written before the addresses existed.
+        hashed_content = text_for_embedding + _mcp_app_hash_suffix(searchable_tools)
+        content_hash = hashlib.sha256(hashed_content.encode()).hexdigest()[:16]
 
         # Skip re-embedding if content hasn't changed (startup optimization)
         if skip_if_unchanged:
@@ -1165,8 +1228,10 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                     "description": t.get("description"),
                     # Support both "inputSchema" (MCP standard) and "schema" (legacy)
                     "inputSchema": t.get("inputSchema") or t.get("schema", {}),
+                    # MCP Apps: the ui:// page this tool opens, or None.
+                    "ui_resource_uri": stored_ui_resource_uri(t),
                 }
-                for t in server_info.get("tool_list") or []
+                for t in searchable_tools
             ],
             "metadata": server_info,
             "indexed_at": server_info.get("updated_at", server_info.get("registered_at")),
@@ -2218,6 +2283,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
 
                     # Also add matching tools to the top-level tools array
                     original_tools = doc.get("tools", [])
+                    _attach_ui_resource_uris(matching_tools, original_tools)
                     tool_schema_map = {
                         t.get("name", ""): t.get("inputSchema", {}) for t in original_tools
                     }
@@ -2236,6 +2302,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                                 "tool_name": tool_name,
                                 "description": tool.get("description", ""),
                                 "inputSchema": tool_schema_map.get(tool_name, {}),
+                                "ui_resource_uri": tool.get("ui_resource_uri"),
                                 "relevance_score": tool["relevance_score"],
                                 "match_context": tool.get("match_context", ""),
                             }
@@ -2485,6 +2552,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
 
                 # Add matching tools to top-level tools array
                 original_tools = doc.get("tools", [])
+                _attach_ui_resource_uris(matching_tools, original_tools)
                 tool_schema_map = {
                     t.get("name", ""): t.get("inputSchema", {}) for t in original_tools
                 }
@@ -2502,6 +2570,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                             "tool_name": tool_name,
                             "description": tool.get("description", ""),
                             "inputSchema": tool_schema_map.get(tool_name, {}),
+                            "ui_resource_uri": tool.get("ui_resource_uri"),
                             "relevance_score": tool["relevance_score"],
                             "match_context": tool.get("match_context", ""),
                         }
@@ -2954,6 +3023,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
 
                     # Also add matching tools to the top-level tools array
                     original_tools = doc.get("tools", [])
+                    _attach_ui_resource_uris(matching_tools, original_tools)
                     tool_schema_map = {
                         t.get("name", ""): t.get("inputSchema", {}) for t in original_tools
                     }
@@ -2972,6 +3042,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                                 "tool_name": tool_name,
                                 "description": tool.get("description", ""),
                                 "inputSchema": tool_schema_map.get(tool_name, {}),
+                                "ui_resource_uri": tool.get("ui_resource_uri"),
                                 "relevance_score": tool["relevance_score"],
                                 "match_context": tool.get("match_context", ""),
                             }

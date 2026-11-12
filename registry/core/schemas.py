@@ -698,6 +698,14 @@ class ServerInfo(ProxyableMixin):
     proxy_pass_url: str | None = None
     tags: list[str] = Field(default_factory=list)
     num_tools: int = 0
+    num_mcp_app_tools: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Number of tools that open an MCP App page (an interactive UI the chat "
+            "client renders). Set by tool discovery; 0 means the server ships no MCP App."
+        ),
+    )
     license: str = "N/A"
     tool_list: list[dict[str, Any]] = Field(default_factory=list)
     is_enabled: bool = False

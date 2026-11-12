@@ -900,6 +900,72 @@ async def test_tool_discovery_version_change_keeps_egress_oauth_client_secret(
     assert store.card["egress_oauth"] == egress_oauth
 
 
+_MCP_APP_TOOL: dict = {
+    "name": "get-budget-data",
+    "description": "Open the budget",
+    "ui_resource_uri": "ui://budget/view.html",
+    "ui_visibility": ["model", "app"],
+}
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_tool_discovery_backfills_mcp_app_count_when_count_unchanged(
+    health_service, mock_server_info
+):
+    """A server stored before UI detection gains num_mcp_app_tools.
+
+    The tool count and version are the same as before, so only the UI
+    signature tells discovery that the stored list is out of date.
+    """
+    card = {
+        **mock_server_info,
+        "tool_list": [{"name": "get-budget-data", "description": "Open the budget"}],
+        "num_tools": 1,
+        "mcp_server_version": "1.0.0",
+    }
+    store = _StoredServerService(card)
+
+    with patch("registry.core.mcp_client.mcp_client_service") as mock_mcp:
+        mock_mcp.get_mcp_connection_result = AsyncMock(
+            return_value={"tools": [_MCP_APP_TOOL], "server_info": {"version": "1.0.0"}}
+        )
+        with (
+            patch("registry.services.server_service.server_service", store),
+            patch("registry.services.scope_service.update_server_scopes", new=AsyncMock()),
+        ):
+            await health_service._update_tools_background("/budget", "http://budget:8000/mcp")
+
+    assert store.card["num_mcp_app_tools"] == 1
+    assert store.card["tool_list"][0]["ui_resource_uri"] == "ui://budget/view.html"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_tool_discovery_skips_write_when_mcp_app_tools_unchanged(
+    health_service, mock_server_info
+):
+    """Discovery does not rewrite a card whose tools, version and UI are unchanged."""
+    card = {
+        **mock_server_info,
+        "tool_list": [_MCP_APP_TOOL],
+        "num_tools": 1,
+        "num_mcp_app_tools": 1,
+        "mcp_server_version": "1.0.0",
+    }
+
+    with patch("registry.core.mcp_client.mcp_client_service") as mock_mcp:
+        mock_mcp.get_mcp_connection_result = AsyncMock(
+            return_value={"tools": [_MCP_APP_TOOL], "server_info": {"version": "1.0.0"}}
+        )
+        with patch("registry.services.server_service.server_service") as mock_server_service:
+            mock_server_service.get_server_info = AsyncMock(return_value=card)
+            mock_server_service.update_server = AsyncMock()
+            await health_service._update_tools_background("/budget", "http://budget:8000/mcp")
+
+    mock_server_service.update_server.assert_not_called()
+
+
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_health_service_get_all_health_status(health_service, mock_server_info):

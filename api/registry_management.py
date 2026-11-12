@@ -1830,6 +1830,7 @@ def cmd_server_get(args: argparse.Namespace) -> int:
             "proxy_pass_url": server.proxy_pass_url,
             "tags": server.tags,
             "num_tools": server.num_tools,
+            "num_mcp_app_tools": server.num_mcp_app_tools,
             "tool_list": server.tool_list,
             "is_enabled": server.is_enabled,
             "health_status": server.health_status,
