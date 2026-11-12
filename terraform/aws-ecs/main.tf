@@ -137,6 +137,8 @@ module "mcp_gateway" {
   # Session cookie security configuration
   session_cookie_secure        = var.session_cookie_secure
   session_cookie_domain        = var.session_cookie_domain
+  session_cookie_host_prefix   = var.session_cookie_host_prefix
+  session_max_age_seconds      = var.session_max_age_seconds
   oauth2_allowed_redirect_uris = var.oauth2_allowed_redirect_uris
   cors_allowed_origins         = var.cors_allowed_origins
   trusted_proxy_hops           = var.trusted_proxy_hops
@@ -180,6 +182,10 @@ module "mcp_gateway" {
   registry_rum_snippet_b64        = var.registry_rum_snippet_b64
   registry_rum_snippet_secret_arn = var.registry_rum_snippet_secret_arn
   registry_rum_allowed_hosts      = var.registry_rum_allowed_hosts
+
+  # Optional base64 .tar.gz of the UI branding folder, rendered as
+  # UI_BRANDING_ARCHIVE_B64 on the registry container.
+  ui_branding_archive_b64 = var.ui_branding_archive_b64
 
   # Search query logging (debug only)
   search_log_query_text = var.search_log_query_text
@@ -507,6 +513,39 @@ resource "terraform_data" "mongodb_backend_uri_required" {
         "mongodb_connection_string_secret_arn (prefer the _secret_arn form",
         "for credentials). See terraform.tfvars.example and",
         "docs/faq/configuring-mongodb-atlas-backend.md.",
+      ])
+    }
+  }
+}
+
+# With session_cookie_host_prefix on, the registry and the auth server refuse to
+# start when the session cookie is not Secure or has a Domain, because browsers
+# drop such a __Host- cookie. Catch the same combination at plan time. These are
+# preconditions rather than variable validations because a validation that reads
+# another variable needs Terraform 1.9, and this configuration supports 1.2+.
+resource "terraform_data" "session_cookie_host_prefix_settings" {
+  input = var.session_cookie_host_prefix
+
+  lifecycle {
+    precondition {
+      condition = !var.session_cookie_host_prefix || var.session_cookie_secure
+      error_message = join(" ", [
+        "session_cookie_host_prefix = true needs session_cookie_secure = true:",
+        "browsers drop a __Host- cookie that is not Secure, and the registry and",
+        "auth-server refuse to start. Set session_cookie_secure = true, or set",
+        "session_cookie_host_prefix = false.",
+      ])
+    }
+
+    precondition {
+      condition = !var.session_cookie_host_prefix || trimspace(
+        var.session_cookie_domain == null ? "" : var.session_cookie_domain
+      ) == ""
+      error_message = join(" ", [
+        "session_cookie_host_prefix = true needs an empty session_cookie_domain:",
+        "browsers drop a __Host- cookie that has a Domain, and the registry and",
+        "auth-server refuse to start. Set session_cookie_domain = \"\", or set",
+        "session_cookie_host_prefix = false.",
       ])
     }
   }

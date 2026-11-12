@@ -1,10 +1,15 @@
 """Base authentication provider interface."""
 
+import copy
 import logging
+import threading
+import time
 from abc import ABC, abstractmethod
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, ClassVar
 
 import jwt
+import requests
 
 logging.basicConfig(
     level=logging.INFO,
@@ -12,6 +17,32 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+
+# A token whose `kid` is not in the cached JWKS triggers at most one refetch per
+# JWKS URL in this window. That picks up an IdP key rotation within seconds
+# while stopping a stream of tokens with made-up `kid` values from turning every
+# request into an outbound fetch.
+JWKS_KID_MISS_REFRESH_INTERVAL_SECONDS: int = 60
+
+
+@dataclass
+class _SharedJwksEntry:
+    """JWKS state for one JWKS URL, shared by every provider instance using it."""
+
+    jwks: dict[str, Any] | None = None
+    fetched_at: float = 0.0
+    last_kid_miss_refresh: float = 0.0
+
+
+def _match_jwks_key(
+    jwks: dict[str, Any],
+    kid: str,
+) -> Any | None:
+    """Return the public key for `kid` from a JWKS document, or None."""
+    for key in jwks.get("keys", []):
+        if key.get("kid") == kid:
+            return jwt.PyJWK(key).key
+    return None
 
 
 class IdTokenVerificationError(Exception):
@@ -56,7 +87,171 @@ def normalize_groups_claim(value: Any, *, source: str) -> list[str]:
 
 
 class AuthProvider(ABC):
-    """Abstract base class for authentication providers."""
+    """Abstract base class for authentication providers.
+
+    The JWKS cache lives on the class, keyed by ``jwks_url``, not on the
+    instance. ``get_auth_provider()`` builds a new provider per request, so a
+    per-instance cache was always empty and every token validation refetched
+    the JWKS (issue #2012). Subclasses keep reading and writing
+    ``self._jwks_cache`` / ``self._jwks_cache_time``; the properties below route
+    those to the shared entry for the provider's ``jwks_url``.
+    """
+
+    _shared_jwks: ClassVar[dict[str, _SharedJwksEntry]] = {}
+    _shared_jwks_lock: ClassVar[threading.Lock] = threading.Lock()
+    _shared_discovery: ClassVar[dict[str, dict[str, Any]]] = {}
+    _shared_discovery_lock: ClassVar[threading.Lock] = threading.Lock()
+
+    @classmethod
+    def _clear_shared_discovery_cache(cls) -> None:
+        """Drop every cached discovery document (test helper and operational reset)."""
+        with cls._shared_discovery_lock:
+            AuthProvider._shared_discovery.clear()
+
+    def _fetch_shared_openid_configuration(
+        self,
+        config_url: str,
+    ) -> dict[str, Any]:
+        """Fetch an OpenID Connect discovery document, cached for the process.
+
+        The cache is on the class, keyed by `config_url`. ``get_auth_provider()``
+        builds a new provider per request, so a cache on the instance (an
+        ``@lru_cache`` on a method, keyed on ``self``) refetched discovery on
+        every request. A failed fetch is not cached. Each caller gets its own
+        deep copy, so a caller that edits the result cannot change it for
+        later requests.
+
+        Args:
+            config_url: The provider's ``/.well-known/openid-configuration`` URL.
+
+        Returns:
+            A private copy of the discovery document.
+
+        Raises:
+            ValueError: If the discovery document cannot be retrieved.
+        """
+        with self._shared_discovery_lock:
+            cached = AuthProvider._shared_discovery.get(config_url)
+        if cached is not None:
+            return copy.deepcopy(cached)
+
+        try:
+            logger.debug(f"Fetching OpenID configuration from {config_url}")
+            response = requests.get(config_url, timeout=10)
+            response.raise_for_status()
+            config: dict[str, Any] = response.json()
+        except requests.RequestException as e:
+            logger.error(f"Failed to get OpenID configuration: {e}")
+            raise ValueError(f"OpenID configuration retrieval failed: {e}") from e
+
+        logger.debug("OpenID configuration retrieved successfully")
+        with self._shared_discovery_lock:
+            AuthProvider._shared_discovery[config_url] = config
+        return copy.deepcopy(config)
+
+    @classmethod
+    def _clear_shared_jwks_cache(cls) -> None:
+        """Drop every shared JWKS entry (test helper and operational reset)."""
+        with cls._shared_jwks_lock:
+            AuthProvider._shared_jwks.clear()
+
+    def _jwks_cache_key(self) -> str:
+        """Key for this provider's shared JWKS entry; the JWKS URL by default.
+
+        Override when reading ``jwks_url`` is itself expensive (for example,
+        when it comes from an OIDC discovery fetch).
+        """
+        return str(self.jwks_url)  # type: ignore[attr-defined]
+
+    def _shared_jwks_entry(self) -> _SharedJwksEntry:
+        """Return the shared JWKS entry for this provider's cache key."""
+        key = self._jwks_cache_key()
+        with self._shared_jwks_lock:
+            entry = AuthProvider._shared_jwks.get(key)
+            if entry is None:
+                entry = _SharedJwksEntry()
+                AuthProvider._shared_jwks[key] = entry
+            return entry
+
+    @property
+    def _jwks_cache(self) -> dict[str, Any] | None:
+        return self._shared_jwks_entry().jwks
+
+    @_jwks_cache.setter
+    def _jwks_cache(self, value: dict[str, Any] | None) -> None:
+        self._shared_jwks_entry().jwks = value
+
+    @property
+    def _jwks_cache_time(self) -> float:
+        return self._shared_jwks_entry().fetched_at
+
+    @_jwks_cache_time.setter
+    def _jwks_cache_time(self, value: float) -> None:
+        self._shared_jwks_entry().fetched_at = value
+
+    def _claim_kid_miss_refresh(self) -> bool:
+        """Reserve this URL's kid-miss refresh slot; False if used within the window."""
+        entry = self._shared_jwks_entry()
+        now = time.time()
+        with self._shared_jwks_lock:
+            if now - entry.last_kid_miss_refresh < JWKS_KID_MISS_REFRESH_INTERVAL_SECONDS:
+                return False
+            entry.last_kid_miss_refresh = now
+            return True
+
+    def _refetch_jwks_for_kid(
+        self,
+        kid: str,
+    ) -> Any | None:
+        """Force one JWKS refetch and look up `kid` again.
+
+        Expires the shared entry so ``get_jwks()`` fetches, then restores the
+        previous fetch time if the fetch did not store a new document. Without
+        that restore, a failed refetch would leave the entry expired and every
+        later request would hit the IdP.
+        """
+        previous_fetch_time = self._jwks_cache_time
+        self._jwks_cache_time = 0.0
+        try:
+            jwks = self.get_jwks()
+        except ValueError as e:
+            logger.warning(f"JWKS refetch for unknown kid failed: {e}")
+            return None
+        finally:
+            if self._jwks_cache_time == 0.0:
+                self._jwks_cache_time = previous_fetch_time
+        return _match_jwks_key(jwks, kid)
+
+    def _find_jwks_signing_key(
+        self,
+        kid: str,
+    ) -> Any | None:
+        """Return the JWKS public key for `kid`, refetching once on a miss.
+
+        A miss usually means the IdP rotated its signing keys since the JWKS was
+        cached. The refetch is rate-limited per JWKS URL by
+        ``JWKS_KID_MISS_REFRESH_INTERVAL_SECONDS``. A key that is still absent
+        returns None, and the caller rejects the token.
+
+        Args:
+            kid: The ``kid`` from the token's (unverified) header.
+
+        Returns:
+            The public key object for PyJWT, or None when no key matches.
+
+        Raises:
+            ValueError: If the initial JWKS retrieval fails.
+        """
+        signing_key = _match_jwks_key(self.get_jwks(), kid)
+        if signing_key is not None:
+            return signing_key
+
+        if not self._claim_kid_miss_refresh():
+            logger.warning(f"No JWKS key for kid {kid!r}; refetch is rate-limited, rejecting")
+            return None
+
+        logger.info(f"No JWKS key for kid {kid!r}; refetching JWKS once")
+        return self._refetch_jwks_for_kid(kid)
 
     def _verify_id_token_with_jwks(
         self,
@@ -147,18 +342,10 @@ class AuthProvider(ABC):
             )
 
         try:
-            jwks = self.get_jwks()
+            signing_key = self._find_jwks_signing_key(kid)
         except Exception as e:
             # Fail closed: if we cannot reach the JWKS, we cannot verify.
             raise IdTokenVerificationError(f"Unable to retrieve JWKS for verification: {e}") from e
-
-        signing_key = None
-        for key in jwks.get("keys", []):
-            if key.get("kid") == kid:
-                from jwt import PyJWK
-
-                signing_key = PyJWK(key).key
-                break
 
         if signing_key is None:
             raise IdTokenVerificationError(f"No JWKS key matches id_token 'kid': {kid}")

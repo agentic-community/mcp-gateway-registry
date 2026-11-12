@@ -274,6 +274,22 @@ session_cookie_secure = true
 # Default: Empty (cookie scoped to exact host only - safest option)
 session_cookie_domain = ""
 
+# Name the session cookie __Host-mcp_gateway_session (Secure, Path=/, no Domain)
+# so no sibling subdomain can set or overwrite it. Requires HTTPS,
+# session_cookie_secure = true and session_cookie_domain = ""; terraform plan
+# fails otherwise, as do the registry and auth-server at startup. Turning it on
+# signs every user out once.
+# Default: false
+session_cookie_host_prefix = false
+
+# Browser session lifetime in seconds. Sets the auth server's session store TTL,
+# the session cookie's Max-Age, and the registry's cookie signature max age.
+# The value must match on the registry and auth-server; this module renders it
+# into both task definitions. Must be a positive whole number; terraform plan
+# fails otherwise, as do the registry and auth-server at startup.
+# Default: 28800 (8 hours)
+# session_max_age_seconds = 28800
+
 # Exact-match allowlist of OAuth login/logout redirect URIs (open-redirect hardening).
 # Comma-separated list of the FULL absolute callback/success/logout URLs the
 # deployment legitimately redirects to after login/logout. When set, an absolute
@@ -485,6 +501,28 @@ storage_backend = "documentdb"
 # closed). Empty disables the check.
 #   registry_rum_allowed_hosts = "cdn.signalfx.com,rum-ingest.us0.signalfx.com"
 # registry_rum_allowed_hosts = ""
+
+# ----------------------------------------------------------------------------
+# Runtime UI branding
+# ----------------------------------------------------------------------------
+# Optional base64-encoded .tar.gz of a branding folder (manifest.json,
+# theme.css, logos, favicon, .woff2 fonts; flat, no subdirectories). The
+# registry extracts it into /app/branding at startup, so the UI is reskinned
+# without building a custom image. Empty keeps the stock branding. At most
+# 49152 characters (48 KiB): ECS caps a whole task definition at 64 KiB. See
+# docs/ui-branding.md for the folder format.
+#
+# Produce the value from a branding folder:
+#   tar -czf - -C ./branding . | base64 | tr -d '\n'
+# On macOS, `export COPYFILE_DISABLE=1` first is optional (the registry skips
+# "._*" and .DS_Store members). macOS tar also pads output written to a pipe up
+# to 10 KiB; to keep that padding out of the 48 KiB budget, write a file first:
+#   tar -czf branding.tar.gz -C ./branding . && base64 < branding.tar.gz | tr -d '\n'
+#
+# tfvars files cannot call functions, so to avoid pasting the value pass it on
+# the command line instead:
+#   terraform apply -var "ui_branding_archive_b64=$(tar -czf - -C ./branding . | base64 | tr -d '\n')"
+# ui_branding_archive_b64 = ""
 
 # ============================================================================
 # EXTERNAL MONGODB (Atlas, self-managed) - issue #955

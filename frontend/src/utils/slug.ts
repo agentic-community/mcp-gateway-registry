@@ -24,3 +24,21 @@ export function pathFromName(name: string, prefix = ''): string {
   const slug = slugify(name);
   return prefix ? `/${prefix}/${slug}` : `/${slug}`;
 }
+
+/**
+ * The path to show after a form's name changes from `prevName` to `nextName`.
+ *
+ * The path follows the name while it is empty or still equals what the
+ * previous name generates. Once the user edits it to anything else (for
+ * example to avoid a duplicate path), it stays as typed. Clearing it, or
+ * editing it back to the generated value, makes it follow the name again.
+ */
+export function pathForRenamed(
+  prevName: string,
+  prevPath: string,
+  nextName: string,
+  prefix = '',
+): string {
+  const following = prevPath === '' || prevPath === pathFromName(prevName, prefix);
+  return following ? pathFromName(nextName, prefix) : prevPath;
+}

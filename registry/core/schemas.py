@@ -526,8 +526,8 @@ class OAuthDiscoveryConfig(BaseModel):
     # Reuses the provider-config shape the shared consent/refresh engine already
     # accepts (build_consent_url / get_valid_token). Independent of egress_oauth.
     oauth: EgressOAuthConfig | None = Field(default=None)
-    # Vault principal to borrow: the ingress auth_method + canonical user id
-    # (OIDC sub, else username) recorded when the identity was designated.
+    # Vault principal to borrow: the canonical auth_method and the designee's
+    # vault user id (``vault_principal``) recorded when the identity was designated.
     auth_method: str = Field(default="")
     user_id: str = Field(default="")
     # Non-secret display fields for the config view / audit.
@@ -844,6 +844,15 @@ class ServerInfo(ProxyableMixin):
         default=None,
         description="Egress OAuth config. Required when egress_auth_mode is 'oauth_user' "
         "(provider/client_id/secret) or 'obo_exchange' (target_audience).",
+    )
+    egress_list_tools_before_consent: bool = Field(
+        default=False,
+        description="When true, a direct-route tools/list from a user who has not "
+        "connected this server's provider account (oauth_user) or submitted a PAT (pat) "
+        "returns the server's stored tool_list, with the connect tool first for "
+        "oauth_user, instead of only the connect tool. For clients that only call tools "
+        "an admin enabled ahead of time (issue #1986). Only valid with egress_auth_mode "
+        "oauth_user or pat.",
     )
 
     # Lifecycle and federation metadata fields

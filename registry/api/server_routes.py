@@ -8,7 +8,6 @@ from typing import Annotated, Any
 import httpx
 from fastapi import (
     APIRouter,
-    Cookie,
     Depends,
     Form,
     Header,
@@ -32,6 +31,10 @@ from ..auth.csrf import (
 )
 from ..auth.dependencies import enhanced_auth, nginx_proxied_auth
 from ..auth.internal import validate_internal_auth
+from ..auth.session_cookie import (
+    SessionCookie,
+    request_session_cookie,
+)
 from ..auth.tool_filter import filter_tools_for_user
 from ..common.log_redaction import redact_mapping, redact_url
 from ..constants import VALID_AUTH_SCHEMES, DeploymentType, HealthStatus
@@ -785,12 +788,14 @@ async def _perform_security_scan_on_registration(
 async def read_root(
     request: Request,
     query: str | None = None,
-    session: Annotated[str | None, Cookie(alias=settings.session_cookie_name)] = None,
+    session: SessionCookie = None,
 ):
     """Main dashboard page showing services based on user permissions."""
     # Check authentication first and redirect if not authenticated
     if not session:
         logger.info("No session cookie at root route, redirecting to login")
+        # A refused duplicate gets both variants expired by
+        # SessionCookieIsolationMiddleware.
         return RedirectResponse(url="/login", status_code=302)
 
     try:
@@ -4128,7 +4133,7 @@ async def generate_user_token(
         from ..auth.dependencies import get_user_session_data
 
         try:
-            session_cookie = request.cookies.get(settings.session_cookie_name)
+            session_cookie = request_session_cookie(request)
             logger.info(f"Session cookie present: {bool(session_cookie)}")
             session_data = await get_user_session_data(session_cookie)
             logger.info(
@@ -5348,7 +5353,7 @@ async def put_server_oauth_discovery(
     Owner-or-admin only; CSRF protected. ``client_secret`` blank keeps stored.
     An existing designation is preserved -- see below.
     """
-    from ..egress_auth.service import canonical_auth_method, is_per_user_auth_method
+    from ..egress_auth.service import vault_principal
     from .egress_auth_routes import build_oauth_provider_config
 
     set_audit_action(
@@ -5402,11 +5407,11 @@ async def put_server_oauth_discovery(
             content={"error": "OAuth 2.1 discovery is not applicable to local servers"},
         )
 
-    # Record the caller's canonical vault principal. Must match what the consent
+    # Record the caller's vault principal. Must match what the consent
     # (/oauth2/egress/connect?purpose=discovery) and vend paths key on:
-    # auth_method + egress_user (OIDC sub, else username).
+    # canonical auth_method + the auth-server's egress_user (vault_principal).
     #
-    # CANONICALIZE. Every vault write folds per-user IdP method names (keycloak, jwt,
+    # CANONICAL. Every vault write folds per-user IdP method names (keycloak, jwt,
     # self_signed, ...) into the single `oauth2` bucket so consent-write and vend-read
     # agree. A browser caller already reports `oauth2`, but a bearer/IdP-JWT caller
     # carries the raw claim straight through -- storing that verbatim designates an
@@ -5414,9 +5419,8 @@ async def put_server_oauth_discovery(
     # principal-mismatch guard on the consent route then refuses the browser consent
     # that would have fixed it. Designating over the API must land in the same bucket
     # the consent will write to.
-    auth_method = canonical_auth_method({"method": user_context.get("auth_method") or ""})
-    user_id = user_context.get("egress_user") or user_context.get("username") or ""
-    if not is_per_user_auth_method(auth_method) or not user_id:
+    principal = vault_principal(user_context)
+    if principal is None:
         return JSONResponse(
             status_code=403,
             content={
@@ -5424,6 +5428,7 @@ async def put_server_oauth_discovery(
                 "reason": "Only a per-user (e.g. oauth2) principal can be a discovery identity",
             },
         )
+    auth_method, user_id = principal
 
     # Build (validate + encrypt) this server's OWN discovery OAuth provider config
     # -- self-contained under Backend Auth, no egress_oauth dependency. Blank

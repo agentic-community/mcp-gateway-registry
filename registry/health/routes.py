@@ -5,7 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
 
 from ..auth.dependencies import nginx_proxied_auth, resolve_session_from_cookie
-from ..core.config import settings
+from ..auth.session_cookie import request_session_cookie
 from .service import health_service
 
 logger = logging.getLogger(__name__)
@@ -18,38 +18,15 @@ async def websocket_endpoint(websocket: WebSocket):
     """High-performance WebSocket endpoint for real-time health status updates with authentication."""
     connection_added = False
     try:
-        # WebSocket cookies are automatically included in handshake
-        # Validate session before accepting connection
-        session_cookie = None
-
-        # Debug: Log WebSocket connection attempt
+        # The browser sends its cookies with the same-origin WebSocket handshake.
+        # Validate the session before accepting the connection; a session cookie
+        # the handshake carries more than once is refused like a missing one.
+        # The session cookie is the only credential read here: a session in the
+        # URL would land in access logs, so the query string is never consulted.
+        # Closing before accept refuses the handshake: the client gets HTTP 403,
+        # and the 1008 code below never reaches it as a close frame.
         logger.info(f"WebSocket connection attempt from {websocket.client}")
-
-        # Try different ways to access cookies from WebSocket
-        if hasattr(websocket, "cookies") and websocket.cookies:
-            session_cookie = websocket.cookies.get(settings.session_cookie_name)
-            logger.debug(
-                f"WebSocket cookies found via websocket.cookies: {list(websocket.cookies.keys())}"
-            )
-
-        # Alternative: Try to get cookies from headers
-        if not session_cookie and hasattr(websocket, "headers"):
-            cookie_header = websocket.headers.get("cookie", "")
-            if cookie_header:
-                # Never log the raw Cookie header: it carries the session cookie
-                # value. Presence is enough for this diagnostic.
-                logger.debug("WebSocket cookie header present")
-                # Parse cookie header manually
-                cookies = {}
-                for cookie_pair in cookie_header.split(";"):
-                    if "=" in cookie_pair:
-                        name, value = cookie_pair.strip().split("=", 1)
-                        cookies[name] = value
-                session_cookie = cookies.get(settings.session_cookie_name)
-
-        # Alternative: Try to get from query parameters as fallback
-        if not session_cookie and hasattr(websocket, "query_params"):
-            session_cookie = websocket.query_params.get(settings.session_cookie_name)
+        session_cookie = request_session_cookie(websocket)
 
         logger.debug(f"WebSocket session cookie found: {bool(session_cookie)}")
 

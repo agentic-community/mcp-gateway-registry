@@ -16,8 +16,14 @@ on the wire:
                          private and ttlMs
     not-found-virtual    an unknown tool on a virtual route gets -32602
     one-challenge-401    a request without a token gets exactly one WWW-Authenticate
-    challenge-403        a request the scopes deny names resource_metadata and no
-                         insufficient_scope (only with --restricted-token-file)
+    challenge-403        a request the scopes deny names resource_metadata, no
+                         insufficient_scope, and returns a JSON-RPC error naming
+                         the method (only with --restricted-token-file)
+    cookie-cross-origin  a request signed in with the browser session cookie
+                         from another origin gets 403 origin_refused (only with
+                         --session-cookie-file)
+    cookie-same-origin   the same request from the gateway's own origin is
+                         accepted (only with --session-cookie-file)
 
 The routes need the MCP compatibility test upstreams from cli/examples/
 (mcp-everything.json, mcp-everything-legacy.json and
@@ -30,6 +36,10 @@ Usage:
 
     # Also check the 403 challenge with a user who cannot reach /everything/
     uv run python tests/e2e/mcp_2026_gateway_checks.py --restricted-token-file .token2
+
+    # Also check the Origin rule for browser sessions: the file holds the value
+    # of the mcp_gateway_session cookie copied from a signed-in browser
+    uv run python tests/e2e/mcp_2026_gateway_checks.py --session-cookie-file .session-cookie
 
     # Other routes and tools (a direct server and a virtual server with two tools each)
     uv run python tests/e2e/mcp_2026_gateway_checks.py --base https://gw.example.com \\
@@ -73,6 +83,9 @@ MODERN_PROTOCOL_VERSION: str = "2026-07-28"
 LEGACY_PROTOCOL_VERSION: str = "2025-06-18"
 HEADER_MISMATCH_CODE: int = -32020
 NOT_FOUND_CODE: int = -32602
+ACCESS_DENIED_CODE: int = -32003
+SESSION_COOKIE_NAME: str = "mcp_gateway_session"
+CROSS_ORIGIN: str = "https://cross-origin.invalid"
 REQUEST_TIMEOUT_SECONDS: float = 30.0
 META: dict[str, Any] = {
     "io.modelcontextprotocol/protocolVersion": MODERN_PROTOCOL_VERSION,
@@ -95,9 +108,18 @@ def _load_token(
 def _last_jsonrpc_message(
     text: str,
 ) -> dict[str, Any]:
-    """Return the last JSON-RPC message in a JSON or SSE response body."""
+    """Return the last JSON-RPC message in a JSON or SSE response body.
+
+    Returns an empty dict when the body is not a JSON object, such as an
+    error page or a bare JSON string, so a check reports a failure instead of
+    crashing.
+    """
     data_lines = [line[6:] for line in text.splitlines() if line.startswith("data: ")]
-    return json.loads(data_lines[-1] if data_lines else text)
+    try:
+        message = json.loads(data_lines[-1] if data_lines else text)
+    except ValueError:
+        return {}
+    return message if isinstance(message, dict) else {}
 
 
 def _modern_post(
@@ -231,18 +253,62 @@ def _check_forbidden_challenge(
 ) -> tuple[bool, str]:
     response = _modern_post(url, restricted_token, "tools/list", {})
     challenge = response.headers.get("www-authenticate", "")
+    error = _last_jsonrpc_message(response.text).get("error", {})
+    # A non-403 reply (an expired token gets a 401) can carry a plain string
+    # error rather than a JSON-RPC error object; report it as a failure.
+    if not isinstance(error, dict):
+        error = {"message": str(error)}
     passed = (
         response.status_code == 403
         and "resource_metadata" in challenge
         and "insufficient_scope" not in challenge
+        and error.get("code") == ACCESS_DENIED_CODE
+        and "tools/list" in error.get("message", "")
     )
-    return passed, f"HTTP {response.status_code}, WWW-Authenticate={challenge[:60]!r}"
+    return passed, f"HTTP {response.status_code}, error={error.get('message', '')[:60]!r}"
+
+
+def _cookie_post(
+    url: str,
+    cookie: str,
+    origin: str,
+) -> requests.Response:
+    """POST a tools/list signed in with the browser session cookie."""
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+        "Cookie": f"{SESSION_COOKIE_NAME}={cookie}",
+        "Origin": origin,
+    }
+    body = {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
+    return requests.post(url, json=body, headers=headers, timeout=REQUEST_TIMEOUT_SECONDS)
+
+
+def _check_cookie_cross_origin(
+    url: str,
+    cookie: str,
+) -> tuple[bool, str]:
+    response = _cookie_post(url, cookie, CROSS_ORIGIN)
+    error = _last_jsonrpc_message(response.text).get("error", {})
+    reason = (error.get("data") or {}).get("reason")
+    passed = response.status_code == 403 and reason == "origin_refused"
+    return passed, f"HTTP {response.status_code}, reason={reason}"
+
+
+def _check_cookie_same_origin(
+    url: str,
+    cookie: str,
+    base_url: str,
+) -> tuple[bool, str]:
+    response = _cookie_post(url, cookie, base_url.rstrip("/"))
+    return response.status_code == 200, f"HTTP {response.status_code}"
 
 
 def _build_checks(
     args: argparse.Namespace,
     token: str,
     restricted_token: str | None,
+    session_cookie: str | None,
 ) -> list[tuple[str, Callable[[], tuple[bool, str]]]]:
     """Name every check with a zero-argument callable that runs it."""
     direct = args.base.rstrip("/") + args.direct_route
@@ -265,6 +331,16 @@ def _build_checks(
     if restricted_token:
         checks.append(
             ("challenge-403", lambda: _check_forbidden_challenge(direct, restricted_token))
+        )
+    if session_cookie:
+        checks.append(
+            ("cookie-cross-origin", lambda: _check_cookie_cross_origin(direct, session_cookie))
+        )
+        checks.append(
+            (
+                "cookie-same-origin",
+                lambda: _check_cookie_same_origin(direct, session_cookie, args.base),
+            )
         )
     return checks
 
@@ -304,13 +380,20 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="Token of a user who cannot reach the direct route, for the 403 check",
     )
+    parser.add_argument(
+        "--session-cookie-file",
+        type=Path,
+        default=None,
+        help="File holding a signed-in browser's mcp_gateway_session cookie value",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = _parse_args()
     restricted = _load_token(args.restricted_token_file) if args.restricted_token_file else None
-    checks = _build_checks(args, _load_token(args.token_file), restricted)
+    cookie = args.session_cookie_file.read_text().strip() if args.session_cookie_file else None
+    checks = _build_checks(args, _load_token(args.token_file), restricted, cookie)
     failures = 0
     for name, run in checks:
         try:

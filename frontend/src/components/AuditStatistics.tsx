@@ -54,7 +54,7 @@ const BarChart: React.FC<{
   emptyMessage?: string;
 }> = ({ items, color, emptyMessage = 'No data available' }) => {
   if (!items.length) {
-    return <p className="text-sm text-gray-400 italic py-2">{emptyMessage}</p>;
+    return <p className="text-sm text-fg-subtle italic py-2">{emptyMessage}</p>;
   }
 
   const maxCount = Math.max(...items.map((i) => i.count));
@@ -63,16 +63,16 @@ const BarChart: React.FC<{
     <div className="space-y-1.5">
       {items.map((item) => (
         <div key={item.name} className="flex items-center gap-2">
-          <span className="text-xs text-gray-700 dark:text-gray-300 w-28 truncate" title={item.name}>
+          <span className="text-xs text-fg-muted w-28 truncate" title={item.name}>
             {item.name}
           </span>
-          <div className="flex-1 bg-gray-100 dark:bg-gray-700 rounded-full h-3.5">
+          <div className="flex-1 bg-gray-200 dark:bg-gray-700 rounded-full h-3.5">
             <div
               className={`${color} h-3.5 rounded-full transition-all duration-300`}
               style={{ width: `${Math.max((item.count / maxCount) * 100, 2)}%` }}
             />
           </div>
-          <span className="text-xs text-gray-500 dark:text-gray-400 w-10 text-right tabular-nums">
+          <span className="text-xs text-fg-subtle w-10 text-right tabular-nums">
             {item.count.toLocaleString()}
           </span>
         </div>
@@ -84,19 +84,19 @@ const BarChart: React.FC<{
 const StatusBar: React.FC<{ distribution: StatusDistribution }> = ({ distribution }) => {
   const total = distribution.status_2xx + distribution.status_4xx + distribution.status_5xx;
   if (total === 0) {
-    return <p className="text-sm text-gray-400 italic py-2">No data available</p>;
+    return <p className="text-sm text-fg-subtle italic py-2">No data available</p>;
   }
 
   const segments = [
-    { label: '2xx', count: distribution.status_2xx, color: 'bg-green-500', textColor: 'text-green-600 dark:text-green-400' },
-    { label: '4xx', count: distribution.status_4xx, color: 'bg-yellow-500', textColor: 'text-yellow-600 dark:text-yellow-400' },
-    { label: '5xx', count: distribution.status_5xx, color: 'bg-red-500', textColor: 'text-red-600 dark:text-red-400' },
+    { label: '2xx', count: distribution.status_2xx, color: 'bg-success-500', textColor: 'text-success-600 dark:text-success-400' },
+    { label: '4xx', count: distribution.status_4xx, color: 'bg-warning-500', textColor: 'text-warning-600 dark:text-warning-400' },
+    { label: '5xx', count: distribution.status_5xx, color: 'bg-danger-500', textColor: 'text-danger-600 dark:text-danger-400' },
   ];
 
   return (
     <div>
       {/* Stacked bar */}
-      <div className="flex h-5 rounded-full overflow-hidden bg-gray-100 dark:bg-gray-700 mb-2">
+      <div className="flex h-5 rounded-full overflow-hidden bg-gray-200 dark:bg-gray-700 mb-2">
         {segments.map((seg) =>
           seg.count > 0 ? (
             <div
@@ -196,7 +196,7 @@ const TimelineChart: React.FC<{
   const maxCount = Math.max(currentMax, priorMax, 1);
 
   if (!filled.length) {
-    return <p className="text-sm text-gray-400 italic py-2">No data available</p>;
+    return <p className="text-sm text-fg-subtle italic py-2">No data available</p>;
   }
 
   const plotW = VB_W - PAD.left - PAD.right;
@@ -277,13 +277,13 @@ const TimelineChart: React.FC<{
         )}
 
         {/* Area fill */}
-        <path d={areaPath} className="fill-blue-500/15 dark:fill-blue-400/15" />
+        <path d={areaPath} className="fill-info-500/15 dark:fill-info-400/15" />
 
         {/* Line */}
         <path
           d={linePath}
           fill="none"
-          className="stroke-blue-500 dark:stroke-blue-400"
+          className="stroke-info-500 dark:stroke-info-400"
           strokeWidth="2"
           strokeLinejoin="round"
           strokeLinecap="round"
@@ -298,10 +298,9 @@ const TimelineChart: React.FC<{
             r={hoverIndex === i ? 5 : (p.count > 0 ? 3.5 : 2)}
             className={
               p.count > 0
-                ? 'fill-blue-500 dark:fill-blue-400'
-                : 'fill-gray-300 dark:fill-gray-600'
+                ? 'fill-info-500 stroke-surface-muted dark:fill-info-400'
+                : 'fill-gray-300 stroke-surface-muted dark:fill-gray-600'
             }
-            stroke="white"
             strokeWidth="1.5"
           />
         ))}
@@ -318,7 +317,7 @@ const TimelineChart: React.FC<{
             <g>
               <line
                 x1={hp.x} y1={PAD.top} x2={hp.x} y2={PAD.top + plotH}
-                className="stroke-blue-400/50"
+                className="stroke-info-400/50"
                 strokeWidth="1"
                 strokeDasharray="4,3"
               />
@@ -366,9 +365,9 @@ const TimelineChart: React.FC<{
 
       {/* Legend */}
       {hasPrior && (
-        <div className="flex items-center justify-end gap-4 text-xs text-gray-500 dark:text-gray-400 mt-1">
+        <div className="flex items-center justify-end gap-4 text-xs text-fg-subtle mt-1">
           <span className="flex items-center gap-1">
-            <span className="inline-block w-4 h-0.5 bg-blue-500 dark:bg-blue-400" />
+            <span className="inline-block w-4 h-0.5 bg-info-500 dark:bg-info-400" />
             This week
           </span>
           <span className="flex items-center gap-1">
@@ -385,26 +384,26 @@ const TimelineChart: React.FC<{
 
 const UserActivityTable: React.FC<{ items: UserActivityItem[] }> = ({ items }) => {
   if (!items.length) {
-    return <p className="text-sm text-gray-400 italic py-2">No user activity data</p>;
+    return <p className="text-sm text-fg-subtle italic py-2">No user activity data</p>;
   }
 
   return (
     <div className="overflow-auto max-h-[160px]">
       <table className="w-full text-xs">
-        <thead className="sticky top-0 bg-white dark:bg-gray-800">
-          <tr className="border-b border-gray-200 dark:border-gray-700">
-            <th className="text-left py-1 pr-2 font-medium text-gray-500 dark:text-gray-400">User</th>
-            <th className="text-right py-1 px-2 font-medium text-gray-500 dark:text-gray-400">Total</th>
-            <th className="text-left py-1 pl-2 font-medium text-gray-500 dark:text-gray-400">Top Operations</th>
+        <thead className="sticky top-0 bg-surface-muted">
+          <tr className="border-b border-line">
+            <th className="text-left py-1 pr-2 font-medium text-fg-subtle">User</th>
+            <th className="text-right py-1 px-2 font-medium text-fg-subtle">Total</th>
+            <th className="text-left py-1 pl-2 font-medium text-fg-subtle">Top Operations</th>
           </tr>
         </thead>
         <tbody>
           {items.map((item) => (
-            <tr key={item.username} className="border-b border-gray-100 dark:border-gray-700/50">
-              <td className="py-1.5 pr-2 text-gray-700 dark:text-gray-300 font-medium truncate max-w-[100px]" title={item.username}>
+            <tr key={item.username} className="border-b border-line/60">
+              <td className="py-1.5 pr-2 text-fg-muted font-medium truncate max-w-[100px]" title={item.username}>
                 {item.username}
               </td>
-              <td className="py-1.5 px-2 text-right text-gray-500 dark:text-gray-400 tabular-nums">
+              <td className="py-1.5 px-2 text-right text-fg-subtle tabular-nums">
                 {item.total.toLocaleString()}
               </td>
               <td className="py-1.5 pl-2">
@@ -412,11 +411,11 @@ const UserActivityTable: React.FC<{ items: UserActivityItem[] }> = ({ items }) =
                   {item.operations.slice(0, 3).map((op) => (
                     <span
                       key={op.name}
-                      className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300"
+                      className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-gray-200/70 dark:bg-gray-700 text-fg-muted"
                       title={`${op.name}: ${op.count}`}
                     >
                       {op.name}
-                      <span className="text-gray-400 dark:text-gray-500">({op.count})</span>
+                      <span className="text-fg-subtle">({op.count})</span>
                     </span>
                   ))}
                 </div>
@@ -502,7 +501,7 @@ const AuditStatistics: React.FC<AuditStatisticsProps> = ({ stream, days = 7, use
   const isTokenMintStream = stream === 'token_mint';
 
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 mb-6">
+    <div className="card mb-6">
       {/* Header */}
       <div
         className="flex items-center justify-between px-4 py-3 cursor-pointer select-none"
@@ -510,16 +509,16 @@ const AuditStatistics: React.FC<AuditStatisticsProps> = ({ stream, days = 7, use
       >
         <div className="flex items-center gap-2">
           {collapsed ? (
-            <ChevronRightIcon className="h-4 w-4 text-gray-500" />
+            <ChevronRightIcon className="h-4 w-4 text-fg-subtle" />
           ) : (
-            <ChevronDownIcon className="h-4 w-4 text-gray-500" />
+            <ChevronDownIcon className="h-4 w-4 text-fg-subtle" />
           )}
-          <ChartBarIcon className="h-5 w-5 text-gray-500 dark:text-gray-400" />
-          <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">
+          <ChartBarIcon className="h-5 w-5 text-fg-subtle" />
+          <h3 className="text-sm font-semibold text-fg">
             Statistics
           </h3>
           {data && !collapsed && (
-            <span className="text-xs text-gray-400 ml-2">
+            <span className="text-xs text-fg-subtle ml-2">
               {data.total_events.toLocaleString()} events (last {days} days){username ? ` - filtered by "${username}"` : ''}
             </span>
           )}
@@ -531,7 +530,7 @@ const AuditStatistics: React.FC<AuditStatisticsProps> = ({ stream, days = 7, use
               handleRefresh();
             }}
             disabled={loading}
-            className="p-1.5 text-gray-500 hover:text-blue-600 dark:text-gray-400 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded transition-colors disabled:opacity-50"
+            className="btn-icon h-8 w-8"
             title="Refresh statistics"
           >
             <ArrowPathIcon className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
@@ -544,15 +543,15 @@ const AuditStatistics: React.FC<AuditStatisticsProps> = ({ stream, days = 7, use
         <div className="px-4 pb-4">
           {loading && !data ? (
             <div className="flex items-center justify-center py-8">
-              <ArrowPathIcon className="h-6 w-6 text-gray-400 animate-spin" />
-              <span className="ml-2 text-sm text-gray-400">Loading statistics...</span>
+              <ArrowPathIcon className="h-6 w-6 text-fg-subtle animate-spin" />
+              <span className="ml-2 text-sm text-fg-subtle">Loading statistics...</span>
             </div>
           ) : error ? (
             <div className="text-center py-8">
-              <p className="text-sm text-red-500">{error}</p>
+              <p className="text-sm text-danger-600 dark:text-danger-400">{error}</p>
               <button
                 onClick={handleRefresh}
-                className="mt-2 text-sm text-blue-500 hover:text-blue-600"
+                className="mt-2 text-sm font-medium text-accent-text hover:underline"
               >
                 Retry
               </button>
@@ -560,19 +559,19 @@ const AuditStatistics: React.FC<AuditStatisticsProps> = ({ stream, days = 7, use
           ) : data ? (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               {/* Top Users */}
-              <div className="border border-gray-100 dark:border-gray-700 rounded-lg p-3">
-                <h4 className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
+              <div className="rounded-lg border border-line bg-surface-muted p-3">
+                <h4 className="text-xs font-medium text-fg-subtle uppercase tracking-wider mb-2">
                   Top Users
                 </h4>
                 <BarChart
                   items={data.top_users.filter((u) => u.name !== 'anonymous')}
-                  color="bg-blue-500"
+                  color="bg-info-500"
                   emptyMessage="No user data"
                 />
                 {(() => {
                   const anon = data.top_users.find((u) => u.name === 'anonymous');
                   return anon ? (
-                    <p className="text-xs text-gray-400 dark:text-gray-500 italic mt-2">
+                    <p className="text-xs text-fg-subtle italic mt-2">
                       + {anon.count.toLocaleString()} anonymous events (unauthenticated API calls, health checks, login attempts)
                     </p>
                   ) : null;
@@ -580,8 +579,8 @@ const AuditStatistics: React.FC<AuditStatisticsProps> = ({ stream, days = 7, use
               </div>
 
               {/* Top Operations */}
-              <div className="border border-gray-100 dark:border-gray-700 rounded-lg p-3">
-                <h4 className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
+              <div className="rounded-lg border border-line bg-surface-muted p-3">
+                <h4 className="text-xs font-medium text-fg-subtle uppercase tracking-wider mb-2">
                   {isMcpStream ? 'Top MCP Methods' : 'Top Operations'}
                 </h4>
                 <BarChart items={data.top_operations} color="bg-purple-500" emptyMessage="No operation data" />
@@ -589,18 +588,18 @@ const AuditStatistics: React.FC<AuditStatisticsProps> = ({ stream, days = 7, use
 
               {/* Top MCP Servers (MCP stream only) */}
               {isMcpStream && (
-                <div className="border border-gray-100 dark:border-gray-700 rounded-lg p-3">
-                  <h4 className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
+                <div className="rounded-lg border border-line bg-surface-muted p-3">
+                  <h4 className="text-xs font-medium text-fg-subtle uppercase tracking-wider mb-2">
                     Top MCP Servers
                   </h4>
-                  <BarChart items={data.top_servers} color="bg-indigo-500" emptyMessage="No server data" />
+                  <BarChart items={data.top_servers} color="bg-server-500" emptyMessage="No server data" />
                 </div>
               )}
 
               {/* Status Distribution (streams with HTTP/MCP status only) */}
               {!isTokenMintStream && (
-                <div className="border border-gray-100 dark:border-gray-700 rounded-lg p-3">
-                  <h4 className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
+                <div className="rounded-lg border border-line bg-surface-muted p-3">
+                  <h4 className="text-xs font-medium text-fg-subtle uppercase tracking-wider mb-2">
                     Status Distribution
                   </h4>
                   <StatusBar distribution={data.status_distribution} />
@@ -608,18 +607,18 @@ const AuditStatistics: React.FC<AuditStatisticsProps> = ({ stream, days = 7, use
               )}
 
               {/* User Activity + Activity Timeline - split panel */}
-              <div className={`border border-gray-100 dark:border-gray-700 rounded-lg p-3 lg:col-span-2`}>
+              <div className="rounded-lg border border-line bg-surface-muted p-3 lg:col-span-2">
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                   {/* Left: User Activity Table */}
                   <div>
-                    <h4 className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
+                    <h4 className="text-xs font-medium text-fg-subtle uppercase tracking-wider mb-2">
                       User Activity Breakdown
                     </h4>
                     <UserActivityTable items={data.user_activity} />
                   </div>
                   {/* Right: Activity Timeline */}
                   <div>
-                    <h4 className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
+                    <h4 className="text-xs font-medium text-fg-subtle uppercase tracking-wider mb-2">
                       Activity Timeline (Last {days} Days)
                     </h4>
                     <TimelineChart

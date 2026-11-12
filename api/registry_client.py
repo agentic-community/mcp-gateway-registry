@@ -4066,6 +4066,7 @@ class RegistryClient:
         custom_token_auth_style: str | None = None,
         custom_resource: str | None = None,
         expected_issuer: str | None = None,
+        list_tools_before_consent: bool = False,
     ) -> dict[str, Any]:
         """Configure per-user egress auth on a server (admin only).
 
@@ -4097,6 +4098,10 @@ class RegistryClient:
             expected_issuer: RFC 9207 issuer of the provider's authorization
                 server (any provider). When set, the callback rejects a reply
                 whose ``iss`` names a different issuer.
+            list_tools_before_consent: oauth_user and pat only. List the
+                server's stored tools on a direct-route tools/list before the
+                user connects (issue #1986). The request replaces the whole
+                config, so leaving this False turns it off.
 
         Returns:
             Non-secret egress config view dict.
@@ -4134,6 +4139,7 @@ class RegistryClient:
             body["custom_resource"] = custom_resource
         if expected_issuer is not None:
             body["expected_issuer"] = expected_issuer
+        body["list_tools_before_consent"] = list_tools_before_consent
 
         response = self._make_request(
             method="POST",

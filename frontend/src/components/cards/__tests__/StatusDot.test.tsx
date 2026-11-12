@@ -11,8 +11,8 @@ describe('StatusDot', () => {
   it('applies the glow class for an active tone', () => {
     const { container } = render(<StatusDot tone="green" label="Healthy" />);
     const dot = container.querySelector('div.rounded-full');
-    expect(dot?.className).toContain('bg-green-400');
-    expect(dot?.className).toContain('shadow-green-400/30');
+    expect(dot?.className).toContain('bg-success-400');
+    expect(dot?.className).toContain('shadow-success-400/30');
   });
 
   it('applies the muted class for the off tone', () => {

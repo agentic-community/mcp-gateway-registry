@@ -37,13 +37,13 @@ const ListStateBoundary: React.FC<ListStateBoundaryProps> = ({
   }
   if (error) {
     return (
-      <div className="text-center py-8 text-red-500 dark:text-red-400 text-sm">{error}</div>
+      <div className="text-center py-8 text-danger-500 dark:text-danger-400 text-sm">{error}</div>
     );
   }
   if (isEmpty) {
     return (
       <div
-        className={`text-center py-12 text-gray-500 dark:text-gray-400 ${emptyClassName ?? ''}`}
+        className={`text-center py-12 text-fg-subtle ${emptyClassName ?? ''}`}
       >
         {emptyMessage}
       </div>

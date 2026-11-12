@@ -1,17 +1,19 @@
 import React, { useState, useCallback } from 'react';
+import { Transition } from '@headlessui/react';
+import { ShieldExclamationIcon, ArrowDownTrayIcon } from '@heroicons/react/24/outline';
 import { useAuth } from '../contexts/AuthContext';
-import AuditFilterBar, { AuditFilters } from '../components/AuditFilterBar';
-import AuditLogTable, { AuditEvent } from '../components/AuditLogTable';
+import AuditFilterBar from '../components/AuditFilterBar';
+import type { AuditFilters } from '../components/AuditFilterBar';
+import AuditLogTable from '../components/AuditLogTable';
 import AuditEventDetail from '../components/AuditEventDetail';
 import AuditStatistics from '../components/AuditStatistics';
 import AuditExecutiveSummary from '../components/AuditExecutiveSummary';
-import { ShieldExclamationIcon, ArrowDownTrayIcon } from '@heroicons/react/24/outline';
+import type { AuditEvent } from '../types/audit';
+import { buildAuditQueryParams } from '../utils/auditQuery';
+import useEscapeKey from '../hooks/useEscapeKey';
 
-interface AuditLogsPageProps {
-  embedded?: boolean;
-}
-
-const AuditLogsPage: React.FC<AuditLogsPageProps> = ({ embedded = false }) => {
+/** Audit log viewer, rendered inside Settings > Audit. Admin only. */
+const AuditLogsPage: React.FC = () => {
   const { user } = useAuth();
   const [filters, setFilters] = useState<AuditFilters>({
     stream: 'registry_api',
@@ -28,212 +30,99 @@ const AuditLogsPage: React.FC<AuditLogsPageProps> = ({ embedded = false }) => {
     setRefreshKey((prev) => prev + 1);
   }, []);
 
-  const handleEventSelect = useCallback((event: AuditEvent) => {
-    setSelectedEvent(event);
-  }, []);
-
   const handleCloseDetail = useCallback(() => {
     setSelectedEvent(null);
   }, []);
+  useEscapeKey(handleCloseDetail, selectedEvent !== null);
 
   const handleExport = useCallback((format: 'jsonl' | 'csv') => {
-    const params = new URLSearchParams();
-    params.set('stream', filters.stream);
+    const params = buildAuditQueryParams(filters);
     params.set('format', format);
-
-    if (filters.from) {
-      params.set('from', new Date(filters.from).toISOString());
-    }
-    if (filters.to) {
-      params.set('to', new Date(filters.to).toISOString());
-    }
-    if (filters.username) {
-      params.set('username', filters.username);
-    }
-    if (filters.operation) {
-      params.set('operation', filters.operation);
-    }
-    if (filters.resourceType) {
-      params.set('resource_type', filters.resourceType);
-    }
-    if (filters.statusMin !== undefined) {
-      params.set('status_min', filters.statusMin.toString());
-    }
-    if (filters.statusMax !== undefined) {
-      params.set('status_max', filters.statusMax.toString());
-    }
-
     // Trigger download by opening the export URL
     window.open(`/api/audit/export?${params.toString()}`, '_blank');
   }, [filters]);
 
-  // Check if user is admin
   if (!user?.is_admin) {
     return (
-      <div className={embedded ? "flex items-center justify-center p-4" : "min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center p-4"}>
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-8 max-w-md text-center">
-          <ShieldExclamationIcon className="h-16 w-16 text-red-500 mx-auto mb-4" />
-          <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100 mb-2">
-            Access Denied
-          </h1>
-          <p className="text-gray-600 dark:text-gray-400">
-            You need administrator privileges to view audit logs.
-          </p>
-        </div>
-      </div>
-    );
-  }
-
-  // Embedded mode - no outer container
-  if (embedded) {
-    return (
-      <div>
-        {/* Page Header */}
-        <div className="mb-6 flex items-center justify-between">
-          <div>
-            <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100">
-              Audit Logs
-            </h2>
-            <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
-              View and search system audit events for compliance and security monitoring.
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => handleExport('jsonl')}
-              className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
-              title="Export as JSONL"
-            >
-              <ArrowDownTrayIcon className="h-4 w-4" />
-              <span>JSONL</span>
-            </button>
-            <button
-              onClick={() => handleExport('csv')}
-              className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
-              title="Export as CSV"
-            >
-              <ArrowDownTrayIcon className="h-4 w-4" />
-              <span>CSV</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Filter Bar */}
-        <div className="mb-6">
-          <AuditFilterBar
-            filters={filters}
-            onFilterChange={handleFilterChange}
-            onRefresh={handleRefresh}
-          />
-        </div>
-
-        {/* Executive Summary - hero tiles for platform leads */}
-        <AuditExecutiveSummary />
-
-        {/* Statistics Dashboard */}
-        <AuditStatistics stream={filters.stream} username={filters.username} />
-
-        {/* Main Content */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Table - takes 2 columns when detail is shown, full width otherwise */}
-          <div className={selectedEvent ? 'lg:col-span-2' : 'lg:col-span-3'}>
-            <AuditLogTable
-              key={refreshKey}
-              filters={filters}
-              onEventSelect={handleEventSelect}
-              selectedEventId={selectedEvent?.request_id}
-            />
-          </div>
-
-          {/* Event Detail Panel */}
-          {selectedEvent && (
-            <div className="lg:col-span-1">
-              <div className="sticky top-8">
-                <AuditEventDetail
-                  event={selectedEvent}
-                  onClose={handleCloseDetail}
-                />
-              </div>
-            </div>
-          )}
+      <div className="flex items-center justify-center p-4">
+        <div className="card max-w-md p-8 text-center">
+          <ShieldExclamationIcon className="mx-auto mb-4 h-14 w-14 text-danger-500" />
+          <h1 className="mb-2 text-xl font-semibold text-fg">Access Denied</h1>
+          <p className="text-fg-muted">You need administrator privileges to view audit logs.</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Page Header */}
-        <div className="mb-6 flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
-              Audit Logs
-            </h1>
-            <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
-              View and search system audit events for compliance and security monitoring.
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => handleExport('jsonl')}
-              className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
-              title="Export as JSONL"
-            >
-              <ArrowDownTrayIcon className="h-4 w-4" />
-              <span>JSONL</span>
-            </button>
-            <button
-              onClick={() => handleExport('csv')}
-              className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
-              title="Export as CSV"
-            >
-              <ArrowDownTrayIcon className="h-4 w-4" />
-              <span>CSV</span>
-            </button>
-          </div>
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-semibold tracking-tight text-fg">Audit Logs</h2>
+          <p className="mt-1 text-sm text-fg-muted">
+            Search system audit events for compliance and security monitoring.
+          </p>
         </div>
-
-        {/* Filter Bar */}
-        <div className="mb-6">
-          <AuditFilterBar
-            filters={filters}
-            onFilterChange={handleFilterChange}
-            onRefresh={handleRefresh}
-          />
-        </div>
-
-        {/* Executive Summary - hero tiles for platform leads */}
-        <AuditExecutiveSummary />
-
-        {/* Statistics Dashboard */}
-        <AuditStatistics stream={filters.stream} username={filters.username} />
-
-        {/* Main Content */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Table - takes 2 columns when detail is shown, full width otherwise */}
-          <div className={selectedEvent ? 'lg:col-span-2' : 'lg:col-span-3'}>
-            <AuditLogTable
-              key={refreshKey}
-              filters={filters}
-              onEventSelect={handleEventSelect}
-              selectedEventId={selectedEvent?.request_id}
-            />
-          </div>
-
-          {/* Event Detail Panel */}
-          {selectedEvent && (
-            <div className="lg:col-span-1">
-              <div className="sticky top-8">
-                <AuditEventDetail
-                  event={selectedEvent}
-                  onClose={handleCloseDetail}
-                />
-              </div>
-            </div>
-          )}
+        <div className="flex items-center gap-2">
+          <span className="hidden text-xs text-fg-subtle md:inline">Export all matching:</span>
+          <button
+            type="button"
+            onClick={() => handleExport('jsonl')}
+            className="btn-secondary px-3"
+            title="Export every event matching the filters as JSONL"
+          >
+            <ArrowDownTrayIcon className="h-4 w-4" />
+            JSONL
+          </button>
+          <button
+            type="button"
+            onClick={() => handleExport('csv')}
+            className="btn-secondary px-3"
+            title="Export every event matching the filters as CSV"
+          >
+            <ArrowDownTrayIcon className="h-4 w-4" />
+            CSV
+          </button>
         </div>
       </div>
+
+      <AuditFilterBar
+        filters={filters}
+        onFilterChange={handleFilterChange}
+        onRefresh={handleRefresh}
+      />
+
+      {/* Executive Summary - hero tiles for platform leads */}
+      <AuditExecutiveSummary />
+
+      {/* Statistics Dashboard */}
+      <AuditStatistics stream={filters.stream} username={filters.username} />
+
+      <AuditLogTable
+        key={refreshKey}
+        filters={filters}
+        onEventSelect={setSelectedEvent}
+        selectedEventId={selectedEvent?.request_id}
+      />
+
+      {/* Inspector drawer: non-modal so another row can be picked while it is
+          open; Escape or the close button dismisses it. */}
+      <Transition
+        show={selectedEvent !== null}
+        enter="transition ease-out duration-200"
+        enterFrom="translate-x-full opacity-0"
+        enterTo="translate-x-0 opacity-100"
+        leave="transition ease-in duration-150"
+        leaveFrom="translate-x-0 opacity-100"
+        leaveTo="translate-x-full opacity-0"
+      >
+        <aside
+          aria-label="Audit event details"
+          className="fixed bottom-0 right-0 top-16 z-40 w-full max-w-xl overflow-y-auto border-l border-line bg-surface-overlay p-4 shadow-xl"
+        >
+          {selectedEvent && <AuditEventDetail event={selectedEvent} onClose={handleCloseDetail} />}
+        </aside>
+      </Transition>
     </div>
   );
 };

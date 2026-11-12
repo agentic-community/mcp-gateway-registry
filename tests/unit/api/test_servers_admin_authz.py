@@ -33,7 +33,6 @@ def _mock_non_admin_auth(
     x_username=None,
     x_scopes=None,
     x_auth_method=None,
-    x_client_id=None,
 ):
     """Mock nginx_proxied_auth returning an authenticated NON-admin user.
 

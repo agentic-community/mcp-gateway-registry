@@ -18,11 +18,11 @@ export type StatusTone =
   | 'off';
 
 const TONE_CLASSES: Record<StatusTone, string> = {
-  green: 'bg-green-400 shadow-lg shadow-green-400/30',
-  emerald: 'bg-emerald-400 shadow-lg shadow-emerald-400/30',
-  orange: 'bg-orange-400 shadow-lg shadow-orange-400/30',
-  red: 'bg-red-400 shadow-lg shadow-red-400/30',
-  amber: 'bg-amber-400 shadow-lg shadow-amber-400/30',
+  green: 'bg-success-400 shadow-lg shadow-success-400/30',
+  emerald: 'bg-success-400 shadow-lg shadow-success-400/30',
+  orange: 'bg-warning-400 shadow-lg shadow-warning-400/30',
+  red: 'bg-danger-400 shadow-lg shadow-danger-400/30',
+  amber: 'bg-warning-400 shadow-lg shadow-warning-400/30',
   off: 'bg-gray-300 dark:bg-gray-600',
 };
 

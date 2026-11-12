@@ -9,11 +9,11 @@ import clsx from 'clsx';
 export type EmptyStateTone = 'neutral' | 'cyan' | 'amber' | 'teal' | 'error';
 
 const TONE_CLASSES: Record<EmptyStateTone, string> = {
-  neutral: 'bg-gray-50 dark:bg-gray-800',
-  cyan: 'bg-cyan-50 dark:bg-cyan-900/20 border border-cyan-200 dark:border-cyan-800',
-  amber: 'bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800',
-  teal: 'bg-teal-50 dark:bg-teal-900/20 border border-teal-200 dark:border-teal-800',
-  error: 'bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800',
+  neutral: 'bg-surface-muted border border-line',
+  cyan: 'bg-agent-50 dark:bg-agent-900/20 border border-agent-200 dark:border-agent-800',
+  amber: 'bg-skill-50 dark:bg-skill-900/20 border border-skill-200 dark:border-skill-800',
+  teal: 'bg-virtual-50 dark:bg-virtual-900/20 border border-virtual-200 dark:border-virtual-800',
+  error: 'bg-danger-50 dark:bg-danger-900/20 border border-danger-200 dark:border-danger-800',
 };
 
 interface EmptyStateProps {
@@ -44,7 +44,7 @@ const EmptyState: React.FC<EmptyStateProps> = ({
       <div
         className={clsx(
           'text-lg mb-2',
-          tone === 'error' ? 'text-red-500' : 'text-gray-400',
+          tone === 'error' ? 'text-danger-500' : 'text-fg-subtle',
         )}
       >
         {title}
@@ -54,8 +54,8 @@ const EmptyState: React.FC<EmptyStateProps> = ({
           className={clsx(
             'text-sm',
             tone === 'error'
-              ? 'text-red-600 dark:text-red-400'
-              : 'text-gray-500 dark:text-gray-300',
+              ? 'text-danger-600 dark:text-danger-400'
+              : 'text-fg-muted',
           )}
         >
           {subtitle}

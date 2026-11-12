@@ -1,0 +1,167 @@
+suite: stack sets the __Host- session cookie prefix once for both services
+release:
+  name: test
+  namespace: default
+# The registry and the auth-server must agree on SESSION_COOKIE_HOST_PREFIX:
+# with only one prefixed, /validate finds the session while CSRF, consent and
+# logout do not. global.sessionCookieHostPrefix is the one place to set it.
+tests:
+  - it: renders the prefix on in both subcharts' secrets when the global is on
+    templates:
+      - charts/registry/templates/secret.yaml
+      - charts/auth-server/templates/secret.yaml
+    set:
+      global:
+        domain: example.com
+        sessionCookieHostPrefix: true
+        ingress:
+          tls: true
+    asserts:
+      - equal:
+          path: data.SESSION_COOKIE_HOST_PREFIX
+          value: "true"
+          decodeBase64: true
+        template: charts/registry/templates/secret.yaml
+      - equal:
+          path: data.SESSION_COOKIE_DOMAIN
+          value: ""
+          decodeBase64: true
+        template: charts/registry/templates/secret.yaml
+      - equal:
+          path: data.SESSION_COOKIE_HOST_PREFIX
+          value: "true"
+          decodeBase64: true
+        template: charts/auth-server/templates/secret.yaml
+      - equal:
+          path: data.SESSION_COOKIE_DOMAIN
+          value: ""
+          decodeBase64: true
+        template: charts/auth-server/templates/secret.yaml
+
+  - it: renders the prefix off in both subcharts' secrets by default
+    templates:
+      - charts/registry/templates/secret.yaml
+      - charts/auth-server/templates/secret.yaml
+    set:
+      global:
+        domain: example.com
+        ingress:
+          tls: true
+    asserts:
+      - equal:
+          path: data.SESSION_COOKIE_HOST_PREFIX
+          value: "false"
+          decodeBase64: true
+        template: charts/registry/templates/secret.yaml
+      - equal:
+          path: data.SESSION_COOKIE_DOMAIN
+          value: ".example.com"
+          decodeBase64: true
+        template: charts/registry/templates/secret.yaml
+      - equal:
+          path: data.SESSION_COOKIE_HOST_PREFIX
+          value: "false"
+          decodeBase64: true
+        template: charts/auth-server/templates/secret.yaml
+      - equal:
+          path: data.SESSION_COOKIE_DOMAIN
+          value: ".example.com"
+          decodeBase64: true
+        template: charts/auth-server/templates/secret.yaml
+
+  - it: refuses a registry override that differs from the global
+    templates:
+      - templates/validate-values.yaml
+    set:
+      global:
+        domain: example.com
+        ingress:
+          tls: true
+      registry:
+        app:
+          sessionCookieHostPrefix: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "registry.app.sessionCookieHostPrefix is true but global.sessionCookieHostPrefix is false"
+
+  - it: refuses an auth-server override that differs from the global
+    templates:
+      - templates/validate-values.yaml
+    set:
+      global:
+        domain: example.com
+        sessionCookieHostPrefix: true
+        ingress:
+          tls: true
+      auth-server:
+        app:
+          sessionCookieHostPrefix: false
+    asserts:
+      - failedTemplate:
+          errorPattern: "auth-server.app.sessionCookieHostPrefix is false but global.sessionCookieHostPrefix is true"
+
+  - it: accepts an override that matches the global
+    templates:
+      - templates/validate-values.yaml
+    set:
+      global:
+        domain: example.com
+        sessionCookieHostPrefix: true
+        ingress:
+          tls: true
+      registry:
+        app:
+          sessionCookieHostPrefix: true
+      auth-server:
+        app:
+          sessionCookieHostPrefix: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: names both globals when the prefix comes with a non-Secure registry cookie
+    templates:
+      - charts/registry/templates/secret.yaml
+    set:
+      global:
+        domain: example.com
+        sessionCookieHostPrefix: true
+        sessionCookieSecure: false
+        ingress:
+          tls: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "global.sessionCookieHostPrefix requires global.sessionCookieSecure=true"
+
+  - it: names both globals when the prefix comes with a non-Secure auth-server cookie
+    templates:
+      - charts/auth-server/templates/secret.yaml
+    set:
+      global:
+        domain: example.com
+        sessionCookieHostPrefix: true
+        sessionCookieSecure: false
+        ingress:
+          tls: true
+      # The registry secret would fail the render first with the same message;
+      # an existing secret skips it so the auth-server guard is the one tested.
+      registry:
+        app:
+          existingSecret: registry-existing # pragma: allowlist secret
+    asserts:
+      - failedTemplate:
+          errorPattern: "global.sessionCookieHostPrefix requires global.sessionCookieSecure=true"
+
+  - it: names both globals when the prefix comes with a shared cookie domain
+    templates:
+      - charts/registry/templates/secret.yaml
+    set:
+      global:
+        domain: example.com
+        sessionCookieHostPrefix: true
+        sessionCookieDomain: ".example.com"
+        ingress:
+          tls: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "global.sessionCookieHostPrefix requires global.sessionCookieDomain to be empty"

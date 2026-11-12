@@ -113,6 +113,10 @@ services:
       # value whenever the operator's .env did not set BUILD_VERSION,
       # which is the silent-fallback symptom this PR fixes.
       - SECRET_KEY=${SECRET_KEY}
+      # __Host- session cookie; needs HTTPS and no SESSION_COOKIE_DOMAIN. Same value on auth-server.
+      - SESSION_COOKIE_HOST_PREFIX=${SESSION_COOKIE_HOST_PREFIX:-false}
+      # Browser session lifetime in seconds; must be positive. Same value on auth-server.
+      - SESSION_MAX_AGE_SECONDS=${SESSION_MAX_AGE_SECONDS:-28800}
       # Per-user egress credential vault (off by default)
       - EGRESS_AUTH_ENABLED=${EGRESS_AUTH_ENABLED:-false}
       - SECRET_STORE_BACKEND=${SECRET_STORE_BACKEND:-openbao}
@@ -442,6 +446,8 @@ services:
       - ${HOME}/mcp-gateway/security_scans:/app/security_scans
       - ${HOME}/mcp-gateway/federation.json:/app/config/federation.json
       - ${HOME}/mcp-gateway/ssl:/etc/ssl:ro
+      # UI branding folder (manifest.json, theme.css, logos), read-only; see docs/ui-branding.md
+      - ${MCP_BRANDING_DIR:-./branding}:/app/branding:ro
       # Application log files (bind mount to host for Splunk ingestion, Issue #987)
       - /var/log/containers/ai-registry:/var/log/containers/ai-registry
     depends_on:
@@ -470,6 +476,10 @@ services:
       - TRUSTED_PROXY_HOPS=${TRUSTED_PROXY_HOPS:-1}
       - TRUSTED_EXTERNAL_HOSTS=${TRUSTED_EXTERNAL_HOSTS:-}
       - SECRET_KEY=${SECRET_KEY}
+      # __Host- session cookie; needs HTTPS and no SESSION_COOKIE_DOMAIN. Same value on registry.
+      - SESSION_COOKIE_HOST_PREFIX=${SESSION_COOKIE_HOST_PREFIX:-false}
+      # Browser session lifetime in seconds; must be positive. Same value on registry.
+      - SESSION_MAX_AGE_SECONDS=${SESSION_MAX_AGE_SECONDS:-28800}
       # MCP access-token lifetime (hours). auth-server mints + clamps to the
       # configured max (bounded to a 7-day ceiling in code). Must match the
       # registry's values. Issue #1477.
@@ -498,6 +508,10 @@ services:
       - EGRESS_HTTP_POOL_MAX_KEEPALIVE=${EGRESS_HTTP_POOL_MAX_KEEPALIVE:-20}
       - EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS=${EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS:-30}
       - EGRESS_HTTP_POOL_CONNECT_RETRIES=${EGRESS_HTTP_POOL_CONNECT_RETRIES:-1}
+      # SSRF guard for the generic proxy (PROXY_PROFILE): an operator CIDR may
+      # admit a reserved IPv4 address (e.g. Istio ServiceEntry VIPs in
+      # 240.240.0.0/16). Same value as the registry and mcpgw. #2018
+      - SSRF_ALLOWED_CIDRS=${SSRF_ALLOWED_CIDRS:-}
       # Forward-proxy egress for the SSRF-guarded clients (issue #1832). OFF by
       # default; enabling it relaxes IP-rebind pinning for targets that resolve
       # exclusively to public addresses. Set HTTP_PROXY / HTTPS_PROXY / NO_PROXY
@@ -728,6 +742,9 @@ services:
       - EGRESS_HTTP_POOL_MAX_KEEPALIVE=${EGRESS_HTTP_POOL_MAX_KEEPALIVE:-20}
       - EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS=${EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS:-30}
       - EGRESS_HTTP_POOL_CONNECT_RETRIES=${EGRESS_HTTP_POOL_CONNECT_RETRIES:-1}
+      # SSRF guard: an operator CIDR may admit a reserved address (e.g. Istio
+      # ServiceEntry VIPs in 240.240.0.0/16). Same value as the registry. #2018
+      - SSRF_ALLOWED_CIDRS=${SSRF_ALLOWED_CIDRS:-}
     security_opt:
       - no-new-privileges:true
     cap_drop:

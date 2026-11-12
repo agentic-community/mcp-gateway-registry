@@ -58,10 +58,13 @@ providers:
     display_name: "Okta"
     client_id: "${OKTA_CLIENT_ID}"
     client_secret: "${OKTA_CLIENT_SECRET}"
-    auth_url: "https://${OKTA_DOMAIN}/oauth2/v1/authorize"
-    token_url: "https://${OKTA_DOMAIN}/oauth2/v1/token"
-    user_info_url: "https://${OKTA_DOMAIN}/oauth2/v1/userinfo"
-    logout_url: "https://${OKTA_DOMAIN}/oauth2/v1/logout"
+    # ${OKTA_OAUTH2_BASE_URL} is resolved at startup from OKTA_DOMAIN and
+    # OKTA_AUTH_SERVER_ID (load_oauth2_config), the same way OktaProvider builds
+    # its endpoints, so login and token validation use one authorization server.
+    auth_url: "${OKTA_OAUTH2_BASE_URL}/authorize"
+    token_url: "${OKTA_OAUTH2_BASE_URL}/token"
+    user_info_url: "${OKTA_OAUTH2_BASE_URL}/userinfo"
+    logout_url: "${OKTA_OAUTH2_BASE_URL}/logout"
     scopes: ["openid", "email", "profile", "groups"]
     response_type: "code"
     grant_type: "authorization_code"
@@ -144,14 +147,18 @@ providers:
     name_claim: "name"
     enabled: "${GOOGLE_ENABLED}"
 
-# Default session settings
+# Session settings. The session cookie's other values come from the environment of
+# the registry and the auth server, which must agree: SESSION_COOKIE_SECURE (Secure on
+# HTTPS), SESSION_MAX_AGE_SECONDS (lifetime, default 28800) and SESSION_COOKIE_NAME.
+# SameSite=Lax and HttpOnly are fixed. Do not add secure, max_age_seconds, cookie_name,
+# samesite or httponly here: the auth server refuses to start when one of them differs
+# from the value it uses.
 session:
-  max_age_seconds: 28800  # 8 hours
-  cookie_name: "mcp_oauth_session"
-  secure: true  # Set to false for development
-  httponly: true
-  samesite: "lax"
-  domain: "${SESSION_COOKIE_DOMAIN}"  # Set to your domain (with leading dot) to share cookies across subdomains, e.g., ".example.com"
+  # The session cookie's Domain comes from SESSION_COOKIE_DOMAIN only; the login and the
+  # registry's logout both use it. Set the domain there (with a leading dot to share the
+  # cookie across subdomains, e.g. ".example.com") and keep this line as shipped. The auth
+  # server refuses to start when this names a different domain.
+  domain: "${SESSION_COOKIE_DOMAIN}"
 
 # Registry integration settings
 registry:

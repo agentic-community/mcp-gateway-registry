@@ -133,7 +133,7 @@ def _client(user_context: dict[str, Any], mock_server_service: MagicMock):
             patch("registry.health.service.health_service", MagicMock()),
             patch("registry.core.nginx_service.nginx_service", MagicMock()),
         ):
-            yield TestClient(app, cookies={"mcp_gateway_session": "test-session"})
+            yield TestClient(app)
     finally:
         app.dependency_overrides.clear()
 

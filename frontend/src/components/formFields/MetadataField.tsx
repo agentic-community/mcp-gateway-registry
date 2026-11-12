@@ -1,6 +1,6 @@
 import React from 'react';
 import FormField from './FormField';
-import { FIELD_BASE, FIELD_FOCUS } from './formClasses';
+import { FIELD } from './formClasses';
 
 interface MetadataFieldProps {
   value: string;
@@ -9,7 +9,6 @@ interface MetadataFieldProps {
   hint?: React.ReactNode;
   placeholder?: string;
   rows?: number;
-  accent?: keyof typeof FIELD_FOCUS;
 }
 
 const DEFAULT_HINT =
@@ -26,7 +25,6 @@ const MetadataField: React.FC<MetadataFieldProps> = ({
   hint = DEFAULT_HINT,
   placeholder = '{"team": "platform", "owner": "alice@example.com"}',
   rows = 4,
-  accent = 'purple',
 }) => {
   return (
     <FormField label={label} hint={hint}>
@@ -34,7 +32,7 @@ const MetadataField: React.FC<MetadataFieldProps> = ({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         rows={rows}
-        className={`${FIELD_BASE} ${FIELD_FOCUS[accent]} font-mono text-sm`}
+        className={`${FIELD} font-mono`}
         placeholder={placeholder}
       />
     </FormField>

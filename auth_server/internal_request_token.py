@@ -238,10 +238,11 @@ def mint_mcp_proxy_token(
     transport-named component (e.g. ``peer/mcp``).
 
     ``auth_method`` is the CANONICAL egress principal method (see
-    ``EgressAuthService.canonical_auth_method``): the per-user egress vault keys
-    on it, so it MUST match what the consent/list paths resolve for the same
-    user (cookie users are ``oauth2``, never ``session_cookie``). It also lets
-    the registry vend endpoint reject non-per-user callers.
+    ``registry.egress_auth.service.canonical_auth_method``): the per-user
+    egress vault keys on it, so it MUST match what the consent/list paths
+    resolve for the same user (cookie users are ``oauth2``, never
+    ``session_cookie``). It also lets the registry vend endpoint reject
+    non-per-user callers.
 
     ``egress_user`` is the CANONICAL per-user vault id (the OIDC ``sub``; see
     ``_canonical_egress_user``). The egress vend keys the vault on this, so it

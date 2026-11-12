@@ -40,14 +40,9 @@ describe('FormField', () => {
 });
 
 describe('fieldClass', () => {
-  it('defaults to the purple focus accent', () => {
-    expect(fieldClass()).toContain('focus:ring-purple-500');
-  });
-  it('applies the requested accent', () => {
-    expect(fieldClass('teal')).toContain('focus:ring-teal-500');
-  });
   it('adds the error border when flagged', () => {
-    expect(fieldClass('purple', true)).toContain('border-red-500');
+    expect(fieldClass(true)).toContain('border-danger-500');
+    expect(fieldClass()).not.toContain('border-danger-500');
   });
 });
 

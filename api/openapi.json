@@ -293,24 +293,6 @@
         "summary": "Logout Get",
         "description": "Handle logout via GET request (for URL navigation)",
         "operationId": "logout_get_api_auth_logout_get",
-        "parameters": [
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -339,24 +321,6 @@
         "summary": "Logout Post",
         "description": "Handle logout via POST request (for forms with CSRF validation)",
         "operationId": "logout_post_api_auth_logout_post",
-        "parameters": [
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -427,24 +391,6 @@
         "summary": "Get Csrf Token",
         "description": "API endpoint to get a CSRF token for React/SPA applications.\n\nReturns a CSRF token bound to the current session that can be used\nin X-CSRF-Token headers for API requests.",
         "operationId": "get_csrf_token_api_auth_csrf_token_get",
-        "parameters": [
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -1162,22 +1108,6 @@
               ],
               "title": "Query"
             }
-          },
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
-            }
           }
         ],
         "responses": {
@@ -1359,22 +1289,6 @@
               "type": "string",
               "title": "Service Path"
             }
-          },
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
-            }
           }
         ],
         "requestBody": {
@@ -1429,22 +1343,6 @@
             "schema": {
               "type": "string",
               "title": "Service Path"
-            }
-          },
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
             }
           }
         ],
@@ -1596,24 +1494,6 @@
         "summary": "Register Service",
         "description": "Register a new service (requires register_service UI permission).\n\nSupports both deployment types:\n- Remote (default): proxy_pass_url required, registry proxies HTTP requests.\n- Local: local_runtime JSON required (admin-only). Registry stores\n  the launch recipe for stdio MCP servers; it does NOT execute the server.\n\nThe local_runtime field is a JSON-encoded string (same convention as metadata):\n    {\"type\": \"npx\", \"package\": \"@acme/mcp\", \"version\": \"1.0.0\",\n     \"args\": [...], \"env\": {...}, \"required_env\": [...]}",
         "operationId": "register_service_api_register_post",
-        "parameters": [
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
-            }
-          }
-        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -1712,22 +1592,6 @@
             "schema": {
               "type": "string",
               "title": "Service Path"
-            }
-          },
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
             }
           }
         ],
@@ -1890,22 +1754,6 @@
               "type": "string",
               "title": "Service Path"
             }
-          },
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
-            }
           }
         ],
         "responses": {
@@ -1951,22 +1799,6 @@
             "schema": {
               "type": "string",
               "title": "Service Path"
-            }
-          },
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
             }
           }
         ],
@@ -2015,24 +1847,6 @@
         "summary": "Token Generation Page",
         "description": "Show token generation page for authenticated users.",
         "operationId": "token_generation_page_api_tokens_get",
-        "parameters": [
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -2100,22 +1914,6 @@
               "title": "Metadata Fields"
             },
             "description": "Comma-separated metadata field paths to include (dot-notation for nested). Example: 'owner,config.region'. Omit to return full metadata."
-          },
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
-            }
           }
         ],
         "responses": {
@@ -2208,22 +2006,6 @@
               "type": "string",
               "title": "Service Path"
             }
-          },
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
-            }
           }
         ],
         "responses": {
@@ -2269,22 +2051,6 @@
             "schema": {
               "type": "string",
               "title": "Service Path"
-            }
-          },
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
             }
           }
         ],
@@ -2585,24 +2351,6 @@
         "summary": "Generate User Token",
         "description": "Generate a JWT token for the authenticated user.\n\nRequest body should contain:\n{\n    \"requested_scopes\": [\"scope1\", \"scope2\"],  // Optional, defaults to user's current scopes\n    \"expires_in_hours\": 8,                     // Optional, defaults to 8 hours\n    \"description\": \"Token for automation\"      // Optional description\n}\n\nReturns:\n    Generated JWT token with expiration info\n\nRaises:\n    HTTPException: If request fails or user lacks permissions",
         "operationId": "generate_user_token_api_tokens_generate_post",
-        "parameters": [
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -8370,24 +8118,6 @@
         "summary": "Get full registry configuration",
         "description": "Returns all configuration parameters grouped by category. Admin only.",
         "operationId": "get_full_config_api_config_full_get",
-        "parameters": [
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -8427,24 +8157,6 @@
         "summary": "Get registry configuration",
         "description": "Returns the current deployment mode, registry mode, and enabled features",
         "operationId": "get_config_api_config_get",
-        "parameters": [
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -8519,22 +8231,6 @@
               "title": "Confirm Sensitive Export"
             },
             "description": "Explicit acknowledgement required alongside include_sensitive=true to bulk-export secrets. Without it, sensitive values are masked."
-          },
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
-            }
           }
         ],
         "responses": {
@@ -11499,22 +11195,6 @@
               "title": "Stream"
             },
             "description": "Log stream type"
-          },
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
-            }
           }
         ],
         "responses": {
@@ -11601,22 +11281,6 @@
               "title": "Username"
             },
             "description": "Filter statistics to a specific username: matches the display identity or any stored identity claim (subject/canonical_id/object_id/principal_name)"
-          },
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
-            }
           }
         ],
         "responses": {
@@ -11671,22 +11335,6 @@
               "title": "Days"
             },
             "description": "Length of the comparison window in days"
-          },
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
-            }
           }
         ],
         "responses": {
@@ -11951,22 +11599,6 @@
               "title": "Sort Order"
             },
             "description": "Sort order: -1 for descending (newest first), 1 for ascending (oldest first)"
-          },
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
-            }
           }
         ],
         "responses": {
@@ -12034,22 +11666,6 @@
               "title": "Log Type"
             },
             "description": "Filter by log type: registry_api_access or mcp_server_access"
-          },
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
-            }
           }
         ],
         "responses": {
@@ -12302,22 +11918,6 @@
               "title": "Limit"
             },
             "description": "Maximum events to export"
-          },
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
-            }
           }
         ],
         "responses": {
@@ -20315,6 +19915,11 @@
               }
             ],
             "title": "Target Audience"
+          },
+          "list_tools_before_consent": {
+            "type": "boolean",
+            "title": "List Tools Before Consent",
+            "default": false
           }
         },
         "type": "object",
@@ -20372,6 +19977,12 @@
           "server_path": {
             "type": "string",
             "title": "Server Path"
+          },
+          "include_pre_consent_tools": {
+            "type": "boolean",
+            "title": "Include Pre Consent Tools",
+            "description": "Set by the mcp-proxy hop on a direct-route tools/list. Asks the registry to return the server's stored tools on a consent miss when the server opted in (egress_list_tools_before_consent). A hint only: the registry still decides from the verified token's route binding and the stored opt-in.",
+            "default": false
           }
         },
         "type": "object",
@@ -20399,17 +20010,6 @@
             "title": "Consent Required",
             "default": false
           },
-          "authorize_url": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Authorize Url"
-          },
           "connect_url": {
             "anyOf": [
               {
@@ -20420,7 +20020,7 @@
               }
             ],
             "title": "Connect Url",
-            "description": "Session-verified gateway front door for MCP URL-mode elicitation (``GET /oauth2/egress/connect?server=<path>``). The mcp_proxy hop puts this in the ``elicitation/create`` ``url`` field. Unlike ``authorize_url`` (the provider-direct URL), this route re-verifies the opener's gateway session against the elicited principal (anti-phishing) and needs NO client-side OAuth/DCR -- so it works with providers like Entra that do not support RFC 7591 DCR."
+            "description": "Session-verified gateway front door for MCP URL-mode elicitation (``GET /oauth2/egress/connect?server=<path>``). The mcp_proxy hop puts this in the ``elicitation/create`` ``url`` field. This route re-verifies the opener's gateway session against the elicited principal (anti-phishing), binds the consent to the opener's browser, and needs NO client-side OAuth/DCR -- so it works with providers like Entra that do not support RFC 7591 DCR."
           },
           "request_state": {
             "anyOf": [
@@ -20508,11 +20108,27 @@
             ],
             "title": "Pat Value Prefix",
             "description": "pat: value prefix before the PAT (e.g. 'Bearer ' or '' for a bare token)."
+          },
+          "pre_consent_tools": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pre Consent Tools",
+            "description": "MCP tool entries (name, description, inputSchema) from the selected version's stored tool_list, blocked tools removed. Set only on a consent miss when the request asked, the route is direct and the server opted in. Not filtered by the caller's tool grants: the mcp-proxy hop applies those."
           }
         },
         "type": "object",
         "title": "EgressTokenResponse",
-        "description": "Vend result. ``access_token`` is None on a clean miss (consent required).\n\nOn a consent-required miss for a properly egress-configured server, the\nregistry builds the provider ``authorize_url`` so mcp_proxy can return it to\nthe caller (the user clicks it to connect). ``authorize_url`` is None when\nthe server isn't egress-configured / the caller isn't a per-user principal\n(nothing to connect)."
+        "description": "Vend result. ``access_token`` is None on a clean miss (consent required).\n\nOn a consent-required miss for a properly egress-configured server, the\nregistry returns ``connect_url`` so mcp_proxy can send the user to connect.\nNo provider authorize URL is returned: a consent must start in the browser\nthat finishes it, and the vend has no browser. ``connect_url`` is None when\nthe server isn't egress-configured / the caller isn't a per-user principal\n(nothing to connect)."
       },
       "ErrorResponse": {
         "properties": {

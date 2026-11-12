@@ -69,6 +69,7 @@ from registry.auth.dependencies import (
 
 # Import domain routers
 from registry.auth.routes import router as auth_router
+from registry.auth.session_cookie import SessionCookieIsolationMiddleware
 
 # Import core configuration
 from registry.core.aws_credential_posture import log_aws_credential_posture
@@ -107,6 +108,14 @@ from registry.services.scanner_llm_analyzer import (
 
 # Import services for initialization
 from registry.services.server_service import server_service
+from registry.utils.branding_files import (
+    BRANDING_PATH_SEGMENT,
+    DEFAULT_BRANDING_FILES,
+    BrandingFileRefusedError,
+    branding_content_type,
+    branding_response_headers,
+    read_branding_file,
+)
 
 # Server start time tracking moved to registry/api/system_routes.py
 # Setup logging using shared module (RotatingFileHandler + optional MongoDB)
@@ -1227,6 +1236,19 @@ if settings.audit_log_enabled:
         log_static_assets=settings.audit_log_static_assets,
     )
 
+# Added last, so it is the outermost of the registry's own middleware and runs
+# before the audit middleware and every other registry component that could
+# read cookies. OpenTelemetry's ASGI middleware, added by instrument_app above
+# or by the opentelemetry-instrument wrapper, wraps the whole stack and runs
+# before it, so OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_REQUEST must
+# never list Cookie: OTel would record the raw session cookie. This middleware
+# reads the session cookie once through the shared reader, caches the result in
+# the scope, and removes the session cookie from the Cookie header fields passed
+# on, so a handler that reads it any other way than request_session_cookie gets
+# nothing. When it refused a duplicated session cookie, it also adds the expiry
+# of both session cookie variants to whatever response the request gets.
+app.add_middleware(SessionCookieIsolationMiddleware)
+
 # Register API routers with /api prefix
 app.include_router(system_router, tags=["System"])  # /api/version, /api/stats
 app.include_router(auth_router, prefix="/api/auth", tags=["Authentication"])
@@ -1482,6 +1504,7 @@ def _build_cached_index_html() -> str | None:
     html_content = html_content.replace('="/static/', f'="{prefix}/static/')
     html_content = html_content.replace('="/favicon.ico"', f'="{prefix}/favicon.ico"')
     html_content = html_content.replace('="/rum.js"', f'="{prefix}/rum.js"')
+    html_content = html_content.replace('="/branding/', f'="{prefix}/branding/')
 
     # Inject <base> tag if not already present (for React Router relative links)
     if "<base" not in html_content:
@@ -1511,6 +1534,59 @@ async def serve_rum_js():
             headers=headers,
         )
     return FileResponse(rum_path, media_type="application/javascript", headers=headers)
+
+
+# Static UI assets, not an API: kept out of the OpenAPI schema (api/openapi.json).
+@app.api_route(
+    f"/{BRANDING_PATH_SEGMENT}/{{name:path}}",
+    methods=["GET", "HEAD"],
+    include_in_schema=False,
+)
+def serve_branding_file(
+    name: str,
+) -> Response:
+    """Serve a runtime UI branding file from the branding folder.
+
+    Registered unconditionally (like /rum.js) so the route exists whether or
+    not the React build is present, and before the SPA catch-all so a
+    /branding/... request never falls through to index.html. Public: the login
+    page needs the logo and theme before anyone signs in.
+
+    The ``path`` converter captures everything under /branding/ so names with
+    a slash are rejected here with a 404 instead of reaching the SPA. Files are
+    read from disk on every request (never cached in memory), so an edited
+    ConfigMap shows up without a restart. The handler is sync so FastAPI runs
+    the file read in its threadpool rather than on the event loop.
+
+    Args:
+        name: Requested file name; must be a bare allowed branding file name.
+
+    Returns:
+        The file, or the built-in default for a missing manifest.json or
+        theme.css.
+
+    Raises:
+        HTTPException: 404 for a disallowed name, a missing file without a
+            default, or a file that is refused (escapes the folder, too
+            large, not a regular file, changed while being opened).
+    """
+    content_type = branding_content_type(name)
+    if content_type is None:
+        raise HTTPException(status_code=404)
+
+    headers = branding_response_headers(content_type)
+    try:
+        content = read_branding_file(settings.branding_dir, name)
+    except FileNotFoundError:
+        default_content = DEFAULT_BRANDING_FILES.get(name)
+        if default_content is None:
+            raise HTTPException(status_code=404) from None
+        return Response(content=default_content, media_type=content_type, headers=headers)
+    except BrandingFileRefusedError as e:
+        logger.warning("Branding: refusing to serve %s: %s", name, e)
+        raise HTTPException(status_code=404) from None
+
+    return Response(content=content, media_type=content_type, headers=headers)
 
 
 GATEWAY_PROXY_DISABLED_BODY: dict[str, str] = {

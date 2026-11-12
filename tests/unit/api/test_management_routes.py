@@ -163,7 +163,7 @@ def test_client_admin(mock_settings, mock_auth_admin, mock_iam_manager):
     ):
         from registry.main import app
 
-        client = TestClient(app, cookies={"mcp_gateway_session": "test-session"})
+        client = TestClient(app)
         yield client, mock_iam_manager
 
 
@@ -176,7 +176,7 @@ def test_client_regular(mock_settings, mock_auth_regular, mock_iam_manager):
     ):
         from registry.main import app
 
-        client = TestClient(app, cookies={"mcp_gateway_session": "test-session"})
+        client = TestClient(app)
         yield client, mock_iam_manager
 
 

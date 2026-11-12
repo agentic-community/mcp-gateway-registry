@@ -29,7 +29,14 @@ from http_pool import (
     shared_async_client,
 )
 from logging_setup import setup_mcpgw_logging
-from models import AgentInfo, RegistryStats, ServerInfo, SkillInfo, ToolSearchResult
+from models import (
+    AgentInfo,
+    CustomEntityInfo,
+    RegistryStats,
+    ServerInfo,
+    SkillInfo,
+    ToolSearchResult,
+)
 from observability_bootstrap import (
     init_meter_provider_if_needed,
     record_egress_conn_reset,
@@ -78,6 +85,8 @@ _DEFAULT_MCPGW_ALLOWED_HOSTS = "mcpgw-server"
 MCPGW_HTTP_ALLOWED_HOSTS = os.getenv("MCPGW_HTTP_ALLOWED_HOSTS", _DEFAULT_MCPGW_ALLOWED_HOSTS)
 
 MAX_QUERY_LENGTH: int = 500
+# Cap on how much of a rejected, caller-supplied value a log line echoes.
+MAX_LOGGED_INPUT_LEN: int = 200
 MIN_TOP_N: int = 1
 MAX_TOP_N: int = 50
 
@@ -93,6 +102,19 @@ MAX_TOP_N: int = 50
 # $) anchors the true end of string: Python's $ also matches just before a
 # trailing newline, which would let "validname\n" slip through.
 _SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*\Z")
+
+# A custom record path is /{type}/{uuid}, and both segments are interpolated
+# into an outbound URL path, so both get the same fail-closed treatment as a
+# skill name. Each group mirrors the registry route's own Path() constraint
+# (TYPE_PARAM and UUID_PARAM in registry/api/custom_entity_routes.py), so a
+# value accepted here is exactly a value the route accepts. The leading and
+# trailing slashes are optional so a path copied from a search result, with or
+# without them, still matches.
+_CUSTOM_RECORD_PATH_PATTERN = re.compile(
+    r"^/?(?P<type>[a-z0-9_-]{1,64})"
+    r"/(?P<uuid>[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"
+    r"/?\Z"
+)
 
 # Max number of withheld candidates itemized in a discovery receipt. The full
 # count is always reported; this caps the listed near-miss items so the receipt
@@ -1022,6 +1044,91 @@ async def get_skill_content(
 
 @mcp.tool()
 @track_tool()
+async def get_custom_entity(
+    path: str,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """
+    Retrieve the full record for a custom catalog entry. Call this after
+    search_registry returns a result in its custom array to get the record's
+    attributes, which search results leave out.
+
+    Custom records belong to catalog types the registry administrator defined
+    (for example datasets or data products). Their attributes hold the fields
+    that type defines, so they are usually what a question about the record
+    needs.
+
+    Args:
+        path: The record's path exactly as search_registry returned it,
+              in the form /{type}/{uuid}
+              (e.g. "/data_product/3f2b8c1e-9d4a-4b7e-8f21-6a5c0d9e7b13")
+
+    Returns:
+        Dictionary containing the path, the record (entity_type, name,
+        description, visibility, owner, tags, enabled, num_stars, timestamps
+        and attributes), and status. A record that does not exist and one the
+        caller may not view both fail with "HTTP 404".
+    """
+    path = (path or "").strip()
+
+    # Both segments are interpolated into an outbound URL path below, so the
+    # whole value must match the strict pattern before the URL is built. This
+    # blocks traversal ("..", extra "/"), encoded forms ("%2f"), query strings
+    # and whitespace because none of them match. The URL is rebuilt from the
+    # validated groups rather than from the raw input. Fail closed rather than
+    # trust downstream URL normalization.
+    match = _CUSTOM_RECORD_PATH_PATTERN.match(path)
+    if not match:
+        # %r keeps control characters visible and the slice bounds the line.
+        logger.info("get_custom_entity rejected path=%r", path[:MAX_LOGGED_INPUT_LEN])
+        return {
+            "path": path,
+            "error": (
+                "path must be /{type}/{uuid}: type matching ^[a-z0-9_-]{1,64}$ "
+                "and uuid in canonical 8-4-4-4-12 hex form"
+            ),
+            "status": "failed",
+        }
+
+    entity_type = match.group("type")
+    record_uuid = match.group("uuid")
+    logger.info("get_custom_entity called: path=/%s/%s", entity_type, record_uuid)
+
+    try:
+        headers = await _get_registry_headers(ctx)
+        url = f"{REGISTRY_URL}/api/custom/{entity_type}/{record_uuid}"
+
+        response = await request_with_reconnect(
+            shared_async_client(),
+            "GET",
+            url,
+            headers=headers,
+            timeout=30.0,
+            on_reset=_registry_conn_reset,
+        )
+        response.raise_for_status()
+        data = response.json()
+
+        return {
+            "path": f"/{entity_type}/{record_uuid}",
+            "record": CustomEntityInfo(**data).model_dump(),
+            "status": "success",
+        }
+
+    except httpx.HTTPStatusError as e:
+        logger.error("HTTP error fetching custom entity: %s", e.response.status_code)
+        return {
+            "path": path,
+            "error": f"HTTP {e.response.status_code}",
+            "status": "failed",
+        }
+    except Exception as e:
+        logger.error("Failed to get custom entity: %s", e)
+        return {"path": path, "error": str(e), "status": "failed"}
+
+
+@mcp.tool()
+@track_tool()
 async def search_registry(
     query: str,
     max_results: int = 10,
@@ -1047,10 +1154,9 @@ async def search_registry(
       successful get_skill_content call marks an unhealthy skill healthy again
     - Custom: records of a catalog type the registry administrator defined, each
       naming its type in entity_type. These are catalogued assets rather than
-      endpoints, and there is no tool to fetch one: the search result below is
-      the whole picture available here, carrying name, description, tags, owner
-      and visibility. The path identifies the record for a caller that can reach
-      the registry's HTTP API directly.
+      endpoints. The search result carries name, description, tags, owner and
+      visibility; pass its path to get_custom_entity to fetch the full record,
+      including the attributes its type defines.
 
     When you find a useful MCP server, you can use its tools in one of two ways:
     - Keep it (recommended): add the endpoint_url to your MCP client, which

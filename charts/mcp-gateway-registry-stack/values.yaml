@@ -8,12 +8,55 @@ global:
   image:
     # Container registry (host + optional namespace), e.g. "public.ecr.aws/p3v1o3c6"
     registry: public.ecr.aws/p3v1o3c6
-    tag: 1.36.0
+    tag: 1.37.0
     pullPolicy: IfNotPresent
   # When installing chart from repository, add --set global.chartVersion=$(git rev-parse HEAD) to add the git hash to a configmap for debugging
   chartVersion:
+  # SSRF guard CIDR allowlist (SSRF_ALLOWED_CIDRS), set once for registry,
+  # auth-server and mcpgw so the three cannot drift. Comma-separated ranges for
+  # internal MCP servers (e.g. the cluster service CIDR "172.20.0.0/16"); a listed
+  # range also admits reserved IPv4 inside it, such as Istio ServiceEntry VIPs in
+  # "240.240.0.0/16" (#2018). Wins over each subchart's app.ssrfAllowedCidrs, which
+  # stays for standalone installs. Cloud metadata/credential, link-local and
+  # multicast addresses are never permitted.
+  ssrfAllowedCidrs: ""
   # Domain configuration - update this to your actual domain
   domain: "DOMAIN"
+  # Name the session cookie __Host-mcp_gateway_session (Secure, Path=/, no
+  # Domain) so no sibling subdomain can set or overwrite it. This one value
+  # sets SESSION_COOKIE_HOST_PREFIX for both the registry and the
+  # auth-server, which must agree. Requires global.ingress.tls=true,
+  # global.sessionCookieSecure=true, and an empty global.sessionCookieDomain;
+  # the subcharts then render SESSION_COOKIE_DOMAIN empty. Do not set
+  # registry.app.sessionCookieHostPrefix or auth-server.app.sessionCookieHostPrefix:
+  # the chart refuses one that differs from this value. Turning it on signs
+  # every user out once. See docs/design/cookie-security-design.md.
+  sessionCookieHostPrefix: false
+  # Mark the session cookie Secure on HTTPS requests; it is never Secure on
+  # plain HTTP. This one value sets SESSION_COOKIE_SECURE for both the registry
+  # and the auth-server, which must agree. Do not set
+  # auth-server.app.sessionCookieSecure: the chart refuses one that differs
+  # from this value.
+  sessionCookieSecure: true
+  # Session lifetime in seconds: how long the auth-server stores a session and
+  # the session cookie Max-Age, and how long the registry accepts the cookie
+  # signature. Must be a positive integer. This one value sets
+  # SESSION_MAX_AGE_SECONDS for both the registry and the auth-server, which
+  # must agree. Do not set registry.app.sessionMaxAgeSeconds or
+  # auth-server.app.sessionMaxAgeSeconds: the chart refuses one that differs
+  # from this value.
+  sessionMaxAgeSeconds: 28800
+  # Session cookie Domain attribute. Leave empty to default to
+  # ".<global.domain>" (cookie valid across all subdomains of the deployment
+  # domain). Override to a specific hostname (e.g. "mcpregistry.example.com")
+  # to scope tighter, or to a different parent (e.g. ".team.example.com") if
+  # this stack lives under a subdomain. This one value sets
+  # SESSION_COOKIE_DOMAIN for both the registry and the auth-server, which
+  # must agree: two domains leave the browser two session cookies, which both
+  # refuse. Do not set registry.app.sessionCookieDomain or
+  # auth-server.app.sessionCookieDomain: the chart refuses one that differs
+  # from the domain it renders (this value, or ".<global.domain>" when empty).
+  sessionCookieDomain: ""
   # Security settings
   # secretKey: If not provided, a random 64-character key is auto-generated
   # and shared between auth-server and registry via a shared secret.
@@ -378,14 +421,6 @@ registry:
     # extra configuration. See docs/forward-proxy-egress.md before turning it on.
     # egressForwardProxyEnabled: false
     replicas: 2 # set to > 1 replica for high availability
-    # Session cookie Domain attribute. Leave empty to default to
-    # ".<global.domain>" (cookie valid across all subdomains of the
-    # deployment domain). Override to a specific hostname (e.g.
-    # "mcpregistry.example.com") to scope tighter, or to a different
-    # parent (e.g. ".team.example.com") if this stack lives under a
-    # subdomain. Keep this in sync with auth-server.app.sessionCookieDomain
-    # below — both services read the same cookie.
-    sessionCookieDomain: ""
     # Deployment mode: with-gateway (nginx integration) or registry-only (catalog only)
     deploymentMode: with-gateway
     # Registry mode: full, skills-only, mcp-servers-only, agents-only
@@ -630,6 +665,17 @@ registry:
   #   key: ca-bundle.pem
   #   mountPath: /etc/ssl/mcp-gateway
 
+  # Runtime UI branding (logos, favicon, colors, named themes, fonts) without an
+  # image rebuild. Create the ConfigMap yourself from a branding folder:
+  #   kubectl create configmap registry-branding --from-file=./branding/
+  # The whole ConfigMap is mounted read-only at mountPath and the chart sets
+  # UI_BRANDING_DIR to it; edits reach the pod without a restart. See
+  # docs/ui-branding.md.
+  # branding:
+  #   enabled: true
+  #   existingConfigMap: registry-branding
+  #   mountPath: /app/branding
+
   # Extra env vars / envFrom sources appended to the registry container.
   # See charts/registry/values.yaml for validation rules, reserved names,
   # and footgun warnings. These values are forwarded to the registry
@@ -688,9 +734,6 @@ auth-server:
     # extra configuration. See docs/forward-proxy-egress.md before turning it on.
     # egressForwardProxyEnabled: false
     replicas: 2 # set to > 1 replica for high availability
-    # Session cookie Domain attribute. See registry.app.sessionCookieDomain
-    # above for guidance — keep these two in sync.
-    sessionCookieDomain: ""
     # Internal JWT configuration
     jwtIssuer: "mcp-auth-server" # Issuer claim for internal JWT tokens
     jwtAudience: "mcp-registry" # Audience claim for internal JWT tokens

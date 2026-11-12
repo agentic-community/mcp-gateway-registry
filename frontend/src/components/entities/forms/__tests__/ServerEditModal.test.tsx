@@ -43,6 +43,7 @@ const baseForm: ServerEditForm = {
   egress_custom_resource: '',
   egress_expected_issuer: '',
   egress_target_audience: '',
+  egress_list_tools_before_consent: false,
   oauth_discovery_enabled: false,
   oauth_discovery_provider: '',
   oauth_discovery_client_id: '',
@@ -348,5 +349,50 @@ describe('ServerEditModal', () => {
     expect(screen.getByText('Egress Auth')).toBeInTheDocument();
     expect(screen.queryByText('Provider')).not.toBeInTheDocument();
     expect(screen.queryByText('Target Audience')).not.toBeInTheDocument();
+  });
+
+  describe('list tools before consent (issue #1986)', () => {
+    const LABEL_TEXT = "List this server's tools before a user connects";
+
+    it.each(['oauth_user', 'pat'] as const)('offers the checkbox in %s mode', (mode) => {
+      render(<Harness initial={{ ...baseForm, egress_auth_mode: mode }} egressEnabled />);
+      expect(screen.getByLabelText(LABEL_TEXT)).not.toBeChecked();
+    });
+
+    it.each(['none', 'obo_exchange'] as const)('hides the checkbox in %s mode', (mode) => {
+      render(<Harness initial={{ ...baseForm, egress_auth_mode: mode }} egressEnabled />);
+      expect(screen.queryByLabelText(LABEL_TEXT)).not.toBeInTheDocument();
+    });
+
+    it('toggles the form value', () => {
+      render(<Harness initial={{ ...baseForm, egress_auth_mode: 'pat' }} egressEnabled />);
+      fireEvent.click(screen.getByLabelText(LABEL_TEXT));
+      expect(screen.getByLabelText(LABEL_TEXT)).toBeChecked();
+    });
+
+    it('warns when the server has no stored tools', () => {
+      render(
+        <Harness
+          initial={{
+            ...baseForm,
+            egress_auth_mode: 'pat',
+            egress_list_tools_before_consent: true,
+            num_tools: 0,
+          }}
+          egressEnabled
+        />
+      );
+      expect(screen.getByText(/no stored tools yet/)).toBeInTheDocument();
+    });
+
+    it('does not warn when the server has stored tools', () => {
+      render(
+        <Harness
+          initial={{ ...baseForm, egress_auth_mode: 'pat', egress_list_tools_before_consent: true }}
+          egressEnabled
+        />
+      );
+      expect(screen.queryByText(/no stored tools yet/)).not.toBeInTheDocument();
+    });
   });
 });

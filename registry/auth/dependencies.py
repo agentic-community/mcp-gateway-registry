@@ -1,11 +1,12 @@
 import logging
 from typing import Annotated, Any
 
-from fastapi import Cookie, Depends, Header, HTTPException, Request, status
+from fastapi import Depends, Header, HTTPException, Request, status
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from ..common.log_redaction import redact_headers, redact_mapping
 from ..core.config import settings
+from ..egress_auth.session_vault_user import session_vault_user_id
 from .access_resolver import (
     get_user_accessible_tools,  # noqa: F401 - re-exported for external callers
     resolve_scope_access,
@@ -15,6 +16,10 @@ from .privileged_constants import ADMIN_ACTION_PREFIXES, is_admin_conferring_act
 from .proxied_token import (
     _api_auth_request_enabled,
     verify_registry_ui_token,
+)
+from .session_cookie import (
+    SessionCookie,
+    request_session_cookie,
 )
 from .session_store import resolve_session as _store_resolve_session
 
@@ -38,7 +43,13 @@ async def resolve_session_from_cookie(
         return None
 
     try:
-        payload = signer.loads(cookie_value, max_age=settings.session_max_age_seconds)
+        # With the __Host- prefix the salt names the cookie, so a value signed
+        # for another cookie name (the one the prefix replaced) is refused.
+        payload = signer.loads(
+            cookie_value,
+            max_age=settings.session_max_age_seconds,
+            salt=settings.session_cookie_signing_salt,
+        )
     except SignatureExpired:
         logger.debug("Session cookie has expired")
         return None
@@ -60,11 +71,13 @@ async def resolve_session_from_cookie(
 
 
 async def get_current_user(
-    session: Annotated[str | None, Cookie(alias=settings.session_cookie_name)] = None,
+    session: SessionCookie = None,
 ) -> str:
     """Get the username for the authenticated user.
 
-    Raises 401 for missing, tampered, expired, or legacy-format cookies.
+    Raises 401 for missing, tampered, expired, or legacy-format cookies, and for
+    a session cookie the request carried more than once (``SessionCookie`` is
+    None then).
     """
     data = await resolve_session_from_cookie(session)
     if data is None or not data.get("username"):
@@ -75,7 +88,7 @@ async def get_current_user(
 
 
 async def get_user_session_data(
-    session: Annotated[str | None, Cookie(alias=settings.session_cookie_name)] = None,
+    session: SessionCookie = None,
 ) -> dict[str, Any]:
     """Get the full session record for the authenticated user.
 
@@ -522,14 +535,14 @@ async def user_can_access_server(server_name: str, user_scopes: list[str]) -> bo
 
 
 async def api_auth(
-    session: Annotated[str | None, Cookie(alias=settings.session_cookie_name)] = None,
+    session: SessionCookie = None,
 ) -> str:
     """API authentication dependency that returns the username."""
     return await get_current_user(session)
 
 
 async def web_auth(
-    session: Annotated[str | None, Cookie(alias=settings.session_cookie_name)] = None,
+    session: SessionCookie = None,
 ) -> str:
     """Web authentication dependency that returns the username."""
     return await get_current_user(session)
@@ -562,6 +575,12 @@ async def _derive_user_context(
     `auth_method == "federation-static"` short-circuits to a no-access
     context (federation static tokens get scoped access via separate routing,
     not registry-side derivation).
+
+    `egress_user` is passed through unchanged, never replaced by `username`:
+    the auth-server computed it (the session's key stored at login, which
+    `enhanced_auth` reads through `session_vault_user_id`, or the
+    `_canonical_egress_user` claim on an internal token), and an empty value
+    marks a caller that owns no per-user vault bucket.
     """
     if auth_method == "federation-static":
         return {
@@ -572,7 +591,7 @@ async def _derive_user_context(
             "scopes": scopes,
             "auth_method": auth_method,
             "provider": provider,
-            "egress_user": egress_user or username,
+            "egress_user": egress_user,
             "session_id": session_id,
             "accessible_servers": [],
             "accessible_tools": {},
@@ -598,10 +617,10 @@ async def _derive_user_context(
         "scopes": scopes,
         "auth_method": auth_method,
         "provider": provider,
-        # egress_user is the canonical per-user egress vault id (OIDC sub when
-        # available, else username). The consent-write path keys the vault on
+        # egress_user is the canonical per-user egress vault id, resolved before
+        # this point (see the docstring). The consent-write path keys the vault on
         # it so it matches the vend path's egress_user claim. See #933.
-        "egress_user": egress_user or username,
+        "egress_user": egress_user,
         # session_id is the opaque server-side identifier — used by template
         # callers to mint CSRF tokens via generate_csrf_token(session_id).
         "session_id": session_id,
@@ -694,8 +713,9 @@ async def _context_from_internal_token(
             provider=session_data.get("provider", "local"),
             session_id=session_id,
             client_id=claims.get("client_id") or "",
-            # The auth_server stamps the canonical egress user (OIDC sub) into
-            # the token; prefer it so the consent-write vault key matches vend.
+            # The auth_server stamps the session's vault key into the token
+            # (_canonical_egress_user, which reads the session through
+            # session_vault_user_id); use it as is so consent-write matches vend.
             egress_user=claims.get("egress_user") or "",
             # Human-readable email for audit records (from the session or claim).
             email=session_data.get("email") or claims.get("email") or "",
@@ -718,7 +738,7 @@ async def _context_from_internal_token(
 
 async def enhanced_auth(
     request: Request,
-    session: Annotated[str | None, Cookie(alias=settings.session_cookie_name)] = None,
+    session: SessionCookie = None,
 ) -> dict[str, Any]:
     """
     Enhanced authentication dependency that returns full user context.
@@ -741,10 +761,12 @@ async def enhanced_auth(
         auth_method=auth_method,
         provider=session_data.get("provider", "local"),
         session_id=session_data.get("session_id"),
-        # Canonical egress vault id (OIDC sub persisted at login). Keeps the
-        # consent-write path (which reaches enhanced_auth via the callback's
-        # cookie, no internal token) keyed the same as the vend path. See #933.
-        egress_user=session_data.get("subject") or "",
+        # The vault key the auth_server stored on the session at login, read
+        # through the same session_vault_user_id the auth_server's
+        # _canonical_egress_user uses for this session. This path has no
+        # internal token (the consent callback and /oauth2/egress/connect
+        # resolve the cookie directly). See #933.
+        egress_user=session_vault_user_id(session_data),
         # Human-readable email for audit records (session store persists it).
         email=session_data.get("email") or "",
     )
@@ -756,18 +778,51 @@ async def enhanced_auth(
     return user_context
 
 
+async def browser_session_context(
+    request: Request,
+) -> dict[str, Any] | None:
+    """Resolve the browser session the request's own session cookie names.
+
+    For routes that act only for a signed-in browser: starting or completing an
+    egress consent (initiate, ``/oauth2/egress/connect`` and the consent
+    callback). It reads the session cookie through the shared reader
+    (``request_session_cookie``) and resolves it with ``enhanced_auth`` against
+    the session store, and nothing else: an ``X-Internal-Token-Registry``, a
+    bearer and the identity headers are never read, so a caller holding a
+    token, real or forged, but no session cookie gets no browser context. A
+    session cookie sent more than once reads as absent, as ``/validate`` also
+    refuses it.
+
+    Args:
+        request: The incoming request.
+
+    Returns:
+        The session's user context, or None when the request carries no usable
+        session cookie or it does not resolve to a live OAuth2 session.
+
+    Raises:
+        Exception: Any error other than the 401 ``enhanced_auth`` raises for an
+            unresolvable session (a failing scope lookup, for example)
+            propagates, so the caller can tell an outage from "not signed in".
+    """
+    session = request_session_cookie(request)
+    if not session:
+        return None
+    try:
+        return await enhanced_auth(request, session)
+    except HTTPException:
+        return None
+
+
 async def nginx_proxied_auth(
     request: Request,
-    session: Annotated[
-        str | None, Cookie(alias=settings.session_cookie_name, include_in_schema=False)
-    ] = None,
+    session: SessionCookie = None,
     x_user: Annotated[str | None, Header(alias="X-User", include_in_schema=False)] = None,
     x_username: Annotated[str | None, Header(alias="X-Username", include_in_schema=False)] = None,
     x_scopes: Annotated[str | None, Header(alias="X-Scopes", include_in_schema=False)] = None,
     x_auth_method: Annotated[
         str | None, Header(alias="X-Auth-Method", include_in_schema=False)
     ] = None,
-    x_client_id: Annotated[str | None, Header(alias="X-Client-Id", include_in_schema=False)] = None,
     x_internal_token: Annotated[
         str | None, Header(alias="X-Internal-Token-Registry", include_in_schema=False)
     ] = None,

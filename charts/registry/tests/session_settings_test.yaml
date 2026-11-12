@@ -1,0 +1,250 @@
+suite: session lifetime, cookie Secure flag and cookie domain secret rendering
+release:
+  name: test
+  namespace: default
+templates:
+  - templates/secret.yaml
+# The registry and the auth-server must agree on SESSION_MAX_AGE_SECONDS,
+# SESSION_COOKIE_SECURE and SESSION_COOKIE_DOMAIN. The stack chart sets them
+# through globals; a standalone install takes the lifetime and domain from app
+# keys and the Secure flag from global.ingress.tls.
+tests:
+  - it: leaves the lifetime to the service default and renders a Secure cookie with TLS on
+    set:
+      app:
+        secretKey: "test-key-not-for-prod"  # pragma: allowlist secret
+      egressAuth:
+        markerSecret: "test-marker-not-for-prod"  # pragma: allowlist secret
+      global:
+        domain: example.com
+        ingress:
+          tls: true
+    asserts:
+      - notExists:
+          path: data.SESSION_MAX_AGE_SECONDS
+      - equal:
+          path: data.SESSION_COOKIE_SECURE
+          value: "true"
+          decodeBase64: true
+
+  - it: renders a non-Secure cookie with TLS off
+    set:
+      app:
+        secretKey: "test-key-not-for-prod"  # pragma: allowlist secret
+      egressAuth:
+        markerSecret: "test-marker-not-for-prod"  # pragma: allowlist secret
+      global:
+        domain: example.com
+        ingress:
+          tls: false
+    asserts:
+      - notExists:
+          path: data.SESSION_MAX_AGE_SECONDS
+      - equal:
+          path: data.SESSION_COOKIE_SECURE
+          value: "false"
+          decodeBase64: true
+
+  - it: renders the app lifetime override
+    set:
+      app:
+        secretKey: "test-key-not-for-prod"  # pragma: allowlist secret
+        sessionMaxAgeSeconds: 3600
+      egressAuth:
+        markerSecret: "test-marker-not-for-prod"  # pragma: allowlist secret
+      global:
+        domain: example.com
+        ingress:
+          tls: true
+    asserts:
+      - equal:
+          path: data.SESSION_MAX_AGE_SECONDS
+          value: "3600"
+          decodeBase64: true
+
+  - it: renders a large lifetime without an exponent
+    set:
+      app:
+        secretKey: "test-key-not-for-prod"  # pragma: allowlist secret
+        sessionMaxAgeSeconds: 2592000
+      egressAuth:
+        markerSecret: "test-marker-not-for-prod"  # pragma: allowlist secret
+      global:
+        domain: example.com
+        ingress:
+          tls: true
+    asserts:
+      - equal:
+          path: data.SESSION_MAX_AGE_SECONDS
+          value: "2592000"
+          decodeBase64: true
+
+  - it: takes the lifetime and Secure flag from the globals over the app key and TLS
+    set:
+      app:
+        secretKey: "test-key-not-for-prod"  # pragma: allowlist secret
+        sessionMaxAgeSeconds: 3600
+      egressAuth:
+        markerSecret: "test-marker-not-for-prod"  # pragma: allowlist secret
+      global:
+        domain: example.com
+        sessionMaxAgeSeconds: 7200
+        sessionCookieSecure: false
+        ingress:
+          tls: true
+    asserts:
+      - equal:
+          path: data.SESSION_MAX_AGE_SECONDS
+          value: "7200"
+          decodeBase64: true
+      - equal:
+          path: data.SESSION_COOKIE_SECURE
+          value: "false"
+          decodeBase64: true
+
+  - it: renders a Secure cookie from the global with TLS off
+    set:
+      app:
+        secretKey: "test-key-not-for-prod"  # pragma: allowlist secret
+      egressAuth:
+        markerSecret: "test-marker-not-for-prod"  # pragma: allowlist secret
+      global:
+        domain: example.com
+        sessionCookieSecure: true
+        ingress:
+          tls: false
+    asserts:
+      - equal:
+          path: data.SESSION_COOKIE_SECURE
+          value: "true"
+          decodeBase64: true
+
+  - it: refuses a zero lifetime
+    set:
+      app:
+        secretKey: "test-key-not-for-prod"  # pragma: allowlist secret
+        sessionMaxAgeSeconds: 0
+      egressAuth:
+        markerSecret: "test-marker-not-for-prod"  # pragma: allowlist secret
+      global:
+        domain: example.com
+    asserts:
+      - failedTemplate:
+          errorPattern: 'app.sessionMaxAgeSeconds must be a positive integer number of seconds, got "0"'
+
+  - it: refuses a negative lifetime
+    set:
+      app:
+        secretKey: "test-key-not-for-prod"  # pragma: allowlist secret
+        sessionMaxAgeSeconds: -60
+      egressAuth:
+        markerSecret: "test-marker-not-for-prod"  # pragma: allowlist secret
+      global:
+        domain: example.com
+    asserts:
+      - failedTemplate:
+          errorPattern: 'app.sessionMaxAgeSeconds must be a positive integer number of seconds, got "-60"'
+
+  - it: refuses a fractional lifetime
+    set:
+      app:
+        secretKey: "test-key-not-for-prod"  # pragma: allowlist secret
+        sessionMaxAgeSeconds: 1.5
+      egressAuth:
+        markerSecret: "test-marker-not-for-prod"  # pragma: allowlist secret
+      global:
+        domain: example.com
+    asserts:
+      - failedTemplate:
+          errorPattern: 'app.sessionMaxAgeSeconds must be a positive integer number of seconds, got "1.5"'
+
+  - it: refuses a non-numeric lifetime from the global, naming the global
+    set:
+      app:
+        secretKey: "test-key-not-for-prod"  # pragma: allowlist secret
+      egressAuth:
+        markerSecret: "test-marker-not-for-prod"  # pragma: allowlist secret
+      global:
+        domain: example.com
+        sessionMaxAgeSeconds: "8h"
+    asserts:
+      - failedTemplate:
+          errorPattern: 'global.sessionMaxAgeSeconds must be a positive integer number of seconds, got "8h"'
+
+  - it: refuses the prefix when the global makes the cookie non-Secure, naming the global
+    set:
+      app:
+        secretKey: "test-key-not-for-prod"  # pragma: allowlist secret
+        sessionCookieHostPrefix: true
+      egressAuth:
+        markerSecret: "test-marker-not-for-prod"  # pragma: allowlist secret
+      global:
+        domain: example.com
+        sessionCookieSecure: false
+        ingress:
+          tls: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "app.sessionCookieHostPrefix requires global.sessionCookieSecure=true: a __Host- cookie is Secure"
+
+  - it: renders the app cookie domain on a standalone install
+    set:
+      app:
+        secretKey: "test-key-not-for-prod"  # pragma: allowlist secret
+        sessionCookieDomain: ".team.example.com"
+      egressAuth:
+        markerSecret: "test-marker-not-for-prod"  # pragma: allowlist secret
+      global:
+        domain: example.com
+    asserts:
+      - equal:
+          path: data.SESSION_COOKIE_DOMAIN
+          value: ".team.example.com"
+          decodeBase64: true
+
+  - it: takes the cookie domain from the global over the app key
+    set:
+      app:
+        secretKey: "test-key-not-for-prod"  # pragma: allowlist secret
+        sessionCookieDomain: ".team.example.com"
+      egressAuth:
+        markerSecret: "test-marker-not-for-prod"  # pragma: allowlist secret
+      global:
+        domain: example.com
+        sessionCookieDomain: "registry.example.com"
+    asserts:
+      - equal:
+          path: data.SESSION_COOKIE_DOMAIN
+          value: "registry.example.com"
+          decodeBase64: true
+
+  - it: defaults the cookie domain to the deployment domain when the global is empty
+    set:
+      app:
+        secretKey: "test-key-not-for-prod"  # pragma: allowlist secret
+      egressAuth:
+        markerSecret: "test-marker-not-for-prod"  # pragma: allowlist secret
+      global:
+        domain: example.com
+        sessionCookieDomain: ""
+    asserts:
+      - equal:
+          path: data.SESSION_COOKIE_DOMAIN
+          value: ".example.com"
+          decodeBase64: true
+
+  - it: refuses the prefix with a global cookie domain, naming the global
+    set:
+      app:
+        secretKey: "test-key-not-for-prod"  # pragma: allowlist secret
+      egressAuth:
+        markerSecret: "test-marker-not-for-prod"  # pragma: allowlist secret
+      global:
+        domain: example.com
+        sessionCookieHostPrefix: true
+        sessionCookieDomain: ".example.com"
+        ingress:
+          tls: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "global.sessionCookieHostPrefix requires global.sessionCookieDomain to be empty"

@@ -943,6 +943,8 @@ def test_create_location_block_streamable_http(nginx_service):
     assert "auth_request_set $rl_limit $upstream_http_x_ratelimit_limit" in block
     assert "auth_request_set $rl_reset $upstream_http_x_ratelimit_reset" in block
     assert "auth_request_set $rl_retry $upstream_http_retry_after" in block
+    # Issue #2006: capture the JSON-RPC error body @forbidden_error returns.
+    assert "auth_request_set $mcp_error_body $upstream_http_x_mcp_error_body" in block
     assert "proxy_buffering off" in block
     assert "auth_request /validate" in block
     # Upstream timeouts derived from MCP_PROXY_TIMEOUT so long-running MCP tool
@@ -1925,6 +1927,28 @@ def test_validate_locations_fit_the_registry_token():
             )
             clears = 'proxy_set_header X-Groups "";' in location
             assert forwards == clears, f"{name}: {location.splitlines()[0]}"
+
+
+def test_validate_locations_blank_the_client_cognito_headers():
+    """Every `location = /validate` block sends the auth server an empty
+    X-User-Pool-Id, X-Client-Id and X-Region, so no client value reaches it.
+
+    nginx passes the client's request headers on the auth subrequest unless the
+    location sets them, and these named the Cognito pool and client a removed
+    /validate fallback validated the bearer against.
+    """
+    for conf_path in (_HTTP_AND_HTTPS_CONF, _HTTP_ONLY_CONF):
+        name = conf_path.name
+        text = conf_path.read_text()
+        blocks = [
+            chunk.split("\n    }", 1)[0] for chunk in text.split("location = /validate {")[1:]
+        ]
+        assert blocks, f"{name}: no `location = /validate` block"
+        for block in blocks:
+            for header in ("X-User-Pool-Id", "X-Client-Id", "X-Region"):
+                assert f'proxy_set_header {header} "";' in block, (name, header)
+        for variable in ("$http_x_user_pool_id", "$http_x_client_id", "$http_x_region"):
+            assert variable not in text, (name, variable)
 
 
 @pytest.mark.unit

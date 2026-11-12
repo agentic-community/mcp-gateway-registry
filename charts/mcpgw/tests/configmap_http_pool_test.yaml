@@ -23,6 +23,10 @@ tests:
       - equal:
           path: data.EGRESS_HTTP_POOL_CONNECT_RETRIES
           value: "1"
+      # SSRF_ALLOWED_CIDRS lives in the deployment env:, not here, so an
+      # extraEnvFrom source cannot shadow it (#2018).
+      - notExists:
+          path: data.SSRF_ALLOWED_CIDRS
 
   - it: honours overridden pool knobs
     set:

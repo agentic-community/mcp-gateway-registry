@@ -351,9 +351,7 @@ class EntraIdProvider(AuthProvider):
         )
         self.application_id_uri = raw_app_id_uri.rstrip("/") if raw_app_id_uri else None
 
-        # JWKS cache
-        self._jwks_cache: dict[str, Any] | None = None
-        self._jwks_cache_time: float = 0
+        # JWKS cache TTL. The cache itself is shared per jwks_url on AuthProvider.
         self._jwks_cache_ttl: int = 3600  # 1 hour
 
         # The fetch endpoint can be a private TLS reverse proxy; the OAuth
@@ -599,9 +597,6 @@ class EntraIdProvider(AuthProvider):
             except Exception as e:
                 logger.debug(f"Not a self-signed token: {e}")
 
-            # Get JWKS for validation
-            jwks = self.get_jwks()
-
             # Decode token header to get key ID
             unverified_header = jwt.get_unverified_header(token)
             kid = unverified_header.get("kid")
@@ -609,15 +604,8 @@ class EntraIdProvider(AuthProvider):
             if not kid:
                 raise ValueError("Token missing 'kid' in header")
 
-            # Find matching key
-            signing_key = None
-            for key in jwks.get("keys", []):
-                if key.get("kid") == kid:
-                    from jwt import PyJWK
-
-                    signing_key = PyJWK(key).key
-                    break
-
+            # Find the matching key; refetches the JWKS once if the IdP rotated keys
+            signing_key = self._find_jwks_signing_key(kid)
             if not signing_key:
                 raise ValueError(f"No matching key found for kid: {kid}")
 
@@ -960,7 +948,7 @@ class EntraIdProvider(AuthProvider):
             # nginx closes /validate at ten seconds; cap the whole OBO and
             # paginated Graph chain to leave room for scope mapping and signing.
             async with asyncio.timeout(GRAPH_GROUP_LOOKUP_TIMEOUT_SECONDS):
-                graph_token = await obo_exchange(
+                graph_token, _ = await obo_exchange(
                     idp_provider,
                     subject_token=access_token,
                     target_audience=graph_resource,

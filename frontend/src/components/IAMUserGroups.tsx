@@ -385,13 +385,13 @@ const IAMUserGroups: React.FC<IAMUserGroupsProps> = ({ onShowToast }) => {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+        <h2 className="text-lg font-semibold text-fg">
           IAM &gt; User Groups
         </h2>
         <div className="flex items-center space-x-2">
           <button
             onClick={refetch}
-            className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+            className="btn-icon"
             title="Refresh"
             aria-label="Refresh"
           >
@@ -402,15 +402,15 @@ const IAMUserGroups: React.FC<IAMUserGroupsProps> = ({ onShowToast }) => {
               resetForm();
               setView('register');
             }}
-            className="flex items-center px-3 py-2 text-sm text-white bg-purple-600 rounded-lg hover:bg-purple-700"
+            className="btn-primary gap-1 px-3"
             title="Register a user-to-group mapping for an IdP that does not carry groups in JWTs"
           >
-            <PlusIcon className="h-4 w-4 mr-1" /> Register User Group
+            <PlusIcon className="h-4 w-4" /> Register User Group
           </button>
         </div>
       </div>
 
-      <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-3 text-sm text-gray-700 dark:text-gray-300">
+      <div className="bg-info-50 dark:bg-info-900/20 border border-info-200 dark:border-info-800 rounded-lg p-3 text-sm text-fg-muted">
         These records back the auth server's user-to-group fallback for IdPs
         that do not carry group memberships in JWTs (for example
         PingFederate). The auth server reads from this collection when the
@@ -424,7 +424,7 @@ const IAMUserGroups: React.FC<IAMUserGroupsProps> = ({ onShowToast }) => {
           value={searchInput}
           onChange={(e) => setSearchInput(e.target.value)}
           placeholder="Search by username..."
-          className="w-full pl-10 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+          className="input pl-10 pr-4"
         />
       </div>
 
@@ -443,26 +443,26 @@ const IAMUserGroups: React.FC<IAMUserGroupsProps> = ({ onShowToast }) => {
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-gray-200 dark:border-gray-700">
-                  <th className="text-left py-3 px-4 font-medium text-gray-500 dark:text-gray-400">
+                <tr className="border-b border-line">
+                  <th className="text-left py-3 px-4 font-medium text-fg-subtle">
                     Username
                   </th>
-                  <th className="text-left py-3 px-4 font-medium text-gray-500 dark:text-gray-400">
+                  <th className="text-left py-3 px-4 font-medium text-fg-subtle">
                     Groups
                   </th>
-                  <th className="text-left py-3 px-4 font-medium text-gray-500 dark:text-gray-400">
+                  <th className="text-left py-3 px-4 font-medium text-fg-subtle">
                     Provider
                   </th>
-                  <th className="text-left py-3 px-4 font-medium text-gray-500 dark:text-gray-400">
+                  <th className="text-left py-3 px-4 font-medium text-fg-subtle">
                     Enabled
                   </th>
-                  <th className="text-left py-3 px-4 font-medium text-gray-500 dark:text-gray-400">
+                  <th className="text-left py-3 px-4 font-medium text-fg-subtle">
                     Email
                   </th>
-                  <th className="text-left py-3 px-4 font-medium text-gray-500 dark:text-gray-400">
+                  <th className="text-left py-3 px-4 font-medium text-fg-subtle">
                     Registered by
                   </th>
-                  <th className="text-right py-3 px-4 font-medium text-gray-500 dark:text-gray-400">
+                  <th className="text-right py-3 px-4 font-medium text-fg-subtle">
                     Action
                   </th>
                 </tr>
@@ -472,8 +472,8 @@ const IAMUserGroups: React.FC<IAMUserGroupsProps> = ({ onShowToast }) => {
                   const isManual = u.provider === 'manual';
                   return (
                     <React.Fragment key={u.username}>
-                      <tr className="table-row border-b border-gray-100 dark:border-gray-800">
-                        <td className="py-3 px-4 text-gray-900 dark:text-white font-medium font-mono">
+                      <tr className="table-row border-b border-line">
+                        <td className="py-3 px-4 text-fg font-medium font-mono">
                           {u.username}
                         </td>
                         <td className="py-3 px-4">
@@ -487,7 +487,7 @@ const IAMUserGroups: React.FC<IAMUserGroupsProps> = ({ onShowToast }) => {
                               </span>
                             ))}
                             {(!u.groups || u.groups.length === 0) && (
-                              <span className="text-gray-400 text-xs">
+                              <span className="text-fg-subtle text-xs">
                                 {EM_DASH}
                               </span>
                             )}
@@ -513,8 +513,8 @@ const IAMUserGroups: React.FC<IAMUserGroupsProps> = ({ onShowToast }) => {
                             }
                             className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
                               u.enabled
-                                ? 'bg-purple-600'
-                                : 'bg-gray-300 dark:bg-gray-600'
+                                ? 'bg-accent'
+                                : 'bg-line-strong'
                             } ${
                               !isManual || togglingUsername === u.username
                                 ? 'opacity-50 cursor-not-allowed'
@@ -528,13 +528,13 @@ const IAMUserGroups: React.FC<IAMUserGroupsProps> = ({ onShowToast }) => {
                             />
                           </button>
                         </td>
-                        <td className="py-3 px-4 text-sm text-gray-600 dark:text-gray-400">
+                        <td className="py-3 px-4 text-sm text-fg-muted">
                           {u.email || (
-                            <span className="text-gray-400">{EM_DASH}</span>
+                            <span className="text-fg-subtle">{EM_DASH}</span>
                           )}
                         </td>
                         <td
-                          className="py-3 px-4 text-sm text-gray-600 dark:text-gray-400"
+                          className="py-3 px-4 text-sm text-fg-muted"
                           title={
                             u.created_at
                               ? `Created at ${formatDate(u.created_at)}`
@@ -542,7 +542,7 @@ const IAMUserGroups: React.FC<IAMUserGroupsProps> = ({ onShowToast }) => {
                           }
                         >
                           {u.created_by || (
-                            <span className="text-gray-400">{EM_DASH}</span>
+                            <span className="text-fg-subtle">{EM_DASH}</span>
                           )}
                         </td>
                         <td className="py-3 px-4 text-right">
@@ -551,7 +551,7 @@ const IAMUserGroups: React.FC<IAMUserGroupsProps> = ({ onShowToast }) => {
                               onClick={() => handleEditOpen(u)}
                               disabled={!isManual}
                               aria-disabled={!isManual}
-                              className="p-1 text-gray-400 hover:text-purple-500 dark:hover:text-purple-400 disabled:opacity-40 disabled:cursor-not-allowed"
+                              className="p-1 text-fg-subtle hover:text-accent-text disabled:opacity-40 disabled:cursor-not-allowed"
                               title={
                                 isManual
                                   ? 'Edit mapping'
@@ -565,7 +565,7 @@ const IAMUserGroups: React.FC<IAMUserGroupsProps> = ({ onShowToast }) => {
                               onClick={() => setDeleteTarget(u.username)}
                               disabled={!isManual}
                               aria-disabled={!isManual}
-                              className="p-1 text-gray-400 hover:text-red-500 dark:hover:text-red-400 disabled:opacity-40 disabled:cursor-not-allowed"
+                              className="p-1 text-fg-subtle hover:text-danger-500 dark:hover:text-danger-400 disabled:opacity-40 disabled:cursor-not-allowed"
                               title={
                                 isManual
                                   ? 'Delete mapping'
@@ -626,12 +626,12 @@ const IAMUserGroups: React.FC<IAMUserGroupsProps> = ({ onShowToast }) => {
     return (
       <div className="space-y-6">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+          <h2 className="text-lg font-semibold text-fg">
             {opts.title}
           </h2>
           <button
             onClick={opts.onCancel}
-            className="flex items-center text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+            className="flex items-center text-sm text-fg-subtle hover:text-fg"
           >
             <ArrowLeftIcon className="h-4 w-4 mr-1" /> Back to List
           </button>
@@ -639,7 +639,7 @@ const IAMUserGroups: React.FC<IAMUserGroupsProps> = ({ onShowToast }) => {
 
         <div className="space-y-4 max-w-lg">
           <div>
-            <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">
+            <label className="block text-sm text-fg-muted mb-1">
               Username *
             </label>
             <input
@@ -653,31 +653,31 @@ const IAMUserGroups: React.FC<IAMUserGroupsProps> = ({ onShowToast }) => {
                 }
               }}
               placeholder="e.g. alice@example.com"
-              className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white font-mono focus:ring-2 focus:ring-purple-500 focus:border-transparent ${
+              className={`input font-mono ${
                 errors.username
-                  ? 'border-red-500'
-                  : 'border-gray-300 dark:border-gray-600'
+                  ? 'border-danger-500'
+                  : 'border-line-strong'
               } ${opts.mode === 'edit' ? 'opacity-60 cursor-not-allowed' : ''}`}
             />
             {errors.username && (
-              <p className="mt-1 text-sm text-red-500">{errors.username}</p>
+              <p className="mt-1 text-sm text-danger-500">{errors.username}</p>
             )}
             {opts.mode === 'edit' && (
-              <p className="mt-1 text-xs text-gray-400">
+              <p className="mt-1 text-xs text-fg-subtle">
                 Username is the primary key and cannot be edited.
               </p>
             )}
           </div>
 
           <div>
-            <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">
+            <label className="block text-sm text-fg-muted mb-1">
               Groups
             </label>
             <div
-              className={`flex flex-wrap items-center gap-1 px-2 py-1.5 border rounded-lg bg-white dark:bg-gray-900 focus-within:ring-2 focus-within:ring-purple-500 ${
+              className={`flex flex-wrap items-center gap-1 px-2 py-1.5 border rounded-lg bg-surface shadow-sm focus-within:border-accent focus-within:ring-2 focus-within:ring-focus/40 ${
                 errors.groups
-                  ? 'border-red-500'
-                  : 'border-gray-300 dark:border-gray-600'
+                  ? 'border-danger-500'
+                  : 'border-line-strong'
               }`}
               onClick={() => groupInputRef.current?.focus()}
             >
@@ -714,20 +714,20 @@ const IAMUserGroups: React.FC<IAMUserGroupsProps> = ({ onShowToast }) => {
                     ? 'Type a group name and press Enter'
                     : ''
                 }
-                className="flex-1 min-w-[8rem] px-1 py-0.5 bg-transparent text-sm text-gray-900 dark:text-white outline-none"
+                className="flex-1 min-w-[8rem] px-1 py-0.5 border-0 bg-transparent text-sm text-fg placeholder:text-fg-subtle outline-none focus:ring-0"
               />
             </div>
             {errors.groups && (
-              <p className="mt-1 text-sm text-red-500">{errors.groups}</p>
+              <p className="mt-1 text-sm text-danger-500">{errors.groups}</p>
             )}
-            <p className="mt-1 text-xs text-gray-400">
+            <p className="mt-1 text-xs text-fg-subtle">
               Press Enter or comma to add a tag. Backspace on an empty input
               removes the last tag.
             </p>
           </div>
 
           <div>
-            <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">
+            <label className="block text-sm text-fg-muted mb-1">
               Email (optional)
             </label>
             <input
@@ -738,14 +738,14 @@ const IAMUserGroups: React.FC<IAMUserGroupsProps> = ({ onShowToast }) => {
                 if (errors.email) setErrors((p) => ({ ...p, email: undefined }));
               }}
               placeholder="alice@example.com"
-              className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-purple-500 focus:border-transparent ${
+              className={`input ${
                 errors.email
-                  ? 'border-red-500'
-                  : 'border-gray-300 dark:border-gray-600'
+                  ? 'border-danger-500'
+                  : 'border-line-strong'
               }`}
             />
             {errors.email && (
-              <p className="mt-1 text-sm text-red-500">{errors.email}</p>
+              <p className="mt-1 text-sm text-danger-500">{errors.email}</p>
             )}
           </div>
 
@@ -776,16 +776,16 @@ const IAMUserGroups: React.FC<IAMUserGroupsProps> = ({ onShowToast }) => {
                       }
                     }
                   }}
-                  className="mt-0.5 h-4 w-4 rounded border-gray-300 dark:border-gray-600 text-purple-600 focus:ring-purple-500"
+                  className="mt-0.5 h-4 w-4 rounded border-line-strong text-purple-600 focus:ring-focus"
                 />
-                <span className="text-sm text-gray-700 dark:text-gray-300">
+                <span className="text-sm text-fg-muted">
                   Also create this user in PingFederate (Simple PCV)
                 </span>
               </label>
 
               {createInPingFederate && (
                 <div>
-                  <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">
+                  <label className="block text-sm text-fg-muted mb-1">
                     PingFederate password *
                   </label>
                   <input
@@ -802,18 +802,18 @@ const IAMUserGroups: React.FC<IAMUserGroupsProps> = ({ onShowToast }) => {
                     }}
                     minLength={PINGFEDERATE_PASSWORD_MIN_LENGTH}
                     autoComplete="new-password"
-                    className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-purple-500 focus:border-transparent ${
+                    className={`input ${
                       errors.pingfederatePassword
-                        ? 'border-red-500'
-                        : 'border-gray-300 dark:border-gray-600'
+                        ? 'border-danger-500'
+                        : 'border-line-strong'
                     }`}
                   />
                   {errors.pingfederatePassword && (
-                    <p className="mt-1 text-sm text-red-500">
+                    <p className="mt-1 text-sm text-danger-500">
                       {errors.pingfederatePassword}
                     </p>
                   )}
-                  <p className="mt-1 text-xs text-gray-400">
+                  <p className="mt-1 text-xs text-fg-subtle">
                     Used to create the user in PingFederate's Simple Password
                     Credential Validator. The registry never stores this
                     password.
@@ -824,17 +824,17 @@ const IAMUserGroups: React.FC<IAMUserGroupsProps> = ({ onShowToast }) => {
           )}
         </div>
 
-        <div className="flex justify-end space-x-3 pt-4 border-t border-gray-200 dark:border-gray-700">
+        <div className="flex justify-end space-x-3 pt-4 border-t border-line">
           <button
             onClick={opts.onCancel}
-            className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-800"
+            className="btn-secondary"
           >
             Cancel
           </button>
           <button
             onClick={opts.onSubmit}
             disabled={opts.isSubmitting}
-            className="px-4 py-2 text-sm text-white bg-purple-600 rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="btn-primary"
           >
             {opts.submitLabel}
           </button>

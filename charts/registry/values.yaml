@@ -11,7 +11,7 @@ global:
   image:
     # Container registry (host + optional namespace). Shared default across subcharts.
     registry: public.ecr.aws/p3v1o3c6
-    tag: 1.36.0
+    tag: 1.37.0
     pullPolicy: IfNotPresent
   cloud:
     # AWS region for cloud detection in telemetry. Set this when deploying
@@ -75,8 +75,33 @@ app:
 
   # Session cookie Domain attribute. Leave empty to default to
   # ".<global.domain>". See charts/auth-server/values.yaml for a longer
-  # note on when to override.
+  # note on when to override. Must match the auth-server.
+  # global.sessionCookieDomain, which the stack chart sets, takes precedence;
+  # this key applies only to a standalone install.
   sessionCookieDomain: ""
+  # Name the session cookie __Host-mcp_gateway_session (Secure, Path=/, no
+  # Domain) so no sibling subdomain can set or overwrite it. Requires a Secure
+  # session cookie (global.sessionCookieSecure, or global.ingress.tls=true when
+  # that global is unset) and an empty sessionCookieDomain; the chart then
+  # renders SESSION_COOKIE_DOMAIN empty. Set the same value on auth-server.
+  # Turning it on signs every user out once. See docs/design/cookie-security-design.md.
+  # global.sessionCookieHostPrefix, which the stack chart sets, takes
+  # precedence; this key applies only to a standalone install. It has no
+  # default here so the stack chart can tell an override from the default.
+  # Default: false
+  # sessionCookieHostPrefix: false
+  # SESSION_COOKIE_SECURE has no app key here: global.sessionCookieSecure, which
+  # the stack chart sets, decides it, and a standalone install without that
+  # global follows global.ingress.tls.
+  # Session lifetime in seconds (SESSION_MAX_AGE_SECONDS): how long the registry
+  # accepts the session cookie signature. Must be a positive integer and must
+  # match the auth-server, which stores the session and sets the cookie Max-Age
+  # from the same setting. global.sessionMaxAgeSeconds, which the stack chart
+  # sets, takes precedence; this key applies only to a standalone install. It
+  # has no default here so the stack chart can tell an override from the
+  # default. Unset, the chart renders no SESSION_MAX_AGE_SECONDS and the
+  # registry uses its built-in 8 hours, as the auth-server does.
+  # sessionMaxAgeSeconds:
   # Comma-separated exact browser origins allowed to make credentialed
   # cross-origin requests to the registry API (e.g.
   # "https://app.example.com,https://admin.example.com"). The registry's own
@@ -371,6 +396,8 @@ app:
   #     wildcards, e.g. "obo-echo.<ns>.svc.cluster.local").
   # The cloud metadata address (169.254.169.254) is never permitted by either.
   ssrfAllowedHosts: ""
+  # For a standalone install. Under the stack chart set global.ssrfAllowedCidrs,
+  # which wins over this value and reaches auth-server and mcpgw too. #2018
   ssrfAllowedCidrs: ""
   # Forward-proxy egress for the SSRF-guarded clients (issue #1832). OFF by
   # default. Only needed where the pod has NO direct internet egress and all
@@ -786,6 +813,19 @@ caBundle:
   existingSecret: "" # or a Secret, for operators who treat the chain as sensitive
   key: ca-bundle.pem # key within the ConfigMap or Secret
   mountPath: /etc/ssl/mcp-gateway # directory the volume is mounted at
+# Runtime UI branding (logos, favicon, colors, named themes, fonts) without an
+# image rebuild. Put the branding files (manifest.json, theme.css, images,
+# .woff2 fonts) in a ConfigMap you manage, binary files under binaryData:
+#   kubectl create configmap registry-branding --from-file=./branding/
+# The whole ConfigMap is mounted read-only as a directory at mountPath (never via
+# subPath, so an edited ConfigMap reaches the pod without a restart) and the
+# deployment sets UI_BRANDING_DIR to mountPath, so the path is never written
+# twice. The registry serves the files at /branding/<name>. Keep the ConfigMap
+# under the 1 MiB Kubernetes object limit. See docs/ui-branding.md.
+branding:
+  enabled: false
+  existingConfigMap: "" # required when enabled (a `fail` guard enforces it)
+  mountPath: /app/branding # directory the ConfigMap is mounted at
 extraEnv: []
 # Extra `envFrom:` sources appended to the container. Use this to inject
 # all keys from an external ConfigMap or Secret you manage (e.g. via

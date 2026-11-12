@@ -173,6 +173,35 @@ sanitizer that isn't called) is equivalent to no check.
   Alibaba ECS `100.100.100.200` — never allowlistable); unwrap scoped,
   IPv4-mapped, NAT64, 6to4, and Teredo forms before classification; require
   http/https. Fail closed. Do not create per-call-site `_is_safe_url` variants.
+- **Relax reserved space only for IPv4, and only from an operator range.** Istio
+  auto-allocates ServiceEntry addresses from `240.240.0.0/16`, which Python
+  classifies as reserved, so an operator `SSRF_ALLOWED_CIDRS` entry may admit a
+  reserved IPv4 address inside it (#2018). Exclude limited broadcast
+  `255.255.255.255`. Never relax reserved IPv6: IPv4-compatible `::a.b.c.d`, SIIT
+  `::ffff:0:a.b.c.d` and RFC 8215 local-use NAT64 `64:ff9b:1::/48` carry an IPv4
+  address the guard does not unwrap, so a broad `::/0` entry would reach IMDS
+  (`64:ff9b:1::a9fe:a9fe`). Pass only the operator's CIDRs to this check, never
+  the exact `/32` added for a trusted hostname, and never let `allow_private`
+  stand in for it. Every process that runs the guard (registry, auth-server,
+  mcpgw) must receive the same `SSRF_ALLOWED_CIDRS` value. Feed a value like this
+  from one source per surface: in Helm, a `global.*` key the subcharts read first
+  (`.Values.global.X | default .Values.app.X`), as `secretKey` does, so a
+  per-subchart key cannot drift from it.
+- **Compare reserved env names case-insensitively.** pydantic-settings reads the
+  environment with `case_sensitive=False`, so a Helm `extraEnv` entry named
+  `ssrf_allowed_cidrs` overrides the chart-managed `SSRF_ALLOWED_CIDRS` in the
+  registry while mcpgw (`os.getenv`) ignores it. Each chart's `validateExtraEnv`
+  compares names through `<chart>.envNameKey` (trimmed, upper-cased) for the
+  reserved check. Keys inside an `extraEnvFrom` source or `app.existingSecret`
+  cannot be checked at render time: a lowercase `ssrf_allowed_cidrs` there sits
+  beside the chart's `SSRF_ALLOWED_CIDRS`, and which one pydantic keeps depends on
+  the order the kubelet writes the container's environment, which the operator
+  does not control. Never put a lowercase copy of a chart-managed name
+  in those sources. The duplicate check stays exact, because `HTTPS_PROXY` and
+  `https_proxy` are two variables and proxy setups set both. Feed a
+  security-relevant chart value through `env:`, not a chart ConfigMap read via
+  `envFrom`: a user `extraEnvFrom` source renders later and wins over `envFrom`,
+  but never over `env:`.
 - **Don't rely on the language runtime's `is_private` to cover reserved ranges —
   block them explicitly and pin the range in a test.** Ranges like CGNAT / shared
   address space (`100.64.0.0/10`, RFC 6598) are only classified private on newer
@@ -370,6 +399,7 @@ sanitizer that isn't called) is equivalent to no check.
   return the handler's error shape, do not raise. Query parameters are lower risk
   (they don't traverse the path), but still reject absolute (`/`-leading) and
   `..`-containing values as defense-in-depth.
+- **Neutralize spreadsheet formulas in every CSV export, including CSV the browser builds.** Audit records and registry data hold caller-authored strings (request paths, usernames, upstream error text). A cell that starts with `=`, `+`, `-`, `@`, tab or CR, also after leading whitespace, runs as a formula when an admin opens the file in Excel, Calc or Sheets (`=HYPERLINK` exfiltration, DDE prompts). The server export applies `_csv_safe` in `registry/audit/routes.py`; a client-side export (AG Grid `exportDataAsCsv`) bypasses it and must apply `frontend/src/utils/csvSafe.ts` through `processCellCallback`. AG Grid's default CSV output does not neutralize anything. Keep the two implementations' prefix rules identical.
 
 ## Authorization & ownership
 
@@ -513,6 +543,7 @@ sanitizer that isn't called) is equivalent to no check.
   resource in the tenant, is then accepted (confused deputy). Enforce audience
   against a config-driven allowlist with `verify_aud=True`; fail closed (reject)
   when the allowlist is unconfigured rather than accepting any audience.
+- **A request header never selects how the request is authenticated.** `/validate` had a fallback, for a provider without `validate_token`, that checked the bearer against the Cognito user pool and app client named by the request's own `X-User-Pool-Id` and `X-Client-Id` headers (and `X-Region`), and nginx forwarded the client's values for all three. A caller could then name a pool it controls, sign a token there, and have it verified against that pool. The branch never ran only because every provider implements `validate_token`. Everything that decides how a credential is verified (provider, issuer, pool, client, JWKS, algorithm, audience) comes from server configuration; a request may carry the credential, never the parameters that verify it. Remove such a branch rather than guard it, fail closed when the configured provider cannot validate, and blank those headers at every nginx location that proxies to `/validate` so an older auth server cannot read them either. Sweep for request headers, query parameters or body fields that reach a validator's constructor or `get_auth_provider`.
 - **Never auto-grant groups/roles/admin from a code-shipped mapping.** A
   hardcoded `client_id → [groups]` (or default-admin) table in an M2M/SSO sync
   path silently confers privilege. Drive the mapping from config, fail closed to
@@ -667,6 +698,27 @@ sanitizer that isn't called) is equivalent to no check.
   NOT a valid "hardening" here — CSRF is defended separately by the CSRF token,
   not by `SameSite=Strict`. Leave a comment at the `set_cookie` site so a future
   reader does not "tighten" it and break login.
+- **A session cookie without the `__Host-` prefix can be tossed from a sibling
+  subdomain.** Any other host under the parent domain can set a cookie with the
+  session cookie's name. Beside the real one, the browser sends both, in an
+  order the tossing host controls, and two readers that pick differently act as
+  two sessions on one request. Refuse a duplicated session cookie in every
+  reader of both services through one parser that matches the exact name, and
+  make a read that bypasses it fail closed. A tossed cookie with the real
+  cookie's Domain and Path replaces it instead, putting the browser in the
+  attacker's session: only the `__Host-` prefix stops that, so turn it on
+  wherever the deployment needs no shared cookie domain. Never record the
+  `Cookie` header, including through OpenTelemetry header capture ([Cookie
+  Security Design](design/cookie-security-design.md#duplicate-session-cookies)).
+- **Renaming or rescoping a credential cookie leaves the old copy live.** Turning
+  on the `__Host-` prefix renamed the session cookie, but the old one, still on
+  the parent `Domain`, kept reaching every sibling host until it expired, and its
+  value was a signed id for a session that stayed live. The value alone was
+  enough: replayed under the new name, it passed the signature check. When a
+  change renames or narrows a credential cookie, bind the signature to the
+  cookie's name (`session_cookie_signing_salt`), so a value signed for one name
+  fails under another, and tell operators to end the old sessions on the server
+  ([Cookie Security Design](design/cookie-security-design.md#session-cookie-host-prefix)).
 - **Bind the OAuth2/OIDC authorization-code flow to the specific login.** A valid
   signature is necessary but not sufficient — a correctly-signed id_token minted
   for a different login can be replayed/injected. Send a per-login `nonce` on the
@@ -680,6 +732,35 @@ sanitizer that isn't called) is equivalent to no check.
   handler exchanges the code inline, a `state` comparison that runs later in the
   calling flow is dead code; gate the exchange itself and fail closed when
   `state` is missing/absent/mismatched or no authorization request is in flight.
+- **Bind an OAuth consent to the browser that started it, and burn its state on
+  every exit.** A check that the finishing browser is signed in as the state's
+  principal does not stop account injection: whoever holds a state bound to user
+  V (an agent with V's bearer, V's browser history) finishes the provider step
+  with their own account and sends V's browser to the callback, and V's vault
+  then holds that account. PKCE does not help, because the verifier rides in the
+  state. Set a per-consent HttpOnly, `SameSite=Lax` cookie where the consent
+  starts, put its hash in the state, and refuse the callback before the code
+  exchange unless the browser presents the matching cookie. Name the cookie per
+  consent so parallel tabs all complete, and start a consent only for the
+  browser's own session cookie: a bearer skips CSRF and would get the state
+  together with its secret. A refusal that leaves the nonce live leaves a usable
+  `?code=...&state=...` in the refusing browser's history, which the minting
+  user's own browser can later complete, so consume the nonce once, right after
+  the state decodes and before the `code` check (RFC 9700 section 4.7, RFC 6749
+  section 10.12; `EgressAuthService.begin_callback`,
+  `registry/egress_auth/browser_binding.py`, `browser_session_context` in
+  `registry/auth/dependencies.py`).
+- **A reserved key prefix is a namespace only if no input can carry it.**
+  Prefixing username-fallback vault keys with `name:` keeps them apart from
+  account ids only while no account id starts with `name:`. A provider whose
+  `subject_claim` names a user-chosen value can return one, and that user then
+  reads the fallback user's bucket. Refuse the prefix wherever an outside value
+  becomes a key: the login (`_require_login_subject`), an IdP bearer's account
+  id (`_canonical_egress_user`) and a mint request that names no session
+  (`_reconcile_context_against_session`), all through one predicate
+  (`is_fallback_shaped` in `registry/egress_auth/fallback_key.py`). Exempt only
+  values the gateway wrote: a session's stored key, and the `egress_user` the
+  session-backed mint stamps on a `self_signed` token.
 - **Cross-resource permission confusion: one entity type's access grant must
   never gate a different entity type.** A skill-listing fast-path keyed on
   `accessible_agents` (an agent grant) let a broad agent grant expose private
@@ -845,6 +926,23 @@ sanitizer that isn't called) is equivalent to no check.
   reuse window (`EGRESS_OBO_CACHE_MAX_TTL_SECONDS`). A data-plane service that starts caching credentials also gets the
   narrowest store access that works: an in-process handle clamped to its own namespace, plus a backend policy scoped to
   that namespace's path, created only when the feature is on.
+- **Key per-user secrets on the IdP's immutable account id, derived the same way
+  on every path.** The egress vault keyed Cognito browser sessions on the Cognito
+  username, which Cognito frees for reuse when the user is deleted, so a new user
+  created under the old name inherited the old user's vaulted provider tokens. A
+  raw Okta access token keyed on its `sub`, the user's editable login, while the
+  browser session keyed on the immutable user id; moving a login to another user
+  moved the connections with it. Key a stored secret on the value the IdP never
+  reassigns (`sub` for most OIDC providers, `uid` on an Okta access token), and
+  give each path one named function: the login computes and stores a session's
+  key (`_login_vault_user_id`), every session reader takes it from there
+  (`session_vault_user_id`), a bearer's comes from `_canonical_egress_user`, and
+  the registry routes and the vend address the vault through `vault_principal`.
+  Refuse an OIDC login that yields no such id, since a fallback to a name
+  reopens the hole. Test the
+  derivation as properties over generated accounts: two accounts with distinct
+  ids never share a key even when every other claim matches, one account keeps
+  its key when its profile changes, and every path agrees.
 
 ## Identity-provider self-registration (DCR)
 
@@ -905,6 +1003,11 @@ surface.
   mixed case); render unsafe schemes as inert text. Enforce with the
   `react/jsx-no-script-url` lint rule so regressions are caught. (Server-side
   template `innerHTML`/inline-`onclick` is a separate sink — guard it too.)
+
+## Files served from, or unpacked into, a configurable folder
+
+- **Check and read a served file through one descriptor.** Resolving a path, checking it, and then handing the path to `FileResponse` leaves a window in which a writer can swap the file or a parent directory for a symlink to anything the process can read, such as `/proc/self/environ`. Open the final component with `O_NOFOLLOW | O_NONBLOCK`, `fstat` the descriptor, read from it, then resolve the name again and require the same `(st_dev, st_ino)` inside the folder. `read_branding_file` in `registry/utils/branding_files.py` is the worked example; it still follows Kubernetes ConfigMap `..data` symlinks because they resolve inside the folder.
+- **Bound everything an archive makes you do, not just the files you keep.** Count every tar header, including entries you skip (archive root, macOS `._*` metadata), and cap the decoded input and the decompressed stream before `tarfile` parses a header: a gzip bomb or a huge pax or long-name record is otherwise read in full. Log skipped entries as one count, not one line each. Never use `extractall`; write accepted regular files yourself with `O_EXCL | O_NOFOLLOW`. `registry/utils/branding_writer.py` is the worked example.
 
 ## Deployment surface & insecure-by-default config
 
@@ -1092,11 +1195,16 @@ the drift between copies is the hole.
   `@router.(post|put|patch|delete)` handler that depends on the session-cookie
   auth dependency — `enhanced_auth` AND `nginx_proxied_auth`, which falls back to
   the cookie — and mutates state) and close every gap. `verify_csrf_token_flexible`
-  correctly NO-OPS for non-cookie (Bearer/CLI) callers, so it is safe to add to a
-  route even if some callers are non-browser. It reads the token from the
-  `X-CSRF-Token` header OR a `csrf_token` form field, so a JSON-body route works
-  fine via the header. Skip only routes authed purely by `validate_internal_auth`
-  / internal-token (not browser/cookie surfaces).
+  correctly NO-OPS for a caller with no session cookie at all (Bearer/CLI), so it
+  is safe to add to a route even if some callers are non-browser. A request that
+  carries the session cookie, even a duplicated one or one that does not
+  resolve, gets a 403 unless it presents the token of the session it resolves
+  to: skipping CSRF because the registry could not read a session rests on
+  `/validate` agreeing, and a transient store error breaks that. It reads the
+  token from the `X-CSRF-Token` header OR a `csrf_token` form field, so a
+  JSON-body route works fine via the header. Skip only routes authed purely by
+  `validate_internal_auth` / internal-token (not browser/cookie surfaces).
+- **Cookie-authenticated proxy requests → `registry/common/request_origin.py`.** A browser attaches the session cookie to a request any site makes, and an MCP client cannot send a CSRF token. So every MCP, virtual, agent and proxy request authenticated by the cookie goes through `origin_refusal()` at `/validate` (`_refuse_cross_origin_cookie_request` in `auth_server/server.py`), before any scope check or token mint. Trusted origins come only from configuration (`AUTH_SERVER_EXTERNAL_URL`, `REGISTRY_URL`), never from `Host` or `X-Forwarded-*`. A missing `Origin` passes only on GET/HEAD/OPTIONS; `null`, malformed and foreign values always fail. Parse an origin with `normalize_origin()`, the same parser the CORS allowlist uses (#1996).
 - **Internal service-to-service auth → `registry/auth/internal.py`.**
   `generate_internal_token()` to mint, `validate_internal_auth` /
   `validate_internal_session_secret` as the route dependency. Internal tokens are
@@ -1142,6 +1250,8 @@ the drift between copies is the hole.
   `MCP_SCANNER_LLM_API_KEY`) or stdin. When an unavoidable third-party tool only
   accepts the secret on argv, keep it off every hop you control and record the
   external constraint as a scoped residual (see FOLLOWUPS F-19/F-20).
+- **CSV export → neutralize formulas with the shared helper.** Server: `_csv_safe` in `registry/audit/routes.py`. Browser: `csvSafe` / `processCsvCell` in `frontend/src/utils/csvSafe.ts`, passed as AG Grid's `processCellCallback`.
+- **Serving a file from an operator-supplied folder → `read_branding_file` pattern** in `registry/utils/branding_files.py` (single descriptor, `O_NOFOLLOW`, post-open inode check). Do not return a path for `FileResponse` to open later.
 
 When you add a NEW canonical helper, list it here so the next agent reaches for
 it instead of rebuilding it.

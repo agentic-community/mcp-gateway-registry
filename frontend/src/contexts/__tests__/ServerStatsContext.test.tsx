@@ -1,5 +1,5 @@
 import React from 'react';
-import { renderHook, waitFor } from '@testing-library/react';
+import { renderHook, waitFor, act } from '@testing-library/react';
 import axios from 'axios';
 import { ServerStatsProvider, useServerStats } from '../ServerStatsContext';
 import { useRegistryConfig } from '../../hooks/useRegistryConfig';
@@ -298,5 +298,43 @@ describe('ServerStatsContext custom entities', () => {
       String(url).startsWith('/api/custom/'),
     );
     expect(customCalls).toHaveLength(0);
+  });
+});
+
+describe('ServerStatsContext refresh-on-event', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  test("refetches servers/agents when a 'registry-data-changed' event fires", async () => {
+    // Arrange: a loaded provider with a known number of /api/servers calls.
+    setConfig([]);
+    mockGetByUrl({
+      '/api/servers': { servers: [], total_count: 0 },
+      '/api/agents': { agents: [], total_count: 0 },
+      '/api/skills': { skills: [], total_count: 0 },
+    });
+
+    const { result } = renderHook(() => useServerStats(), { wrapper });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    const serversCallsAfterMount = mockedAxios.get.mock.calls.filter(
+      ([url]) => url === '/api/servers',
+    ).length;
+    expect(serversCallsAfterMount).toBe(1);
+
+    // Act: a sibling mutation (e.g. a skill create) only refreshes its own
+    // source but dispatches this event to keep the shared stats consistent.
+    await act(async () => {
+      window.dispatchEvent(new Event('registry-data-changed'));
+    });
+
+    // Assert: the shared context re-fetched its lists without a page reload.
+    await waitFor(() => {
+      const serversCalls = mockedAxios.get.mock.calls.filter(
+        ([url]) => url === '/api/servers',
+      ).length;
+      expect(serversCalls).toBe(serversCallsAfterMount + 1);
+    });
   });
 });

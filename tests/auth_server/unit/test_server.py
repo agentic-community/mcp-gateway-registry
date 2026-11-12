@@ -998,6 +998,90 @@ class TestValidateEndpoint:
             assert data["username"] == "testuser"
 
     @patch("auth_server.server.get_auth_provider")
+    def test_validate_ignores_forged_cognito_headers(
+        self,
+        mock_get_provider,
+        mock_cognito_provider,
+        auth_env_vars,
+        mock_scope_repository_with_data,
+    ):
+        """A request with forged X-User-Pool-Id/X-Client-Id/X-Region validates as one without."""
+        mock_get_provider.return_value = mock_cognito_provider
+        import auth_server.server as server_module
+
+        request_headers = {
+            "Authorization": "Bearer test-token",
+            "X-Original-URL": "https://example.com/test-server/mcp",
+        }
+        forged = {
+            "X-User-Pool-Id": "us-east-1_ATTACKERPOOL",
+            "X-Client-Id": "attacker-client",
+            "X-Region": "eu-west-1",
+        }
+        identity_headers = ("x-user", "x-username", "x-client-id", "x-scopes", "x-auth-method")
+        with patch(
+            "auth_server.server.get_scope_repository", return_value=mock_scope_repository_with_data
+        ):
+            client = TestClient(server_module.app)
+            plain = client.get("/validate", headers=request_headers)
+            with_forged = client.get("/validate", headers={**request_headers, **forged})
+
+        assert (with_forged.status_code, with_forged.json()) == (plain.status_code, plain.json())
+        assert {h: with_forged.headers.get(h) for h in identity_headers} == {
+            h: plain.headers.get(h) for h in identity_headers
+        }
+        assert (
+            mock_cognito_provider.validate_token.call_args_list[0]
+            == (mock_cognito_provider.validate_token.call_args_list[1])
+        )
+
+    @patch("auth_server.server.get_auth_provider")
+    def test_validate_refuses_a_provider_without_validate_token(
+        self,
+        mock_get_provider,
+        auth_env_vars,
+        mock_scope_repository_with_data,
+    ):
+        """A provider that cannot validate tokens fails closed instead of trusting client headers.
+
+        The removed fallback validated the bearer against whatever Cognito pool
+        and client the request named, so a caller could pick a pool it controls.
+        """
+        import auth_server.server as server_module
+
+        mock_get_provider.return_value = MagicMock(spec=["get_provider_info"])
+        header_validator = MagicMock(
+            return_value={
+                "valid": True,
+                "method": "cognito",
+                "username": "attacker",
+                "groups": [],
+                "scopes": [],
+                "client_id": "attacker-client",
+                "data": {},
+            }
+        )
+        with (
+            patch.object(server_module.validator, "validate_token", header_validator),
+            patch(
+                "auth_server.server.get_scope_repository",
+                return_value=mock_scope_repository_with_data,
+            ),
+        ):
+            response = TestClient(server_module.app, raise_server_exceptions=False).get(
+                "/validate",
+                headers={
+                    "Authorization": "Bearer attacker-pool-token",
+                    "X-Original-URL": "https://example.com/test-server/mcp",
+                    "X-User-Pool-Id": "us-east-1_ATTACKERPOOL",
+                    "X-Client-Id": "attacker-client",
+                },
+            )
+
+        assert response.status_code == 500, response.text
+        header_validator.assert_not_called()
+
+    @patch("auth_server.server.get_auth_provider")
     def test_validate_a2a_agent_request_allowed(
         self,
         mock_get_provider,
@@ -1308,6 +1392,10 @@ class TestValidateEndpoint:
             ),
             patch("auth_server.server.signer", test_signer),
             patch("session_store.resolve_session", _fake_resolve),
+            patch(
+                "auth_server.server._gateway_trusted_origins",
+                return_value=frozenset({"https://example.com"}),
+            ),
         ):
             client = TestClient(server_module.app)
 
@@ -1316,6 +1404,8 @@ class TestValidateEndpoint:
                 headers={
                     "Cookie": f"mcp_gateway_session={valid_session_cookie}",
                     "X-Original-URL": "https://example.com/test-server/mcp",
+                    "X-Original-Method": "POST",
+                    "Origin": "https://example.com",
                 },
             )
 
@@ -2608,8 +2698,18 @@ class TestOAuth2CallbackTokenStorage:
     # point of the server-side store is to keep the cookie small.
     COOKIE_SIZE_CEILING_BYTES = 512
 
-    def _call_oauth2_callback(self) -> tuple[dict, str]:
+    def _call_oauth2_callback(
+        self,
+        subject: str | None = "12345",
+        id_token: str | None = "mock-id-token",
+    ) -> tuple[dict, str]:
         """Drive the real oauth2_callback endpoint with create_session mocked.
+
+        Args:
+            subject: The subject map_user_info resolves, or None for none.
+            id_token: The id_token in the token response, or None to omit it.
+                A login whose token response carries an id_token is OIDC and
+                is refused without a subject.
 
         Returns (kwargs, session_cookie_value) so tests can assert what would
         have landed in the persistent record AND can verify the cookie value
@@ -2621,8 +2721,9 @@ class TestOAuth2CallbackTokenStorage:
             "access_token": "mock-access-token-value",
             "refresh_token": "mock-refresh-token-value",
             "expires_in": 3600,
-            "id_token": "mock-id-token",
         }
+        if id_token is not None:
+            mock_token_data["id_token"] = id_token
         mock_user_info = {
             "sub": "testuser",
             "email": "test@example.com",
@@ -2662,6 +2763,7 @@ class TestOAuth2CallbackTokenStorage:
                     "username": "testuser",
                     "email": "test@example.com",
                     "name": "Test User",
+                    "subject": subject,
                     "groups": [],
                 },
             ),
@@ -2683,10 +2785,11 @@ class TestOAuth2CallbackTokenStorage:
         return captured, session_cookie
 
     def test_login_without_subject_warns(self, caplog):
-        # The mocked map_user_info yields no subject: bearer tokens minted from
-        # this session will be refused at the egress vend, so say so at login.
+        # A GitHub login (no id_token) whose mapping yields no subject still
+        # logs in: bearer tokens minted from this session will be refused at the
+        # egress vend, so say so at login.
         with caplog.at_level("WARNING"):
-            kwargs, _cookie = self._call_oauth2_callback()
+            kwargs, _cookie = self._call_oauth2_callback(subject=None, id_token=None)
         assert kwargs["subject"] is None
         assert any("yielded no subject" in rec.getMessage() for rec in caplog.records)
 
@@ -3456,6 +3559,39 @@ class TestEntraBrowserOAuthCloudEndpoints:
         config = server.load_oauth2_config()
 
         assert config["providers"]["keycloak"]["enabled"] is True
+
+
+class TestOktaBrowserAuthorizationServer:
+    """The browser login uses the Okta authorization server the provider verifies against."""
+
+    @pytest.mark.parametrize("auth_server_id", ["", "default", "aus1example2345"])
+    def test_browser_endpoints_match_the_provider(self, monkeypatch, auth_server_id):
+        """An id_token from the login must come from the issuer the provider accepts.
+
+        With OKTA_AUTH_SERVER_ID set, the provider verifies tokens against that
+        custom authorization server. A login sent to the org server instead
+        returns an id_token whose issuer and signing keys the provider refuses,
+        so every login fails with "ID token verification failed".
+        """
+        from providers.okta import OktaProvider
+
+        from auth_server.server import load_oauth2_config
+
+        monkeypatch.setenv("OKTA_DOMAIN", "dev-123456.okta.com")
+        if auth_server_id:
+            monkeypatch.setenv("OKTA_AUTH_SERVER_ID", auth_server_id)
+        else:
+            monkeypatch.delenv("OKTA_AUTH_SERVER_ID", raising=False)
+
+        browser = load_oauth2_config()["providers"]["okta"]
+        provider = OktaProvider("dev-123456.okta.com", "test-client", "test-secret")
+
+        assert (
+            browser["auth_url"],
+            browser["token_url"],
+            browser["user_info_url"],
+            browser["logout_url"],
+        ) == (provider.auth_url, provider.token_url, provider.userinfo_url, provider.logout_url)
 
 
 class TestOAuth2PkceAndNonce:
@@ -4662,7 +4798,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
             "provider": "github",
         }
 
-        async def _consent_vend(token, server):
+        async def _consent_vend(token, server, **_kwargs):
             return vend
 
         with (
@@ -4708,7 +4844,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
             "provider": "github",
         }
 
-        async def _consent_vend(token, server):
+        async def _consent_vend(token, server, **_kwargs):
             return vend
 
         with (
@@ -4754,7 +4890,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
         """POST a JSON-RPC body to an egress server whose user has no token."""
         import auth_server.server as server_module
 
-        async def _consent_vend(token, server):
+        async def _consent_vend(token, server, **_kwargs):
             return dict(_CONSENT_VEND)
 
         authorize = authorize or AsyncMock(return_value=None)
@@ -4913,7 +5049,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
             "provider": "github",
         }
 
-        async def _consent_vend(token, server):
+        async def _consent_vend(token, server, **_kwargs):
             return vend
 
         with (
@@ -4956,7 +5092,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
             "provider": "github",
         }
 
-        async def _consent_vend(token, server):
+        async def _consent_vend(token, server, **_kwargs):
             return vend
 
         with (
@@ -4990,7 +5126,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
             "provider": "github",
         }
 
-        async def _consent_vend(token, server):
+        async def _consent_vend(token, server, **_kwargs):
             return vend
 
         with (
@@ -5098,7 +5234,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
         )
         vend_paths = []
 
-        async def vend(_token, registered_server):
+        async def vend(_token, registered_server, **_kwargs):
             vend_paths.append(registered_server)
             return {"access_token": "backend-token"}
 
@@ -5123,7 +5259,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
 
         seen: list[str] = []
 
-        async def vend(_token, registered_server):
+        async def vend(_token, registered_server, **_kwargs):
             seen.append(registered_server)
             return {"access_token": "nested-credential"}
 
@@ -5276,7 +5412,7 @@ class TestMcpProxyOboExchange:
     """
 
     @staticmethod
-    async def _obo_directive_vend(token, server):
+    async def _obo_directive_vend(token, server, **_kwargs):
         return {
             "mode": "obo_exchange",
             "obo_target_audience": "api://outlook-mcp-server",
@@ -6060,7 +6196,7 @@ class TestMcpProxyOboExchange:
         assert sent["authorization"] == "Bearer real-exchanged-token"
 
     @staticmethod
-    async def _keycloak_obo_directive_vend(token, server):
+    async def _keycloak_obo_directive_vend(token, server, **_kwargs):
         return {
             "mode": "obo_exchange",
             "obo_target_audience": "finance-mcp-server",
@@ -6251,7 +6387,7 @@ class TestMcpProxyPatMode:
     def test_pat_hit_injects_and_strips_ingress_creds(self):
         import auth_server.server as server_module
 
-        async def _pat_vend(token, server):
+        async def _pat_vend(token, server, **_kwargs):
             return {"access_token": "ghp_the_pat"}
 
         patch_httpx, captured = _capture_upstream_headers()
@@ -6294,7 +6430,7 @@ class TestMcpProxyPatMode:
         client-supplied copy so only the gateway-injected value reaches upstream."""
         import auth_server.server as server_module
 
-        async def _pat_vend(token, server):
+        async def _pat_vend(token, server, **_kwargs):
             return {
                 "access_token": "glpat_the_pat",
                 "pat_header_name": "PRIVATE-TOKEN",
@@ -6339,7 +6475,7 @@ class TestMcpProxyPatMode:
     def test_pat_miss_is_terminal_no_forward(self):
         import auth_server.server as server_module
 
-        async def _pat_miss_vend(token, server):
+        async def _pat_miss_vend(token, server, **_kwargs):
             return {"consent_required": True, "mode": "pat"}
 
         patch_httpx, captured = _capture_upstream_headers()
@@ -6672,37 +6808,6 @@ class TestAuthorizeForwardedMcpBody:
                     ["read:servers"],
                 )
         assert exc_info.value.status_code == 403
-
-
-class TestSessionCookieSecureDefault:
-    """Verify the session cookie Secure flag resolves fail-closed.
-
-    The callback handler computes the Secure flag as
-    ``OAUTH2_CONFIG.get("session", {}).get("secure", True) and is_https``.
-    These tests pin the two properties that matter for security: a missing
-    ``session.secure`` config key defaults to Secure (True), and the flag is
-    never emitted over plain HTTP (a browser would reject a Secure cookie set
-    on an HTTP response).
-    """
-
-    @staticmethod
-    def _resolve_cookie_secure(session_config: dict, is_https: bool) -> bool:
-        """Mirror the auth_server callback's Secure-flag resolution."""
-        cookie_secure_config = session_config.get("secure", True)
-        return cookie_secure_config and is_https
-
-    def test_missing_secure_key_defaults_to_secure_over_https(self) -> None:
-        """A config with no session.secure key must default to Secure=True."""
-        assert self._resolve_cookie_secure({}, is_https=True) is True
-
-    def test_explicit_false_disables_secure_for_dev(self) -> None:
-        """An operator can still opt out for a plain-HTTP dev stack."""
-        assert self._resolve_cookie_secure({"secure": False}, is_https=True) is False
-
-    def test_secure_never_set_over_plain_http(self) -> None:
-        """Even secure-by-default must not emit Secure over plain HTTP."""
-        assert self._resolve_cookie_secure({}, is_https=False) is False
-        assert self._resolve_cookie_secure({"secure": True}, is_https=False) is False
 
 
 class TestForwardHeadersIngressStrip:
@@ -7823,7 +7928,7 @@ class TestMcpProxyEgressUnavailable:
     def test_tools_call_returns_retryable_503(self):
         import auth_server.server as server_module
 
-        async def _boom(token, server):
+        async def _boom(token, server, **_kwargs):
             raise server_module.EgressVendUnavailable("registry returned 503")
 
         with (
@@ -7860,7 +7965,7 @@ class TestMcpProxyEgressUnavailable:
 
         vend_called = {"n": 0}
 
-        async def _boom(token, server):
+        async def _boom(token, server, **_kwargs):
             vend_called["n"] += 1
             raise server_module.EgressVendUnavailable("registry returned 503")
 

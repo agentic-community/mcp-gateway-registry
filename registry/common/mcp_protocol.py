@@ -35,6 +35,42 @@ CACHEABLE_RESULT_METHODS: frozenset[str] = frozenset(
 # such as a pre-consent list that changes the moment the user connects.
 NO_REUSE_TTL_MS: int = 0
 
+# JSON-RPC code the gateway uses when it refuses a request (issue #2006). It
+# sits in the implementation-defined server-error range (-32000 to -32099),
+# below the -32020 to -32099 block the MCP specification reserves.
+GATEWAY_ACCESS_DENIED: int = -32003
+
+# Reasons the gateway gives in error.data.reason when it refuses a request.
+DENIED_NO_SCOPES: str = "no_scopes"
+DENIED_BY_SCOPES: str = "not_permitted"
+DENIED_ORIGIN: str = "origin_refused"
+
+# Longest tool name copied from the request into a refusal message.
+MAX_DENIED_NAME_LENGTH: int = 128
+
+
+def _denied_message(
+    reason: str,
+    method: str,
+    tool_name: str | None,
+    server_path: str,
+) -> str:
+    """Write the one-line refusal message for access_denied_error()."""
+    if reason == DENIED_ORIGIN:
+        return (
+            f"Access denied: {method} on {server_path} was signed in with a browser "
+            "session cookie but did not come from the gateway's own origin. "
+            "MCP clients should send a bearer token instead."
+        )
+    if reason == DENIED_NO_SCOPES:
+        return f"Access denied: your account has no scopes that grant access to {server_path}."
+    if tool_name:
+        return (
+            f'Access denied: {method} for tool "{tool_name}" on {server_path} '
+            "is not permitted for your account."
+        )
+    return f"Access denied: {method} on {server_path} is not permitted for your account."
+
 
 def request_meta(
     payload: object,
@@ -91,3 +127,47 @@ def shape_result(
         shaped.setdefault("cacheScope", "private")
         shaped.setdefault("ttlMs", ttl_ms)
     return shaped
+
+
+def access_denied_error(
+    payload: object,
+    reason: str,
+    method: str,
+    tool_name: str | None,
+    server_path: str,
+) -> dict[str, Any] | None:
+    """Build the JSON-RPC error the gateway returns when it refuses a request.
+
+    The message names the refused method, the tool for ``tools/call``, and the
+    server, and ``error.data`` carries the same facts for a client to read. It
+    never names scopes, groups or token claims.
+
+    Args:
+        payload: The JSON-RPC request the gateway refused.
+        reason: DENIED_NO_SCOPES, DENIED_BY_SCOPES or DENIED_ORIGIN.
+        method: The JSON-RPC method of the request.
+        tool_name: The tool name for tools/call, else None.
+        server_path: The registered server path, such as "/github/".
+
+    Returns:
+        The JSON-RPC error response, or None when the payload is not a single
+        JSON-RPC request with an id (a notification gets no response body).
+    """
+    if not isinstance(payload, dict) or payload.get("jsonrpc") != "2.0" or "id" not in payload:
+        return None
+    request_id = payload.get("id")
+    if not isinstance(request_id, str | int) or isinstance(request_id, bool):
+        request_id = None
+    tool = str(tool_name)[:MAX_DENIED_NAME_LENGTH] if tool_name else None
+    data: dict[str, Any] = {"reason": reason, "method": method, "server": server_path}
+    if tool:
+        data["tool"] = tool
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "error": {
+            "code": GATEWAY_ACCESS_DENIED,
+            "message": _denied_message(reason, method, tool, server_path),
+            "data": data,
+        },
+    }

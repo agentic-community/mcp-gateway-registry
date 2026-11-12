@@ -14,7 +14,8 @@ import {
 import { labelFor } from '../utils/humanize';
 import {
   FormField,
-  fieldClass,
+  CHECKBOX,
+  FIELD,
   ProxyField,
   UpstreamHeadersField,
   upstreamHeaderRowError,
@@ -50,8 +51,7 @@ const PROXY_RESERVED_ATTR_KEYS = new Set([
   'proxy_connect_notes',
 ]);
 
-// Custom-entity forms use a teal focus accent.
-const INPUT_CLASS = fieldClass('teal');
+const INPUT_CLASS = FIELD;
 
 /** Comma/enter chip input — matches the agents allowed_groups widget. */
 function ChipInput({
@@ -80,13 +80,13 @@ function ChipInput({
           <span
             key={chip}
             className="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full
-                       bg-teal-100 dark:bg-teal-900/30 text-teal-700 dark:text-teal-300"
+                       bg-custom-100 dark:bg-custom-900/30 text-custom-700 dark:text-custom-300"
           >
             {chip}
             <button
               type="button"
               onClick={() => onChange(value.filter((c) => c !== chip))}
-              className="hover:text-red-500"
+              className="hover:text-danger-500"
               aria-label={`Remove ${chip}`}
             >
               <XMarkIcon className="h-3 w-3" />
@@ -247,7 +247,7 @@ const CustomEntityForm: React.FC<CustomEntityFormProps> = ({
             type="checkbox"
             checked={!!raw}
             onChange={(e) => setAttr(field.name, e.target.checked)}
-            className="h-4 w-4 rounded border-gray-300 text-teal-600 focus:ring-teal-500"
+            className={CHECKBOX}
           />
         );
         break;
@@ -289,7 +289,7 @@ const CustomEntityForm: React.FC<CustomEntityFormProps> = ({
       default:
         // Unknown datatype (older frontend vs newer descriptor): show read-only.
         widget = (
-          <div className="px-3 py-2 rounded-lg bg-gray-100 dark:bg-gray-900/50 text-sm text-gray-500 dark:text-gray-400">
+          <div className="px-3 py-2 rounded-lg bg-surface-muted text-sm text-fg-subtle">
             {raw === undefined || raw === null ? '—' : String(raw)}
             <span className="ml-2 italic">(unsupported field type — read only)</span>
           </div>
@@ -426,18 +426,18 @@ const CustomEntityForm: React.FC<CustomEntityFormProps> = ({
   return (
     <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
       <div
-        className="bg-white dark:bg-gray-800 rounded-xl shadow-xl max-w-2xl w-full mx-4 max-h-[90vh] flex flex-col"
+        className="bg-surface-overlay border border-line rounded-xl shadow-xl max-w-2xl w-full mx-4 max-h-[90vh] flex flex-col"
         role="dialog"
         aria-modal="true"
         aria-label={isEditMode ? `Edit ${typeLabel}` : `Create ${typeLabel}`}
       >
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-line flex-shrink-0">
+          <h2 className="text-lg font-semibold text-fg">
             {isEditMode ? `Edit ${typeLabel}` : `Create ${typeLabel}`}
           </h2>
           <button
             onClick={onCancel}
-            className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded-lg transition-colors"
+            className="btn-icon"
           >
             <XMarkIcon className="h-5 w-5" />
           </button>
@@ -445,8 +445,8 @@ const CustomEntityForm: React.FC<CustomEntityFormProps> = ({
 
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
           {formError && (
-            <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
-              <p className="text-sm text-red-700 dark:text-red-300">{formError}</p>
+            <div className="p-3 bg-danger-50 dark:bg-danger-900/20 border border-danger-200 dark:border-danger-800 rounded-lg">
+              <p className="text-sm text-danger-700 dark:text-danger-300">{formError}</p>
             </div>
           )}
 
@@ -505,7 +505,6 @@ const CustomEntityForm: React.FC<CustomEntityFormProps> = ({
             proxyTargetUrl={proxyTargetUrl}
             onProxyTargetUrlChange={setProxyTargetUrl}
             targetRequired
-            accent="teal"
             error={fieldErrors.proxy_target_url}
             clientUrl={proxyClientUrl}
           />
@@ -527,27 +526,24 @@ const CustomEntityForm: React.FC<CustomEntityFormProps> = ({
             <UpstreamHeadersField
               headers={customHeaders}
               onChange={setCustomHeaders}
-              accent="teal"
               editMode={!!record}
             />
           )}
 
           {/* --- Per-type attributes (descriptor-driven) --- */}
           {renderableFields.length > 0 && (
-            <div className="space-y-6 pt-2 border-t border-gray-200 dark:border-gray-700">
+            <div className="space-y-6 pt-2 border-t border-line">
               {renderableFields.map(renderField)}
             </div>
           )}
         </div>
 
-        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-gray-200 dark:border-gray-700 flex-shrink-0">
+        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-line flex-shrink-0">
           <button
             type="button"
             onClick={onCancel}
             disabled={saving}
-            className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300
-                       bg-gray-100 dark:bg-gray-700 rounded-lg
-                       hover:bg-gray-200 dark:hover:bg-gray-800 transition-colors disabled:opacity-50"
+            className="btn-secondary"
           >
             Cancel
           </button>
@@ -555,8 +551,7 @@ const CustomEntityForm: React.FC<CustomEntityFormProps> = ({
             type="button"
             onClick={handleSubmit}
             disabled={saving}
-            className="px-4 py-2 text-sm font-medium text-white bg-teal-600 rounded-lg
-                       hover:bg-teal-700 transition-colors disabled:opacity-50 flex items-center gap-2"
+            className="btn-base bg-custom-600 text-white shadow-sm hover:bg-custom-700"
           >
             {saving && (
               <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">

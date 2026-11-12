@@ -295,6 +295,19 @@ export interface SessionConfig {
   /** Domain for session cookies */
   cookieDomain: string;
   /**
+   * Name the session cookie __Host-<name> (Secure, Path=/, no Domain). Requires
+   * cookieSecure and an empty cookieDomain; cdk synth fails otherwise, as both
+   * services would refuse to start.
+   */
+  cookieHostPrefix: boolean;
+  /**
+   * Browser session lifetime in seconds: the auth server's session store TTL,
+   * the session cookie's Max-Age, and the registry's cookie signature max age.
+   * Rendered into both services' environments so the two always match. Must be
+   * a positive integer; both services refuse to start otherwise.
+   */
+  maxAgeSeconds: number;
+  /**
    * Comma-separated exact-match allowlist of OAuth login/logout redirect URIs
    * (open-redirect hardening). When set, an absolute redirect_uri is accepted
    * only if it exactly matches an entry; relative paths are always allowed.
@@ -589,6 +602,8 @@ export const DEFAULT_REGISTRY_CONFIG: RegistryConfig = {
   session: {
     cookieSecure: true,
     cookieDomain: '',
+    cookieHostPrefix: false,
+    maxAgeSeconds: 28800,
     oauth2AllowedRedirectUris: '',
     oauthStoreTokensInSession: false,
   },
@@ -732,6 +747,36 @@ export function loadRegistryConfig(configPath: string): RegistryConfig {
       throw new Error(
         `Required secrets missing or too short (min 8 chars): ${missing.join(', ')}. ` +
         'Set them as environment variables before running cdk synth/deploy.',
+      );
+    }
+  }
+
+  // Both services refuse to start on a non-positive session lifetime; fail
+  // at synth instead of as crash-looping tasks.
+  const sessionMaxAge = config.session.maxAgeSeconds;
+  if (!Number.isInteger(sessionMaxAge) || sessionMaxAge <= 0) {
+    throw new Error(
+      `session.maxAgeSeconds must be a positive integer number of seconds (for example 28800 for 8 hours), got ${JSON.stringify(sessionMaxAge)}. ` +
+      'The registry and auth-server refuse to start on 0, a negative, or a non-integer value.',
+    );
+  }
+
+  // Browsers drop a __Host- cookie that is not Secure or has a Domain, and both
+  // services refuse to start on that pair; fail at synth, as Terraform's
+  // preconditions do at plan.
+  if (config.session.cookieHostPrefix) {
+    const problems: string[] = [];
+    if (!config.session.cookieSecure) {
+      problems.push('session.cookieSecure must be true');
+    }
+    if ((config.session.cookieDomain ?? '').trim() !== '') {
+      problems.push('session.cookieDomain must be empty');
+    }
+    if (problems.length > 0) {
+      throw new Error(
+        `session.cookieHostPrefix=true needs a Secure session cookie with no Domain, but ${problems.join(' and ')}. ` +
+        'Browsers drop a __Host- cookie otherwise, and the registry and auth-server refuse to start. ' +
+        'Fix those values in config.yaml, or set session.cookieHostPrefix=false.',
       );
     }
   }

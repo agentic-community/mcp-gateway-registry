@@ -7,11 +7,15 @@ account-swap).
 """
 
 import pytest
+from hypothesis import assume, given, settings
+from hypothesis import strategies as st
 
 from registry.egress_auth import oauth_engine, service, state_codec
+from registry.egress_auth.browser_binding import new_browser_binding
 from registry.egress_auth.schemas import StoredToken
 from registry.egress_auth.service import (
     EgressAuthService,
+    VaultPrincipal,
     canonical_auth_method,
     is_per_user_auth_method,
 )
@@ -59,6 +63,10 @@ BOUND_DD = "https://mcp.example.net"
 # The server records consent snapshots its approved destinations from.
 SERVER = {"proxy_pass_url": BOUND}
 SERVER_DD = {"proxy_pass_url": BOUND_DD}
+
+# The consent cookie of the one browser these orchestration tests run in: every
+# consent is started and completed there.
+_BROWSER = new_browser_binding()
 
 
 @pytest.fixture(autouse=True)
@@ -114,6 +122,34 @@ def _stub_exchange(monkeypatch, **token_over):
     monkeypatch.setattr(oauth_engine, "_post_token", fake_post)
 
 
+async def _run_callback(
+    svc: EgressAuthService,
+    code: str,
+    state_blob: str,
+    egress_oauth: dict,
+    current_user_id: str,
+    current_auth_method: str,
+    *,
+    browser_secret: str | None,
+    response_issuer: str | None = None,
+):
+    """Complete a consent callback the way the route does.
+
+    The route decodes the state once, consumes it with ``begin_callback``, then
+    completes it with ``handle_callback`` for the browser's live principal.
+    """
+    state = state_codec.decode_state(state_blob)
+    await svc.begin_callback(state)
+    return await svc.handle_callback(
+        code,
+        state,
+        egress_oauth,
+        VaultPrincipal(current_auth_method, current_user_id),
+        browser_secret=browser_secret,
+        response_issuer=response_issuer,
+    )
+
+
 @pytest.mark.unit
 class TestCanonicalAuthMethod:
     def test_cookie_path_maps_to_oauth2(self):
@@ -140,6 +176,36 @@ class TestCanonicalAuthMethod:
         # is_per_user_auth_method() still rejects them at vend time.
         assert canonical_auth_method({"method": method}) == method
 
+    def test_self_signed_folds_its_own_auth_method_claim(self):
+        # A self-signed JWT (UI 'generate token', or the egress OAuth-facade
+        # /token mint) reports method='self_signed' (the FORMAT) and carries the
+        # principal's method as its own verified claim. The vault keys on the
+        # principal method, so a user who consents through a cookie session
+        # (bucket 'oauth2') vends with a minted token from the same bucket.
+        vr = {"method": "self_signed", "data": {"auth_method": "oauth2"}}
+        assert canonical_auth_method(vr) == "oauth2"
+
+    def test_self_signed_token_minted_for_a_static_key_stays_non_per_user(self):
+        # /internal/tokens also mints for network-trusted callers (a
+        # REGISTRY_API_TOKEN key) and stamps that method; folding the format
+        # into oauth2 would hand the static key a per-user bucket.
+        vr = {"method": "self_signed", "data": {"auth_method": "network-trusted"}}
+        assert canonical_auth_method(vr) == "network-trusted"
+
+    @pytest.mark.parametrize(
+        "data",
+        [None, {}, {"auth_method": None}, {"auth_method": 7}, {"auth_method": "self_signed"}],
+        ids=repr,
+    )
+    def test_self_signed_without_a_usable_claim_owns_no_bucket(self, data):
+        # Every mint stamps the claim, so a token without a usable one names no
+        # principal method and must not fall into the per-user bucket.
+        assert canonical_auth_method({"method": "self_signed", "data": data}) == ""
+
+    @pytest.mark.parametrize("vr", [{}, {"method": None}, {"method": ""}], ids=repr)
+    def test_missing_method_is_empty(self, vr):
+        assert canonical_auth_method(vr) == ""
+
     @pytest.mark.parametrize(
         "method,expected",
         [
@@ -156,6 +222,75 @@ class TestCanonicalAuthMethod:
         assert is_per_user_auth_method(method) is expected
 
 
+_CANONICAL_METHOD_SAMPLES = st.one_of(
+    st.sampled_from(
+        [
+            "oauth2",
+            "session_cookie",
+            "self_signed",
+            "jwt",
+            "boto3",
+            "keycloak",
+            "entra",
+            "cognito",
+            "okta",
+            "auth0",
+            "pingfederate",
+            "network-trusted",
+            "federation-static",
+            "",
+        ]
+    ),
+    st.text(max_size=16),
+)
+_CLAIM_SHAPES = st.one_of(
+    st.none(),
+    _CANONICAL_METHOD_SAMPLES,
+    st.integers(),
+    st.booleans(),
+    st.lists(st.text(max_size=4), max_size=2),
+)
+_PURE_SETTINGS = settings(
+    max_examples=200, derandomize=True, database=None, report_multiple_bugs=False
+)
+
+
+@pytest.mark.unit
+@_PURE_SETTINGS
+@given(claim=_CLAIM_SHAPES)
+def test_self_signed_canonicalizes_as_its_claim_would(claim):
+    """A self-signed result maps to what its ``auth_method`` claim maps to on its own.
+
+    For every claim shape, a ``self_signed`` result whose claim is a string
+    other than ``self_signed`` canonicalizes like a result reporting that
+    method directly; any other claim (absent, non-string, ``self_signed``)
+    yields ``""``, which no per-user check accepts.
+    """
+    result = canonical_auth_method({"method": "self_signed", "data": {"auth_method": claim}})
+
+    if isinstance(claim, str) and claim != "self_signed":
+        assert result == canonical_auth_method({"method": claim})
+    else:
+        assert result == ""
+
+
+@pytest.mark.unit
+@_PURE_SETTINGS
+@given(method=_CANONICAL_METHOD_SAMPLES, claim=_CLAIM_SHAPES)
+def test_only_self_signed_reads_the_auth_method_claim(method, claim):
+    """Outside ``self_signed``, the ``auth_method`` claim never changes the result.
+
+    For every other method and claim shape, the result equals the result with
+    no ``data`` at all: per-user IdP methods fold into ``oauth2`` and the rest
+    pass through unchanged.
+    """
+    assume(method != "self_signed")
+    with_claim = canonical_auth_method({"method": method, "data": {"auth_method": claim}})
+
+    assert with_claim == canonical_auth_method({"method": method})
+    assert with_claim in ("oauth2", method)
+
+
 @pytest.mark.unit
 class TestConsentAndCallback:
     async def test_build_consent_url(self, svc, egress_oauth):
@@ -167,6 +302,7 @@ class TestConsentAndCallback:
             server_path="/github-mcp",
             egress_oauth=egress_oauth,
             server=SERVER,
+            browser_binding=_BROWSER.digest,
         )
         assert url.startswith("https://github.com/login/oauth/authorize?")
         assert "code_challenge=" in url and "state=" in url
@@ -181,15 +317,18 @@ class TestConsentAndCallback:
             "/github-mcp",
             egress_oauth,
             server=SERVER,
+            browser_binding=_BROWSER.digest,
         )
         state_blob = _extract_state(url)
 
-        conn = await svc.handle_callback(
+        conn = await _run_callback(
+            svc,
             code="the-code",
             state_blob=state_blob,
             egress_oauth=egress_oauth,
             current_user_id="alice",
             current_auth_method="oauth2",
+            browser_secret=_BROWSER.secret,
         )
         assert conn.provider == "github" and conn.server_path == "/github-mcp"
 
@@ -212,10 +351,25 @@ class TestConsentAndCallback:
         # bound to the returned credential.
         _stub_exchange(monkeypatch)
         url = await svc.build_consent_url(
-            "oauth2", "alice", "Iv1.testclient", "s", "/github-mcp", egress_oauth, server=SERVER
+            "oauth2",
+            "alice",
+            "Iv1.testclient",
+            "s",
+            "/github-mcp",
+            egress_oauth,
+            server=SERVER,
+            browser_binding=_BROWSER.digest,
         )
         added_meanwhile = "https://added-later.example/mcp"
-        await svc.handle_callback("c", _extract_state(url), egress_oauth, "alice", "oauth2")
+        await _run_callback(
+            svc,
+            "c",
+            _extract_state(url),
+            egress_oauth,
+            "alice",
+            "oauth2",
+            browser_secret=_BROWSER.secret,
+        )
 
         stored = await svc._store.get_token(
             "oauth2", "alice", "github", "/github-mcp", purpose=keys.EGRESS_PURPOSE
@@ -240,16 +394,38 @@ class TestConsentAndCallback:
         # only go to the token endpoint that was configured when consent began.
         _stub_exchange(monkeypatch)
         url = await svc.build_consent_url(
-            "oauth2", "alice", "", "s", "/dd", egress_oauth_public, server=SERVER_DD
+            "oauth2",
+            "alice",
+            "",
+            "s",
+            "/dd",
+            egress_oauth_public,
+            server=SERVER_DD,
+            browser_binding=_BROWSER.digest,
         )
         repointed = {**egress_oauth_public, "custom_token_url": "https://attacker.example/token"}
         with pytest.raises(service.EgressAuthError):
-            await svc.handle_callback("c", _extract_state(url), repointed, "alice", "oauth2")
+            await _run_callback(
+                svc,
+                "c",
+                _extract_state(url),
+                repointed,
+                "alice",
+                "oauth2",
+                browser_secret=_BROWSER.secret,
+            )
 
     async def _consent_with_issuer(self, svc, egress_oauth, expected_issuer):
         cfg = {**egress_oauth, "expected_issuer": expected_issuer}
         url = await svc.build_consent_url(
-            "oauth2", "alice", "Iv1.testclient", "s", "/github-mcp", cfg, server=SERVER
+            "oauth2",
+            "alice",
+            "Iv1.testclient",
+            "s",
+            "/github-mcp",
+            cfg,
+            server=SERVER,
+            browser_binding=_BROWSER.digest,
         )
         return cfg, _extract_state(url)
 
@@ -257,8 +433,15 @@ class TestConsentAndCallback:
         _stub_exchange(monkeypatch)
         cfg, state = await self._consent_with_issuer(svc, egress_oauth, "https://github.com")
 
-        conn = await svc.handle_callback(
-            "c", state, cfg, "alice", "oauth2", response_issuer="https://github.com"
+        conn = await _run_callback(
+            svc,
+            "c",
+            state,
+            cfg,
+            "alice",
+            "oauth2",
+            browser_secret=_BROWSER.secret,
+            response_issuer="https://github.com",
         )
 
         assert conn.provider == "github"
@@ -275,8 +458,15 @@ class TestConsentAndCallback:
         cfg, state = await self._consent_with_issuer(svc, egress_oauth, "https://github.com")
 
         with pytest.raises(service.EgressAuthError, match="issuer mismatch"):
-            await svc.handle_callback(
-                "c", state, cfg, "alice", "oauth2", response_issuer="https://attacker.example"
+            await _run_callback(
+                svc,
+                "c",
+                state,
+                cfg,
+                "alice",
+                "oauth2",
+                browser_secret=_BROWSER.secret,
+                response_issuer="https://attacker.example",
             )
 
         assert exchanged == []
@@ -295,7 +485,16 @@ class TestConsentAndCallback:
         _stub_exchange(monkeypatch)
         cfg, state = await self._consent_with_issuer(svc, egress_oauth, expected)
 
-        conn = await svc.handle_callback("c", state, cfg, "alice", "oauth2", response_issuer=reply)
+        conn = await _run_callback(
+            svc,
+            "c",
+            state,
+            cfg,
+            "alice",
+            "oauth2",
+            browser_secret=_BROWSER.secret,
+            response_issuer=reply,
+        )
 
         assert conn.provider == "github"
 
@@ -305,8 +504,15 @@ class TestConsentAndCallback:
         _, state = await self._consent_with_issuer(svc, egress_oauth, "https://github.com")
         changed = {**egress_oauth, "expected_issuer": "https://attacker.example"}
 
-        conn = await svc.handle_callback(
-            "c", state, changed, "alice", "oauth2", response_issuer="https://github.com"
+        conn = await _run_callback(
+            svc,
+            "c",
+            state,
+            changed,
+            "alice",
+            "oauth2",
+            browser_secret=_BROWSER.secret,
+            response_issuer="https://github.com",
         )
 
         assert conn.provider == "github"
@@ -334,13 +540,16 @@ class TestConsentAndCallback:
                 egress_oauth,
                 purpose=purpose,
                 server=SERVER,
+                browser_binding=_BROWSER.digest,
             )
-            conn = await svc.handle_callback(
+            conn = await _run_callback(
+                svc,
                 "c",
                 _extract_state(url),
                 egress_oauth,
                 "alice",
                 "oauth2",
+                browser_secret=_BROWSER.secret,
             )
             assert conn.server_path == "/github-mcp"
 
@@ -378,13 +587,16 @@ class TestConsentAndCallback:
             "/github-mcp",
             egress_oauth,
             server=SERVER,
+            browser_binding=_BROWSER.digest,
         )
-        await svc.handle_callback(
+        await _run_callback(
+            svc,
             "c1",
             _extract_state(url),
             egress_oauth,
             "alice",
             "oauth2",
+            browser_secret=_BROWSER.secret,
         )
 
         rotated = {**egress_oauth, "client_id": "Iv1.rotatedclient"}
@@ -396,13 +608,16 @@ class TestConsentAndCallback:
             "/github-mcp",
             rotated,
             server=SERVER,
+            browser_binding=_BROWSER.digest,
         )
-        conn = await svc.handle_callback(
+        conn = await _run_callback(
+            svc,
             "c2",
             _extract_state(url2),
             rotated,
             "alice",
             "oauth2",
+            browser_secret=_BROWSER.secret,
         )
         assert conn.server_path == "/github-mcp"
         # And the rotated credential is what a subsequent vend returns.
@@ -432,13 +647,16 @@ class TestConsentAndCallback:
                 "/github-mcp",
                 egress_oauth,
                 server=SERVER,
+                browser_binding=_BROWSER.digest,
             )
-            conn = await svc.handle_callback(
+            conn = await _run_callback(
+                svc,
                 "c",
                 _extract_state(url),
                 egress_oauth,
                 "alice",
                 "oauth2",
+                browser_secret=_BROWSER.secret,
             )
             assert conn.server_path == "/github-mcp"
 
@@ -467,13 +685,16 @@ class TestConsentAndCallback:
             egress_oauth,
             purpose=written_as,
             server=SERVER,
+            browser_binding=_BROWSER.digest,
         )
-        await svc.handle_callback(
+        await _run_callback(
+            svc,
             "c",
             _extract_state(url),
             egress_oauth,
             "alice",
             "oauth2",
+            browser_secret=_BROWSER.secret,
         )
 
         async def _vend(purpose):
@@ -519,13 +740,16 @@ class TestConsentAndCallback:
             egress_oauth,
             purpose=purpose,
             server=SERVER,
+            browser_binding=_BROWSER.digest,
         )
-        await svc.handle_callback(
+        await _run_callback(
+            svc,
             "c",
             _extract_state(url),
             egress_oauth,
             "alice",
             "oauth2",
+            browser_secret=_BROWSER.secret,
         )
 
         # Force the stored entry near expiry so the next vend actually refreshes.
@@ -571,22 +795,27 @@ class TestConsentAndCallback:
             "/github-mcp",
             egress_oauth,
             server=SERVER,
+            browser_binding=_BROWSER.digest,
         )
         state_blob = _extract_state(url)
-        await svc.handle_callback(
+        await _run_callback(
+            svc,
             "c",
             state_blob,
             egress_oauth,
             "alice",
             "oauth2",
+            browser_secret=_BROWSER.secret,
         )
         with pytest.raises(service.EgressAuthError, match="replay"):
-            await svc.handle_callback(
+            await _run_callback(
+                svc,
                 "c",
                 state_blob,
                 egress_oauth,
                 "alice",
                 "oauth2",
+                browser_secret=_BROWSER.secret,
             )
 
     async def test_account_swap_rejected(self, svc, egress_oauth, monkeypatch):
@@ -599,16 +828,19 @@ class TestConsentAndCallback:
             "/github-mcp",
             egress_oauth,
             server=SERVER,
+            browser_binding=_BROWSER.digest,
         )
         state_blob = _extract_state(url)
         # different user finishes the callback
         with pytest.raises(service.EgressAuthError, match="user mismatch"):
-            await svc.handle_callback(
+            await _run_callback(
+                svc,
                 "c",
                 state_blob,
                 egress_oauth,
                 "mallory",
                 "oauth2",
+                browser_secret=_BROWSER.secret,
             )
 
     async def test_same_user_new_session_accepted(self, svc, egress_oauth, monkeypatch):
@@ -623,26 +855,19 @@ class TestConsentAndCallback:
             "/github-mcp",
             egress_oauth,
             server=SERVER,
+            browser_binding=_BROWSER.digest,
         )
         state_blob = _extract_state(url)
-        conn = await svc.handle_callback(
+        conn = await _run_callback(
+            svc,
             "c",
             state_blob,
             egress_oauth,
             "alice",
             "oauth2",
+            browser_secret=_BROWSER.secret,
         )
         assert conn.provider == "github"
-
-    async def test_tampered_state_rejected(self, svc, egress_oauth):
-        with pytest.raises(service.EgressAuthError, match="invalid state"):
-            await svc.handle_callback(
-                "c",
-                "garbage-state",
-                egress_oauth,
-                "alice",
-                "oauth2",
-            )
 
     async def test_confidential_provider_still_requires_secret(
         self, svc, egress_oauth, monkeypatch
@@ -666,16 +891,19 @@ class TestConsentAndCallback:
             "/github-mcp",
             egress_oauth,
             server=SERVER,
+            browser_binding=_BROWSER.digest,
         )
         secretless = dict(EGRESS_OAUTH)
         secretless["client_secret_encrypted"] = None
         with pytest.raises(service.EgressAuthError, match="client_secret_encrypted missing"):
-            await svc.handle_callback(
+            await _run_callback(
+                svc,
                 "c",
                 _extract_state(url),
                 secretless,
                 "alice",
                 "oauth2",
+                browser_secret=_BROWSER.secret,
             )
 
     async def test_provider_rejected_exchange_is_egress_error_and_stores_nothing(
@@ -693,6 +921,7 @@ class TestConsentAndCallback:
             "/github-mcp",
             egress_oauth,
             server=SERVER,
+            browser_binding=_BROWSER.digest,
         )
 
         async def rejecting_post(cfg, data, headers):
@@ -702,7 +931,15 @@ class TestConsentAndCallback:
 
         monkeypatch.setattr(oauth_engine, "_post_token", rejecting_post)
         with pytest.raises(service.EgressAuthError, match="code exchange failed"):
-            await svc.handle_callback("c", _extract_state(url), egress_oauth, "alice", "oauth2")
+            await _run_callback(
+                svc,
+                "c",
+                _extract_state(url),
+                egress_oauth,
+                "alice",
+                "oauth2",
+                browser_secret=_BROWSER.secret,
+            )
 
         stored = await svc._store.get_token(
             "oauth2", "alice", "github", "/github-mcp", purpose=keys.EGRESS_PURPOSE
@@ -739,13 +976,16 @@ class TestPublicClientFlow:
             "/datadog-user",
             egress_oauth_public,
             server=SERVER_DD,
+            browser_binding=_BROWSER.digest,
         )
-        conn = await svc.handle_callback(
+        conn = await _run_callback(
+            svc,
             "the-code",
             _extract_state(url),
             egress_oauth_public,
             "alice",
             "oauth2",
+            browser_secret=_BROWSER.secret,
         )
         assert conn.provider == "custom" and conn.server_path == "/datadog-user"
         assert "client_secret" not in captured
@@ -806,7 +1046,14 @@ class TestPublicClientFlow:
         eo = {"provider": "atlassian", "scopes": ["read:me"]}  # no client_id yet
         with pytest.raises(service.EgressClientNotRegistered, match="not registered yet"):
             await svc.build_consent_url(
-                "oauth2", "alice", "aud", "sess", "/atlassian", eo, server=SERVER
+                "oauth2",
+                "alice",
+                "aud",
+                "sess",
+                "/atlassian",
+                eo,
+                server=SERVER,
+                browser_binding=_BROWSER.digest,
             )
 
 
@@ -956,13 +1203,16 @@ class TestVendRefreshDisconnect:
             "/github-mcp",
             egress_oauth,
             server=SERVER,
+            browser_binding=_BROWSER.digest,
         )
-        await svc.handle_callback(
+        await _run_callback(
+            svc,
             "c",
             _extract_state(url),
             egress_oauth,
             "alice",
             "oauth2",
+            browser_secret=_BROWSER.secret,
         )
 
         conns = await svc.list_connections("oauth2", "alice")
@@ -999,13 +1249,16 @@ class TestVendRefreshDisconnect:
                 egress_oauth,
                 purpose=p,
                 server=SERVER,
+                browser_binding=_BROWSER.digest,
             )
-            await svc.handle_callback(
+            await _run_callback(
+                svc,
                 "c",
                 _extract_state(url),
                 egress_oauth,
                 "alice",
                 "oauth2",
+                browser_secret=_BROWSER.secret,
             )
 
         await svc.disconnect("oauth2", "alice", "github", "/github-mcp", purpose=purpose)
@@ -1046,6 +1299,7 @@ class TestConsentRefusesBeforeRedirecting:
                 server_path="/github-mcp",
                 egress_oauth=cfg,
                 server=SERVER,
+                browser_binding=_BROWSER.digest,
             )
 
     async def test_undecryptable_secret_refuses(self, svc, monkeypatch):
@@ -1065,6 +1319,7 @@ class TestConsentRefusesBeforeRedirecting:
                 server_path="/github-mcp",
                 egress_oauth=cfg,
                 server=SERVER,
+                browser_binding=_BROWSER.digest,
             )
 
     async def test_public_client_still_builds_a_url(self, svc, egress_oauth_public):
@@ -1081,6 +1336,7 @@ class TestConsentRefusesBeforeRedirecting:
             server_path="/datadog",
             egress_oauth=egress_oauth_public,
             server=SERVER_DD,
+            browser_binding=_BROWSER.digest,
         )
         assert url.startswith("https://app.datadoghq.com/oauth2/v1/authorize?")
         assert "state=" in url
@@ -1094,6 +1350,7 @@ class TestConsentRefusesBeforeRedirecting:
             server_path="/github-mcp",
             egress_oauth=egress_oauth,
             server=SERVER,
+            browser_binding=_BROWSER.digest,
         )
         assert url.startswith("https://github.com/login/oauth/authorize?")
 

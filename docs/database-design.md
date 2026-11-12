@@ -445,6 +445,8 @@ for the end-to-end browser login flow that uses this collection.
   "groups": ["504c300b-d7a5-4731-b5ea-e4999a1e2496"],
   "provider": "entra",
   "auth_method": "oauth2",
+  "egress_user": "00000000-0000-0000-0000-00000000sub1",
+  "subject": "00000000-0000-0000-0000-00000000sub1",
   "created_at": "ISODate('2026-05-17T15:29:27.090Z')",
   "expires_at": "ISODate('2026-05-17T23:29:27.090Z')",
   "id_token_encrypted": "BinData(0, '<12-byte nonce || AES-GCM ciphertext>')"
@@ -459,6 +461,8 @@ for the end-to-end browser login flow that uses this collection.
   group names, Keycloak group paths, etc.). May be empty.
 - `provider` — One of `cognito`, `keycloak`, `okta`, `auth0`, `entra`.
   Used at logout time to redirect back to the right IdP.
+- `subject`: Optional. The account id the IdP returned at login (the OIDC `sub`, or the field the provider's `subject_claim` names). Absent when a non-OIDC login mapped none.
+- `egress_user`: The per-user egress vault key the auth-server computed at login: `subject`, or `name:<provider>:<username>` for a login without one. Every reader of a session's vault key reads this field through `session_vault_user_id`; a record without it (stored by an earlier release) has no vault key until the user signs in again.
 - `id_token_encrypted` — Optional. The OIDC `id_token` encrypted at rest
   with AES-GCM. The 12-byte random nonce is prepended to the ciphertext.
   Encryption key is derived from `SECRET_KEY` via HKDF-SHA256 with the

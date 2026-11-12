@@ -335,8 +335,16 @@ module "ecs_service_auth" {
           value = tostring(var.session_cookie_secure)
         },
         {
+          name  = "SESSION_MAX_AGE_SECONDS"
+          value = tostring(var.session_max_age_seconds)
+        },
+        {
           name  = "SESSION_COOKIE_DOMAIN"
           value = var.session_cookie_domain
+        },
+        {
+          name  = "SESSION_COOKIE_HOST_PREFIX"
+          value = tostring(var.session_cookie_host_prefix)
         },
         {
           # Exact-match allowlist of OAuth login/logout redirect URIs
@@ -661,6 +669,13 @@ module "ecs_service_auth" {
         {
           name  = "EGRESS_HTTP_POOL_CONNECT_RETRIES"
           value = tostring(var.egress_http_pool_connect_retries)
+        },
+        # SSRF guard for the generic proxy (PROXY_PROFILE): an operator CIDR may
+        # admit a reserved IPv4 address (e.g. Istio ServiceEntry VIPs in
+        # 240.240.0.0/16). Same value as the registry and mcpgw. #2018
+        {
+          name  = "SSRF_ALLOWED_CIDRS"
+          value = var.ssrf_allowed_cidrs
         },
         # Forward-proxy egress for the SSRF-guarded clients (issue #1832). OFF by
         # default. HTTP_PROXY / HTTPS_PROXY / NO_PROXY are passed through the
@@ -1347,8 +1362,16 @@ module "ecs_service_registry" {
           value = tostring(var.session_cookie_secure)
         },
         {
+          name  = "SESSION_MAX_AGE_SECONDS"
+          value = tostring(var.session_max_age_seconds)
+        },
+        {
           name  = "SESSION_COOKIE_DOMAIN"
           value = var.session_cookie_domain
+        },
+        {
+          name  = "SESSION_COOKIE_HOST_PREFIX"
+          value = tostring(var.session_cookie_host_prefix)
         },
         {
           name  = "TRUSTED_PROXY_HOPS"
@@ -2148,6 +2171,15 @@ module "ecs_service_registry" {
             value = var.registry_rum_allowed_hosts
           }
         ] : [],
+        # Runtime UI branding archive (base64 .tar.gz), extracted into
+        # /app/branding by the registry entrypoint. Only emitted when set, so
+        # a default deployment keeps the stock branding.
+        var.ui_branding_archive_b64 != "" ? [
+          {
+            name  = "UI_BRANDING_ARCHIVE_B64"
+            value = var.ui_branding_archive_b64
+          }
+        ] : [],
         # Issue #1819: extra embeddings request headers. Empty list when the
         # map is unset, so a default deployment gets no new variables.
         local.embeddings_extra_header_env,
@@ -2743,6 +2775,12 @@ module "ecs_service_mcpgw" {
         {
           name  = "EGRESS_HTTP_POOL_CONNECT_RETRIES"
           value = tostring(var.egress_http_pool_connect_retries)
+        },
+        # SSRF guard: an operator CIDR may admit a reserved address (e.g. Istio
+        # ServiceEntry VIPs in 240.240.0.0/16). Same value as the registry. #2018
+        {
+          name  = "SSRF_ALLOWED_CIDRS"
+          value = var.ssrf_allowed_cidrs
         }
         ],
         # Extra environment variables from user (Issue #1000)

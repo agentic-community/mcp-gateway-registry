@@ -58,7 +58,7 @@ const TagList: React.FC<TagListProps> = ({
       {overflow > 0 && (
         <span
           className={clsx(
-            'px-2 py-1 text-xs font-medium bg-gray-50 dark:bg-gray-800 text-gray-600 dark:text-gray-300',
+            'px-2 py-1 text-xs font-medium bg-gray-500/10 text-fg-muted',
             rounded,
           )}
         >

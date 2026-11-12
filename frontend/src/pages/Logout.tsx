@@ -22,10 +22,10 @@ const Logout: React.FC = () => {
   }, [navigate]);
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
+    <div className="min-h-screen bg-canvas flex flex-col justify-center py-12 sm:px-6 lg:px-8">
       <div className="sm:mx-auto sm:w-full sm:max-w-md">
         <div className="flex justify-center mb-6">
-          <CheckCircleIcon className="h-16 w-16 text-green-500" />
+          <CheckCircleIcon className="h-16 w-16 text-success-500 dark:text-success-400" />
         </div>
         <h2 className="text-center text-3xl font-bold text-gray-900 dark:text-white">
           Successfully Logged Out
@@ -47,7 +47,7 @@ const Logout: React.FC = () => {
                 variant="primary"
                 fullWidth
                 onClick={() => navigate('/login')}
-                className="py-3 shadow-sm hover:shadow-md focus:ring-2 focus:ring-offset-2 focus:ring-purple-500"
+                className="py-3"
               >
                 Return to Login
               </Button>

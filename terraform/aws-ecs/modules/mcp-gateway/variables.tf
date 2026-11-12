@@ -41,19 +41,19 @@ variable "task_execution_role_arn" {
 variable "registry_image_uri" {
   description = "Container image URI for registry service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/registry:1.36.0"
+  default     = "public.ecr.aws/p3v1o3c6/registry:1.37.0"
 }
 
 variable "auth_server_image_uri" {
   description = "Container image URI for auth server service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/auth-server:1.36.0"
+  default     = "public.ecr.aws/p3v1o3c6/auth-server:1.37.0"
 }
 
 variable "mcpgw_image_uri" {
   description = "Container image URI for mcpgw service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/mcpgw:1.36.0"
+  default     = "public.ecr.aws/p3v1o3c6/mcpgw:1.37.0"
 }
 
 variable "enable_demo_servers" {
@@ -494,6 +494,23 @@ variable "session_cookie_domain" {
   default     = ""
 }
 
+variable "session_cookie_host_prefix" {
+  description = "Name the session cookie __Host-<name> (Secure, Path=/, no Domain). Requires session_cookie_secure = true and an empty session_cookie_domain."
+  type        = bool
+  default     = false
+}
+
+variable "session_max_age_seconds" {
+  description = "Browser session lifetime in seconds: the auth server's session store TTL, the session cookie's Max-Age, and the registry's cookie signature max age. Rendered into both the registry and auth-server task definitions so the two always match."
+  type        = number
+  default     = 28800
+
+  validation {
+    condition     = var.session_max_age_seconds > 0 && floor(var.session_max_age_seconds) == var.session_max_age_seconds
+    error_message = "session_max_age_seconds must be a positive whole number of seconds (for example 28800 for 8 hours); the registry and auth-server refuse to start on 0 or a negative value."
+  }
+}
+
 variable "oauth2_allowed_redirect_uris" {
   description = "Comma-separated exact-match allowlist of OAuth login/logout redirect URIs (open-redirect hardening). When set, an absolute redirect_uri is accepted only if it exactly matches an entry; relative paths are always allowed. Empty falls back to the weaker cookie-domain heuristic."
   type        = string
@@ -732,6 +749,15 @@ variable "registry_rum_snippet_secret_arn" {
 
 variable "registry_rum_allowed_hosts" {
   description = "Optional comma-separated allowlist of hosts the RUM snippet may reference (script src and beacon). When set, a snippet referencing any host not on the list is rejected at startup (fail closed). Empty disables the check."
+  type        = string
+  default     = ""
+}
+
+# Base64 .tar.gz of the UI branding folder, rendered as UI_BRANDING_ARCHIVE_B64
+# on the registry container only. Validated (format and 48 KiB cap) at the root
+# module; see terraform/aws-ecs/variables.tf.
+variable "ui_branding_archive_b64" {
+  description = "Optional base64-encoded .tar.gz of the UI branding folder, extracted into /app/branding by the registry at startup. Empty disables it."
   type        = string
   default     = ""
 }
@@ -1712,7 +1738,7 @@ variable "ssrf_allowed_hosts" {
 }
 
 variable "ssrf_allowed_cidrs" {
-  description = "Comma-separated CIDR ranges the SSRF guard accepts for MCP-server / A2A-agent upstreams even though they are private (e.g. an internal service subnet). The cloud metadata address 169.254.169.254 is never permitted."
+  description = "Comma-separated CIDR ranges the SSRF guard accepts for MCP-server / A2A-agent upstreams even though they are private (e.g. an internal service subnet). A listed range also admits the reserved IPv4 addresses it contains (e.g. Istio ServiceEntry VIPs in 240.240.0.0/16), in the registry, the auth-server generic proxy and mcpgw. Cloud metadata/credential, link-local, unspecified and multicast addresses are never permitted."
   type        = string
   default     = ""
 }
@@ -1971,9 +1997,10 @@ variable "registry_extra_env" {
         "GATEWAY_GENERIC_CLIENT_MAX_BODY_SIZE",
         "GATEWAY_PROXY_PREFIX",
         "GATEWAY_GENERIC_STREAM_READ_TIMEOUT_SECONDS",
+        "SSRF_ALLOWED_CIDRS",
       ], upper(trimspace(entry.name)))
     ])
-    error_message = "registry_extra_env must not override Terraform-managed generic-proxy variables."
+    error_message = "registry_extra_env must not override Terraform-managed generic-proxy variables or SSRF_ALLOWED_CIDRS."
   }
 }
 
@@ -1998,17 +2025,27 @@ variable "auth_server_extra_env" {
         "GATEWAY_GENERIC_STREAM_MAX_DURATION_SECONDS",
         "GATEWAY_GENERIC_STREAM_MAX_BYTES",
         "AWS_EC2_METADATA_DISABLED",
+        "SSRF_ALLOWED_CIDRS",
       ], upper(trimspace(entry.name)))
     ])
-    error_message = "auth_server_extra_env must not override Terraform-managed generic-proxy or metadata-hardening variables; use the canonical variables instead."
+    error_message = "auth_server_extra_env must not override Terraform-managed generic-proxy, metadata-hardening or SSRF_ALLOWED_CIDRS variables; use the canonical variables instead."
   }
 }
 
 variable "mcpgw_extra_env" {
-  description = "Extra environment variables for mcpgw service. List of objects with 'name' and 'value' string fields. Reserved-name validation is performed at the root module."
+  description = "Extra environment variables for mcpgw service. List of objects with 'name' and 'value' string fields. Comprehensive reserved-name validation is performed at the root module; the SSRF guard's SSRF_ALLOWED_CIDRS is also refused here so a direct module caller cannot override it."
   type        = list(object({ name = string, value = string }))
   default     = []
   sensitive   = true
+
+  validation {
+    condition = alltrue([
+      for entry in var.mcpgw_extra_env : !contains([
+        "SSRF_ALLOWED_CIDRS",
+      ], upper(trimspace(entry.name)))
+    ])
+    error_message = "mcpgw_extra_env must not override SSRF_ALLOWED_CIDRS; use the ssrf_allowed_cidrs variable instead."
+  }
 }
 
 # ---------------------------------------------------------------------------

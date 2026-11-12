@@ -20,8 +20,11 @@ implementations (``skill_service._is_safe_url`` and
   category-checked, so a private/metadata target cannot be smuggled through a
   non-canonical spelling.
 - Explicit host/CIDR allowlists can admit private, loopback, and CGNAT targets,
-  but cloud/workload credential endpoints, link-local, unspecified, reserved, and
-  multicast destinations remain hard-denied.
+  but cloud/workload credential endpoints, link-local, unspecified, and
+  multicast destinations remain hard-denied. Reserved IPv4 destinations (for example
+  Istio's ``240.240.0.0/16`` ServiceEntry range) are admitted only by an
+  operator ``SSRF_ALLOWED_CIDRS`` entry that contains them, never by hostname
+  trust or ``allow_private``.
 - Hostname trust (``ssrf_allowed_hosts`` / ``github_extra_hosts``) is a
   post-resolution relaxation, not a DNS bypass. Trusted names are still resolved,
   every answer is classified, and the request is pinned to a validated answer.
@@ -163,6 +166,7 @@ import httpx
 
 from ..common.log_redaction import redact_url
 from ..exceptions import UrlValidationError
+from .branding_files import BRANDING_PATH_SEGMENT
 
 if TYPE_CHECKING:
     from ..core.config import Settings
@@ -228,6 +232,30 @@ _TEREDO_PREFIX = ipaddress.ip_network("2001::/32")  # RFC 4380: client v4 in low
 # range, but it is internally routable (carrier NAT / on-cluster overlays), so we
 # treat it like private-unicast: denied by default, relaxable with allow_private.
 _CGNAT_NET = ipaddress.ip_network("100.64.0.0/10")
+
+# IPv4 limited broadcast. Reserved, and never a legitimate egress target, so an
+# operator CIDR (even 0.0.0.0/0) must not relax it.
+_IPV4_BROADCAST = ipaddress.IPv4Address("255.255.255.255")
+
+
+def _operator_may_admit_reserved(
+    ip: ipaddress.IPv4Address | ipaddress.IPv6Address,
+    reserved_cidrs: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...],
+) -> bool:
+    """Return True if an operator CIDR admits this reserved address (#2018).
+
+    Only IPv4 reserved space (``240.0.0.0/4``, minus limited broadcast) is
+    relaxable. Reserved IPv6 is never relaxed: several reserved IPv6 ranges
+    carry an IPv4 address that is not unwrapped and category-checked (IPv4-
+    compatible ``::a.b.c.d``, SIIT ``::ffff:0:a.b.c.d``, RFC 8215 local-use
+    NAT64 ``64:ff9b:1::/48``), so a broad ``::/0`` or ``::/8`` entry would
+    otherwise reach IMDS. Embedded IPv4 forms that ARE unwrapped (mapped,
+    NAT64, 6to4, Teredo) arrive here as IPv4 and are judged as IPv4.
+    """
+    if not isinstance(ip, ipaddress.IPv4Address) or ip == _IPV4_BROADCAST:
+        return False
+    return any(ip in net for net in reserved_cidrs)
+
 
 # Cloud metadata and workload-identity credential endpoints. NEVER reachable:
 # not relaxable by ``allow_private`` NOR by an explicit CIDR/hostname allowlist.
@@ -359,13 +387,22 @@ def _ip_denial_reason(
     ip: ipaddress.IPv4Address | ipaddress.IPv6Address,
     allow_private: bool,
     allowed_cidrs: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...] = (),
+    reserved_cidrs: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...] = (),
 ) -> str | None:
     """Return a denial reason if ``ip`` is an unsafe egress target.
 
     Embedded IPv4 forms are unwrapped first. Cloud/workload credential
-    endpoints, link-local, unspecified, multicast, and reserved destinations
-    are hard-denied before any relaxation. ``allow_private`` and explicit CIDRs
+    endpoints, link-local, unspecified, and multicast destinations are
+    hard-denied before any relaxation. ``allow_private`` and ``allowed_cidrs``
     may relax only loopback, private-unicast, and CGNAT destinations.
+
+    Reserved destinations are denied unless they fall inside
+    ``reserved_cidrs``: the operator's own ``SSRF_ALLOWED_CIDRS`` ranges (for
+    example Istio's auto-allocated ServiceEntry range ``240.240.0.0/16``).
+    Callers must pass only operator-listed CIDRs here, never the exact ``/32``
+    synthesized for a trusted hostname, so neither hostname trust nor
+    ``allow_private`` can reopen a reserved address. Only IPv4 reserved space is
+    relaxable; see ``_operator_may_admit_reserved``.
     """
     ip = _unwrap_embedded_ipv4(ip)
 
@@ -384,7 +421,7 @@ def _ip_denial_reason(
     if ip.is_loopback:
         return None if allow_private or explicitly_allowed else "loopback"
     if ip.is_reserved:
-        return "reserved"
+        return None if _operator_may_admit_reserved(ip, reserved_cidrs) else "reserved"
     if ip.is_private or (isinstance(ip, ipaddress.IPv4Address) and ip in _CGNAT_NET):
         return None if allow_private or explicitly_allowed else "private"
     return None
@@ -477,10 +514,11 @@ _NGINX_METACHARACTERS: frozenset[str] = frozenset(
 class _Allowlist:
     """A resolved set of hosts/CIDRs that relax the IP block.
 
-    ``cidrs`` explicitly permit private, loopback, and CGNAT destinations.
-    ``hosts`` is a post-resolution trust signal with the same limited
-    relaxation. Hard-denied credential, link-local, unspecified, reserved, and
-    multicast categories remain closed in both cases.
+    ``cidrs`` explicitly permit private, loopback, CGNAT, and (only for the
+    ranges they contain) reserved IPv4 destinations. ``hosts`` is a post-resolution
+    trust signal limited to private, loopback, and CGNAT. Hard-denied
+    credential, link-local, unspecified, and multicast categories remain closed
+    in both cases.
     """
 
     hosts: frozenset[str] = field(default_factory=frozenset)
@@ -1292,10 +1330,13 @@ def _is_blocked_ip(
             # (profile.allow_private, e.g. EGRESS_UPSTREAM_PROFILE=True) or the
             # allowlist (allowlist.allow_private, set from
             # gateway_proxy_allow_private_targets). Metadata/credential/link-local
-            # /reserved/multicast stay hard-denied in _ip_denial_reason before
-            # any relaxation, so this only ever relaxes loopback/private/CGNAT.
+            # /multicast stay hard-denied in _ip_denial_reason before any
+            # relaxation, so this only ever relaxes loopback/private/CGNAT.
             allow_private=allow_private or allowlist.allow_private,
             allowed_cidrs=allowed_cidrs,
+            # Only the operator's own CIDRs may admit a reserved address (#2018),
+            # never the /32 added above for a trusted hostname.
+            reserved_cidrs=allowlist.cidrs,
         )
         is not None
     )
@@ -1531,14 +1572,17 @@ def validate_server_path(
     a mutating admin action masquerade as a health check and be dropped from the
     audit trail.
 
+    A path whose first segment is ``branding`` is also rejected: that prefix is
+    the public UI branding route, which a server location block would shadow.
+
     Args:
         path: The server path (e.g. ``/github``).
 
     Raises:
         UrlValidationError: If the path is empty, contains disallowed nginx
-            metacharacters, normalizes to an empty (slashes-only) path, or
+            metacharacters, normalizes to an empty (slashes-only) path,
             normalizes to a reserved cross-server wildcard or monitoring-route
-            name.
+            name, or starts with the reserved ``branding`` segment.
     """
     if not path or not isinstance(path, str):
         raise UrlValidationError(str(path), "server path is empty or not a string")
@@ -1574,6 +1618,16 @@ def validate_server_path(
         raise UrlValidationError(
             path,
             f"server path '{normalized}' is reserved (shadows a built-in monitoring route)",
+        )
+
+    # The first segment "branding" is the public UI branding route
+    # ({ROOT_PATH}/branding/<name>). A server there would get an nginx location
+    # block that shadows it (and puts it behind auth_request), so reserve it.
+    if normalized.split("/", 1)[0].lower() == BRANDING_PATH_SEGMENT:
+        raise UrlValidationError(
+            path,
+            f"server path '{normalized}' is reserved (the '/{BRANDING_PATH_SEGMENT}' "
+            "prefix serves the UI branding files)",
         )
 
 

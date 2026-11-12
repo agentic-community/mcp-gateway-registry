@@ -200,19 +200,19 @@ variable "keycloak_log_level" {
 variable "registry_image_uri" {
   description = "Container image URI for registry service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/registry:1.36.0"
+  default     = "public.ecr.aws/p3v1o3c6/registry:1.37.0"
 }
 
 variable "auth_server_image_uri" {
   description = "Container image URI for auth server service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/auth-server:1.36.0"
+  default     = "public.ecr.aws/p3v1o3c6/auth-server:1.37.0"
 }
 
 variable "mcpgw_image_uri" {
   description = "Container image URI for mcpgw service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/mcpgw:1.36.0"
+  default     = "public.ecr.aws/p3v1o3c6/mcpgw:1.37.0"
 }
 
 variable "keycloak_image_uri" {
@@ -479,6 +479,23 @@ variable "session_cookie_domain" {
   default     = ""
 }
 
+variable "session_cookie_host_prefix" {
+  description = "Name the session cookie __Host-<name> (Secure, Path=/, no Domain) so no sibling subdomain can set or overwrite it. Requires session_cookie_secure = true and an empty session_cookie_domain; terraform plan fails otherwise, as do the registry and auth-server at startup. Turning it on signs every user out once."
+  type        = bool
+  default     = false
+}
+
+variable "session_max_age_seconds" {
+  description = "Browser session lifetime in seconds. It sets the auth server's session store TTL, the session cookie's Max-Age, and the registry's cookie signature max age, so it must be the same on the registry and the auth server; this module renders the one value into both task definitions. Default 28800 (8 hours)."
+  type        = number
+  default     = 28800
+
+  validation {
+    condition     = var.session_max_age_seconds > 0 && floor(var.session_max_age_seconds) == var.session_max_age_seconds
+    error_message = "session_max_age_seconds must be a positive whole number of seconds (for example 28800 for 8 hours); the registry and auth-server refuse to start on 0 or a negative value."
+  }
+}
+
 variable "oauth2_allowed_redirect_uris" {
   description = "Comma-separated exact-match allowlist of OAuth login/logout redirect URIs (open-redirect hardening). When set, an absolute redirect_uri is accepted only if it exactly matches an entry; relative paths are always allowed. Empty falls back to the weaker cookie-domain heuristic."
   type        = string
@@ -725,6 +742,28 @@ variable "registry_rum_allowed_hosts" {
   description = "Optional comma-separated allowlist of hosts the RUM snippet may reference (script src and beacon). When set, a snippet referencing any host not on the list is rejected at startup (fail closed). Empty disables the check."
   type        = string
   default     = ""
+}
+
+# Runtime UI branding archive: base64 of a .tar.gz of the branding folder
+# (manifest.json, theme.css, logos, favicon, .woff2 fonts). The registry
+# entrypoint extracts it into /app/branding at startup, so an ECS deployment can
+# reskin the UI without a custom image. Not a secret, so it is a plain env
+# value. Capped at 48 KiB of base64 text (about 36 KiB of compressed archive):
+# ECS limits a whole task definition to 64 KiB, and this value shares that
+# budget with every other registry environment variable.
+variable "ui_branding_archive_b64" {
+  description = "Optional base64-encoded .tar.gz of the UI branding folder, extracted into /app/branding by the registry at startup. Empty (default) keeps the stock branding. At most 49152 characters (48 KiB) so the registry task definition stays under the ECS 64 KiB limit. Produce it with: tar -czf - -C ./branding . | base64 | tr -d '\\n'"
+  type        = string
+  default     = ""
+
+  validation {
+    condition = var.ui_branding_archive_b64 == "" || (
+      length(var.ui_branding_archive_b64) <= 49152
+      && length(var.ui_branding_archive_b64) % 4 == 0
+      && can(regex("^[A-Za-z0-9+/]+={0,2}$", var.ui_branding_archive_b64))
+    )
+    error_message = "ui_branding_archive_b64 must be empty or single-line standard base64 (A-Z, a-z, 0-9, +, /, up to two trailing =, length a multiple of 4) of at most 49152 characters (48 KiB). Build it with: tar -czf - -C ./branding . | base64 | tr -d '\\n'. If the archive is too large, shrink or drop images and fonts."
+  }
 }
 
 # =============================================================================
@@ -1842,7 +1881,7 @@ variable "ssrf_allowed_hosts" {
 }
 
 variable "ssrf_allowed_cidrs" {
-  description = "Comma-separated CIDR ranges the SSRF guard accepts for MCP-server / A2A-agent upstreams even though they are private. The cloud metadata address 169.254.169.254 is never permitted."
+  description = "Comma-separated CIDR ranges the SSRF guard accepts for MCP-server / A2A-agent upstreams even though they are private. A listed range also admits the reserved IPv4 addresses it contains (e.g. Istio ServiceEntry VIPs in 240.240.0.0/16), in the registry, the auth-server generic proxy and mcpgw. Cloud metadata/credential, link-local, unspecified and multicast addresses are never permitted."
   type        = string
   default     = ""
 }
@@ -2188,10 +2227,12 @@ variable "registry_extra_env" {
           "GATEWAY_PROXY_PREFIX",
           "GATEWAY_GENERIC_STREAM_READ_TIMEOUT_SECONDS",
           "SEARCH_LOG_QUERY_TEXT",
+          "SSRF_ALLOWED_CIDRS",
+          "SESSION_MAX_AGE_SECONDS",
         ], upper(trimspace(entry.name)))
       )
     ])
-    error_message = "registry_extra_env must not override Terraform-managed variables (AWS_EC2_METADATA_DISABLED, the canonical gateway_* generic-proxy variables, or SEARCH_LOG_QUERY_TEXT; use the matching Terraform variable instead)."
+    error_message = "registry_extra_env must not override Terraform-managed variables (AWS_EC2_METADATA_DISABLED, the canonical gateway_* generic-proxy variables, SEARCH_LOG_QUERY_TEXT, SSRF_ALLOWED_CIDRS, or SESSION_MAX_AGE_SECONDS; use the matching Terraform variable instead, so the registry and auth-server keep the same session lifetime)."
   }
 
   # Forward-proxy egress: NO_PROXY must exclude the cloud credential endpoints.
@@ -2247,9 +2288,11 @@ variable "auth_server_extra_env" {
         "GATEWAY_GENERIC_STREAM_MAX_DURATION_SECONDS",
         "GATEWAY_GENERIC_STREAM_MAX_BYTES",
         "AWS_EC2_METADATA_DISABLED",
+        "SSRF_ALLOWED_CIDRS",
+        "SESSION_MAX_AGE_SECONDS",
       ], upper(trimspace(entry.name)))
     ])
-    error_message = "auth_server_extra_env must not override Terraform-managed generic-proxy or metadata-hardening variables; use the canonical variables instead."
+    error_message = "auth_server_extra_env must not override Terraform-managed generic-proxy, metadata-hardening, SSRF_ALLOWED_CIDRS, or session-lifetime (SESSION_MAX_AGE_SECONDS) variables; use the canonical variables instead."
   }
 
   # Forward-proxy egress: NO_PROXY must exclude the cloud credential endpoints.
@@ -2293,10 +2336,10 @@ variable "mcpgw_extra_env" {
   validation {
     condition = alltrue([
       for entry in var.mcpgw_extra_env : (
-        !contains(["SEARCH_LOG_QUERY_TEXT"], upper(trimspace(entry.name)))
+        !contains(["SEARCH_LOG_QUERY_TEXT", "SSRF_ALLOWED_CIDRS"], upper(trimspace(entry.name)))
       )
     ])
-    error_message = "mcpgw_extra_env must not override Terraform-managed variables (SEARCH_LOG_QUERY_TEXT; use the search_log_query_text variable instead)."
+    error_message = "mcpgw_extra_env must not override Terraform-managed variables (SEARCH_LOG_QUERY_TEXT, SSRF_ALLOWED_CIDRS; use the search_log_query_text / ssrf_allowed_cidrs variables instead)."
   }
 }
 

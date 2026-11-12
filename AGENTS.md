@@ -303,7 +303,8 @@ working in those areas.
   `registry/utils/url_guard.py` `guarded_client`/`guarded_async_client` (never a
   bare `httpx` client), IP categories/literal and tunnel unwrapping →
   `registry/utils/url_guard.py`, URL identity → `normalize_url_identity`, URL log
-  redaction → `registry/common/log_redaction.py` `redact_url`; CSRF →
+  redaction → `registry/common/log_redaction.py` `redact_url`; Origin check on
+  cookie-authenticated proxy requests → `registry/common/request_origin.py`; CSRF →
   `registry/auth/csrf.py`; internal service auth →
   `registry/auth/internal.py`; signing-secret validation →
   `registry/common/secret_key.py`; read redaction → `registry/services/visibility.py`;
@@ -323,6 +324,10 @@ working in those areas.
   RFC-1918/loopback/link-local/reserved/multicast and exact cloud/workload
   metadata endpoints (AWS plus Alibaba `100.100.100.200`), including scoped/
   mapped/NAT64/6to4/Teredo forms. Validate at registration AND pin at fetch time.
+  The one relaxation of reserved space: an operator `SSRF_ALLOWED_CIDRS` range
+  admits reserved IPv4 inside it (Istio's `240.240.0.0/16`), never
+  `255.255.255.255` and never reserved IPv6, which can carry an IPv4 the guard
+  does not unwrap. Hostname trust and `allow_private` never admit reserved.
   Credentialed OAuth token endpoints MUST use the HTTPS-only empty-allowlist
   `CREDENTIALED_OAUTH_PROFILE` at both points, never `PROXY_PROFILE`. Credential
   builders self-guard the exact derived destination before adding/decrypting any
@@ -339,7 +344,13 @@ working in those areas.
   on a different host or nonstandard port without publishing it as agent `url`.
 - **Injection:** sanitize at EVERY interpolation site AND validate at the source
   (a sanitizer that exists but isn't called is worthless); `re.escape` user input
-  in regex/`$regex` queries.
+  in regex/`$regex` queries. Neutralize spreadsheet formulas in EVERY CSV export,
+  server (`_csv_safe`) and browser (`frontend/src/utils/csvSafe.ts`); AG Grid's
+  own CSV export neutralizes nothing.
+- **Operator-supplied files:** check and read a served file through ONE
+  descriptor (`O_NOFOLLOW`, then re-resolve and match the inode), never a path
+  handed to `FileResponse` later; bound an archive's raw header count and
+  decompressed size, skipped entries included.
 - **Authorization:** deny by default; never treat a broad/execute scope as admin;
   enforce ownership server-side before every mutation across the whole endpoint
   family; `dict.get("k")` not `getattr(dict, "k")`; no substring matching for
@@ -370,6 +381,15 @@ working in those areas.
   `"groups": "mcp-registry-admin"` a membership). One shared validator
   (`normalize_groups_claim`), applied in EVERY provider including the
   self-signed and userinfo paths.
+- **Per-user secret keys:** key a user's stored secrets on the IdP's immutable
+  account id (`sub`; on an Okta access token, `uid`), never a username, email or
+  login an account can change or a later account can reuse. One named function
+  per path, and no other code derives a key: login `_login_vault_user_id`,
+  session readers `session_vault_user_id`, bearer `_canonical_egress_user`,
+  registry routes and the vend `vault_principal`. Refuse an OIDC login that
+  yields none. Refuse the reserved `name:` prefix of username-fallback keys on
+  every outside value (login subject, IdP bearer id, sessionless mint body);
+  only gateway-written keys may carry it.
 - **Self-registration (DCR):** restrict which scopes a self-registered client
   may request AND whether it may define protocol mappers (a mapper chooses
   what a claim says), for the `anonymous` and `authenticated` subtypes alike.
@@ -383,9 +403,13 @@ working in those areas.
   reads) via one shared helper, not just the reported endpoint. Mutation success
   responses, webhooks, lifecycle events, and exports must project a fresh recursive
   token-free copy; never serialize the encrypted storage object directly.
-- **Tokens/JWT:** never derive `verify_aud`/issuer/alg from an unverified claim:
-  enforce audience against a config allowlist, fail closed. Never auto-grant
-  groups/admin from a code-shipped mapping (config-driven, fail closed).
+- **Tokens/JWT:** never derive `verify_aud`/issuer/alg from an unverified claim,
+  and never let a request header (or query or body field) select how a request
+  is authenticated: the provider, pool, client, issuer and JWKS a credential is
+  checked against come from server config only (the `/validate` Cognito fallback
+  took them from `X-User-Pool-Id`/`X-Client-Id`). Enforce audience against a
+  config allowlist, fail closed. Never auto-grant groups/admin from a
+  code-shipped mapping (config-driven, fail closed).
 - **Admin ops:** refuse self-delete + last-admin removal/demotion (fail closed if
   the admin population can't be counted); audit admin-tier grants. A config/secrets
   export must deny sensitive values by default. Gate them behind a SEPARATE
@@ -427,6 +451,15 @@ working in those areas.
   (fail closed), attributable to a specific actor.
 - **OAuth CSRF `state`:** validate at the token-exchange point, not a post-hoc
   check that may be dead code; OAuth discovery metadata → `Cache-Control: no-store`.
+- **OAuth consent binding:** bind a consent to the browser that started it (per-consent
+  HttpOnly cookie, its hash in the `state`, checked before the code exchange), not only
+  to the principal; start a consent only for the browser's own session (never a bearer),
+  and consume the single-use `state` once, right after it decodes, before the `code` check.
+- **Credential cookies:** read the session cookie through one exact-name parser and treat
+  a duplicate as no session. A change that renames or rescopes a credential cookie leaves
+  the old copy live in browsers: bind the signature to the cookie name
+  (`session_cookie_signing_salt`) so the old value fails under the new name, and tell
+  operators to end the old sessions.
 - **Frontend:** one shared URL-scheme guard on every dynamic href/`window.open`/
   markdown link (allowlist http/https/mailto, render unsafe as text); enforce
   `react/jsx-no-script-url`.

@@ -12,8 +12,22 @@ from fastapi.testclient import TestClient
 
 import registry.api.egress_auth_routes as routes
 
-ADMIN = {"username": "admin", "is_admin": True, "auth_method": "oauth2", "client_id": "web"}
-USER = {"username": "alice", "is_admin": False, "auth_method": "oauth2", "client_id": "web"}
+# The auth-server resolves egress_user (the vault key) for every per-user caller;
+# the registry keys on it alone, with no username fallback.
+ADMIN = {
+    "username": "admin",
+    "egress_user": "sub-admin",
+    "is_admin": True,
+    "auth_method": "oauth2",
+    "client_id": "web",
+}
+USER = {
+    "username": "alice",
+    "egress_user": "sub-alice",
+    "is_admin": False,
+    "auth_method": "oauth2",
+    "client_id": "web",
+}
 STATIC = {"username": "ci-bot", "is_admin": False, "auth_method": "network-trusted"}
 
 
@@ -62,6 +76,13 @@ def _server(**over):
     }
     base.update(over)
     return base
+
+
+def _with_live_session(c, monkeypatch, user_context):
+    """Make initiate and the callback (which resolve the cookie) see a live session."""
+    c.cookies.set(routes.settings.session_cookie_name, "live-session")
+    monkeypatch.setattr(routes, "browser_session_context", AsyncMock(return_value=user_context))
+    return c
 
 
 @pytest.mark.unit
@@ -192,18 +213,22 @@ class TestReadConfig:
 
 @pytest.mark.unit
 class TestInitiate:
-    def test_initiate_returns_authorize_url(self, client):
+    def test_initiate_returns_authorize_url(self, client, monkeypatch):
         svc = AsyncMock()
         svc.build_consent_url = AsyncMock(
             return_value="https://github.com/login/oauth/authorize?x=1"
         )
-        c = client(USER, server=_server(), svc=svc)
+        # Initiate serves only the browser session the request's cookie names.
+        browser_user = {**USER, "session_id": "sid-alice"}
+        c = _with_live_session(
+            client(browser_user, server=_server(), svc=svc), monkeypatch, browser_user
+        )
         r = c.post("/api/egress-auth/initiate", json={"server_path": "/github-mcp"})
         assert r.status_code == 200
         assert r.json()["authorize_url"].startswith("https://github.com/")
 
-    def test_initiate_non_per_user_403(self, client):
-        c = client(STATIC, server=_server())
+    def test_initiate_non_per_user_403(self, client, monkeypatch):
+        c = _with_live_session(client(STATIC, server=_server()), monkeypatch, STATIC)
         r = c.post("/api/egress-auth/initiate", json={"server_path": "/github-mcp"})
         assert r.status_code == 403
 
@@ -212,7 +237,7 @@ class TestInitiate:
         r = c.post("/api/egress-auth/initiate", json={"server_path": "/github-mcp"})
         assert r.status_code == 400
 
-    def test_initiate_unregistered_dcr_client_400(self, client):
+    def test_initiate_unregistered_dcr_client_400(self, client, monkeypatch):
         # A requires_dcr provider whose client_id has not been registered yet makes
         # build_consent_url raise EgressClientNotRegistered -> clean 400 that says so,
         # not a KeyError/500 or the generic missing-secret message.
@@ -222,7 +247,11 @@ class TestInitiate:
             raise routes.EgressClientNotRegistered()
 
         svc.build_consent_url = _raise
-        c = client(USER, server=_server(), svc=svc)
+        # Initiate serves only the browser session the request's cookie names.
+        browser_user = {**USER, "session_id": "sid-alice"}
+        c = _with_live_session(
+            client(browser_user, server=_server(), svc=svc), monkeypatch, browser_user
+        )
         r = c.post("/api/egress-auth/initiate", json={"server_path": "/github-mcp"})
         assert r.status_code == 400
         assert "not registered" in r.json()["detail"]
@@ -283,7 +312,7 @@ class TestCallback:
         svc.handle_callback = AsyncMock(
             return_value=EgressConnection(provider="github", server_path="/github-mcp")
         )
-        c = client(USER, server=_server(), svc=svc)
+        c = _with_live_session(client(USER, server=_server(), svc=svc), monkeypatch, USER)
         r = c.get("/api/oauth2/egress/callback", params={"code": "the-code", "state": blob})
         assert r.status_code == 200
         assert "Connected github" in r.text
@@ -313,7 +342,7 @@ class TestCallback:
         svc.handle_callback = AsyncMock(
             return_value=EgressConnection(provider="github", server_path="/github-mcp")
         )
-        c = client(USER, server=_server(), svc=svc)
+        c = _with_live_session(client(USER, server=_server(), svc=svc), monkeypatch, USER)
         c.get("/api/oauth2/egress/callback", params={"code": "c", "state": blob, **params})
 
         assert svc.handle_callback.call_args.kwargs["response_issuer"] == expected
@@ -343,7 +372,7 @@ class TestCallback:
         )
         svc = AsyncMock()
         svc.handle_callback = AsyncMock(side_effect=SecretStoreError("vault write failed"))
-        c = client(USER, server=_server(), svc=svc)
+        c = _with_live_session(client(USER, server=_server(), svc=svc), monkeypatch, USER)
         r = c.get("/api/oauth2/egress/callback", params={"code": "the-code", "state": blob})
         assert r.status_code == 503
         assert "Connection not saved" in r.text
@@ -375,7 +404,7 @@ class TestCallback:
         svc.handle_callback = AsyncMock(
             return_value=EgressConnection(provider="<b>github</b>", server_path=evil_path)
         )
-        c = client(USER, server=_server(), svc=svc)
+        c = _with_live_session(client(USER, server=_server(), svc=svc), monkeypatch, USER)
         r = c.get("/api/oauth2/egress/callback", params={"code": "the-code", "state": blob})
         assert r.status_code == 200
         # The raw script-bearing markup must NOT appear; the escaped form must.

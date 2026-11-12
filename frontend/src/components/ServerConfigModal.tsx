@@ -1,5 +1,5 @@
 import React, { useCallback, useState, useEffect } from 'react';
-import { ClipboardDocumentIcon, KeyIcon } from '@heroicons/react/24/outline';
+import { ClipboardDocumentIcon, KeyIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import PlugIcon from './icons/PlugIcon';
 import axios from 'axios';
 import type { Server } from './ServerCard';
@@ -12,6 +12,14 @@ import {
   disconnect as disconnectEgress,
   type EgressCardState,
 } from '../utils/egressAuth';
+
+/** Copy buttons: brand primary, switching to green for the "Copied!" flash. */
+function copyButtonClass(copied: boolean, compact = false): string {
+  const size = compact ? 'px-3 py-1.5' : 'px-3';
+  return copied
+    ? `btn-base bg-success-600 text-white shadow-sm ${size}`
+    : `btn-primary ${size}`;
+}
 
 const IDE_LABELS = {
   'cursor': 'Cursor',
@@ -131,13 +139,13 @@ function EgressConnectCallout({
       <div
         className={`flex items-center gap-3 rounded-lg border p-4 ${
           warn
-            ? 'border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20'
+            ? 'border-warning-300 dark:border-warning-700 bg-warning-50 dark:bg-warning-900/20'
             : 'border-purple-200 dark:border-purple-800 bg-purple-50 dark:bg-purple-900/20'
         }`}
       >
         <PlugIcon
           className={`h-5 w-5 flex-shrink-0 ${
-            warn ? 'text-amber-500' : 'text-purple-600 dark:text-purple-400'
+            warn ? 'text-warning-500' : 'text-purple-600 dark:text-purple-400'
           }`}
         />
         <span className="text-sm text-gray-900 dark:text-gray-100">
@@ -149,7 +157,7 @@ function EgressConnectCallout({
           type="button"
           disabled={busy}
           onClick={startConnect}
-          className="ml-auto flex-shrink-0 rounded-md bg-purple-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-purple-700 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-purple-500"
+          className="btn-primary ml-auto flex-shrink-0 px-3 py-1.5"
         >
           {busy ? 'Opening…' : warn ? `Reconnect ${providerLabel}` : `Connect ${providerLabel} account`}
         </button>
@@ -158,16 +166,16 @@ function EgressConnectCallout({
   }
 
   return (
-    <div className="flex items-center gap-3 rounded-lg border border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-900/20 p-4">
-      <PlugIcon className="h-5 w-5 flex-shrink-0 text-green-600 dark:text-green-400" />
-      <span className="text-sm text-green-900 dark:text-green-100">
+    <div className="flex items-center gap-3 rounded-lg border border-success-200 dark:border-success-800 bg-success-50 dark:bg-success-900/20 p-4">
+      <PlugIcon className="h-5 w-5 flex-shrink-0 text-success-600 dark:text-success-400" />
+      <span className="text-sm text-success-900 dark:text-success-100">
         Connected to {providerLabel}. This server can act on your behalf.
       </span>
       <button
         type="button"
         disabled={busy}
         onClick={handleDisconnect}
-        className="ml-auto flex-shrink-0 rounded-md px-3 py-1.5 text-sm font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-red-500"
+        className="ml-auto flex-shrink-0 rounded-md px-3 py-1.5 text-sm font-medium text-danger-600 dark:text-danger-400 hover:bg-danger-50 dark:hover:bg-danger-900/30 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-danger-500"
       >
         {busy ? 'Working…' : 'Disconnect'}
       </button>
@@ -883,16 +891,17 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
 
   return (
     <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
-      <div className="bg-white dark:bg-gray-800 rounded-xl p-6 max-w-3xl w-full mx-4 max-h-[80vh] overflow-auto">
+      <div
+        role="dialog"
+        aria-modal="true"
+        className="bg-surface-overlay border border-line shadow-xl rounded-xl p-6 max-w-3xl w-full mx-4 max-h-[80vh] overflow-auto"
+      >
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+          <h3 className="text-lg font-semibold text-fg">
             MCP Configuration for {server.name}
           </h3>
-          <button
-            onClick={onClose}
-            className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
-          >
-            ✕
+          <button onClick={onClose} className="btn-icon" aria-label="Close">
+            <XMarkIcon className="h-5 w-5" />
           </button>
         </div>
 
@@ -909,18 +918,18 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
             />
           )}
 
-          <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
-            <h4 className="font-medium text-blue-900 dark:text-blue-100 mb-2">
+          <div className="bg-info-50 dark:bg-info-900/20 border border-info-200 dark:border-info-800 rounded-lg p-4">
+            <h4 className="font-medium text-info-900 dark:text-info-100 mb-2">
               How to use this configuration:
             </h4>
-            <ol className="text-sm text-blue-800 dark:text-blue-200 space-y-1 list-decimal list-inside">
+            <ol className="text-sm text-info-800 dark:text-info-200 space-y-1 list-decimal list-inside">
               <li>Copy the configuration below</li>
               <li>
-                Paste it into your <code className="bg-blue-100 dark:bg-blue-800 px-1 rounded">mcp.json</code> file
+                Paste it into your <code className="bg-info-100 dark:bg-info-800 px-1 rounded">mcp.json</code> file
               </li>
               {!isRegistryOnly && !jwtToken && (
                 <li>
-                  Replace <code className="bg-blue-100 dark:bg-blue-800 px-1 rounded">[YOUR_AUTH_TOKEN]</code> with your
+                  Replace <code className="bg-info-100 dark:bg-info-800 px-1 rounded">[YOUR_AUTH_TOKEN]</code> with your
                   gateway authentication token (or wait for auto-generation)
                 </li>
               )}
@@ -931,9 +940,9 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
           {connectConfigError && (
             <div
               role="alert"
-              className="bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-800 rounded-lg p-4"
+              className="bg-warning-50 dark:bg-warning-900/20 border border-warning-300 dark:border-warning-800 rounded-lg p-4"
             >
-              <p className="text-sm text-amber-800 dark:text-amber-200">{connectConfigError}</p>
+              <p className="text-sm text-warning-800 dark:text-warning-200">{connectConfigError}</p>
             </div>
           )}
 
@@ -945,13 +954,13 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
                 is a launch recipe — no gateway authentication needed.
               </p>
               {server.local_runtime?.required_env && server.local_runtime.required_env.length > 0 && (
-                <div className="mt-3 p-3 rounded bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800">
-                  <p className="text-sm text-yellow-900 dark:text-yellow-100">
+                <div className="mt-3 p-3 rounded bg-warning-50 dark:bg-warning-900/30 border border-warning-200 dark:border-warning-800">
+                  <p className="text-sm text-warning-900 dark:text-warning-100">
                     <strong>Action required:</strong> replace{' '}
-                    <code className="bg-yellow-100 dark:bg-yellow-800 px-1 rounded">&lt;your-value&gt;</code>{' '}
-                    in the <code className="bg-yellow-100 dark:bg-yellow-800 px-1 rounded">env</code> block
+                    <code className="bg-warning-100 dark:bg-warning-800 px-1 rounded">&lt;your-value&gt;</code>{' '}
+                    in the <code className="bg-warning-100 dark:bg-warning-800 px-1 rounded">env</code> block
                     for these keys before pasting into your IDE config:{' '}
-                    <code className="bg-yellow-100 dark:bg-yellow-800 px-1 rounded">
+                    <code className="bg-warning-100 dark:bg-warning-800 px-1 rounded">
                       {server.local_runtime.required_env.join(', ')}
                     </code>
                   </p>
@@ -961,18 +970,18 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
           ) : !isRegistryOnly ? (
             <div className={`border rounded-lg p-4 ${
               jwtToken
-                ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'
+                ? 'bg-success-50 dark:bg-success-900/20 border-success-200 dark:border-success-800'
                 : tokenError
-                ? 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800'
-                : 'bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800'
+                ? 'bg-danger-50 dark:bg-danger-900/20 border-danger-200 dark:border-danger-800'
+                : 'bg-warning-50 dark:bg-warning-900/20 border-warning-200 dark:border-warning-800'
             }`}>
               <div className="flex items-center justify-between mb-2">
                 <h4 className={`font-medium ${
                   jwtToken
-                    ? 'text-green-900 dark:text-green-100'
+                    ? 'text-success-900 dark:text-success-100'
                     : tokenError
-                    ? 'text-red-900 dark:text-red-100'
-                    : 'text-amber-900 dark:text-amber-100'
+                    ? 'text-danger-900 dark:text-danger-100'
+                    : 'text-warning-900 dark:text-warning-100'
                 }`}>
                   {tokenLoading
                     ? 'Fetching Token...'
@@ -985,7 +994,7 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
                 {!tokenLoading && (
                   <button
                     onClick={fetchJwtToken}
-                    className="flex items-center gap-1 px-2 py-1 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors"
+                    className="btn-primary gap-1 px-2 py-1 text-xs rounded-md"
                     title="Generate new token"
                   >
                     <KeyIcon className="h-3 w-3" />
@@ -994,35 +1003,35 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
                 )}
               </div>
               {tokenLoading ? (
-                <p className="text-sm text-amber-800 dark:text-amber-200">
+                <p className="text-sm text-warning-800 dark:text-warning-200">
                   Generating JWT token for your configuration...
                 </p>
               ) : jwtToken ? (
-                <p className="text-sm text-green-800 dark:text-green-200">
+                <p className="text-sm text-success-800 dark:text-success-200">
                   JWT token has been automatically added to the configuration below. You can copy and paste it directly into your mcp.json file.
                   {tokenExpiresInHours
                     ? ` Token expires in ${tokenExpiresInHours} hour${tokenExpiresInHours === 1 ? '' : 's'}.`
                     : ''}
                 </p>
               ) : tokenError ? (
-                <p className="text-sm text-red-800 dark:text-red-200">
+                <p className="text-sm text-danger-800 dark:text-danger-200">
                   {tokenError}. Click &quot;Get Token&quot; to retry, or manually replace [YOUR_AUTH_TOKEN] with your gateway token.
                 </p>
               ) : (
-                <p className="text-sm text-amber-800 dark:text-amber-200">
+                <p className="text-sm text-warning-800 dark:text-warning-200">
                   This configuration requires gateway authentication tokens. The tokens authenticate your AI assistant with
                   the MCP Gateway, not the individual server.
                 </p>
               )}
             </div>
           ) : (
-            <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
-              <h4 className="font-medium text-blue-900 dark:text-blue-100 mb-2">Direct Connection Mode</h4>
-              <p className="text-sm text-blue-800 dark:text-blue-200">
+            <div className="bg-info-50 dark:bg-info-900/20 border border-info-200 dark:border-info-800 rounded-lg p-4">
+              <h4 className="font-medium text-info-900 dark:text-info-100 mb-2">Direct Connection Mode</h4>
+              <p className="text-sm text-info-800 dark:text-info-200">
                 This registry operates in catalog-only mode. The configuration connects directly to the MCP server
                 endpoint without going through a gateway proxy.
               </p>
-              <p className="text-sm text-blue-800 dark:text-blue-200 mt-2">
+              <p className="text-sm text-info-800 dark:text-info-200 mt-2">
                 <strong>Note:</strong> The MCP server may still require authentication (API key, auth header, etc.).
                 Check the server's documentation to determine if any credentials are needed.
               </p>
@@ -1039,7 +1048,7 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
             </div>
           )}
 
-          <div className="bg-gray-50 dark:bg-gray-900 border dark:border-gray-700 rounded-lg p-4">
+          <div className="bg-surface-muted border border-line rounded-lg p-4">
             <h4 className="font-medium text-gray-900 dark:text-white mb-3">Select your IDE/Tool:</h4>
             <div className="flex flex-wrap gap-2">
               {enabledIDEs.map((ide) => (
@@ -1048,15 +1057,15 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
                   onClick={() => setSelectedIDE(ide)}
                   className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
                     selectedIDE === ide
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-800'
+                      ? 'bg-accent text-accent-fg shadow-sm'
+                      : 'bg-surface border border-line text-fg-muted hover:bg-surface-hover hover:text-fg'
                   }`}
                 >
                   {IDE_LABELS[ide]}
                 </button>
               ))}
             </div>
-            <p className="text-xs text-gray-600 dark:text-gray-400 mt-2">
+            <p className="text-xs text-fg-muted mt-2">
               Configuration format optimized for {IDE_LABELS[selectedIDE]} integration
             </p>
           </div>
@@ -1067,17 +1076,13 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
                 <h4 className="font-medium text-gray-900 dark:text-white">CLI Command:</h4>
                 <button
                   onClick={copyCommandToClipboard}
-                  className={`flex items-center gap-2 px-3 py-2 text-white rounded-lg transition-colors duration-200 ${
-                    copied
-                      ? 'bg-green-700'
-                      : 'bg-green-600 hover:bg-green-700'
-                  }`}
+                  className={copyButtonClass(copied)}
                 >
                   <ClipboardDocumentIcon className="h-4 w-4" />
                   {copied ? 'Copied!' : 'Copy Command'}
                 </button>
               </div>
-              <pre className="bg-gray-900 text-green-100 p-4 rounded-lg text-sm overflow-x-auto whitespace-pre-wrap break-all">
+              <pre className="bg-gray-900 text-success-100 p-4 rounded-lg text-sm overflow-x-auto whitespace-pre-wrap break-all">
                 {generateClaudeCodeCommand()}
               </pre>
               <p className="text-xs text-gray-600 dark:text-gray-400 mt-2">
@@ -1092,9 +1097,9 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
             </div>
           ) : selectedIDE === 'codex' ? (
             <div className="space-y-2">
-              <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4 mb-3">
-                <h4 className="font-medium text-blue-900 dark:text-blue-100 mb-2">Codex CLI:</h4>
-                <p className="text-sm text-blue-800 dark:text-blue-200">
+              <div className="bg-info-50 dark:bg-info-900/20 border border-info-200 dark:border-info-800 rounded-lg p-4 mb-3">
+                <h4 className="font-medium text-info-900 dark:text-info-100 mb-2">Codex CLI:</h4>
+                <p className="text-sm text-info-800 dark:text-info-200">
                   Run this command in your terminal to add the MCP server to Codex.
                   {useOAuthLogin
                     ? ' It registers the pre-registered public client id (--oauth-client-id) ' +
@@ -1102,7 +1107,7 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
                     : isDCR && ' OAuth authentication is handled automatically via DCR.'}
                 </p>
                 {useOAuthLogin && oauthCallbackPort ? (
-                  <p className="text-xs text-amber-800 dark:text-amber-300 mt-2">
+                  <p className="text-xs text-warning-800 dark:text-warning-300 mt-2">
                     Note: Codex does not support pinning the OAuth callback port, so it uses a
                     random loopback port. If your identity provider requires the redirect URI
                     (including the port) to be pre-registered (e.g. Okta, Entra, Cognito), Codex
@@ -1114,15 +1119,13 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
                 <h4 className="font-medium text-gray-900 dark:text-white">Command:</h4>
                 <button
                   onClick={() => copyCurlToClipboard(generateCodexCommand())}
-                  className={`flex items-center gap-2 px-3 py-2 text-white rounded-lg transition-colors duration-200 ${
-                    copied ? 'bg-green-700' : 'bg-green-600 hover:bg-green-700'
-                  }`}
+                  className={copyButtonClass(copied)}
                 >
                   <ClipboardDocumentIcon className="h-4 w-4" />
                   {copied ? 'Copied!' : 'Copy Command'}
                 </button>
               </div>
-              <pre className="bg-gray-900 text-green-100 p-4 rounded-lg text-sm overflow-x-auto whitespace-pre-wrap break-all">
+              <pre className="bg-gray-900 text-success-100 p-4 rounded-lg text-sm overflow-x-auto whitespace-pre-wrap break-all">
                 {generateCodexCommand()}
               </pre>
               {!isDCR && !isRegistryOnly && !useOAuthLogin && (
@@ -1133,11 +1136,11 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
             </div>
           ) : selectedIDE === 'cli' ? (
             <div className="space-y-4">
-              <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4 mb-3">
-                <h4 className="font-medium text-blue-900 dark:text-blue-100 mb-2">MCP Protocol via curl:</h4>
-                <p className="text-sm text-blue-800 dark:text-blue-200">
+              <div className="bg-info-50 dark:bg-info-900/20 border border-info-200 dark:border-info-800 rounded-lg p-4 mb-3">
+                <h4 className="font-medium text-info-900 dark:text-info-100 mb-2">MCP Protocol via curl:</h4>
+                <p className="text-sm text-info-800 dark:text-info-200">
                   Use these commands to interact with the MCP server directly. Copy the{' '}
-                  <code className="bg-blue-100 dark:bg-blue-800 px-1 rounded">Mcp-Session-Id</code>{' '}
+                  <code className="bg-info-100 dark:bg-info-800 px-1 rounded">Mcp-Session-Id</code>{' '}
                   response header from Step 1 into Step 2.
                 </p>
               </div>
@@ -1146,15 +1149,13 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
                   <h4 className="font-medium text-gray-900 dark:text-white">Step 1: Initialize session</h4>
                   <button
                     onClick={() => copyCurlToClipboard(generateCurlCommands().initCmd)}
-                    className={`flex items-center gap-2 px-3 py-1.5 text-sm text-white rounded-lg transition-colors duration-200 ${
-                      copied ? 'bg-green-700' : 'bg-green-600 hover:bg-green-700'
-                    }`}
+                    className={copyButtonClass(copied, true)}
                   >
                     <ClipboardDocumentIcon className="h-3 w-3" />
                     {copied ? 'Copied!' : 'Copy'}
                   </button>
                 </div>
-                <pre className="bg-gray-900 text-green-100 p-4 rounded-lg text-sm overflow-x-auto whitespace-pre-wrap">
+                <pre className="bg-gray-900 text-success-100 p-4 rounded-lg text-sm overflow-x-auto whitespace-pre-wrap">
                   {generateCurlCommands().initCmd}
                 </pre>
               </div>
@@ -1163,72 +1164,62 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
                   <h4 className="font-medium text-gray-900 dark:text-white">Step 2: List tools</h4>
                   <button
                     onClick={() => copyCurlToClipboard(generateCurlCommands().toolsCmd)}
-                    className={`flex items-center gap-2 px-3 py-1.5 text-sm text-white rounded-lg transition-colors duration-200 ${
-                      copied ? 'bg-green-700' : 'bg-green-600 hover:bg-green-700'
-                    }`}
+                    className={copyButtonClass(copied, true)}
                   >
                     <ClipboardDocumentIcon className="h-3 w-3" />
                     {copied ? 'Copied!' : 'Copy'}
                   </button>
                 </div>
-                <pre className="bg-gray-900 text-green-100 p-4 rounded-lg text-sm overflow-x-auto whitespace-pre-wrap">
+                <pre className="bg-gray-900 text-success-100 p-4 rounded-lg text-sm overflow-x-auto whitespace-pre-wrap">
                   {generateCurlCommands().toolsCmd}
                 </pre>
               </div>
             </div>
           ) : selectedIDE === 'goose' ? (
             <div className="space-y-2">
-              <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4 mb-3">
-                <h4 className="font-medium text-blue-900 dark:text-blue-100 mb-2">Goose Configuration:</h4>
-                <p className="text-sm text-blue-800 dark:text-blue-200">
+              <div className="bg-info-50 dark:bg-info-900/20 border border-info-200 dark:border-info-800 rounded-lg p-4 mb-3">
+                <h4 className="font-medium text-info-900 dark:text-info-100 mb-2">Goose Configuration:</h4>
+                <p className="text-sm text-info-800 dark:text-info-200">
                   Copy the YAML below and merge it into{' '}
-                  <code className="bg-blue-100 dark:bg-blue-800 px-1 rounded">~/.config/goose/config.yaml</code>{' '}
-                  under the <code className="bg-blue-100 dark:bg-blue-800 px-1 rounded">extensions:</code> key. If an{' '}
-                  <code className="bg-blue-100 dark:bg-blue-800 px-1 rounded">extensions:</code> block already exists, add this entry underneath it.
+                  <code className="bg-info-100 dark:bg-info-800 px-1 rounded">~/.config/goose/config.yaml</code>{' '}
+                  under the <code className="bg-info-100 dark:bg-info-800 px-1 rounded">extensions:</code> key. If an{' '}
+                  <code className="bg-info-100 dark:bg-info-800 px-1 rounded">extensions:</code> block already exists, add this entry underneath it.
                 </p>
               </div>
               <div className="flex items-center justify-between">
                 <h4 className="font-medium text-gray-900 dark:text-white">Configuration YAML:</h4>
                 <button
                   onClick={copyGooseConfigToClipboard}
-                  className={`flex items-center gap-2 px-3 py-2 text-white rounded-lg transition-colors duration-200 ${
-                    copied
-                      ? 'bg-green-700'
-                      : 'bg-green-600 hover:bg-green-700'
-                  }`}
+                  className={copyButtonClass(copied)}
                 >
                   <ClipboardDocumentIcon className="h-4 w-4" />
                   {copied ? 'Copied!' : 'Copy to Clipboard'}
                 </button>
               </div>
-              <pre className="bg-gray-900 text-green-100 p-4 rounded-lg text-sm overflow-x-auto">
+              <pre className="bg-gray-900 text-success-100 p-4 rounded-lg text-sm overflow-x-auto">
                 {generateGooseConfig()}
               </pre>
             </div>
           ) : selectedIDE === 'kiro' ? (
             <div className="space-y-2">
-              <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4 mb-3">
-                <h4 className="font-medium text-blue-900 dark:text-blue-100 mb-2">Kiro Configuration:</h4>
-                <p className="text-sm text-blue-800 dark:text-blue-200">
+              <div className="bg-info-50 dark:bg-info-900/20 border border-info-200 dark:border-info-800 rounded-lg p-4 mb-3">
+                <h4 className="font-medium text-info-900 dark:text-info-100 mb-2">Kiro Configuration:</h4>
+                <p className="text-sm text-info-800 dark:text-info-200">
                   Copy the JSON below and paste it into{' '}
-                  <code className="bg-blue-100 dark:bg-blue-800 px-1 rounded">~/.kiro/settings/mcp.json</code>
+                  <code className="bg-info-100 dark:bg-info-800 px-1 rounded">~/.kiro/settings/mcp.json</code>
                 </p>
               </div>
               <div className="flex items-center justify-between">
                 <h4 className="font-medium text-gray-900 dark:text-white">Configuration JSON:</h4>
                 <button
                   onClick={copyConfigToClipboard}
-                  className={`flex items-center gap-2 px-3 py-2 text-white rounded-lg transition-colors duration-200 ${
-                    copied
-                      ? 'bg-green-700'
-                      : 'bg-green-600 hover:bg-green-700'
-                  }`}
+                  className={copyButtonClass(copied)}
                 >
                   <ClipboardDocumentIcon className="h-4 w-4" />
                   {copied ? 'Copied!' : 'Copy to Clipboard'}
                 </button>
               </div>
-              <pre className="bg-gray-900 text-green-100 p-4 rounded-lg text-sm overflow-x-auto">
+              <pre className="bg-gray-900 text-success-100 p-4 rounded-lg text-sm overflow-x-auto">
                 {JSON.stringify(generateMCPConfig(), null, 2)}
               </pre>
             </div>
@@ -1238,17 +1229,13 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
                 <h4 className="font-medium text-gray-900 dark:text-white">Configuration JSON:</h4>
                 <button
                   onClick={copyConfigToClipboard}
-                  className={`flex items-center gap-2 px-3 py-2 text-white rounded-lg transition-colors duration-200 ${
-                    copied
-                      ? 'bg-green-700'
-                      : 'bg-green-600 hover:bg-green-700'
-                  }`}
+                  className={copyButtonClass(copied)}
                 >
                   <ClipboardDocumentIcon className="h-4 w-4" />
                   {copied ? 'Copied!' : 'Copy to Clipboard'}
                 </button>
               </div>
-              <pre className="bg-gray-900 text-green-100 p-4 rounded-lg text-sm overflow-x-auto">
+              <pre className="bg-gray-900 text-success-100 p-4 rounded-lg text-sm overflow-x-auto">
                 {JSON.stringify(generateMCPConfig(), null, 2)}
               </pre>
               {useOAuthLogin && selectedIDE === 'cursor' && (
