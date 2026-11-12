@@ -11,7 +11,7 @@ The chat client (the "host") renders the page. The gateway never renders it. Its
 | Direct server routes (`/<server>/mcp`) | Supported |
 | Virtual servers (`/virtual/<id>/mcp`) | Not supported yet |
 | Registry UI: MCP APP badge on the server card and on each tool | Supported |
-| Pages that set `_meta.ui.domain` (Claude only) | Known limitation, see below |
+| Pages that set `_meta.ui.domain` (Claude only) | Supported on direct routes; the gateway rewrites the value, see below |
 
 ## How it works
 
@@ -77,7 +77,16 @@ A virtual server does not support MCP Apps yet:
 
 ### `ui.domain` in Claude
 
-A page can set `_meta.ui.domain` to get a stable sandbox origin. Claude checks that value against a hash of the connector URL ([Claude's troubleshooting guide](https://claude.com/docs/connectors/building/mcp-apps/troubleshooting)). A backend computes the value from its own URL, and behind the gateway the connector URL is the gateway's, so the two differ. Expect Claude to show a `ui.domain mismatch` error for such a page until the gateway rewrites the field. Pages that do not set `ui.domain` are not affected.
+A page can set `_meta.ui.domain` to get a stable sandbox origin. Claude accepts only `<hash>.claudemcpcontent.com`, where `<hash>` is the first 32 hex characters of the SHA-256 of the connector URL ([Claude's troubleshooting guide](https://claude.com/docs/connectors/building/mcp-apps/troubleshooting)). A backend computes the value from its own URL, but behind the gateway the user connects to the gateway's URL, so Claude would refuse the page with "There was a problem displaying content".
+
+On direct routes the gateway fixes this. When a `resources/read` reply carries a `ui.domain` ending in `.claudemcpcontent.com`, the auth server's proxy replaces it with the value for the URL the client connected to: the gateway's public origin, then the route path exactly as the client sent it (a trailing slash counts), then any query string. Values in any other format are left alone, and so is every other method. If the reply cannot be parsed, it is forwarded unchanged.
+
+The public origin comes from configuration, never from request headers: `AUTH_SERVER_EXTERNAL_URL`, then `REGISTRY_URL`, then `settings.registry_url`. If none is set, the gateway does not rewrite the value. Two cases are not covered:
+
+- A deployment reachable under more than one host name: the value matches the first configured origin only.
+- A deployment that serves MCP routes under a path prefix: the origin drops the path, so the hash does not match.
+
+After the rewrite the page runs under a different sandbox origin than the backend chose. A page that relies on that exact origin, for example for an OAuth callback or a CORS allowlist on the backend's own API, may need its backend to accept the gateway-derived origin as well.
 
 ### Servers that store state per MCP session
 
@@ -94,6 +103,6 @@ These public servers serve MCP Apps and need no sign-in. They are run by others 
 | Server | URL | Notes |
 |---|---|---|
 | Budget Allocator (official ext-apps example, hosted by a community gallery) | `https://openwork-mcp-app-gallery-fable.vercel.app/apps/budget-allocator/mcp` | Stateless. Renders through the gateway in Claude. |
-| draw.io | `https://mcp.draw.io/mcp` | Sets `ui.domain`, so it tests the limitation above. |
+| draw.io | `https://mcp.draw.io/mcp` | Sets `ui.domain`, so it exercises the rewrite above. |
 
 The [ext-apps repository](https://github.com/modelcontextprotocol/ext-apps/tree/main/examples) has more examples you can run yourself.

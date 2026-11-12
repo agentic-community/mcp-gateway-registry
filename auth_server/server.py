@@ -53,6 +53,11 @@ from internal_request_token import (
 )
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from jwt.api_jwk import PyJWK
+from mcp_apps_domain import RESOURCES_READ_METHOD as MCP_APPS_RESOURCES_READ_METHOD
+from mcp_apps_domain import claude_ui_domain as mcp_apps_claude_ui_domain
+from mcp_apps_domain import connector_url as mcp_apps_connector_url
+from mcp_apps_domain import gateway_public_origin as mcp_apps_gateway_public_origin
+from mcp_apps_domain import rewrite_ui_domains as mcp_apps_rewrite_ui_domains
 from metrics_middleware import add_auth_metrics_middleware
 from starlette.background import BackgroundTask
 
@@ -10497,6 +10502,16 @@ async def mcp_proxy(
             server_name,
         )
 
+    if incoming_method == MCP_APPS_RESOURCES_READ_METHOD and 200 <= status_code < 300:
+        # MCP Apps: Claude shows a page only when its ui.domain matches the URL the
+        # user connected to, which is the gateway's, not the backend's.
+        body_bytes = _rewrite_mcp_apps_ui_domain(
+            body_bytes,
+            is_sse_response,
+            server_name,
+            request.url.query,
+        )
+
     if not should_filter:
         # Forward the upstream body and content_type unchanged. Many MCP
         # servers reply with text/event-stream (SSE) rather than plain JSON;
@@ -10559,6 +10574,37 @@ async def mcp_proxy(
         parsed["result"] = result
 
     return JSONResponse(content=parsed, status_code=status_code, headers=response_headers)
+
+
+def _rewrite_mcp_apps_ui_domain(
+    body_bytes: bytes,
+    is_sse: bool,
+    route_path: str,
+    query: str,
+) -> bytes:
+    """Point a resources/read page's Claude ui.domain at the gateway URL.
+
+    Returns the body unchanged when no public gateway URL is configured or the
+    reply has no Claude-format ui.domain. See auth_server/mcp_apps_domain.py.
+
+    Args:
+        body_bytes: The upstream reply body.
+        is_sse: True when the reply is text/event-stream.
+        route_path: The path the client used after the gateway origin.
+        query: The request's query string.
+
+    Returns:
+        The body to forward.
+    """
+    origin = mcp_apps_gateway_public_origin(getattr(settings, "registry_url", None))
+    if not origin:
+        return body_bytes
+    url = mcp_apps_connector_url(origin, route_path, query)
+    rewritten = mcp_apps_rewrite_ui_domains(body_bytes, is_sse, mcp_apps_claude_ui_domain(url))
+    if rewritten is None:
+        return body_bytes
+    logger.info(f"mcp_proxy: rewrote MCP Apps ui.domain for {redact_url(url)}")
+    return rewritten
 
 
 def _safe_parse_body(
