@@ -73,11 +73,14 @@ jobs:
 
       - name: Import the server module
         working-directory: ${{ runner.temp }}/app
-        # The server refuses to import without its two signing secrets; these
-        # values are placeholders for this check only. env -i keeps anything the
-        # runner provides off the import path, as in the image.
+        # The server refuses to import without its two signing secrets. Each run
+        # generates throwaway random values, so no secret-like literal lives in
+        # the repository. env -i keeps anything the runner provides off the
+        # import path, as in the image.
         run: |
+          signing_key="$(openssl rand -hex 32)"
+          marker_value="$(openssl rand -hex 32)"
           env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" \
-            SECRET_KEY=ci-only-placeholder-0123456789abcdef0123 \
-            AUTH_SERVER_NGINX_MARKER_SECRET=ci-only-placeholder-0123456789abcdef0123 \
+            SECRET_KEY="$signing_key" \
+            AUTH_SERVER_NGINX_MARKER_SECRET="$marker_value" \
             .venv/bin/python -c "import server; print('auth server imports with its own dependencies')"
