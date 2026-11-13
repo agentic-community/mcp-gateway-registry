@@ -126,8 +126,14 @@ class TestHelpers:
         rewritten = rewrite_ui_domains(body, is_sse=True, new_domain="x.claudemcpcontent.com")
 
         assert rewritten.startswith(b"data: not-json\n")
-        assert b"x.claudemcpcontent.com" in rewritten
-        assert DRAWIO_DOMAIN.encode() not in rewritten
+        reply_lines = [
+            line[len("data:") :]
+            for line in rewritten.decode().split("\n")
+            if line.startswith("data: {")
+        ]
+        assert len(reply_lines) == 1
+        item = json.loads(reply_lines[0])["result"]["contents"][0]
+        assert item["_meta"]["ui"]["domain"] == "x.claudemcpcontent.com"
 
     def test_rewrites_json_reply(self):
         """A Claude-format domain is replaced, and the rest of _meta is kept."""
