@@ -5808,9 +5808,6 @@ async def remove_service_api(
       -F "path=/myservice"
     ```
     """
-    from ..health.service import health_service
-    from ..services.scope_service import remove_server_scopes
-
     # Set audit action for server removal
     set_audit_action(
         request, "delete", "server", resource_id=path, description=f"Remove server at {path}"
@@ -5907,42 +5904,10 @@ async def remove_service_api(
             },
         )
 
-    logger.info(f"Service removed successfully: {path} by user {user_context.get('username')}")
+    # Search, nginx, scopes, webhook: shared with OpenAPI MCP servers (issue #2022).
+    from ..services.server_lifecycle import clean_up_removed_server
 
-    # Remove from DocumentDB search index
-    try:
-        from ..repositories.factory import get_search_repository
-
-        search_repo = get_search_repository()
-        await search_repo.remove_entity(path)
-    except Exception as e:
-        logger.warning(f"Failed to remove search index for {path}: {e}")
-
-    # Flush nginx config immediately (delete must take effect before response)
-    from ..core.nginx_service import nginx_reload_scheduler
-
-    nginx_reload_scheduler.mark_dirty()
-    await nginx_reload_scheduler.flush_now()
-
-    # Broadcast health status update to WebSocket clients
-    await health_service.broadcast_health_update(path)
-
-    # Remove server from scopes and reload auth server
-    try:
-        await remove_server_scopes(path)
-        logger.info(f"Successfully removed server {path} from scopes")
-    except Exception as e:
-        logger.warning(f"Failed to remove server {path} from scopes: {e}")
-
-    # Deletion webhook (Issue #742): server_info was fetched before removal
-    asyncio.create_task(
-        send_registration_webhook(
-            event_type="deletion",
-            registration_type="server",
-            card_data=strip_credentials_from_dict(server_info),
-            performed_by=user_context.get("username"),
-        )
-    )
+    await clean_up_removed_server(path, server_info, user_context.get("username"))
 
     return JSONResponse(
         status_code=200,
