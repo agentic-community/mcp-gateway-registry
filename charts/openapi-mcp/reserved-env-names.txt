@@ -1,0 +1,25 @@
+# Container settings (servers/openapi-mcp/settings.py ContainerSettings), env: block.
+HOST
+PORT
+BUILD_VERSION
+OPENAPI_MCP_SYNC_SECRET
+OPENAPI_MCP_BACKEND_TIMEOUT_SECONDS
+OPENAPI_MCP_MAX_RESPONSE_BYTES
+OPENAPI_MCP_CONVERSION_TIMEOUT_SECONDS
+# SSRF guard settings (GuardSettings), env: block. Same values as the registry.
+SSRF_ALLOWED_HOSTS
+SSRF_ALLOWED_CIDRS
+GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS
+GITHUB_EXTRA_HOSTS
+EGRESS_OAUTH_TRUSTED_IDP_HOSTS
+EGRESS_HTTP_POOL_MAX_CONNECTIONS
+EGRESS_HTTP_POOL_MAX_KEEPALIVE
+EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS
+EGRESS_HTTP_POOL_CONNECT_RETRIES
+# Forward-proxy egress read by registry/utils/url_guard.py from os.environ.
+EGRESS_FORWARD_PROXY_ENABLED
+EGRESS_FORWARD_PROXY_CA_BUNDLE
+# Read by the guard but owned by the registry: the container must not turn on
+# the registry-side OpenAPI identity or move the reserved host.
+OPENAPI_MCP_ENABLED
+OPENAPI_MCP_INTERNAL_URL

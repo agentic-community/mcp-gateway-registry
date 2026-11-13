@@ -2325,3 +2325,164 @@ variable "gateway_generic_stream_max_bytes" {
     error_message = "gateway_generic_stream_max_bytes must be at least 1024."
   }
 }
+
+# =============================================================================
+# OPENAPI MCP SERVERS (issue #2022, ships disabled by default)
+# =============================================================================
+# Serves REST APIs described by OpenAPI specs as MCP servers. When enabled, the
+# registry gets the OPENAPI_MCP_* settings and an openapi-mcp ECS service is
+# deployed behind Service Connect as openapi-mcp:9876. Only the registry security
+# group can reach it. The sync secret both tasks share is generated here.
+
+variable "openapi_mcp_enabled" {
+  description = "Deploy the openapi-mcp service and turn on OpenAPI MCP servers in the registry. Requires openapi_mcp_image_uri."
+  type        = bool
+  default     = false
+}
+
+variable "openapi_mcp_image_uri" {
+  description = "Container image URI for the openapi-mcp service, with a pinned version tag or digest (never :latest). Required when openapi_mcp_enabled is true."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = !var.openapi_mcp_enabled || trimspace(var.openapi_mcp_image_uri) != ""
+    error_message = "openapi_mcp_image_uri must be set when openapi_mcp_enabled is true."
+  }
+
+  validation {
+    condition     = !endswith(var.openapi_mcp_image_uri, ":latest")
+    error_message = "openapi_mcp_image_uri must use a pinned version tag or digest, not :latest."
+  }
+}
+
+variable "openapi_mcp_replicas" {
+  description = "Number of openapi-mcp tasks. Must be 1: the registry pushes each server's state to one address, and Service Connect hides individual replicas behind it, so a second replica would serve stale tools."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.openapi_mcp_replicas == 1
+    error_message = "openapi_mcp_replicas must be 1. The registry cannot push state to each replica behind Service Connect."
+  }
+}
+
+variable "openapi_mcp_max_servers" {
+  description = "Most OpenAPI MCP servers a deployment can have (1 to 100)."
+  type        = number
+  default     = 10
+
+  validation {
+    condition     = var.openapi_mcp_max_servers >= 1 && var.openapi_mcp_max_servers <= 100
+    error_message = "openapi_mcp_max_servers must be between 1 and 100."
+  }
+}
+
+variable "openapi_mcp_max_targets_per_server" {
+  description = "Most REST targets one OpenAPI MCP server can have (1 to 50)."
+  type        = number
+  default     = 10
+
+  validation {
+    condition     = var.openapi_mcp_max_targets_per_server >= 1 && var.openapi_mcp_max_targets_per_server <= 50
+    error_message = "openapi_mcp_max_targets_per_server must be between 1 and 50."
+  }
+}
+
+variable "openapi_mcp_max_tools_per_target" {
+  description = "Most tools one target may produce after its filters (1 to 500)."
+  type        = number
+  default     = 100
+
+  validation {
+    condition     = var.openapi_mcp_max_tools_per_target >= 1 && var.openapi_mcp_max_tools_per_target <= 500
+    error_message = "openapi_mcp_max_tools_per_target must be between 1 and 500."
+  }
+}
+
+variable "openapi_mcp_spec_max_bytes" {
+  description = "Largest OpenAPI spec, in bytes, the registry will fetch (1024 to 20971520)."
+  type        = number
+  default     = 5242880
+
+  validation {
+    condition     = var.openapi_mcp_spec_max_bytes >= 1024 && var.openapi_mcp_spec_max_bytes <= 20971520
+    error_message = "openapi_mcp_spec_max_bytes must be between 1024 and 20971520."
+  }
+}
+
+variable "openapi_mcp_reconcile_interval_seconds" {
+  description = "How often, in seconds, the registry compares stored and running OpenAPI MCP state (10 to 3600)."
+  type        = number
+  default     = 60
+
+  validation {
+    condition     = var.openapi_mcp_reconcile_interval_seconds >= 10 && var.openapi_mcp_reconcile_interval_seconds <= 3600
+    error_message = "openapi_mcp_reconcile_interval_seconds must be between 10 and 3600."
+  }
+}
+
+variable "openapi_mcp_backend_timeout_seconds" {
+  description = "Timeout, in seconds, for each backend REST call the openapi-mcp container makes (above 0, at most 300)."
+  type        = number
+  default     = 30
+
+  validation {
+    condition     = var.openapi_mcp_backend_timeout_seconds > 0 && var.openapi_mcp_backend_timeout_seconds <= 300
+    error_message = "openapi_mcp_backend_timeout_seconds must be above 0 and at most 300."
+  }
+}
+
+variable "openapi_mcp_max_response_bytes" {
+  description = "Largest backend response, in bytes, the openapi-mcp container passes to the agent (1024 to 104857600). Larger ones become a tool error."
+  type        = number
+  default     = 2097152
+
+  validation {
+    condition     = var.openapi_mcp_max_response_bytes >= 1024 && var.openapi_mcp_max_response_bytes <= 104857600
+    error_message = "openapi_mcp_max_response_bytes must be between 1024 and 104857600."
+  }
+}
+
+variable "openapi_mcp_conversion_timeout_seconds" {
+  description = "Longest one spec conversion may take in the openapi-mcp container, in seconds (above 0, at most 120)."
+  type        = number
+  default     = 10
+
+  validation {
+    condition     = var.openapi_mcp_conversion_timeout_seconds > 0 && var.openapi_mcp_conversion_timeout_seconds <= 120
+    error_message = "openapi_mcp_conversion_timeout_seconds must be above 0 and at most 120."
+  }
+}
+
+variable "openapi_mcp_extra_env" {
+  description = "Extra environment variables for the openapi-mcp service. List of objects with 'name' and 'value' fields. The forward-proxy variables (HTTP_PROXY, HTTPS_PROXY, NO_PROXY) are copied from registry_extra_env automatically, so both apply one egress policy. Reserved names (listed in charts/openapi-mcp/reserved-env-names.txt) are refused."
+  type        = list(object({ name = string, value = string }))
+  default     = []
+  sensitive   = true
+
+  validation {
+    condition = alltrue([
+      for entry in var.openapi_mcp_extra_env : !contains([
+        "OPENAPI_MCP_SYNC_SECRET",
+        "OPENAPI_MCP_BACKEND_TIMEOUT_SECONDS",
+        "OPENAPI_MCP_MAX_RESPONSE_BYTES",
+        "OPENAPI_MCP_CONVERSION_TIMEOUT_SECONDS",
+        "HOST",
+        "PORT",
+        "BUILD_VERSION",
+        "SSRF_ALLOWED_HOSTS",
+        "SSRF_ALLOWED_CIDRS",
+        "GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS",
+        "GITHUB_EXTRA_HOSTS",
+        "EGRESS_OAUTH_TRUSTED_IDP_HOSTS",
+        "EGRESS_FORWARD_PROXY_ENABLED",
+        "EGRESS_FORWARD_PROXY_CA_BUNDLE",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+      ], upper(trimspace(entry.name)))
+    ])
+    error_message = "openapi_mcp_extra_env must not override Terraform-managed variables (the OPENAPI_MCP_* container settings, HOST, PORT, BUILD_VERSION, the SSRF guard variables, or the forward-proxy variables, which come from registry_extra_env)."
+  }
+}

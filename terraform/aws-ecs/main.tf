@@ -384,6 +384,20 @@ module "mcp_gateway" {
   max_custom_records_per_type   = var.max_custom_records_per_type
   max_custom_types              = var.max_custom_types
 
+  # OpenAPI MCP servers (issue #2022, disabled by default)
+  openapi_mcp_enabled                    = var.openapi_mcp_enabled
+  openapi_mcp_image_uri                  = var.openapi_mcp_image_uri
+  openapi_mcp_replicas                   = var.openapi_mcp_replicas
+  openapi_mcp_max_servers                = var.openapi_mcp_max_servers
+  openapi_mcp_max_targets_per_server     = var.openapi_mcp_max_targets_per_server
+  openapi_mcp_max_tools_per_target       = var.openapi_mcp_max_tools_per_target
+  openapi_mcp_spec_max_bytes             = var.openapi_mcp_spec_max_bytes
+  openapi_mcp_reconcile_interval_seconds = var.openapi_mcp_reconcile_interval_seconds
+  openapi_mcp_backend_timeout_seconds    = var.openapi_mcp_backend_timeout_seconds
+  openapi_mcp_max_response_bytes         = var.openapi_mcp_max_response_bytes
+  openapi_mcp_conversion_timeout_seconds = var.openapi_mcp_conversion_timeout_seconds
+  openapi_mcp_extra_env                  = var.openapi_mcp_extra_env
+
   # Update check (admin "newer release available" banner)
   update_check_enabled        = var.update_check_enabled
   update_check_interval_hours = var.update_check_interval_hours

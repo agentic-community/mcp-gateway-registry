@@ -1,0 +1,184 @@
+suite: OpenAPI MCP servers across the stack (issue #2022)
+release:
+  name: test
+  namespace: default
+tests:
+  - it: leaves the feature off in the registry by default
+    templates:
+      - charts/registry/templates/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENAPI_MCP_ENABLED
+            value: "false"
+
+  - it: deploys the openapi-mcp pod when both flags are on
+    templates:
+      - charts/openapiMcp/templates/deployment.yaml
+    set:
+      openapiMcp:
+        enabled: true
+      registry:
+        app:
+          openapiMcpEnabled: true
+    asserts:
+      - isKind:
+          of: Deployment
+      - equal:
+          path: metadata.name
+          value: openapi-mcp
+
+  - it: points the registry and openapi-mcp at the same sync Secret
+    templates:
+      - charts/registry/templates/deployment.yaml
+      - charts/openapiMcp/templates/deployment.yaml
+    set:
+      openapiMcp:
+        enabled: true
+      registry:
+        app:
+          openapiMcpEnabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENAPI_MCP_SYNC_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: openapi-mcp-sync-secret
+                key: OPENAPI_MCP_SYNC_SECRET
+        template: charts/registry/templates/deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENAPI_MCP_SYNC_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: openapi-mcp-sync-secret
+                key: OPENAPI_MCP_SYNC_SECRET
+        template: charts/openapiMcp/templates/deployment.yaml
+
+  - it: global.openapiMcp.existingSyncSecret reaches both pods and suppresses the chart Secret
+    templates:
+      - charts/registry/templates/deployment.yaml
+      - charts/openapiMcp/templates/deployment.yaml
+      - charts/openapiMcp/templates/secret.yaml
+    set:
+      global:
+        openapiMcp:
+          existingSyncSecret: my-sync
+      openapiMcp:
+        enabled: true
+      registry:
+        app:
+          openapiMcpEnabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENAPI_MCP_SYNC_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: my-sync
+                key: OPENAPI_MCP_SYNC_SECRET
+        template: charts/registry/templates/deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENAPI_MCP_SYNC_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: my-sync
+                key: OPENAPI_MCP_SYNC_SECRET
+        template: charts/openapiMcp/templates/deployment.yaml
+      - hasDocuments:
+          count: 0
+        template: charts/openapiMcp/templates/secret.yaml
+
+  - it: global.ssrfAllowedCidrs reaches the openapi-mcp deployment
+    templates:
+      - charts/openapiMcp/templates/deployment.yaml
+    set:
+      global:
+        ssrfAllowedCidrs: "240.240.0.0/16"
+      openapiMcp:
+        enabled: true
+      registry:
+        app:
+          openapiMcpEnabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSRF_ALLOWED_CIDRS
+            value: "240.240.0.0/16"
+
+  - it: fails when openapiMcp.enabled is on but the registry flag is off
+    templates:
+      - templates/validate-values.yaml
+    set:
+      openapiMcp:
+        enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "openapiMcp.enabled .* and registry.app.openapiMcpEnabled .* must be equal"
+
+  - it: fails when the registry flag is on but the openapi-mcp subchart is off
+    templates:
+      - templates/validate-values.yaml
+    set:
+      registry:
+        app:
+          openapiMcpEnabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "must be equal"
+
+  - it: fails when the SSRF allowlists differ between the registry and openapi-mcp
+    templates:
+      - templates/validate-values.yaml
+    set:
+      openapiMcp:
+        enabled: true
+      registry:
+        app:
+          openapiMcpEnabled: true
+          ssrfAllowedHosts: internal.example.test
+    asserts:
+      - failedTemplate:
+          errorPattern: "registry app.ssrfAllowedHosts is \"internal.example.test\" but openapiMcp has \"\""
+
+  - it: fails when gatewayProxyAllowPrivateTargets differs
+    templates:
+      - templates/validate-values.yaml
+    set:
+      openapiMcp:
+        enabled: true
+        app:
+          gatewayProxyAllowPrivateTargets: true
+      registry:
+        app:
+          openapiMcpEnabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "gatewayProxyAllowPrivateTargets"
+
+  - it: renders when the SSRF settings match on both
+    templates:
+      - charts/openapiMcp/templates/deployment.yaml
+    set:
+      openapiMcp:
+        enabled: true
+        app:
+          ssrfAllowedHosts: internal.example.test
+      registry:
+        app:
+          openapiMcpEnabled: true
+          ssrfAllowedHosts: internal.example.test
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSRF_ALLOWED_HOSTS
+            value: internal.example.test

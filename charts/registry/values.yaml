@@ -346,6 +346,21 @@ app:
   customTypeCacheTtlSeconds: 60 # TTL (s) for the in-process custom-type descriptor cache
   maxCustomRecordsPerType: 1000 # Soft cap on records per type (0 = unlimited); best-effort, rejects create at cap
   maxCustomTypes: 50 # Cap on number of custom types (0 = unlimited); rejects type create at limit
+  # OpenAPI MCP servers (issue #2022). Serves REST APIs described by OpenAPI
+  # specs as MCP servers through the openapi-mcp container. Under the stack
+  # chart, set openapiMcp.enabled to the same value (a render-time check fails
+  # when they differ). OPENAPI_MCP_SYNC_SECRET is read from the openapi-mcp sync
+  # Secret through secretKeyRef, only when this is true.
+  openapiMcpEnabled: false
+  openapiMcpInternalUrl: "http://openapi-mcp:9876" # How the registry and nginx reach the container
+  openapiMcpMaxServers: 10 # 1 to 100
+  openapiMcpMaxTargetsPerServer: 10 # 1 to 50
+  openapiMcpMaxToolsPerTarget: 100 # 1 to 500
+  openapiMcpSpecMaxBytes: 5242880 # 1 KiB to 20 MiB
+  openapiMcpReconcileIntervalSeconds: 60 # 10 to 3600
+  # Name of the Secret holding OPENAPI_MCP_SYNC_SECRET. Matches the openapi-mcp
+  # chart's syncSecret.name; global.openapiMcp.existingSyncSecret wins when set.
+  openapiMcpSyncSecretName: openapi-mcp-sync-secret
   # Gateway generic-proxy feature (registry-consumed). Ships DISABLED. Do NOT
   # enable gatewayGenericProxyEnabled until the network egress policy (SSRF layer 1)
   # is deployed and the registration-time validation + CSRF defenses are in place.

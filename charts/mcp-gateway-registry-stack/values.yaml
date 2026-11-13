@@ -98,7 +98,13 @@ global:
   #   mongodb.password
   #   global.federation.staticToken / .encryptionKey  (federation only)
   #   registry.egressAuth.markerSecret
+  #   openapiMcp.syncSecret.value  (OpenAPI MCP servers only)
   generateSecrets: true
+  # OpenAPI MCP servers (issue #2022). Name a Secret you manage that holds
+  # OPENAPI_MCP_SYNC_SECRET to stop the chart creating openapi-mcp-sync-secret.
+  # Both the registry and openapi-mcp read it.
+  openapiMcp:
+    existingSyncSecret: ""
   # Federation configuration - shared between registry and auth-server
   federation:
     staticTokenAuthEnabled: false # If not provided, defaults to false
@@ -571,6 +577,14 @@ registry:
     customEntityTypesEnabled: false # Main switch for dynamic tabs + endpoints; off = no behavior change
     customTypeCacheTtlSeconds: 60 # TTL (s) for the in-process custom-type descriptor cache
     maxCustomRecordsPerType: 0 # Soft cap on records per type (0 = unlimited); rejects create at cap
+    # OpenAPI MCP servers (issue #2022). Must equal openapiMcp.enabled below; a
+    # render-time check fails when they differ.
+    openapiMcpEnabled: false
+    openapiMcpMaxServers: 10 # 1 to 100
+    openapiMcpMaxTargetsPerServer: 10 # 1 to 50
+    openapiMcpMaxToolsPerTarget: 100 # 1 to 500
+    openapiMcpSpecMaxBytes: 5242880 # 1 KiB to 20 MiB
+    openapiMcpReconcileIntervalSeconds: 60 # 10 to 3600
     # PRM `scopes_supported` override. Default matches Keycloak-DCR setup
     # (Claude Code, Claude.ai, Cursor) — the three scopes are present in every
     # Keycloak realm by default, so DCR succeeds. Set to "" to derive from the
@@ -680,6 +694,20 @@ registry:
   # See charts/registry/values.yaml for validation rules, reserved names,
   # and footgun warnings. These values are forwarded to the registry
   # subchart unchanged.
+  extraEnv: []
+  extraEnvFrom: []
+# OpenAPI MCP servers (issue #2022, disabled by default). Deploys one
+# openapi-mcp pod that serves REST APIs from OpenAPI specs as MCP servers. Only
+# the registry pods can reach it (NetworkPolicy). Set registry.app.openapiMcpEnabled
+# to the same value. The SSRF settings under openapiMcp.app must match the
+# registry's (ssrfAllowedHosts, gatewayProxyAllowPrivateTargets,
+# egressOauthTrustedIdpHosts, egressForwardProxyEnabled); a render-time check
+# fails when they differ. global.ssrfAllowedCidrs applies to both.
+# See charts/openapi-mcp/values.yaml for every field.
+openapiMcp:
+  enabled: false
+  app:
+    replicas: 1 # Must be 1
   extraEnv: []
   extraEnvFrom: []
 # MCPGW MCP server configuration.

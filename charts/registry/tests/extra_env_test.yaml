@@ -176,7 +176,10 @@ tests:
       # rendered) is env[62]; SECURITY_BLOCK_ON_SCAN_FAILURE (always rendered)
       # directly follows it;
       # the forward-proxy egress pair (issue #1832, always rendered) is
-      # env[57]/env[58]; user extraEnv entries are appended at the end.
+      # env[57]/env[58]; the seven OpenAPI MCP settings (issue #2022, always
+      # rendered) are env[59]-env[65] (OPENAPI_MCP_SYNC_SECRET is added only
+      # when app.openapiMcpEnabled is true); user extraEnv entries are
+      # appended at the end.
       #
       # The seven CIMD publisher vars (always rendered) sit at env[16]-env[22],
       # between SSRF_ALLOWED_CIDRS and A2A_REVERSE_PROXY_ENABLED, which is why
@@ -336,11 +339,19 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].env[58].name
           value: EGRESS_FORWARD_PROXY_CA_BUNDLE
+      # OpenAPI MCP settings (issue #2022), always rendered, after the
+      # forward-proxy pair.
       - equal:
           path: spec.template.spec.containers[0].env[59].name
+          value: OPENAPI_MCP_ENABLED
+      - equal:
+          path: spec.template.spec.containers[0].env[65].name
+          value: OPENAPI_MCP_RECONCILE_INTERVAL_SECONDS
+      - equal:
+          path: spec.template.spec.containers[0].env[66].name
           value: MY_FLAG
       - equal:
-          path: spec.template.spec.containers[0].env[60].name
+          path: spec.template.spec.containers[0].env[67].name
           value: MY_SECRET_VAR
 
   - it: appends extraEnvFrom entries after chart-managed envFrom sources

@@ -23,6 +23,11 @@ dependencies:
     version: 0.1.0
     repository: "file://../mcpgw"
     condition: mcpgw.enabled
+  - name: openapi-mcp
+    alias: openapiMcp
+    version: 0.1.0
+    repository: "file://../openapi-mcp"
+    condition: openapiMcp.enabled
   - name: keycloak-configure
     version: 0.2.0
     repository: "file://../keycloak-configure"

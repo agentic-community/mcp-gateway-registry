@@ -36,6 +36,8 @@ export class RegistrySecrets extends Construct {
   public readonly metricsAdminApiKey?: secretsmanager.Secret;
   public readonly otlpExporterHeaders?: secretsmanager.Secret;
   public readonly grafanaAdminPassword?: secretsmanager.Secret;
+  /** OpenAPI MCP sync secret (issue #2022). Deliberately NOT in accessStatements. */
+  public readonly openapiMcpSyncSecret?: secretsmanager.Secret;
 
   /** IAM statements granting GetSecretValue + KMS decrypt for all secrets above */
   public readonly accessStatements: iam.PolicyStatement[];
@@ -188,6 +190,19 @@ export class RegistrySecrets extends Construct {
         description: 'OTLP exporter authentication headers',
         kmsKey: this.kmsKey,
         stringValue: config.otel.exporterOtlpHeaders,
+      });
+    }
+
+    // OpenAPI MCP sync secret (issue #2022). The registry signs each push to
+    // the openapi-mcp container with a key derived from it, and the container
+    // verifies it. Generated, 48 letters and digits. It is left out of
+    // accessStatements below, which every service shares: ecs.Secret grants
+    // read to exactly the registry and openapi-mcp execution roles that use it.
+    if (config.openapiMcp.enabled) {
+      this.openapiMcpSyncSecret = _createSecret(this, 'OpenapiMcpSyncSecret', {
+        description: 'Signs registry-to-openapi-mcp sync tokens (registry and openapi-mcp only)',
+        kmsKey: this.kmsKey,
+        generateString: { passwordLength: 48, excludePunctuation: true },
       });
     }
 

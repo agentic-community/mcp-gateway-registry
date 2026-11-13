@@ -1,0 +1,127 @@
+suite: OpenAPI MCP servers registry settings (issue #2022)
+templates:
+  - deployment.yaml
+release:
+  name: test
+  namespace: default
+set:
+  global:
+    authProvider:
+      type: keycloak
+tests:
+  - it: renders the feature off with the default limits
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENAPI_MCP_ENABLED
+            value: "false"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENAPI_MCP_INTERNAL_URL
+            value: http://openapi-mcp:9876
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENAPI_MCP_MAX_SERVERS
+            value: "10"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENAPI_MCP_MAX_TARGETS_PER_SERVER
+            value: "10"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENAPI_MCP_MAX_TOOLS_PER_TARGET
+            value: "100"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENAPI_MCP_SPEC_MAX_BYTES
+            value: "5242880"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENAPI_MCP_RECONCILE_INTERVAL_SECONDS
+            value: "60"
+
+  - it: does not reference the sync secret while the feature is off
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENAPI_MCP_SYNC_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: openapi-mcp-sync-secret
+                key: OPENAPI_MCP_SYNC_SECRET
+
+  - it: reads the sync secret through secretKeyRef when the feature is on
+    set:
+      app:
+        openapiMcpEnabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENAPI_MCP_ENABLED
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENAPI_MCP_SYNC_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: openapi-mcp-sync-secret
+                key: OPENAPI_MCP_SYNC_SECRET
+
+  - it: uses global.openapiMcp.existingSyncSecret for the sync secret when set
+    set:
+      global:
+        openapiMcp:
+          existingSyncSecret: my-sync
+      app:
+        openapiMcpEnabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENAPI_MCP_SYNC_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: my-sync
+                key: OPENAPI_MCP_SYNC_SECRET
+
+  - it: passes operator limits through
+    set:
+      app:
+        openapiMcpMaxServers: 25
+        openapiMcpSpecMaxBytes: 1048576
+        openapiMcpInternalUrl: http://openapi-mcp.tools.svc.cluster.local:9876
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENAPI_MCP_MAX_SERVERS
+            value: "25"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENAPI_MCP_SPEC_MAX_BYTES
+            value: "1048576"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENAPI_MCP_INTERNAL_URL
+            value: http://openapi-mcp.tools.svc.cluster.local:9876
+
+  - it: rejects OPENAPI_MCP_SYNC_SECRET in extraEnv
+    set:
+      extraEnv:
+        - name: OPENAPI_MCP_SYNC_SECRET
+          value: oops
+    asserts:
+      - failedTemplate:
+          errorPattern: "OPENAPI_MCP_SYNC_SECRET"

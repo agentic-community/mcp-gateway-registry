@@ -2,8 +2,8 @@
  * McpServerService - L3 construct for optional MCP server / A2A agent ECS
  * services. A service is only created when its container image URI is non-empty.
  *
- * Handles: currenttime, mcpgw, realserverfaketools, flight-booking-agent,
- * travel-assistant-agent.
+ * Handles: currenttime, mcpgw, openapi-mcp, realserverfaketools,
+ * flight-booking-agent, travel-assistant-agent.
  *
  * Each service gets its own Fargate task definition, security group, Cloud Map
  * Service Connect entry, and optional EFS volume mounts.
@@ -68,6 +68,14 @@ export interface McpServerServiceProps {
   readonly additionalExecRoleStatements?: iam.PolicyStatement[];
   /** Additional task role policy statements */
   readonly additionalTaskRoleStatements?: iam.PolicyStatement[];
+  /** Container secrets from Secrets Manager (read is granted to the exec role) */
+  readonly secrets?: Record<string, ecs.Secret>;
+  /** Task and container memory in MiB (defaults to 1024) */
+  readonly memoryLimitMiB?: number;
+  /** Attach CPU autoscaling, min 1 and max 4 (defaults to true) */
+  readonly enableAutoScaling?: boolean;
+  /** Drop every Linux capability from the container (defaults to false) */
+  readonly dropAllCapabilities?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -207,10 +215,12 @@ export class McpServerService extends Construct {
     // Task Definition
     // ------------------------------------------------------------------
 
+    const memoryLimitMiB = props.memoryLimitMiB ?? 1024;
+
     const taskDef = new ecs.FargateTaskDefinition(this, 'TaskDef', {
       family: `${props.namePrefix}-${props.serviceName}`,
       cpu: 512,
-      memoryLimitMiB: 1024,
+      memoryLimitMiB,
       executionRole: taskExecRole,
       taskRole,
     });
@@ -238,13 +248,21 @@ export class McpServerService extends Construct {
     const healthCmd = props.healthCheckCommand
       ?? `nc -z localhost ${props.containerPort} || exit 1`;
 
+    let linuxParameters: ecs.LinuxParameters | undefined;
+    if (props.dropAllCapabilities) {
+      linuxParameters = new ecs.LinuxParameters(this, 'LinuxParams');
+      linuxParameters.dropCapabilities(ecs.Capability.ALL);
+    }
+
     const container = taskDef.addContainer(props.serviceName, {
       containerName: props.serviceName,
       image: ecs.ContainerImage.fromRegistry(props.imageUri),
       essential: true,
       cpu: 512,
-      memoryLimitMiB: 1024,
+      memoryLimitMiB,
       environment: props.environment,
+      secrets: props.secrets,
+      linuxParameters,
       logging: ecs.LogDrivers.awsLogs({
         logGroup,
         streamPrefix: 'ecs',
@@ -307,14 +325,16 @@ export class McpServerService extends Construct {
     // Auto Scaling (min 1, max 4, CPU 70%)
     // ------------------------------------------------------------------
 
-    const scaling = this.service.autoScaleTaskCount({
-      minCapacity: 1,
-      maxCapacity: 4,
-    });
+    if (props.enableAutoScaling ?? true) {
+      const scaling = this.service.autoScaleTaskCount({
+        minCapacity: 1,
+        maxCapacity: 4,
+      });
 
-    scaling.scaleOnCpuUtilization('CpuScaling', {
-      targetUtilizationPercent: 70,
-    });
+      scaling.scaleOnCpuUtilization('CpuScaling', {
+        targetUtilizationPercent: 70,
+      });
+    }
 
     // ------------------------------------------------------------------
     // Tags
