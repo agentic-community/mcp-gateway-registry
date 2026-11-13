@@ -1,0 +1,15 @@
+{
+  "server_name": "Budget Allocator (MCP App)",
+  "description": "The official ext-apps budget-allocator example: an interactive budget with sliders and charts that renders in clients that support MCP Apps. Hosted by a third-party community gallery with no SLA; for a stable test target, run the example yourself from modelcontextprotocol/ext-apps.",
+  "path": "/budget-allocator",
+  "proxy_pass_url": "https://openwork-mcp-app-gallery-fable.vercel.app/apps/budget-allocator/mcp",
+  "supported_transports": ["streamable-http"],
+  "tags": ["mcp-apps", "example", "budget"],
+  "provider_organization": "Model Context Protocol (ext-apps example)",
+  "provider_url": "https://github.com/modelcontextprotocol/ext-apps/tree/main/examples/budget-allocator-server",
+  "visibility": "public",
+  "metadata": {
+    "category": "example",
+    "official": false
+  }
+}
