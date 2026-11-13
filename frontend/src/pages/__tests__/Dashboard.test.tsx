@@ -98,6 +98,11 @@ jest.mock('../../components/VirtualServerCard', () => {
   M.displayName = 'VirtualServerCard';
   return M;
 });
+jest.mock('../../components/OpenApiServerList', () => {
+  const M = () => <div data-testid="openapi-server-list" />;
+  M.displayName = 'OpenApiServerList';
+  return M;
+});
 // Other heavy children that aren't under test.
 jest.mock('../../components/DiscoverTab', () => {
   const M = () => <div data-testid="discover-tab" />;
@@ -319,5 +324,34 @@ describe('Dashboard entity collections', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Agent Skills' }));
     expect(screen.getByTestId('skill-card')).toBeInTheDocument();
     expect(screen.queryByTestId('server-card')).not.toBeInTheDocument();
+  });
+});
+
+
+describe('Dashboard OpenAPI MCP servers view (issue #2022)', () => {
+  it('hides the OpenAPI tab when the feature flag is off', () => {
+    registryFeatures = { openapi_servers: false };
+    renderDashboard();
+    expect(screen.queryByRole('button', { name: 'OpenAPI MCP Servers' })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('openapi-server-list')).not.toBeInTheDocument();
+  });
+
+  it('hides the OpenAPI tab when the backend omits the flag', () => {
+    renderDashboard();
+    expect(screen.queryByRole('button', { name: 'OpenAPI MCP Servers' })).not.toBeInTheDocument();
+  });
+
+  it('hides the OpenAPI tab from a non-admin even when the flag is on', () => {
+    registryFeatures = { openapi_servers: true };
+    authUser = { username: 'dev', is_admin: false, can_modify_servers: true };
+    renderDashboard();
+    expect(screen.queryByRole('button', { name: 'OpenAPI MCP Servers' })).not.toBeInTheDocument();
+  });
+
+  it('renders the OpenAPI list for an admin when the flag is on', () => {
+    registryFeatures = { openapi_servers: true };
+    renderDashboard();
+    fireEvent.click(screen.getByRole('button', { name: 'OpenAPI MCP Servers' }));
+    expect(screen.getByTestId('openapi-server-list')).toBeInTheDocument();
   });
 });
