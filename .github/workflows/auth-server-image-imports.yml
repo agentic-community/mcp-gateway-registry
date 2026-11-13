@@ -1,0 +1,83 @@
+name: Auth Server Image Imports
+
+# The auth-server image installs only auth_server/pyproject.toml's dependencies,
+# then copies auth_server/ and registry/ into /app (docker/Dockerfile.auth). The
+# other test jobs install the repository's full dependency set, so a registry
+# module the auth server imports can depend on a package the image lacks and
+# still pass CI. That shipped once: registry/core/mcp_apps.py imported the MCP
+# SDK, and the auth server crashed on startup with "No module named 'mcp'".
+#
+# This job builds the image's environment without Docker and imports the server
+# module the way the entrypoint does. It runs on registry/ changes too, because
+# that is where such an import usually comes from.
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'auth_server/**'
+      - 'registry/**'
+      - 'docker/Dockerfile.auth'
+      - '.github/workflows/auth-server-image-imports.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'auth_server/**'
+      - 'registry/**'
+      - 'docker/Dockerfile.auth'
+      - '.github/workflows/auth-server-image-imports.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  imports:
+    name: "Auth Server Image Imports"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.14"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "latest"
+
+      - name: Lay out /app the way docker/Dockerfile.auth does
+        run: |
+          mkdir -p "$RUNNER_TEMP/app"
+          cp auth_server/pyproject.toml auth_server/uv.lock "$RUNNER_TEMP/app/"
+
+      - name: Install only the auth server's dependencies
+        working-directory: ${{ runner.temp }}/app
+        run: uv sync --frozen --no-dev --python 3.14
+
+      - name: Copy the code the image copies
+        run: |
+          cp -r auth_server/. "$RUNNER_TEMP/app/"
+          cp -r registry "$RUNNER_TEMP/app/registry"
+
+      - name: Import the server module
+        working-directory: ${{ runner.temp }}/app
+        # The server refuses to import without its two signing secrets; these
+        # values are placeholders for this check only. env -i keeps anything the
+        # runner provides off the import path, as in the image.
+        run: |
+          env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" \
+            SECRET_KEY=ci-only-placeholder-0123456789abcdef0123 \
+            AUTH_SERVER_NGINX_MARKER_SECRET=ci-only-placeholder-0123456789abcdef0123 \
+            .venv/bin/python -c "import server; print('auth server imports with its own dependencies')"
