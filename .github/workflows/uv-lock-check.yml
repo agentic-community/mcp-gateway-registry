@@ -35,6 +35,7 @@ jobs:
           - "metrics-service"
           - "servers/currenttime"
           - "servers/mcpgw"
+          - "servers/openapi-mcp"
           - "servers/realserverfaketools"
           - "agents/a2a"
 

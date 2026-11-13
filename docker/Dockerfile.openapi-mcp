@@ -1,0 +1,67 @@
+# openapi-mcp: serves REST APIs from OpenAPI specs as MCP servers (issue #2022).
+#
+# Build from the repo root, because the image copies a few registry modules:
+#   docker build -f docker/Dockerfile.openapi-mcp -t openapi-mcp .
+#
+# The registry modules are the SSRF guard and the sync-token verifier, copied
+# unchanged so the container enforces exactly the registry's policy. They are
+# copied file by file; the rest of the registry (and its SECRET_KEY-validating
+# settings) never enters the image.
+FROM python:3.14.9-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    UV_NO_CACHE=1 \
+    PYTHONPATH=/app
+
+# apt-get upgrade pulls in security patches against the base image's packages.
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
+    curl \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd -g 1000 appuser && useradd -u 1000 -g appuser appuser
+
+WORKDIR /app
+
+RUN pip install uv==0.13.5 && chown appuser:appuser /app
+
+USER appuser
+RUN uv venv .venv --python 3.14
+
+# Dependency manifests first, so the install layer caches on the lock.
+COPY --chown=appuser:appuser servers/openapi-mcp/pyproject.toml /app/pyproject.toml
+COPY --chown=appuser:appuser servers/openapi-mcp/uv.lock        /app/uv.lock
+
+# If the lock pins a quarantine cutoff ([options] exclude-newer), re-export it so
+# --locked re-resolves under the same constraint (mirrors Dockerfile.mcp-server-light).
+RUN CUTOFF=$(awk '/^\[options\]/{o=1;next} /^\[/{o=0} o&&/^exclude-newer/{gsub(/.*= *"|" *$/,"");print;exit}' uv.lock) && \
+    if [ -n "$CUTOFF" ]; then export UV_EXCLUDE_NEWER="$CUTOFF"; echo "Using UV_EXCLUDE_NEWER=$CUTOFF from uv.lock"; fi && \
+    uv sync --locked --no-dev
+
+# The registry modules the container imports, and nothing else from registry/.
+COPY --chown=appuser:appuser registry/exceptions.py               /app/registry/exceptions.py
+COPY --chown=appuser:appuser registry/utils/__init__.py           /app/registry/utils/__init__.py
+COPY --chown=appuser:appuser registry/utils/url_guard.py          /app/registry/utils/url_guard.py
+COPY --chown=appuser:appuser registry/utils/branding_files.py     /app/registry/utils/branding_files.py
+COPY --chown=appuser:appuser registry/common/__init__.py          /app/registry/common/__init__.py
+COPY --chown=appuser:appuser registry/common/log_redaction.py     /app/registry/common/log_redaction.py
+COPY --chown=appuser:appuser registry/common/secret_key.py        /app/registry/common/secret_key.py
+COPY --chown=appuser:appuser registry/auth/__init__.py            /app/registry/auth/__init__.py
+COPY --chown=appuser:appuser registry/auth/openapi_mcp_sync.py    /app/registry/auth/openapi_mcp_sync.py
+
+# Container source last. Tests stay out of the image.
+COPY --chown=appuser:appuser servers/openapi-mcp/*.py /app/
+
+# Fail the build if a copied module grew an import the image does not carry.
+RUN .venv/bin/python -c "import server, registry.utils.url_guard, registry.auth.openapi_mcp_sync"
+
+ARG BUILD_VERSION="1.0.0"
+ENV BUILD_VERSION=$BUILD_VERSION
+
+EXPOSE 9876
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD curl -fsS "http://127.0.0.1:${PORT:-9876}/health" || exit 1
+
+ENTRYPOINT ["/app/.venv/bin/python", "server.py"]
