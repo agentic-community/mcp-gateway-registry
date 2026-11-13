@@ -181,3 +181,32 @@ Usage:
 {{- fail (printf "global.generateSecrets is false and %s has no value, so the chart will not generate one. Set %s explicitly, or set %s to a Secret that already holds it. Generation is unsafe under ArgoCD and other `helm template` based tools: they render without cluster access, so the chart cannot read the previous value back and every sync would produce a different secret." .key .value .byo) -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+OpenAPI MCP servers (issue #2022): the feature needs the registry flag and the
+openapi-mcp subchart together, and the container's SSRF guard must apply the
+registry's policy. Fails the render when they disagree, instead of deploying a
+registry that pushes to a missing pod or a pod with a looser guard.
+*/}}
+{{- define "mcp-gateway-registry-stack.validateOpenapiMcp" -}}
+{{- /* .Values itself is not a plain map, so dig starts one level down. */ -}}
+{{- $openapiMcp := .Values.openapiMcp | default dict -}}
+{{- $registry := .Values.registry | default dict -}}
+{{- $stackEnabled := dig "enabled" false $openapiMcp -}}
+{{- $registryEnabled := dig "app" "openapiMcpEnabled" false $registry -}}
+{{- if ne (toString $stackEnabled) (toString $registryEnabled) -}}
+{{- fail (printf "openapiMcp.enabled (%v) and registry.app.openapiMcpEnabled (%v) must be equal. Set both to true to turn on OpenAPI MCP servers, or both to false." $stackEnabled $registryEnabled) -}}
+{{- end -}}
+{{- if $stackEnabled -}}
+  {{- $pairs := list
+        (list "app.ssrfAllowedHosts" (dig "app" "ssrfAllowedHosts" "" $registry) (dig "app" "ssrfAllowedHosts" "" $openapiMcp))
+        (list "app.gatewayProxyAllowPrivateTargets" (dig "app" "gatewayProxyAllowPrivateTargets" false $registry) (dig "app" "gatewayProxyAllowPrivateTargets" false $openapiMcp))
+        (list "app.egressForwardProxyEnabled" (dig "app" "egressForwardProxyEnabled" false $registry) (dig "app" "egressForwardProxyEnabled" false $openapiMcp))
+        (list "egressAuth.oauthTrustedIdpHosts / app.egressOauthTrustedIdpHosts" (dig "egressAuth" "oauthTrustedIdpHosts" "" $registry) (dig "app" "egressOauthTrustedIdpHosts" "" $openapiMcp)) -}}
+  {{- range $pairs -}}
+    {{- if ne (toString (index . 1)) (toString (index . 2)) -}}
+    {{- fail (printf "registry %s is %q but openapiMcp has %q. The openapi-mcp SSRF guard must apply the registry's policy; set the same value on both." (index . 0) (toString (index . 1)) (toString (index . 2))) -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- end -}}

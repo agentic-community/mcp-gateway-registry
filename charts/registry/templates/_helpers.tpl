@@ -191,3 +191,13 @@ Call as: {{ include "registry.sessionSetting" (list . "sessionMaxAgeSeconds" (li
 {{- end -}}
 {{- toJson $result -}}
 {{- end -}}
+
+{{/*
+Name of the Secret holding OPENAPI_MCP_SYNC_SECRET (issue #2022). The stack's
+global.openapiMcp.existingSyncSecret wins, then app.openapiMcpSyncSecretName.
+The openapi-mcp chart resolves the same name, so both pods read one Secret.
+*/}}
+{{- define "registry.openapiMcpSyncSecretName" -}}
+{{- $existing := dig "openapiMcp" "existingSyncSecret" "" .Values.global -}}
+{{- $existing | default .Values.app.openapiMcpSyncSecretName -}}
+{{- end -}}

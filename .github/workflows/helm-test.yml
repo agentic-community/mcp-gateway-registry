@@ -246,6 +246,8 @@ jobs:
               "registry.awsRegistry.federationEnabled=true",
               "global.ingress.tls=false",
               "global.ingress.routingMode=host",
+              "openapiMcp.enabled=true",
+              "registry.app.openapiMcpEnabled=true",
           ])
 
           out = subprocess.run(
@@ -281,6 +283,7 @@ jobs:
               "registry": "charts/registry/reserved-env-names.txt",
               "auth-server": "charts/auth-server/reserved-env-names.txt",
               "mcpgw-server": "charts/mcpgw/reserved-env-names.txt",
+              "openapi-mcp": "charts/openapi-mcp/reserved-env-names.txt",
           }
 
           rendered_by_chart = {name: set() for name in deployment_to_reserved}

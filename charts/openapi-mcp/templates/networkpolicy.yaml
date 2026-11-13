@@ -1,0 +1,34 @@
+{{- /*
+Only the registry pods may connect to openapi-mcp: the registry pushes server
+state to it, and nginx inside the registry pod proxies MCP traffic to it. Every
+other source is denied, because the pod accepts any MCP request it is sent.
+*/ -}}
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Values.app.name }}-ingress
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    app.kubernetes.io/name: {{ .Values.app.name }}
+    app.kubernetes.io/component: {{ .Values.app.name }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Values.app.name }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- required "openapi-mcp.networkPolicy.fromPodSelector must not be empty" .Values.networkPolicy.fromPodSelector | toYaml | nindent 14 }}
+          {{- with .Values.networkPolicy.fromNamespaceSelector }}
+          namespaceSelector:
+            matchLabels:
+              {{- toYaml . | nindent 14 }}
+          {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.app.port }}
+{{- end }}
