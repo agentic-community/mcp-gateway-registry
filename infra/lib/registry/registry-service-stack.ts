@@ -608,7 +608,9 @@ export class RegistryServiceStack extends cdk.Stack {
         secrets: openapiMcpSecrets,
         ingressSecurityGroup: registryService.securityGroup,
         healthCheckCommand: `curl -fsS http://127.0.0.1:${OPENAPI_MCP_PORT}/health || exit 1`,
-        memoryLimitMiB: 2048,
+        // Load test (10 servers x 10 targets) peaked at 293 MiB; 1024 MiB is the
+        // smallest Fargate size for 0.5 vCPU.
+        memoryLimitMiB: 1024,
         enableAutoScaling: false,
         dropAllCapabilities: true,
         namePrefix,

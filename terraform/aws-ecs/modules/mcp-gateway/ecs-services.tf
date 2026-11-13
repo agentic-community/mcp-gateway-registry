@@ -2934,8 +2934,9 @@ module "ecs_service_mcpgw" {
 # name, and every replica would need every push (openapi_mcp_replicas is
 # validated to 1).
 #
-# Memory: the LLD estimates about 1 GiB for 100 targets of 1 MiB. 2048 MiB is
-# that estimate plus headroom, pending the pre-release load test.
+# Memory: a load test of 10 servers x 10 targets (one 4.4 MB spec) peaked at
+# 293 MiB (2026-11-13). That plus 50% is about 440 MiB; 1024 MiB is the smallest
+# Fargate size for 0.5 vCPU, which spec conversion (CPU-bound) needs.
 module "ecs_service_openapi_mcp" {
   #checkov:skip=CKV_TF_1:Module version is pinned via version constraint
   source  = "terraform-aws-modules/ecs/aws//modules/service"
@@ -2945,7 +2946,7 @@ module "ecs_service_openapi_mcp" {
   name          = "${local.name_prefix}-openapi-mcp"
   cluster_arn   = var.ecs_cluster_arn
   cpu           = "512"
-  memory        = "2048"
+  memory        = "1024"
   desired_count = var.openapi_mcp_replicas
 
   # One task only, so no autoscaling.
@@ -2989,7 +2990,7 @@ module "ecs_service_openapi_mcp" {
   container_definitions = {
     openapi-mcp = {
       cpu                    = 512
-      memory                 = 2048
+      memory                 = 1024
       essential              = true
       image                  = var.openapi_mcp_image_uri
       versionConsistency     = "disabled"

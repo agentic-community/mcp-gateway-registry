@@ -1,4 +1,4 @@
-.PHONY: help test test-unit test-integration test-e2e test-fast test-coverage test-auth test-servers test-search test-health test-core install-dev lint format check-deps clean build-keycloak push-keycloak build-and-push-keycloak deploy-keycloak update-keycloak save-outputs view-logs view-logs-keycloak view-logs-registry view-logs-auth view-logs-follow list-images build push build-push generate-manifest validate-config publish-dockerhub publish-dockerhub-component publish-dockerhub-version publish-dockerhub-no-mirror publish-local compose-up-agents compose-down-agents compose-logs-agents build-agents push-agents uv-update-locks
+.PHONY: help test test-unit test-integration test-e2e test-fast test-coverage test-auth test-servers test-search test-health test-core install-dev lint format check-deps clean build-keycloak push-keycloak build-and-push-keycloak deploy-keycloak update-keycloak save-outputs view-logs view-logs-keycloak view-logs-registry view-logs-auth view-logs-follow list-images build push build-push build-openapi-mcp push-openapi-mcp build-push-openapi-mcp generate-manifest validate-config publish-dockerhub publish-dockerhub-component publish-dockerhub-version publish-dockerhub-no-mirror publish-local compose-up-agents compose-down-agents compose-logs-agents build-agents push-agents uv-update-locks
 
 # Default target
 help:
@@ -52,6 +52,9 @@ help:
 	@echo "  push IMAGE=name             Push specific image to ECR"
 	@echo "  build-push                  Build and push all images"
 	@echo "  build-push IMAGE=name       Build and push specific image"
+	@echo "  build-openapi-mcp           Build the openapi-mcp image locally"
+	@echo "  push-openapi-mcp            Push the openapi-mcp image to ECR"
+	@echo "  build-push-openapi-mcp      Build and push the openapi-mcp image"
 	@echo "  build-push-deploy           Build, push, and deploy (default: both services)"
 	@echo "  build-push-deploy IMAGE=x   Build, push, deploy specific (registry or auth_server)"
 	@echo "  generate-manifest           Generate image-manifest.json for Terraform"
@@ -237,6 +240,16 @@ push:
 
 build-push:
 	@$(if $(NO_CACHE),NO_CACHE=$(NO_CACHE),) $(if $(IMAGE),IMAGE=$(IMAGE),) ./scripts/build-images.sh build-push
+
+# OpenAPI MCP servers (issue #2022): the image entry in build-config.yaml is openapi_mcp.
+build-openapi-mcp:
+	@$(MAKE) build IMAGE=openapi_mcp
+
+push-openapi-mcp:
+	@$(MAKE) push IMAGE=openapi_mcp
+
+build-push-openapi-mcp:
+	@$(MAKE) build-push IMAGE=openapi_mcp
 
 build-push-deploy:
 	@./scripts/deploy.sh $(if $(IMAGE),--service $(IMAGE),) $(if $(NO_CACHE),--no-cache,) --skip-monitor

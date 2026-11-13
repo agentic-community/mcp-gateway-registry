@@ -96,7 +96,8 @@ resources:
     memory: 512Mi
   limits:
     cpu: 1
-    memory: 2Gi
+    # A load test of 10 servers x 10 targets peaked at 293 MiB (2026-11-13).
+    memory: 1Gi
 # Extra environment variables appended to the container's `env:` list.
 # Names must be unique and must not collide with reserved-env-names.txt.
 extraEnv: []
