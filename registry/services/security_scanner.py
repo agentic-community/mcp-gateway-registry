@@ -96,7 +96,12 @@ _SCANNER_SHIM = (
 )
 
 
-def _scan_failure_message(exc: BaseException, headers: str | None) -> str:
+def _scan_failure_message(
+    exc: BaseException,
+    headers: str | None,
+    credential_expected: bool | None = None,
+    appended_mcp_path: bool = False,
+) -> str:
     """Build the failure string the UI's scan modal shows.
 
     This is the one place an operator reads about a failed scan, so it has to carry
@@ -119,13 +124,47 @@ def _scan_failure_message(exc: BaseException, headers: str | None) -> str:
     if isinstance(exc, LLMAnalyzerUnavailableError):
         return str(exc)
     message = f"security scan failed ({type(exc).__name__})"
-    if not headers:
+    # Issue #2032: the hint used to appear on every unauthenticated failure, even
+    # for a server configured with no credential at all, where it points the wrong
+    # way. None means the caller did not say, which keeps the old behavior.
+    if not headers and credential_expected is not False:
         message += (
             " - the scan ran without a credential. A server that requires "
             "authentication will refuse it. Check this server's scan/discovery "
             "credential, then rescan."
         )
+    # The scanner reports only "connection cancelled", never the HTTP status, so
+    # name the registry's own guess instead. Nothing from the URL goes into this
+    # message: it is shown in the UI and a URL can carry secrets.
+    if appended_mcp_path:
+        message += (
+            " - the registry added /mcp to the server URL to reach its MCP endpoint. "
+            "If the endpoint is at a different path, set mcp_endpoint, then rescan."
+        )
     return message
+
+
+def scan_credential_expected(
+    server_info: dict | None,
+) -> bool:
+    """Return True when the server is configured to scan with a credential.
+
+    Mirrors the resolver behind the scan's credential (backend_oauth.with_bearer
+    and the static header fallback): a backend auth scheme, a designated OAuth
+    discovery identity, or an OBO exchange.
+
+    Args:
+        server_info: The server record.
+
+    Returns:
+        True when one of those is configured.
+    """
+    info = server_info or {}
+    if (info.get("auth_scheme") or "none") != "none":
+        return True
+    if (info.get("oauth_discovery") or {}).get("enabled"):
+        return True
+    return info.get("egress_auth_mode") == "obo_exchange"
 
 
 def _extract_bearer_token_from_headers(headers: str) -> str | None:
@@ -273,6 +312,7 @@ class SecurityScannerService:
         headers: str | None = None,
         timeout: int | None = None,
         mcp_endpoint: str | None = None,
+        credential_expected: bool | None = None,
     ) -> SecurityScanResult:
         """
         Scan an MCP server for security vulnerabilities.
@@ -286,6 +326,9 @@ class SecurityScannerService:
             timeout: Scan timeout in seconds (overrides config)
             mcp_endpoint: Optional explicit MCP endpoint URL. If set, used directly
                 instead of appending /mcp to server_url.
+            credential_expected: Whether the server is configured with a scan
+                credential (see scan_credential_expected). Decides whether a failed
+                unauthenticated scan blames the credential. None keeps the hint.
 
         Returns:
             SecurityScanResult containing scan results
@@ -332,10 +375,16 @@ class SecurityScannerService:
 
         # Resolve endpoint URL using centralized utility
         # Priority: explicit mcp_endpoint > URL detection > append /mcp
+        registered_url = server_url
         server_url = get_endpoint_url(
             proxy_pass_url=server_url,
             transport_type="streamable-http",
             mcp_endpoint=mcp_endpoint,
+        )
+        # True when the registry guessed the endpoint by adding /mcp, which is
+        # what a scan of the wrong URL usually comes down to.
+        appended_mcp_path = not mcp_endpoint and server_url.rstrip("/") != registered_url.rstrip(
+            "/"
         )
 
         safe_server_url = redact_url(server_url)
@@ -405,7 +454,12 @@ class SecurityScannerService:
             RuntimeError,
             UrlValidationError,
         ) as exc:
-            failure = _scan_failure_message(exc, headers)
+            failure = _scan_failure_message(
+                exc,
+                headers,
+                credential_expected=credential_expected,
+                appended_mcp_path=appended_mcp_path,
+            )
             logger.error(
                 f"Security scan failed endpoint={safe_server_url} type={type(exc).__name__} "
                 f"authenticated={bool(headers)}",
@@ -437,7 +491,12 @@ class SecurityScannerService:
             await self._scan_repo.create(result.model_dump())
             return result
         except Exception as exc:
-            failure = _scan_failure_message(exc, headers)
+            failure = _scan_failure_message(
+                exc,
+                headers,
+                credential_expected=credential_expected,
+                appended_mcp_path=appended_mcp_path,
+            )
             logger.error(
                 f"Unexpected security scan failure endpoint={safe_server_url} "
                 f"type={type(exc).__name__} authenticated={bool(headers)}",

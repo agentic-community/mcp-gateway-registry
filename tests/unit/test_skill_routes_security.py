@@ -273,6 +273,7 @@ class TestScanUsesSkillCredentials:
         scanner = MagicMock()
         scanner.get_scan_config.return_value = config
         scanner.scan_skill = AsyncMock(return_value=_make_safe_scan_result("/test-skill"))
+        scanner.get_scan_result = AsyncMock(return_value=None)
         return scanner
 
     async def _registration_scan(self, skill):

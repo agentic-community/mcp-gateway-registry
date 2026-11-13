@@ -358,6 +358,10 @@ Administrators can trigger manual security scans for specific servers using the 
 
 **Description:** Initiates a new security scan for the specified server and returns the results.
 
+**Clearing `security-pending`:** when a rescan passes, the registry removes the `security-pending` tag that a failing scan added. The same applies to `POST /api/agents/{path}/rescan` and to skill rescans. The scanner does not record who added the tag, so the registry reads it from the scan history: the tag stays if the scan before this one also passed, because then a person added it afterwards. The one case this misjudges is a tag added by hand while the last scan was failing; a passing rescan clears it.
+
+**When a scan fails:** the error in the scan view names the exception type and, where it applies, the likely cause. It mentions a missing credential only when the server is configured with one (a backend auth scheme, a discovery identity, or an OBO exchange). It notes when the registry reached the server by adding `/mcp` to its URL, which is the usual cause when the real endpoint lives elsewhere; set `mcp_endpoint` and rescan. The message never includes the URL itself. The scanner does not report the HTTP status, so the message cannot either.
+
 **Authentication:** JWT Bearer token or session cookie
 
 **Authorization:** Requires admin privileges

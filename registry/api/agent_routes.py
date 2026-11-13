@@ -76,6 +76,7 @@ from ..services.lifecycle_events import (
     user_can_change_lifecycle_status,
 )
 from ..services.registration_gate_service import check_registration_gate
+from ..services.security_pending import tags_after_passing_scan
 from ..services.visibility import gateway_routable_agent_interfaces
 from ..services.webhook_service import send_registration_webhook
 from ..utils.metadata import (
@@ -112,6 +113,30 @@ logger = logging.getLogger(__name__)
 
 
 router = APIRouter()
+
+
+async def _clear_agent_security_pending(
+    path: str,
+    previous_scan: dict | None,
+) -> bool:
+    """Remove a scanner-set security-pending tag after a passing rescan (issue #2032).
+
+    Args:
+        path: The agent path.
+        previous_scan: The latest stored scan result from before this rescan.
+
+    Returns:
+        True when the tag was removed.
+    """
+    agent = await agent_service.get_agent_info(path)
+    if not agent:
+        return False
+    new_tags = tags_after_passing_scan(agent.tags, previous_scan)
+    if new_tags is None:
+        return False
+    await agent_service.update_agent(path, {"tags": new_tags})
+    logger.info(f"Removed 'security-pending' from agent {path} after a passing rescan")
+    return True
 
 
 async def _perform_agent_security_scan_on_registration(
@@ -2038,6 +2063,8 @@ async def rescan_agent(
         # Trigger security scan
         from ..services.agent_scanner import agent_scanner_service
 
+        # Read before scanning: the new result replaces it as the latest.
+        previous_scan = await agent_scanner_service.get_scan_result(path)
         scan_result = await agent_scanner_service.scan_agent(
             agent_card=agent_card_dict,
             agent_path=path,
@@ -2045,6 +2072,8 @@ async def rescan_agent(
             api_key=None,  # Use default API key from config
             timeout=None,  # Use default timeout from config
         )
+        if scan_result.is_safe:
+            await _clear_agent_security_pending(path, previous_scan)
 
         # Return the full scan result including raw_output for detailed findings
         return scan_result.model_dump(mode="json")
