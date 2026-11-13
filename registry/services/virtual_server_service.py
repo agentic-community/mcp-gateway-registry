@@ -13,6 +13,7 @@ from typing import (
 )
 
 from ..auth.tool_filter import filter_tools_for_user
+from ..core.mcp_apps import is_model_visible
 from ..exceptions import (
     VirtualServerNotFoundError,
     VirtualServerValidationError,
@@ -564,6 +565,16 @@ class VirtualServerService:
                     f"server '{server_path}'. Available tools: "
                     f"{', '.join(tool_names[:10])}"
                 )
+                continue
+            # MCP Apps: a tool only its page may call must not reach the model,
+            # and a virtual server's tools/list is what the model reads.
+            mapped_tool = next(t for t in tool_list if t.get("name") == mapping.tool_name)
+            if not is_model_visible(mapped_tool):
+                errors.append(
+                    f"Tool '{mapping.tool_name}' in backend server '{server_path}' can "
+                    f"only be called by its MCP App page (its visibility does not "
+                    f"include 'model'), so a virtual server cannot expose it"
+                )
         if errors:
             raise VirtualServerValidationError(
                 "Tool mapping validation failed:\n" + "\n".join(f"- {e}" for e in errors)
@@ -758,6 +769,12 @@ class VirtualServerService:
                 logger.warning(
                     f"Tool '{mapping.tool_name}' not found in backend '{server_path}', skipping"
                 )
+                continue
+
+            # MCP Apps: skip a tool only its page may call. New mappings to one are
+            # rejected; this covers a mapping made before the tool became app-only.
+            if not is_model_visible(tool_meta):
+                logger.debug(f"Dropping virtual tool '{mapping.tool_name}': app-only MCP Apps tool")
                 continue
 
             tool_scopes = scope_overrides.get(effective_name, [])

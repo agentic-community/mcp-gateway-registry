@@ -3504,7 +3504,6 @@ async def get_service_tools(
             updated_server_info = server_info.copy()
             updated_server_info["tool_list"] = tool_list
             updated_server_info["num_tools"] = new_tool_count
-            updated_server_info["num_mcp_app_tools"] = count_mcp_app_tools(tool_list)
 
             # Save updated server info
             success = await server_service.update_server(service_path, updated_server_info)
@@ -4604,7 +4603,6 @@ async def register_service_api(
         "path": path,
         "tags": tag_list,
         "num_tools": len(tool_list) if tool_list else num_tools,
-        "num_mcp_app_tools": count_mcp_app_tools(tool_list),
         "license": license_str,
         "tool_list": tool_list,
         "deployment": deployment,

@@ -176,8 +176,12 @@ def is_model_visible(
         tool: A tool dict as the registry stores it.
 
     Returns:
-        True unless the tool has a ui_visibility list without "model".
+        True unless the tool has a valid page and a ui_visibility list
+        without "model". Visibility on a tool without a valid page is ignored,
+        as is a missing list (the spec default is model and app).
     """
+    if not stored_ui_resource_uri(tool):
+        return True
     visibility = tool.get(TOOL_UI_VISIBILITY_KEY)
     if not isinstance(visibility, list):
         return True
