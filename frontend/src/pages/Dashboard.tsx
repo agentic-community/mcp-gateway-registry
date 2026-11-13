@@ -9,6 +9,7 @@ import ServerCard from '../components/ServerCard';
 import AgentCard from '../components/AgentCard';
 import SkillCard from '../components/SkillCard';
 import VirtualServerCard from '../components/VirtualServerCard';
+import OpenApiServerList from '../components/OpenApiServerList';
 import SemanticSearchResults from '../components/SemanticSearchResults';
 import { useSemanticSearch } from '../hooks/useSemanticSearch';
 import { useVirtualServers, useVirtualServer } from '../hooks/useVirtualServers';
@@ -383,9 +384,12 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     | 'agents'
     | 'skills'
     | 'virtual'
+    | 'openapi'
     | 'external'
     | `custom:${string}`;
   const [viewFilter, setViewFilter] = useState<ViewFilter>('discover');
+  // Issue #2022: the OpenAPI view is for admins, and only when the feature is on.
+  const showOpenApiView = !!registryConfig?.features.openapi_servers && !!user?.is_admin;
 
   // Whether the user can DISCOVER any resource of an entity family, i.e. holds
   // the family's list_ scope for at least one resource (or "all"). Admins always
@@ -450,6 +454,9 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     if (viewFilter === 'virtual' && registryConfig?.features.virtual_servers === false) {
       setViewFilter('discover');
     }
+    if (viewFilter === 'openapi' && !showOpenApiView) {
+      setViewFilter('discover');
+    }
     if (viewFilter === 'agents' && registryConfig?.features.agents === false) {
       setViewFilter('discover');
     }
@@ -469,7 +476,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         setViewFilter('discover');
       }
     }
-  }, [viewFilter, registryConfig, hasListAccess]);
+  }, [viewFilter, registryConfig, hasListAccess, showOpenApiView]);
 
   // Collapsible state for registry groups (tracks which groups are expanded)
   // Key is registry name: 'local' or peer registry ID like 'peer-registry-lob-1'
@@ -2491,6 +2498,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                       authToken={agentApiToken}
                       egressConnect={egressStateByPath.get(server.path)}
                       onEgressChanged={reloadEgressState}
+                      openApiEnabled={showOpenApiView}
                     />
                   );
 
@@ -2787,6 +2795,11 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
           />
         )}
 
+      {/* OpenAPI MCP Servers Section (admins only, issue #2022) */}
+      {showOpenApiView && viewFilter === 'openapi' && (
+        <OpenApiServerList onShowToast={showToast} />
+      )}
+
       {/* External Registries Section */}
       {registryConfig?.features.federation !== false && viewFilter === 'external' && (
         <ExternalRegistriesSection
@@ -2941,6 +2954,14 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                 Virtual MCP Servers
               </button>
             )}
+            {showOpenApiView && (
+              <button
+                onClick={() => handleChangeViewFilter('openapi')}
+                className={viewTabClass(viewFilter === 'openapi')}
+              >
+                OpenAPI MCP Servers
+              </button>
+            )}
             {registryConfig?.features.agents !== false && (
               <button
                 onClick={() => handleChangeViewFilter('agents')}
@@ -2984,7 +3005,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
             )}
           </div>
 
-          {viewFilter !== 'discover' && !currentCustomType && (
+          {viewFilter !== 'discover' && viewFilter !== 'openapi' && !currentCustomType && (
           <>
           {/* Search Bar and Refresh Button */}
           <div className="flex gap-4 items-center">

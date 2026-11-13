@@ -31,6 +31,9 @@ interface RegistryConfig {
     federation: boolean;
     gateway_proxy: boolean;
     custom_types: boolean;
+    // Issue #2022: OpenAPI MCP servers (OPENAPI_MCP_ENABLED). Older backends
+    // omit the field, which reads as off.
+    openapi_servers?: boolean;
   };
   custom_types: CustomTypeTab[];
 }
@@ -52,6 +55,7 @@ const DEFAULT_CONFIG: RegistryConfig = {
     federation: true,
     gateway_proxy: true,
     custom_types: false,
+    openapi_servers: false,
   },
   custom_types: [],
 };

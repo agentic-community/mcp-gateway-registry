@@ -47,6 +47,8 @@ interface Server {
   num_tools?: number;
   // MCP Apps: tools that open an interactive page in the chat client.
   num_mcp_app_tools?: number;
+  // Issue #2022: set from metadata.openapi_server.slug for OpenAPI MCP servers.
+  openapi_server_slug?: string;
   type: 'server' | 'agent';
   proxy_pass_url?: string;
   // ARD discovery imports (#1296): URL to the source registry's server.json
@@ -118,6 +120,13 @@ interface ServerStatsContextType {
 }
 
 const ServerStatsContext = createContext<ServerStatsContextType | undefined>(undefined);
+
+
+/** The OpenAPI MCP server slug from a server's metadata, if it has one (issue #2022). */
+const _openApiServerSlug = (metadata: unknown): string | undefined => {
+  const openapi = (metadata as { openapi_server?: { slug?: unknown } } | null)?.openapi_server;
+  return typeof openapi?.slug === 'string' ? openapi.slug : undefined;
+};
 
 // Helper function to map backend health status to frontend status
 const mapHealthStatus = (healthStatus: string): 'healthy' | 'unhealthy' | 'unknown' | 'local' => {
@@ -281,6 +290,7 @@ export const ServerStatsProvider: React.FC<ServerStatsProviderProps> = ({ childr
           status: mapHealthStatus(serverInfo.health_status || 'unknown'),
           num_tools: serverInfo.num_tools || 0,
           num_mcp_app_tools: serverInfo.num_mcp_app_tools || 0,
+          openapi_server_slug: _openApiServerSlug(serverInfo.metadata),
           type: 'server' as const,
           proxy_pass_url: serverInfo.proxy_pass_url || '',
           version: serverInfo.version,
