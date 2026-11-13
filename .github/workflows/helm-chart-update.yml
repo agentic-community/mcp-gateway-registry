@@ -69,6 +69,7 @@ jobs:
             charts/auth-server/values.yaml \
             charts/registry/values.yaml \
             charts/mcpgw/values.yaml \
+            charts/openapi-mcp/values.yaml \
             charts/mongodb-configure/values.yaml; do
             VERSION="$VERSION" yq -i '.global.image.tag = strenv(VERSION)' "$VALUES_FILE"
             echo "Updated $VALUES_FILE"
@@ -195,6 +196,7 @@ jobs:
             - `charts/auth-server/values.yaml`
             - `charts/registry/values.yaml`
             - `charts/mcpgw/values.yaml`
+            - `charts/openapi-mcp/values.yaml`
             - `charts/mongodb-configure/values.yaml`
             - `terraform/aws-ecs/variables.tf`
             - `terraform/aws-ecs/modules/mcp-gateway/variables.tf`

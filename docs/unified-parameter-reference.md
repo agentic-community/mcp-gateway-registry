@@ -492,6 +492,36 @@ enable flag to `false` for air-gapped clusters or to silence the banner.
 
 ---
 
+## Group 13d - OpenAPI MCP Servers (Issue #2022)
+
+REST APIs served as MCP servers by the `openapi-mcp` container. See [`docs/design/openapi-mcp-servers-design.md`](design/openapi-mcp-servers-design.md). Off by default, so there is no behavior change. The registry turns the feature off at startup in `registry-only` mode or when `REGISTRY_MODE` excludes MCP servers. The sync secret must be the same value for the registry and the container, and must differ from `SECRET_KEY`. On Helm, set both `openapiMcp.enabled` (deploys the container) and `registry.app.openapiMcpEnabled` (turns the registry side on); the stack chart fails the render if they differ.
+
+Registry settings:
+
+| Parameter | Docker (`.env`) | Terraform (`.tfvars`) | Helm (`values.yaml`) | Purpose |
+|-----------|-----------------|-----------------------|----------------------|---------|
+| Enable OpenAPI MCP servers | `OPENAPI_MCP_ENABLED` | `openapi_mcp_enabled` | `registry.app.openapiMcpEnabled` and `openapiMcp.enabled` | Main switch: `/api/openapi-servers` routes, reconciler, SSRF identity, and the container. Default `false`. |
+| Container URL | `OPENAPI_MCP_INTERNAL_URL` | | `registry.app.openapiMcpInternalUrl` | How the registry and nginx reach the container. Must use a hostname. Default `http://openapi-mcp:9876`. Terraform sets it from Service Connect. |
+| Sync secret **(secret)** | `OPENAPI_MCP_SYNC_SECRET` | generated (`random_password` in Secrets Manager) | `openapiMcp.syncSecret.*` or `global.openapiMcp.existingSyncSecret` | Signs registry-to-container calls. At least 32 characters, not `SECRET_KEY`. |
+| Max servers | `OPENAPI_MCP_MAX_SERVERS` | `openapi_mcp_max_servers` | `registry.app.openapiMcpMaxServers` | OpenAPI MCP servers per deployment (1 to 100). Default `10`. |
+| Max targets per server | `OPENAPI_MCP_MAX_TARGETS_PER_SERVER` | `openapi_mcp_max_targets_per_server` | `registry.app.openapiMcpMaxTargetsPerServer` | REST targets per server (1 to 50). Default `10`. |
+| Max tools per target | `OPENAPI_MCP_MAX_TOOLS_PER_TARGET` | `openapi_mcp_max_tools_per_target` | `registry.app.openapiMcpMaxToolsPerTarget` | Tools one target may produce after its include filters (1 to 500). Default `100`. |
+| Max spec size (bytes) | `OPENAPI_MCP_SPEC_MAX_BYTES` | `openapi_mcp_spec_max_bytes` | `registry.app.openapiMcpSpecMaxBytes` | Largest spec the registry fetches (1024 to 20971520). Default `5242880`. |
+| Reconcile interval (s) | `OPENAPI_MCP_RECONCILE_INTERVAL_SECONDS` | `openapi_mcp_reconcile_interval_seconds` | `registry.app.openapiMcpReconcileIntervalSeconds` | Seconds between full reconcile passes (10 to 3600). Default `60`. |
+
+Container settings (the container also receives the registry's `SSRF_*`, `GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS`, forward-proxy and `EGRESS_HTTP_POOL_*` values, so its SSRF guard applies the same policy):
+
+| Parameter | Docker (`.env`) | Terraform (`.tfvars`) | Helm (`values.yaml`) | Purpose |
+|-----------|-----------------|-----------------------|----------------------|---------|
+| Image | compose `build` or `OPENAPI_MCP_VERSION` (prebuilt) | `openapi_mcp_image_uri` | `openapiMcp.image.*` | Pinned image; Terraform and CDK refuse `:latest`. |
+| Replicas | | `openapi_mcp_replicas` | `openapiMcp.app.replicas` | Must be `1`: the registry pushes state to one address. |
+| Backend timeout (s) | `OPENAPI_MCP_BACKEND_TIMEOUT_SECONDS` | `openapi_mcp_backend_timeout_seconds` | `openapiMcp.app.backendTimeoutSeconds` | Timeout for each backend REST call. Default `30`. |
+| Max response size (bytes) | `OPENAPI_MCP_MAX_RESPONSE_BYTES` | `openapi_mcp_max_response_bytes` | `openapiMcp.app.maxResponseBytes` | Largest backend response passed to the agent; larger ones become a tool error. Default `2097152`. |
+| Conversion timeout (s) | `OPENAPI_MCP_CONVERSION_TIMEOUT_SECONDS` | `openapi_mcp_conversion_timeout_seconds` | `openapiMcp.app.conversionTimeoutSeconds` | Longest one spec conversion may take. Default `10`. |
+| Extra environment | `extra_env/openapi-mcp.env` | `openapi_mcp_extra_env` | `openapiMcp.extraEnv` | Extra variables for the container, checked against its reserved names. |
+
+---
+
 ## Group 14 — GitHub Private Repo Access (for SKILL.md fetching)
 
 Only the Helm `mcpgw` subchart and Docker expose these today.

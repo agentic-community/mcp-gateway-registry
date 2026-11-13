@@ -85,6 +85,15 @@ class TestPreview:
         assert "items_fetch_item" in result.tools
         assert result.warnings == []
 
+    async def test_rename_by_method_and_path(self, items_spec):
+        result = await preview(
+            _request(items_spec, tool_name_overrides={"GET /echo": "echo"}), TIMEOUT
+        )
+
+        assert "items_echo" in result.tools
+        assert "items_Echo_Things" not in result.tools
+        assert result.warnings == []
+
     async def test_invalid_spec_raises_conversion_error(self):
         with pytest.raises(ConversionError):
             await preview(

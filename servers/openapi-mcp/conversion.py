@@ -6,6 +6,7 @@ sees in the preview is what the hub serves.
 
 import asyncio
 import logging
+import re
 from collections.abc import Callable
 from typing import Any
 
@@ -39,6 +40,8 @@ HTTP_METHODS: tuple[str, ...] = (
 READ_ONLY_METHODS: frozenset[str] = frozenset({"GET", "HEAD", "OPTIONS"})
 DESTRUCTIVE_METHODS: frozenset[str] = frozenset({"DELETE"})
 MAX_DESCRIPTION_OVERRIDE_CHARS: int = 2000
+UNSAFE_TOOL_NAME_CHARS = re.compile(r"[^A-Za-z0-9_.\-]+")
+MAX_BASE_TOOL_NAME_CHARS: int = 56
 # The preview never sends a request; this base URL only satisfies the client.
 PREVIEW_BASE_URL: str = "http://preview.invalid"
 
@@ -112,6 +115,13 @@ def _closed_input_schema(
     return closed
 
 
+def _safe_tool_name(
+    name: str,
+) -> str:
+    """Keep a renamed tool to the characters MCP clients accept."""
+    return UNSAFE_TOOL_NAME_CHARS.sub("_", name).strip("_")[:MAX_BASE_TOOL_NAME_CHARS] or "tool"
+
+
 def _component_adjuster(
     options: TargetOptions,
 ) -> Callable[[HTTPRoute, Any], None]:
@@ -123,6 +133,11 @@ def _component_adjuster(
     ) -> None:
         if not isinstance(component, OpenAPITool):
             return
+        # FastMCP's mcp_names only matches operationId; this also renames an
+        # operation without one, keyed "METHOD /path" (prototype finding 8).
+        rename = options.tool_name_overrides.get(f"{route.method.upper()} {route.path}")
+        if rename:
+            component.name = _safe_tool_name(rename)
         override = options.description_overrides.get(component.name)
         if override:
             component.description = override[:MAX_DESCRIPTION_OVERRIDE_CHARS]
@@ -218,11 +233,8 @@ def _unmatched_warnings(
     operations = _iter_operations(spec)
     all_tags = {tag for *_rest, tags in operations for tag in tags}
     all_keys: set[str] = set()
-    operation_ids: set[str] = set()
     for method, path, operation_id, _tags in operations:
         all_keys |= _operation_keys(method, path, operation_id)
-        if operation_id:
-            operation_ids.add(operation_id)
 
     warnings = [
         f"include_tags entry '{t}' matches no tag in the spec"
@@ -235,9 +247,9 @@ def _unmatched_warnings(
         if o not in all_keys
     ]
     warnings += [
-        f"tool_name_overrides key '{k}' matches no operationId"
+        f"tool_name_overrides key '{k}' matches no operationId or 'METHOD /path'"
         for k in options.tool_name_overrides
-        if k not in operation_ids
+        if k not in all_keys
     ]
     warnings += [
         f"description_overrides key '{k}' matches no tool"

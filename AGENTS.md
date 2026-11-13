@@ -478,6 +478,7 @@ working in those areas.
   names from registry values must be injective encodings. A header only a NEW
   template sets/clears is forgeable behind an OLD one: honor it only with the
   marker under a new header name (`X-Validate-Binding-Secret`).
+- **Bridges to third-party APIs:** a library that copies inbound headers onto outbound requests (FastMCP OpenAPI tools do) must sit behind an inbound-header allowlist, so gateway identity, forwarding and routing headers never reach a third-party API. A built-in private target (airegistry-tools, the openapi-mcp container) is admitted only by exact entity identity, through a profile limited to that entity's URLs, never by host.
 - **After fixing a finding, grep the pattern repo-wide**, because findings usually have
   siblings the report didn't list.
 

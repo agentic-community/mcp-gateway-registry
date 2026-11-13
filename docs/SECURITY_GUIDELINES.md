@@ -374,6 +374,9 @@ sanitizer that isn't called) is equivalent to no check.
   after registration, or that reached the connect through the override field, is
   still blocked before any credential is attached or process spawned.
 
+- **A built-in private identity follows the entity, not the host.** The guard admits two first-party private targets: the bundled airegistry-tools server (`mcpgw-server`) and the openapi-mcp container (issue #2022). Each is admitted only when the entity type, the registered path and the full target URL all match, and the selected profile may reach only that entity's URLs: three exact URLs for airegistry-tools, and `<container>/s/<slug>/mcp` by pattern for each OpenAPI MCP server, so a health check or tool refresh can never reach the container's `/internal/*` control API. Both hostnames stay reserved in every other profile, even when the feature is off, so an `SSRF_ALLOWED_HOSTS` entry cannot admit them for an ordinary server. Read feature flags with `is True` and URLs with `isinstance(str)`, so a partial or mocked settings object fails closed. Name the container by hostname: an IP literal is classified before the reserved-host check runs.
+- **A bridge that copies inbound headers onto outbound calls must strip them to an allowlist first.** FastMCP's OpenAPI tools copy every inbound HTTP header onto the backend request except a short exclusion list, so behind the gateway they would send the caller's identity headers, forwarding addresses and internal routing headers to a third-party API. The openapi-mcp dispatcher keeps only the MCP headers a hub needs (`content-type`, `accept`, `mcp-protocol-version`, `mcp-session-id`, `mcp-method`, `mcp-name`, `last-event-id`, `content-length`) before the library sees the request. Apply the same allowlist at the ASGI boundary of any library that forwards headers on its own.
+
 ## Injection (nginx config generation, NoSQL/regex)
 
 - **Sanitize at EVERY interpolation site AND validate at the source.** A
