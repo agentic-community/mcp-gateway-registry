@@ -71,12 +71,26 @@ Each tool is marked from its HTTP method: `GET`, `HEAD` and `OPTIONS` are read-o
 
 The registry database is the only stored state. The container keeps each server in memory and the registry pushes it back whenever needed:
 
-- After a container restart, calls to OpenAPI MCP servers return 404 for about 15 seconds, until the registry notices the restart and pushes every server again.
+- After a container restart, calls to OpenAPI MCP servers return 404 until the registry notices the restart and pushes every server again. With 10 servers of 10 targets each, that took 23 seconds.
 - After a registry restart, the registry compares what it stores with what the container runs and pushes anything stale.
 - A change that cannot reach the container in time returns `sync_status: "pending"`. The registry retries every `OPENAPI_MCP_RECONCILE_INTERVAL_SECONDS` (60 by default).
 
 The registry's calls to the container carry each target's credential in plain HTTP on the internal network, signed with the sync token. Only the registry and nginx can reach the container. A cluster that needs TLS on internal hops can set `OPENAPI_MCP_INTERNAL_URL` to an `https` URL.
 
-The container runs one replica, because the registry pushes state to one address. Turning the feature off leaves stored servers in place without a backend; the registry logs their names at startup. Turn the feature back on, or delete them with it on.
+The container runs one replica, because the registry pushes state to one address. With 10 servers of 10 targets each, including one 4.4 MB spec, it peaked at 293 MiB. Turning the feature off leaves stored servers in place without a backend; the registry logs their names at startup. Turn the feature back on, or delete them with it on.
 
 Metrics are under `mcpgw_openapi_mcp_*` on the registry's Prometheus endpoint. Alert when `mcpgw_openapi_mcp_state{kind="container_reachable"}` stays at 0 for five minutes.
+
+## End-to-end test
+
+`tests/integration/test_openapi_mcp_e2e.py` runs against a local Compose stack with the feature on, and is skipped otherwise. It uses a mock REST API (`tests/integration/openapi_mock_api.py`) that serves its own spec, checks each auth scheme, and echoes the headers it receives.
+
+```bash
+docker run -d --name openapi-mock-api --network mcp-gateway-registry_default \
+    -v "$PWD/tests/integration/openapi_mock_api.py:/mock/openapi_mock_api.py:ro" \
+    --entrypoint /app/.venv/bin/python mcp-gateway-registry-registry \
+    -m uvicorn --app-dir /mock openapi_mock_api:app --host 0.0.0.0 --port 8000
+# add openapi-mock-api to SSRF_ALLOWED_HOSTS in .env, then recreate registry and openapi-mcp
+OPENAPI_MCP_E2E=1 uv run pytest tests/integration/test_openapi_mcp_e2e.py -v --no-cov
+```
+
