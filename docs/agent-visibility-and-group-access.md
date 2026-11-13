@@ -68,6 +68,8 @@ The two layers work as an AND:
 
 A user must pass **both** checks to see the agent.
 
+Check 2 compares group names without surrounding slashes or whitespace, so an `allowed_groups` entry of `/hr-team` matches a user group `hr-team` and the reverse. Keycloak sends the full path (`/hr-team`) when *Full group path* is on, and browser sessions store the name without the slash. Nested paths keep their parent (`/org/hr-team` matches `org/hr-team`, not `hr-team`), and case still has to match.
+
 For browser sessions the groups in check 2 are the ones kept at login: only groups that a scope maps (or that `ALLOWED_IDP_GROUPS` lists). A group named only in `allowed_groups` therefore works for a bearer token but not in the browser. Map it to a scope with no `server_access` and no `ui_permissions`, which keeps the group without granting any access, so both behave the same. The [FAQ](faq/group-restricted-agent-visibility.md#idp-independence) has the details.
 
 ## Concrete Scenario

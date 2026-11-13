@@ -401,6 +401,27 @@ class TestGroupToScopeMapping:
             mock_repo.get_group_mappings_bulk.assert_awaited_once_with(groups)
 
     @pytest.mark.asyncio
+    async def test_fallback_merges_mappings_that_share_a_canonical_name(self):
+        """``team`` and ``/team`` keys both contribute when the repository fails.
+
+        The in-memory fallback keys on the canonical name, so a dict built by
+        overwriting would keep only one of the two keys' scopes (issue #1689).
+        """
+        from auth_server.server import map_groups_to_scopes
+
+        mock_repo = AsyncMock()
+        mock_repo.get_group_mappings_bulk.side_effect = RuntimeError("storage down")
+        config = {"group_mappings": {"team": ["scope-a"], "/team": ["scope-b"]}}
+
+        with (
+            patch("auth_server.server.get_scope_repository", return_value=mock_repo),
+            patch("auth_server.server.SCOPES_CONFIG", config),
+        ):
+            scopes = await map_groups_to_scopes(["team"])
+
+        assert sorted(scopes) == ["scope-a", "scope-b"]
+
+    @pytest.mark.asyncio
     async def test_map_groups_to_scopes_no_duplicates(self, mock_scopes_config):
         """Test that duplicate scopes are removed."""
         from auth_server.server import map_groups_to_scopes

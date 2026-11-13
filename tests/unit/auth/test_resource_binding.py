@@ -571,6 +571,60 @@ class TestValidateUserCanBindResource:
             )
 
     @pytest.mark.asyncio
+    async def test_agent_group_restricted_matches_full_path_allowed_group(self) -> None:
+        """``/team`` in allowed_groups lets a session carrying ``team`` bind the agent."""
+        from registry.services import agent_service as agent_mod
+
+        fake_agent = MagicMock()
+        fake_agent.visibility = "group-restricted"
+        fake_agent.registered_by = "someone-else"
+        fake_agent.allowed_groups = ["/team"]
+        with patch.object(
+            agent_mod.agent_service,
+            "get_agent_info",
+            new=AsyncMock(return_value=fake_agent),
+        ):
+            member = {
+                "is_admin": False,
+                "accessible_agents": ["code-reviewer"],
+                "username": "me",
+                "groups": ["team"],
+            }
+            stranger = {**member, "groups": ["other"]}
+            assert (
+                await resource_binding.validate_user_can_bind_resource(
+                    "agent", "code-reviewer", member
+                )
+                is True
+            )
+            assert (
+                await resource_binding.validate_user_can_bind_resource(
+                    "agent", "code-reviewer", stranger
+                )
+                is False
+            )
+
+    @pytest.mark.asyncio
+    async def test_skill_group_matches_full_path_allowed_group(self) -> None:
+        from registry.schemas.skill_models import VisibilityEnum
+
+        fake_skill = MagicMock()
+        fake_skill.visibility = VisibilityEnum.GROUP
+        fake_skill.owner = "someone-else"
+        fake_skill.allowed_groups = ["/team"]
+        fake_service = MagicMock()
+        fake_service.get_skill = AsyncMock(return_value=fake_skill)
+        with patch(
+            "registry.services.skill_service.get_skill_service",
+            return_value=fake_service,
+        ):
+            ctx = {"is_admin": False, "username": "me", "groups": ["team"]}
+            assert (
+                await resource_binding.validate_user_can_bind_resource("skill", "/my-skill", ctx)
+                is True
+            )
+
+    @pytest.mark.asyncio
     async def test_skill_private_only_owner(self) -> None:
         from registry.schemas.skill_models import VisibilityEnum
 
