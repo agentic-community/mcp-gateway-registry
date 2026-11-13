@@ -1084,7 +1084,7 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
                                 MCP APP
                               </Badge>
                             )}
-                            {hasMcpAppPage(tool) && !(tool.ui_visibility || []).includes('model') && (
+                            {hasMcpAppPage(tool) && Array.isArray(tool.ui_visibility) && !tool.ui_visibility.includes('model') && (
                               <Badge
                                 tone="gray"
                                 shape="square"

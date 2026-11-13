@@ -3,6 +3,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
+from ..core.mcp_apps import count_mcp_app_tools
 from ..core.metrics import ASSET_ID_CONFLICT_TOTAL
 from ..exceptions import AssetIdConflictError
 from ..repositories.factory import get_server_repository
@@ -76,6 +77,33 @@ def _warn_if_sse_only(
     )
 
 
+def _sync_mcp_app_count(
+    server_info: dict[str, Any],
+    updated_fields: list[str] | None,
+) -> list[str] | None:
+    """Recompute num_mcp_app_tools whenever a write carries a tool_list.
+
+    Every path that stores a tool list (registration, the PUT update, federation
+    and import, the health check) goes through register_server or update_server,
+    so doing it here keeps the MCP App badge in step with the stored tools.
+
+    Args:
+        server_info: The server dict being written; updated in place.
+        updated_fields: A field-scoped write's field list, or None for a full write.
+
+    Returns:
+        The field list to use, with num_mcp_app_tools added when it is scoped.
+    """
+    if "tool_list" not in server_info:
+        return updated_fields
+    server_info["num_mcp_app_tools"] = count_mcp_app_tools(server_info.get("tool_list"))
+    if updated_fields is None or "tool_list" not in updated_fields:
+        return updated_fields
+    if "num_mcp_app_tools" in updated_fields:
+        return updated_fields
+    return [*updated_fields, "num_mcp_app_tools"]
+
+
 class ServerService:
     """Service for managing server registration and state."""
 
@@ -133,6 +161,7 @@ class ServerService:
         path = server_info.get("path")
         new_version = server_info.get("version")
         _warn_if_sse_only(server_info)
+        _sync_mcp_app_count(server_info, None)
 
         # Fail-closed URL validation on every registration path (dashboard/API,
         # internal register, CLI, federation import) before anything is
@@ -294,6 +323,7 @@ class ServerService:
             helper that returns the names it wrote (see
             ``clear_upstream_headers_on_repoint``) over restating them here.
         """
+        updated_fields = _sync_mcp_app_count(server_info, updated_fields)
         # Validate the merged target state whenever a target-bearing field is
         # edited. This prevents an existing built-in registration from lending
         # its privileged profile to a different mcp_endpoint/sse_endpoint.

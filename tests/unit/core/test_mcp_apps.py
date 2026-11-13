@@ -133,12 +133,26 @@ class TestModelVisibility:
     """Tests for is_model_visible, model_visible_tools and stored_ui_resource_uri."""
 
     def test_app_only_tool_is_hidden(self):
-        """A tool with ui_visibility ["app"] is not model-visible."""
-        assert is_model_visible({"name": "save", "ui_visibility": ["app"]}) is False
+        """A tool with a page and ui_visibility ["app"] is not model-visible."""
+        tool = {"name": "save", "ui_resource_uri": "ui://a/b", "ui_visibility": ["app"]}
+
+        assert is_model_visible(tool) is False
 
     def test_model_and_app_tool_is_visible(self):
         """A tool the model and the page share stays visible."""
-        assert is_model_visible({"name": "open", "ui_visibility": ["model", "app"]}) is True
+        tool = {"name": "open", "ui_resource_uri": "ui://a/b", "ui_visibility": ["model", "app"]}
+
+        assert is_model_visible(tool) is True
+
+    def test_visibility_without_a_valid_page_is_ignored(self):
+        """A caller-supplied ui_visibility on a tool with no valid page does not hide it."""
+        assert is_model_visible({"name": "x", "ui_visibility": ["app"]}) is True
+        bad_uri = {"name": "y", "ui_resource_uri": "https://x", "ui_visibility": ["app"]}
+        assert is_model_visible(bad_uri) is True
+
+    def test_page_with_missing_visibility_is_visible(self):
+        """No ui_visibility means the spec default, model and app."""
+        assert is_model_visible({"name": "z", "ui_resource_uri": "ui://a/b"}) is True
 
     def test_plain_tool_is_visible(self):
         """An ordinary tool with no ui_visibility stays visible."""
@@ -148,8 +162,8 @@ class TestModelVisibility:
         """Hidden tools are dropped and the rest keep their order."""
         tools = [
             {"name": "a"},
-            {"name": "b", "ui_visibility": ["app"]},
-            {"name": "c", "ui_visibility": ["model"]},
+            {"name": "b", "ui_resource_uri": "ui://x/b", "ui_visibility": ["app"]},
+            {"name": "c", "ui_resource_uri": "ui://x/c", "ui_visibility": ["model"]},
         ]
 
         assert [t["name"] for t in model_visible_tools(tools)] == ["a", "c"]
@@ -183,3 +197,39 @@ class TestDiscoveryIntegration:
 
         assert details[0]["ui_resource_uri"] == "ui://budget/view.html"
         assert "ui_resource_uri" not in details[1]
+
+
+@pytest.mark.unit
+class TestServerServiceKeepsMcpAppCountInStep:
+    """server_service._sync_mcp_app_count: every tool_list write carries the count."""
+
+    def test_full_write_gets_the_count(self):
+        """A write with a tool_list and no field scope sets num_mcp_app_tools."""
+        from registry.services.server_service import _sync_mcp_app_count
+
+        info = {"tool_list": [{"name": "a", "ui_resource_uri": "ui://x/a"}], "num_mcp_app_tools": 9}
+
+        fields = _sync_mcp_app_count(info, None)
+
+        assert fields is None
+        assert info["num_mcp_app_tools"] == 1
+
+    def test_scoped_tool_list_write_adds_the_field(self):
+        """A field-scoped write of tool_list also persists the recomputed count."""
+        from registry.services.server_service import _sync_mcp_app_count
+
+        info = {"tool_list": [{"name": "a"}]}
+
+        fields = _sync_mcp_app_count(info, ["tool_list", "num_tools"])
+
+        assert fields == ["tool_list", "num_tools", "num_mcp_app_tools"]
+        assert info["num_mcp_app_tools"] == 0
+
+    def test_write_without_tool_list_is_untouched(self):
+        """A write that does not carry a tool_list leaves the stored count alone."""
+        from registry.services.server_service import _sync_mcp_app_count
+
+        info = {"description": "new"}
+
+        assert _sync_mcp_app_count(info, ["description"]) == ["description"]
+        assert "num_mcp_app_tools" not in info

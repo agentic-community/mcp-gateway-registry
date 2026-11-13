@@ -56,7 +56,7 @@ from jwt.api_jwk import PyJWK
 from mcp_apps_domain import RESOURCES_READ_METHOD as MCP_APPS_RESOURCES_READ_METHOD
 from mcp_apps_domain import claude_ui_domain as mcp_apps_claude_ui_domain
 from mcp_apps_domain import connector_url as mcp_apps_connector_url
-from mcp_apps_domain import gateway_public_origin as mcp_apps_gateway_public_origin
+from mcp_apps_domain import gateway_public_origins as mcp_apps_gateway_public_origins
 from mcp_apps_domain import rewrite_ui_domains as mcp_apps_rewrite_ui_domains
 from metrics_middleware import add_auth_metrics_middleware
 from starlette.background import BackgroundTask
@@ -10502,7 +10502,7 @@ async def mcp_proxy(
             server_name,
         )
 
-    if incoming_method == MCP_APPS_RESOURCES_READ_METHOD and 200 <= status_code < 300:
+    if _should_rewrite_mcp_apps_ui_domain(direct_route, incoming_method, status_code):
         # MCP Apps: Claude shows a page only when its ui.domain matches the URL the
         # user connected to, which is the gateway's, not the backend's.
         body_bytes = _rewrite_mcp_apps_ui_domain(
@@ -10576,6 +10576,24 @@ async def mcp_proxy(
     return JSONResponse(content=parsed, status_code=status_code, headers=response_headers)
 
 
+def _should_rewrite_mcp_apps_ui_domain(
+    direct_route: bool,
+    method: str | None,
+    status_code: int,
+) -> bool:
+    """Return True for a reply whose MCP Apps ui.domain should be rewritten.
+
+    Only successful resources/read replies on a direct route. On a virtual
+    server's backend hop the client connected to the virtual URL, which this
+    hop does not know, so the value is left alone.
+    """
+    if not direct_route:
+        return False
+    if method != MCP_APPS_RESOURCES_READ_METHOD:
+        return False
+    return 200 <= status_code < 300
+
+
 def _rewrite_mcp_apps_ui_domain(
     body_bytes: bytes,
     is_sse: bool,
@@ -10590,20 +10608,26 @@ def _rewrite_mcp_apps_ui_domain(
     Args:
         body_bytes: The upstream reply body.
         is_sse: True when the reply is text/event-stream.
-        route_path: The path the client used after the gateway origin.
+        route_path: The path after the gateway origin, as nginx forwarded it.
         query: The request's query string.
 
     Returns:
         The body to forward.
     """
-    origin = mcp_apps_gateway_public_origin(getattr(settings, "registry_url", None))
-    if not origin:
+    origins = mcp_apps_gateway_public_origins()
+    if not origins:
         return body_bytes
-    url = mcp_apps_connector_url(origin, route_path, query)
-    rewritten = mcp_apps_rewrite_ui_domains(body_bytes, is_sse, mcp_apps_claude_ui_domain(url))
+    urls = [mcp_apps_connector_url(origin, route_path, query) for origin in origins]
+    keep_domains = frozenset(mcp_apps_claude_ui_domain(url) for url in urls)
+    rewritten = mcp_apps_rewrite_ui_domains(
+        body_bytes,
+        is_sse,
+        mcp_apps_claude_ui_domain(urls[0]),
+        keep_domains,
+    )
     if rewritten is None:
         return body_bytes
-    logger.info(f"mcp_proxy: rewrote MCP Apps ui.domain for {redact_url(url)}")
+    logger.info(f"mcp_proxy: rewrote MCP Apps ui.domain for {redact_url(urls[0])}")
     return rewritten
 
 

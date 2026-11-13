@@ -87,6 +87,7 @@ describe('ServerCard tools modal MCP Apps markers', () => {
             ui_visibility: ['app'],
           },
           { name: 'plain-tool', description: 'No page' },
+          { name: 'page-no-visibility', description: 'Page, default visibility', ui_resource_uri: 'ui://budget/other.html' },
           { name: 'forged-tool', description: 'Bad address', ui_resource_uri: 'javascript:alert(1)' },
         ],
       },
@@ -98,14 +99,15 @@ describe('ServerCard tools modal MCP Apps markers', () => {
   });
 
   it('marks tools with a ui:// page and the app-only tool, not a forged address', async () => {
-    render(<ServerCard server={_server({ num_tools: 4 })} onToggle={noop} />);
+    render(<ServerCard server={_server({ num_tools: 5 })} onToggle={noop} />);
 
     fireEvent.click(screen.getByTitle('View tools'));
 
     await screen.findAllByTitle(/^Opens the MCP App page ui:\/\/budget/);
     // No header badge here (num_mcp_app_tools is unset), so every MCP APP label
-    // is a per-tool marker: two real pages, none for the forged address.
-    expect(screen.getAllByText('MCP APP')).toHaveLength(2);
+    // is a per-tool marker: three real pages, none for the forged address. The
+    // page with no ui_visibility uses the spec default and is not APP ONLY.
+    expect(screen.getAllByText('MCP APP')).toHaveLength(3);
     expect(screen.getAllByText('APP ONLY')).toHaveLength(1);
   });
 });
