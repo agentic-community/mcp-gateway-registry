@@ -704,6 +704,39 @@ async def _clear_server_security_pending(
     return True
 
 
+def start_post_registration_tasks(
+    path: str,
+    proxy_pass_url: str,
+    server_entry: dict,
+    performed_by: str | None,
+    headers_list: list | None = None,
+    run_scan: bool = True,
+    run_health_check: bool = True,
+) -> None:
+    """Start the background steps every server registration runs.
+
+    The security scan, the immediate health check, and the registration
+    webhook (issue #742). Used by POST /api/servers/register and by OpenAPI MCP
+    servers (issue #2022), so both register a server the same way.
+    """
+    from ..health.service import health_service
+
+    if run_scan:
+        asyncio.create_task(
+            _perform_security_scan_on_registration(path, proxy_pass_url, server_entry, headers_list)
+        )
+    if run_health_check:
+        asyncio.create_task(health_service.perform_immediate_health_check(path))
+    asyncio.create_task(
+        send_registration_webhook(
+            event_type="registration",
+            registration_type="server",
+            card_data=strip_credentials_from_dict(server_entry),
+            performed_by=performed_by,
+        )
+    )
+
+
 async def _perform_security_scan_on_registration(
     path: str,
     proxy_pass_url: str,
@@ -4505,7 +4538,6 @@ async def register_service_api(
     # with named status codes.
     from fastapi import status as fastapi_status
 
-    from ..health.service import health_service
     from ..utils.local_runtime_validation import (
         add_unpinned_warning_tag,
         parse_and_validate_local_runtime,
@@ -4893,25 +4925,15 @@ async def register_service_api(
                 f"it appears in default search results or the gateway route."
             )
 
-        # Security scanning (non-blocking). Skipped for local stdio servers.
-        if not is_local:
-            asyncio.create_task(
-                _perform_security_scan_on_registration(
-                    path, proxy_pass_url, server_entry, headers_list
-                )
-            )
-
-        # Trigger async task for health check
-        asyncio.create_task(health_service.perform_immediate_health_check(path))
-
-        # Registration webhook (Issue #742)
-        asyncio.create_task(
-            send_registration_webhook(
-                event_type="registration",
-                registration_type="server",
-                card_data=strip_credentials_from_dict(server_entry),
-                performed_by=user_context.get("username"),
-            )
+        # Security scan (skipped for local stdio servers), health check and
+        # registration webhook, shared with OpenAPI MCP servers (issue #2022).
+        start_post_registration_tasks(
+            path,
+            proxy_pass_url,
+            server_entry,
+            user_context.get("username"),
+            headers_list=headers_list,
+            run_scan=not is_local,
         )
 
         return JSONResponse(

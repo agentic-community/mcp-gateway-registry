@@ -135,7 +135,7 @@ Only the registry starts calls between the two; the container never calls the re
 
 ![Recovering after the container restarts](../images/openapi-mcp-servers-200-recovery.png)
 
-A container restart loses every hub. The reconciler checks the container's `/health` every 10 seconds. When the start time changes, it reads the container's status and pushes every server it finds missing or stale. It also runs a full pass at registry startup and every 60 seconds. Until the push lands, which takes about 15 seconds, calls to those servers return 404. The registry does not restart the container itself, because Compose, ECS and Kubernetes each do that their own way.
+A container restart loses every hub. The reconciler checks the container's `/health` every 10 seconds. When the start time changes, it reads the container's status and pushes every server it finds missing or stale. It also runs a full pass at registry startup and every 60 seconds. Until the push lands, calls to those servers return 404. In a load test with 10 servers of 10 targets each, every target was serving again 23 seconds after the restart. The registry does not restart the container itself, because Compose, ECS and Kubernetes each do that their own way.
 
 ### Security model
 
@@ -171,7 +171,7 @@ In `REGISTRY_ONLY` mode, or when `REGISTRY_MODE` turns MCP servers off, the regi
 
 ![Deployment surfaces](../images/openapi-mcp-servers-200-deployment.png)
 
-The container ships as its own image, built from `docker/Dockerfile.openapi-mcp`. Besides its own code, the image holds nine files from the registry: the SSRF guard and its imports, the signing-secret check, and the sync-token module. It holds nothing else from the registry, including the settings class that needs `SECRET_KEY`. One replica runs, because pushes go to one address.
+The container ships as its own image, built from `docker/Dockerfile.openapi-mcp`. Besides its own code, the image holds nine files from the registry: the SSRF guard and its imports, the signing-secret check, and the sync-token module. It holds nothing else from the registry, including the settings class that needs `SECRET_KEY`. One replica runs, because pushes go to one address. The same load test, which included one 4.4 MB spec, peaked at 293 MiB, so ECS and CDK give the container 1024 MiB (the smallest Fargate size for 0.5 vCPU) and Helm limits it to 1 Gi.
 
 On every surface, only the registry and nginx can reach the container: Compose keeps it on the internal network with a loopback-only port, ECS allows ingress from the registry security group, and Helm adds a NetworkPolicy. The hop between them is plain HTTP by default. A cluster that needs TLS inside can set an `https` URL.
 

@@ -26,7 +26,10 @@ class TestValidation:
         )
 
     def test_feature_off_needs_no_secret(self):
-        assert Settings(openapi_mcp_enabled=False).openapi_mcp_sync_secret == ""
+        # Explicit values: Settings() also reads the repo's .env file.
+        s = Settings(openapi_mcp_enabled=False, openapi_mcp_sync_secret="")
+
+        assert s.openapi_mcp_enabled is False
 
     @pytest.mark.parametrize(
         "secret",
