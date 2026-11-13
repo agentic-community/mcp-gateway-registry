@@ -1,0 +1,15 @@
+{
+  "server_name": "draw.io Diagrams (MCP App)",
+  "description": "Official draw.io MCP App: creates diagrams and renders them inline, with zoom and pan, in clients that support MCP Apps. Sets ui.domain, which the gateway rewrites so the page renders in Claude.",
+  "path": "/drawio",
+  "proxy_pass_url": "https://mcp.draw.io/mcp",
+  "supported_transports": ["streamable-http"],
+  "tags": ["mcp-apps", "diagrams", "drawio"],
+  "provider_organization": "JGraph Ltd (draw.io)",
+  "provider_url": "https://github.com/jgraph/drawio-mcp",
+  "visibility": "public",
+  "metadata": {
+    "category": "diagrams",
+    "official": true
+  }
+}

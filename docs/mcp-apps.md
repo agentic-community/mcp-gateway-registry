@@ -102,9 +102,18 @@ The gateway answers the 2026-07-28 `subscriptions/listen` method with "method no
 
 These public servers serve MCP Apps and need no sign-in. They are run by others and may change or go away.
 
-| Server | URL | Notes |
-|---|---|---|
-| Budget Allocator (official ext-apps example, hosted by a community gallery) | `https://openwork-mcp-app-gallery-fable.vercel.app/apps/budget-allocator/mcp` | Stateless. Renders through the gateway in Claude. |
-| draw.io | `https://mcp.draw.io/mcp` | Sets `ui.domain`, so it exercises the rewrite above. |
+| Server | URL | Example config | Notes |
+|---|---|---|---|
+| Budget Allocator (official ext-apps example, hosted by a community gallery) | `https://openwork-mcp-app-gallery-fable.vercel.app/apps/budget-allocator/mcp` | [`cli/examples/budget-allocator-mcp-app-server-config.json`](../cli/examples/budget-allocator-mcp-app-server-config.json) | Stateless. Renders through the gateway in Claude. |
+| draw.io | `https://mcp.draw.io/mcp` | [`cli/examples/drawio-mcp-app-server-config.json`](../cli/examples/drawio-mcp-app-server-config.json) | Sets `ui.domain`, so it exercises the rewrite above. |
+
+Register one, then enable it, because a server registered through the API starts disabled:
+
+```bash
+uv run python api/registry_management.py --registry-url http://localhost --token-file .token \
+  register --config cli/examples/drawio-mcp-app-server-config.json
+uv run python api/registry_management.py --registry-url http://localhost --token-file .token \
+  toggle --path /drawio
+```
 
 The [ext-apps repository](https://github.com/modelcontextprotocol/ext-apps/tree/main/examples) has more examples you can run yourself.
