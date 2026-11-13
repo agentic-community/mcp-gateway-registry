@@ -301,16 +301,6 @@
                 "schema": {}
               }
             }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
           }
         }
       },
@@ -327,16 +317,6 @@
             "content": {
               "application/json": {
                 "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
               }
             }
           }
@@ -397,16 +377,6 @@
             "content": {
               "application/json": {
                 "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
               }
             }
           }
@@ -897,7 +867,7 @@
     "/api/egress-auth/initiate": {
       "post": {
         "summary": "Initiate Consent",
-        "description": "Begin the OAuth consent for the current user; returns the authorize URL.",
+        "description": "Begin the OAuth consent for the current user; returns the authorize URL.\n\nAlso sets this consent's cookie on the response, so the consent completes\nonly in the browser that called this route (the frontend's same-origin XHR\nstores it in that browser). The caller is the request's own browser session\n(``browser_session_context``: the session cookie, never a bearer or an\ninternal token), so a bearer caller, which skips CSRF, cannot get a state\nbound to the user plus its matching consent secret. CSRF still applies to\nthe browser caller.",
         "operationId": "initiate_consent_api_egress_auth_initiate_post",
         "requestBody": {
           "content": {
@@ -939,7 +909,7 @@
     "/api/oauth2/egress/callback": {
       "get": {
         "summary": "Egress Callback",
-        "description": "Provider redirect target. No ingress auth -- the signed+encrypted state is\nthe authority. Verifies state (TTL + single-use + account-swap), exchanges the\ncode, and stores the token. Reached via nginx -> registry (no /validate).\n\n``iss`` is the RFC 9207 issuer the provider names in its reply. It is checked\nagainst the server's ``expected_issuer`` when one is configured.",
+        "description": "Provider redirect target. No ingress auth (reached via nginx -> registry,\nno /validate), so the browser's session cookie is resolved here: the token is\nstored only when the browser that started the consent (it holds the consent\ncookie) is authenticated as the principal bound in the signed+encrypted\nstate. Verifies state (single-use + TTL + browser binding + account-swap),\nexchanges the code, and stores the token.\n\nThe state is decoded once, here, and its single-use nonce is consumed once,\nright after, by ``EgressAuthService.begin_callback``: before the ``code``\ncheck and before any other refusal, so every exit after it has already\nburned the state (a provider error such as ``?error=access_denied`` sends\nonly the state). Every response after the decode expires that consent's\ncookie. When the replay store cannot burn the state, or the callback raises\nan error it does not handle, the response is a 503 that still expires the\ncookie: without its cookie the state fails the browser binding, so nobody\ncan complete it.\n\n``iss`` is the RFC 9207 issuer the provider names in its reply. It is checked\nagainst the ``expected_issuer`` snapshot in the state when one is configured.",
         "operationId": "egress_callback_api_oauth2_egress_callback_get",
         "parameters": [
           {
@@ -1495,14 +1465,14 @@
         "description": "Register a new service (requires register_service UI permission).\n\nSupports both deployment types:\n- Remote (default): proxy_pass_url required, registry proxies HTTP requests.\n- Local: local_runtime JSON required (admin-only). Registry stores\n  the launch recipe for stdio MCP servers; it does NOT execute the server.\n\nThe local_runtime field is a JSON-encoded string (same convention as metadata):\n    {\"type\": \"npx\", \"package\": \"@acme/mcp\", \"version\": \"1.0.0\",\n     \"args\": [...], \"env\": {...}, \"required_env\": [...]}",
         "operationId": "register_service_api_register_post",
         "requestBody": {
-          "required": true,
           "content": {
             "application/x-www-form-urlencoded": {
               "schema": {
                 "$ref": "#/components/schemas/Body_register_service_api_register_post"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "200": {
@@ -1854,16 +1824,6 @@
               "text/html": {
                 "schema": {
                   "type": "string"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -2357,16 +2317,6 @@
             "content": {
               "application/json": {
                 "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
               }
             }
           }
@@ -8124,19 +8074,9 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
                   "additionalProperties": true,
+                  "type": "object",
                   "title": "Response Get Full Config Api Config Full Get"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -8163,19 +8103,9 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
                   "additionalProperties": true,
+                  "type": "object",
                   "title": "Response Get Config Api Config Get"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -9981,7 +9911,7 @@
           "Egress OAuth Facade"
         ],
         "summary": "Egress Connect",
-        "description": "Session-verified front door for MCP URL-mode elicitation.\n\nThis is the ``url`` the MCP client opens (verbatim, with user consent) when\nthe gateway returns an ``elicitation/create`` ``mode: \"url\"`` for an egress\nserver the user has not connected yet. It takes NO client-side OAuth\nparameters (no ``redirect_uri``/PKCE/``response_type`` and no Dynamic Client\nRegistration) -- the CLIENT performs no OAuth at all, so this works with\nproviders like Entra that do not support RFC 7591 DCR.\n\nFlow:\n  1. If the browser has no gateway session, bounce through the gateway login\n     (configured provider) and return here (so the opener is always an authenticated principal).\n  2. Verify the session principal is a per-user identity. This is the\n     elicitation anti-phishing requirement: the user who OPENS the URL must\n     be a real authenticated user, and the provider-leg AEAD state binds the\n     token write to THIS principal -- a stolen connect URL opened by a\n     different user cannot bind a token to the elicited user.\n  3. 302 the browser to the provider consent (``build_consent_url``). The\n     existing ``/oauth2/egress/callback`` stores the token and shows the\n     close-tab page; the client then retries the original tool call (same\n     bearer) and the vend now HITs.",
+        "description": "Session-verified front door for MCP URL-mode elicitation.\n\nThis is the ``url`` the MCP client opens (verbatim, with user consent) when\nthe gateway returns an ``elicitation/create`` ``mode: \"url\"`` for an egress\nserver the user has not connected yet. It takes NO client-side OAuth\nparameters (no ``redirect_uri``/PKCE/``response_type`` and no Dynamic Client\nRegistration) -- the CLIENT performs no OAuth at all, so this works with\nproviders like Entra that do not support RFC 7591 DCR.\n\nFlow:\n  1. If the browser has no gateway session, bounce through the gateway login\n     (configured provider) and return here (so the opener is always an authenticated principal).\n  2. Verify the session principal is a per-user identity. This is the\n     elicitation anti-phishing requirement: the user who OPENS the URL must\n     be a real authenticated user, and the provider-leg AEAD state binds the\n     token write to THIS principal -- a stolen connect URL opened by a\n     different user cannot bind a token to the elicited user.\n  3. 302 the browser to the provider consent (``build_consent_url``) and set\n     this consent's cookie on that redirect, so only this browser can\n     complete it. The existing ``/oauth2/egress/callback`` stores the token\n     and shows the close-tab page; the client then retries the original tool\n     call (same bearer) and the vend now HITs.",
         "operationId": "egress_connect_oauth2_egress_connect_get",
         "parameters": [
           {
