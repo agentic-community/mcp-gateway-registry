@@ -72,6 +72,8 @@ export class RegistrySecrets extends Construct {
   public readonly sharedContainerCredentials: Record<string, secretsmanager.Secret>;
   /** Same as {@link sharedContainerCredentials}, for the registry only. */
   public readonly registryContainerCredentials: Record<string, secretsmanager.Secret>;
+  /** OpenAPI MCP sync secret (issue #2022). Deliberately NOT in accessStatements. */
+  public readonly openapiMcpSyncSecret?: secretsmanager.Secret;
 
   /**
    * IAM statements granting GetSecretValue + KMS decrypt for every secret in
@@ -297,6 +299,19 @@ export class RegistrySecrets extends Construct {
       { envName: 'GITHUB_PAT', id: 'GithubPat', value: config.github.pat },
       { envName: 'GITHUB_APP_PRIVATE_KEY', id: 'GithubAppPrivateKey', value: config.github.appPrivateKey },
     ]);
+
+    // OpenAPI MCP sync secret (issue #2022). The registry signs each push to
+    // the openapi-mcp container with a key derived from it, and the container
+    // verifies it. Generated, 48 letters and digits. It is left out of
+    // accessStatements below, which every service shares: ecs.Secret grants
+    // read to exactly the registry and openapi-mcp execution roles that use it.
+    if (config.openapiMcp.enabled) {
+      this.openapiMcpSyncSecret = _createSecret(this, 'OpenapiMcpSyncSecret', {
+        description: 'Signs registry-to-openapi-mcp sync tokens (registry and openapi-mcp only)',
+        kmsKey: this.kmsKey,
+        generateString: { passwordLength: 48, excludePunctuation: true },
+      });
+    }
 
     // IAM statements
     const arns: string[] = [

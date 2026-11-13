@@ -1,0 +1,6 @@
+apiVersion: v2
+name: openapi-mcp
+description: A Helm chart for the openapi-mcp container, which serves REST APIs described by OpenAPI specs as MCP servers
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

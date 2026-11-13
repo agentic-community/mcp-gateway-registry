@@ -1,0 +1,106 @@
+# openapi-mcp: serves REST APIs described by OpenAPI specs as MCP servers
+# (issue #2022). The registry pushes each server's state to this pod, and nginx
+# inside the registry pod proxies MCP traffic to it. Nothing else may reach it:
+# the NetworkPolicy below admits only the registry pods.
+
+# Global configuration
+global:
+  image:
+    # Container registry (host + optional namespace). Shared default across subcharts.
+    registry: public.ecr.aws/p3v1o3c6
+    tag: 1.37.0
+    pullPolicy: IfNotPresent
+  # Set by the stack chart; the per-chart value below wins only when this is empty.
+  ssrfAllowedCidrs: ""
+  # Off only for GitOps tools that render without cluster access (see the stack chart).
+  generateSecrets: true
+  openapiMcp:
+    # Name of a Secret you manage that holds OPENAPI_MCP_SYNC_SECRET. When set,
+    # the chart creates no Secret and both the registry and openapi-mcp read this one.
+    existingSyncSecret: ""
+# Per-service image configuration
+# Any field left empty falls back to the corresponding global.image.* value.
+# The tag must be a pinned version; "latest" is refused at render time.
+image:
+  registry: "" # Overrides global.image.registry when set
+  repository: openapi-mcp # Image name within the registry
+  tag: "" # Overrides global.image.tag when set
+  pullPolicy: "" # Overrides global.image.pullPolicy when set
+# Application configuration
+app:
+  # Also the Service name. The registry reaches the pod at
+  # http://openapi-mcp:9876 (registry.app.openapiMcpInternalUrl).
+  name: openapi-mcp
+  # Must be 1. The registry pushes each server's state to the Service address,
+  # which load-balances across pods, so a second replica would miss pushes and
+  # serve stale tools. The template fails on any other value.
+  replicas: 1
+  port: 9876
+  # Bind address inside the pod. Ingress is limited by the NetworkPolicy.
+  # Set to "::" only for IPv6-only clusters.
+  bindHost: "0.0.0.0"
+  backendTimeoutSeconds: "30" # Timeout for each backend REST call (above 0, at most 300)
+  maxResponseBytes: "2097152" # Largest backend response passed to the agent (1024 to 104857600)
+  conversionTimeoutSeconds: "10" # Longest one spec conversion may take (above 0, at most 120)
+  # SSRF guard. Use the SAME values as the registry chart so both apply one
+  # policy; under the stack chart a render-time check fails when they differ.
+  ssrfAllowedHosts: "" # Same as registry.app.ssrfAllowedHosts
+  # For a standalone install. Under the stack chart set global.ssrfAllowedCidrs
+  # instead, which wins over this value.
+  ssrfAllowedCidrs: ""
+  gatewayProxyAllowPrivateTargets: false # Same as registry.app.gatewayProxyAllowPrivateTargets
+  githubExtraHosts: ""
+  egressOauthTrustedIdpHosts: "" # Same as registry.egressAuth.oauthTrustedIdpHosts
+  # Egress httpx connection pooling for the guarded backend client.
+  httpPoolMaxConnections: "100"
+  httpPoolMaxKeepalive: "20"
+  httpPoolKeepaliveExpirySeconds: "30"
+  httpPoolConnectRetries: "1"
+  # Forward-proxy egress (issue #1832). Same as registry.app.egressForwardProxyEnabled.
+  # When true, extraEnv must carry HTTP_PROXY/HTTPS_PROXY and a NO_PROXY that
+  # excludes 169.254.169.254, 169.254.170.2 and 169.254.170.23.
+  egressForwardProxyEnabled: false
+# The sync secret signs registry-to-container pushes. The chart creates the
+# Secret unless global.openapiMcp.existingSyncSecret or syncSecret.existingSecret
+# names one you manage (it must hold the key OPENAPI_MCP_SYNC_SECRET). Both the
+# registry and this pod read it through secretKeyRef, never a plain env value.
+syncSecret:
+  name: openapi-mcp-sync-secret # Name of the chart-created Secret
+  existingSecret: "" # Standalone alternative to global.openapiMcp.existingSyncSecret
+  # Explicit value (32 characters or more). Empty reuses the stored value on
+  # upgrade, or generates 48 random characters on first install.
+  value: ""
+# CA bundle for a TLS-intercepting forward proxy (same shape as the registry chart).
+caBundle:
+  enabled: false
+  existingConfigMap: "" # ConfigMap holding the PEM
+  existingSecret: "" # or a Secret
+  key: ca-bundle.pem
+  mountPath: /etc/ssl/mcp-gateway
+# Only the registry pods may connect. Set fromNamespaceSelector when the
+# registry runs in another namespace.
+networkPolicy:
+  enabled: true
+  fromPodSelector:
+    app.kubernetes.io/name: registry
+  fromNamespaceSelector: {}
+service:
+  type: ClusterIP
+  port: 9876
+  annotations: {}
+# The LLD estimates about 1 GiB for 100 targets of 1 MiB specs. The limit is
+# that estimate plus headroom, pending the pre-release load test.
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: 1
+    memory: 2Gi
+# Extra environment variables appended to the container's `env:` list.
+# Names must be unique and must not collide with reserved-env-names.txt.
+extraEnv: []
+# Extra `envFrom:` sources appended to the container. Not validated: keys here
+# never override the chart-managed `env:` entries, which always win.
+extraEnvFrom: []
+nodeSelector: {}

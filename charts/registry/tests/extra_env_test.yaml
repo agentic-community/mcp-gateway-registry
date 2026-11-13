@@ -176,7 +176,10 @@ tests:
       # rendered) is env[62]; SECURITY_BLOCK_ON_SCAN_FAILURE (always rendered)
       # directly follows it;
       # the forward-proxy egress pair (issue #1832, always rendered) is
-      # env[57]/env[58]; user extraEnv entries are appended at the end.
+      # env[61]/env[62]; the seven OpenAPI MCP settings (issue #2022, always
+      # rendered) are env[63]-env[69] (OPENAPI_MCP_SYNC_SECRET is added only
+      # when app.openapiMcpEnabled is true); user extraEnv entries are
+      # appended at the end.
       #
       # The four health-check and tool-refresh vars (issue #2050, always
       # rendered) sit at env[13]-env[16], right after the tool-level access
@@ -353,11 +356,19 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].env[62].name
           value: EGRESS_FORWARD_PROXY_CA_BUNDLE
+      # OpenAPI MCP settings (issue #2022), always rendered, after the
+      # forward-proxy pair.
       - equal:
           path: spec.template.spec.containers[0].env[63].name
+          value: OPENAPI_MCP_ENABLED
+      - equal:
+          path: spec.template.spec.containers[0].env[69].name
+          value: OPENAPI_MCP_RECONCILE_INTERVAL_SECONDS
+      - equal:
+          path: spec.template.spec.containers[0].env[70].name
           value: MY_FLAG
       - equal:
-          path: spec.template.spec.containers[0].env[64].name
+          path: spec.template.spec.containers[0].env[71].name
           value: MY_SECRET_VAR
 
   - it: appends extraEnvFrom entries after chart-managed envFrom sources

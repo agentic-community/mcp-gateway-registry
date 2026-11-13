@@ -718,3 +718,33 @@ resource "aws_secretsmanager_secret_version" "container_secret" {
   secret_id     = aws_secretsmanager_secret.container_secret[each.key].id
   secret_string = local.container_secret_values[each.key]
 }
+
+# OpenAPI MCP sync secret (issue #2022). The registry signs each push to the
+# openapi-mcp container with a key derived from this value, and the container
+# verifies it, so the container never needs SECRET_KEY. Generated, never
+# operator-supplied, and handed to both tasks through `secrets` only.
+# special=false keeps it to letters and digits; 48 characters clears the
+# 32-character floor the registry enforces at startup.
+resource "random_password" "openapi_mcp_sync_secret" {
+  count   = var.openapi_mcp_enabled ? 1 : 0
+  length  = 48
+  special = false
+}
+
+resource "aws_secretsmanager_secret" "openapi_mcp_sync_secret" {
+  #checkov:skip=CKV2_AWS_57:Application-generated sync secret - rotation requires a coordinated restart of the registry and openapi-mcp tasks
+  count = var.openapi_mcp_enabled ? 1 : 0
+
+  name_prefix             = "${local.name_prefix}-openapi-mcp-sync-"
+  description             = "Signs registry-to-openapi-mcp sync tokens (shared by the registry and openapi-mcp tasks)"
+  recovery_window_in_days = 0
+  kms_key_id              = aws_kms_key.secrets.id
+  tags                    = local.common_tags
+}
+
+resource "aws_secretsmanager_secret_version" "openapi_mcp_sync_secret" {
+  count = var.openapi_mcp_enabled ? 1 : 0
+
+  secret_id     = aws_secretsmanager_secret.openapi_mcp_sync_secret[0].id
+  secret_string = random_password.openapi_mcp_sync_secret[0].result
+}
