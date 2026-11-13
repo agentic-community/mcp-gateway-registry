@@ -157,14 +157,12 @@ async def register_and_enable_managed_server(
 
     await get_search_repository().index_server(path, server_entry, True)
     await _flush_nginx()
-    _start_security_scan(server_entry)
-    asyncio.create_task(
-        send_registration_webhook(
-            event_type="registration",
-            registration_type="server",
-            card_data=strip_credentials_from_dict(server_entry),
-            performed_by=performed_by,
-        )
+    # The same scan and webhook as POST /api/servers/register. The caller runs
+    # the health check and tool refresh itself, after pushing the hub.
+    from ..api.server_routes import start_post_registration_tasks
+
+    start_post_registration_tasks(
+        path, server_entry["proxy_pass_url"], server_entry, performed_by, run_health_check=False
     )
     logger.info(f"Managed server {path} registered and enabled by {performed_by}")
 
