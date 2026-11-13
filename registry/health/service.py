@@ -37,6 +37,7 @@ from ..utils.tool_list_hash import (
 )
 from ..utils.url_guard import (
     BUILTIN_AIREGISTRY_TOOLS_PROFILE,
+    BUILTIN_OPENAPI_MCP_PROFILE,
     PROXY_PROFILE,
     guarded_async_client,
     proxy_profile_for_entity_target,
@@ -654,6 +655,11 @@ class HealthMonitoringService:
         # stream/post below; the SSRF guard still validates+pins every request.
         client = shared_guarded_async_client(profile=PROXY_PROFILE)
         builtin_client = shared_guarded_async_client(profile=BUILTIN_AIREGISTRY_TOOLS_PROFILE)
+        openapi_mcp_client = shared_guarded_async_client(profile=BUILTIN_OPENAPI_MCP_PROFILE)
+        clients_by_profile = {
+            BUILTIN_AIREGISTRY_TOOLS_PROFILE.name: builtin_client,
+            BUILTIN_OPENAPI_MCP_PROFILE.name: openapi_mcp_client,
+        }
 
         check_tasks = []
         for service_path in enabled_services:
@@ -671,9 +677,7 @@ class HealthMonitoringService:
                 profile = proxy_profile_for_entity_target(
                     "mcp_server", path, info["proxy_pass_url"]
                 )
-                selected_client = (
-                    builtin_client if profile is BUILTIN_AIREGISTRY_TOOLS_PROFILE else client
-                )
+                selected_client = clients_by_profile.get(profile.name, client)
                 batch_coros.append(self._check_single_service(selected_client, path, info))
             results = await asyncio.gather(*batch_coros, return_exceptions=True)
 
@@ -1837,6 +1841,24 @@ class HealthMonitoringService:
 
         # All other status codes (404, 500, etc.) are considered unhealthy
         return False
+
+    async def refresh_tools_now(
+        self,
+        service_path: str,
+    ) -> None:
+        """Run the tool refresh for one server and return when it is done.
+
+        perform_immediate_health_check starts the same refresh in the background;
+        callers that must answer with the new tool list (OpenAPI MCP servers,
+        issue #2022) await this instead of polling the record.
+        """
+        from ..services.server_service import server_service
+
+        server_info = await server_service.get_server_info(service_path)
+        if not server_info or not server_info.get("proxy_pass_url"):
+            logger.warning(f"Tool refresh skipped for {service_path}: no proxy_pass_url")
+            return
+        await self._update_tools_background(service_path, server_info["proxy_pass_url"])
 
     async def _fetch_tools_for_server(
         self,

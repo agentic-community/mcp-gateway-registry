@@ -43,6 +43,7 @@ from registry.api.log_routes import router as log_router
 from registry.api.m2m_management_routes import router as m2m_management_router
 from registry.api.management_routes import router as management_router
 from registry.api.okta_m2m_routes import router as okta_m2m_router
+from registry.api.openapi_server_routes import router as openapi_server_router
 from registry.api.peer_management_routes import router as peer_management_router
 from registry.api.public_record_routes import router as public_record_router
 from registry.api.rate_limit_routes import router as rate_limit_router
@@ -78,6 +79,7 @@ from registry.core.config import (
     RegistryMode,
     _print_config_warning_banner,
     _validate_mode_combination,
+    apply_openapi_mcp_mode_gate,
     log_tab_visibility_warnings,
     print_a2a_reverse_proxy_mode_banner,
     print_embeddings_extra_headers_inert_banner,
@@ -957,6 +959,14 @@ async def lifespan(app: FastAPI):
 
         await nginx_reload_scheduler.start()
 
+        # OpenAPI MCP servers (issue #2022): keep the container in step.
+        from registry.services import openapi_mcp_reconciler
+
+        if settings.openapi_mcp_enabled:
+            await openapi_mcp_reconciler.start()
+        else:
+            await openapi_mcp_reconciler.warn_if_disabled_with_records()
+
         logger.info("All services initialized successfully!")
 
         # Initialize and send anonymous startup telemetry (opt-out: MCP_TELEMETRY_DISABLED=1)
@@ -1017,6 +1027,10 @@ async def lifespan(app: FastAPI):
         from registry.core.nginx_service import nginx_reload_scheduler
 
         await nginx_reload_scheduler.stop()
+
+        from registry.services import openapi_mcp_reconciler
+
+        await openapi_mcp_reconciler.stop()
 
         # Shutdown services gracefully
         await health_service.shutdown()
@@ -1266,6 +1280,9 @@ app.include_router(federation_router, prefix="/api", tags=["federation"])
 app.include_router(skill_router, prefix="/api", tags=["skills"])
 app.include_router(config_router, prefix="/api/config", tags=["config"])
 app.include_router(virtual_server_router, prefix="/api", tags=["virtual-servers"])
+if apply_openapi_mcp_mode_gate(settings):
+    app.include_router(openapi_server_router, prefix="/api", tags=["openapi-servers"])
+    logger.info("OpenAPI MCP servers enabled; registered /api/openapi-servers routes")
 if settings.custom_entity_types_enabled:
     app.include_router(custom_type_router, prefix="/api", tags=["custom-types"])
     app.include_router(custom_entity_router, prefix="/api", tags=["custom-entities"])
