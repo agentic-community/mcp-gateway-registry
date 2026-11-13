@@ -71,6 +71,7 @@ from ..services.lifecycle_events import (
     user_can_change_lifecycle_status,
 )
 from ..services.registration_gate_service import check_registration_gate
+from ..services.security_pending import tags_after_passing_scan
 from ..services.skill_service import (
     SKILL_MD_GONE_STATUSES,
     SkillService,
@@ -987,11 +988,21 @@ async def rescan_skill(
             str(skill.skill_md_raw_url or skill.skill_md_url),
             skill,
         )
+        # Read before scanning: the new result replaces it as the latest.
+        previous_scan = await skill_scanner_service.get_scan_result(normalized_path)
         result = await skill_scanner_service.scan_skill(
             skill_path=normalized_path,
             skill_md_url=fetch_url,
             headers=fetch_headers or None,
         )
+        if result.is_safe:
+            new_tags = tags_after_passing_scan(skill.tags, previous_scan)
+            if new_tags is not None:
+                await service.update_skill(normalized_path, {"tags": new_tags})
+                logger.info(
+                    f"Removed 'security-pending' from skill {normalized_path} "
+                    f"after a passing rescan"
+                )
         return result.model_dump()
 
     except Exception as e:

@@ -65,7 +65,11 @@ from ..services.lifecycle_events import (
     user_can_change_lifecycle_status,
 )
 from ..services.registration_gate_service import check_registration_gate
-from ..services.security_scanner import security_scanner_service
+from ..services.security_pending import tags_after_passing_scan
+from ..services.security_scanner import (
+    scan_credential_expected,
+    security_scanner_service,
+)
 from ..services.server_service import server_service
 from ..services.tool_blocks import annotate_blocked_tools, hide_blocked_tools
 from ..services.visibility import (
@@ -671,6 +675,35 @@ async def _apply_unsafe_scan_decision(
     return True
 
 
+async def _clear_server_security_pending(
+    path: str,
+    previous_scan: dict | None,
+) -> bool:
+    """Remove a scanner-set security-pending tag after a passing rescan (issue #2032).
+
+    Writes only the tags field, from a full copy of the stored server, the same
+    way tool discovery does, so nested secrets and the search index are intact.
+
+    Args:
+        path: The server path.
+        previous_scan: The latest stored scan result from before this rescan.
+
+    Returns:
+        True when the tag was removed.
+    """
+    server_info = await server_service.get_server_info(path)
+    if not server_info:
+        return False
+    new_tags = tags_after_passing_scan(server_info.get("tags"), previous_scan)
+    if new_tags is None:
+        return False
+    updated = server_info.copy()
+    updated["tags"] = new_tags
+    await server_service.update_server(path, updated, updated_fields=["tags"])
+    logger.info(f"Removed 'security-pending' from {path} after a passing rescan")
+    return True
+
+
 async def _perform_security_scan_on_registration(
     path: str,
     proxy_pass_url: str,
@@ -718,6 +751,7 @@ async def _perform_security_scan_on_registration(
             headers=headers_json,
             timeout=scan_config.scan_timeout_seconds,
             mcp_endpoint=server_entry.get("mcp_endpoint"),
+            credential_expected=scan_credential_expected(server_entry),
         )
 
         # Handle unsafe servers
@@ -6810,6 +6844,9 @@ async def rescan_server(
 
     from ..exceptions import UrlValidationError
 
+    # Read before scanning: the new result replaces it as the latest.
+    previous_scan = await security_scanner_service.get_scan_result(path)
+
     try:
         # Trigger security scan
         scan_result = await security_scanner_service.scan_server(
@@ -6820,6 +6857,7 @@ async def rescan_server(
             headers=headers_json,
             timeout=None,
             mcp_endpoint=server_info.get("mcp_endpoint"),
+            credential_expected=scan_credential_expected(server_info),
         )
 
         # Apply the per-tool block on rescan too, not just at registration.
@@ -6865,6 +6903,9 @@ async def rescan_server(
                     f"Server {path} passed rescan; reconciled tool blocks, "
                     f"{len(cleared)} override(s) remain"
                 )
+
+        if scan_result.is_safe:
+            await _clear_server_security_pending(path, previous_scan)
 
         # Return the scan result data
         return {
