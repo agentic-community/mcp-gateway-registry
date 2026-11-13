@@ -226,6 +226,13 @@ log "Found .env file"
 # Load environment variables from .env file early so we can check STORAGE_BACKEND
 source .env
 
+# OpenAPI MCP servers (issue #2022): start the openapi-mcp service with the
+# registry. COMPOSE_PROFILES applies to every compose command below.
+if [ "${OPENAPI_MCP_ENABLED:-false}" = "true" ]; then
+    export COMPOSE_PROFILES="${COMPOSE_PROFILES:+${COMPOSE_PROFILES},}openapi-mcp"
+    log "OPENAPI_MCP_ENABLED=true: adding compose profile openapi-mcp"
+fi
+
 # Check if docker compose is installed
 if ! docker compose version &> /dev/null; then
     log "ERROR: docker compose is not available"
