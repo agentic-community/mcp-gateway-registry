@@ -220,6 +220,14 @@ app:
   # VIP in 240.240.0.0/16. For a standalone install; under the stack chart set
   # global.ssrfAllowedCidrs instead, which wins over this value. #2018
   ssrfAllowedCidrs: ""
+  # OpenAPI MCP servers (issue #2022). The mcp-proxy hop forwards
+  # per-user-credential calls to the openapi-mcp container. Set both to the
+  # same values as the registry's app.openapiMcpEnabled and
+  # app.openapiMcpInternalUrl; under the stack chart a render-time check fails
+  # when the enabled flags differ. The auth server never receives
+  # OPENAPI_MCP_SYNC_SECRET: the registry signs the per-user credential envelope.
+  openapiMcpEnabled: false
+  openapiMcpInternalUrl: "http://openapi-mcp:9876" # How the auth server reaches the container
 # Authentication Provider Configuration
 # Choose ONE provider: keycloak, entra, okta, auth0, cognito, or pingfederate
 authProvider:

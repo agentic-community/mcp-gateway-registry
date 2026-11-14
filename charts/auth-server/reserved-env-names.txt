@@ -163,3 +163,9 @@ GATEWAY_GENERIC_STREAM_MAX_BYTES
 EGRESS_FORWARD_PROXY_ENABLED
 SSRF_ALLOWED_CIDRS
 EGRESS_FORWARD_PROXY_CA_BUNDLE
+# OpenAPI MCP servers (issue #2022): rendered only when app.openapiMcpEnabled is
+# true. OPENAPI_MCP_SYNC_SECRET is reserved so extraEnv cannot hand the auth
+# server the sync secret; the registry signs the per-user credential envelope.
+OPENAPI_MCP_ENABLED
+OPENAPI_MCP_INTERNAL_URL
+OPENAPI_MCP_SYNC_SECRET

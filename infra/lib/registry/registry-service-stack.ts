@@ -325,6 +325,12 @@ export class RegistryServiceStack extends cdk.Stack {
       // credentials remain available through the container credential URI.
       // Kept in parity with terraform/aws-ecs auth-server env.
       AWS_EC2_METADATA_DISABLED: 'true',
+      // OpenAPI MCP servers (issue #2022). The mcp-proxy hop forwards
+      // per-user-credential calls to the openapi-mcp container. The auth server
+      // never receives OPENAPI_MCP_SYNC_SECRET: the registry signs the
+      // per-user credential envelope.
+      OPENAPI_MCP_ENABLED: String(config.openapiMcp.enabled),
+      OPENAPI_MCP_INTERNAL_URL: OPENAPI_MCP_INTERNAL_URL,
     };
 
     // Container secrets (registry + auth share most of these)
@@ -584,12 +590,13 @@ export class RegistryServiceStack extends cdk.Stack {
 
     // OpenAPI MCP servers (issue #2022). One task, reachable only from the
     // registry (sync pushes, and nginx inside the registry container proxying
-    // MCP traffic). Its execution role reads only the sync secret. The SSRF
+    // MCP traffic) and from the auth server (the mcp-proxy hop for per-user
+    // credentials). Its execution role reads only the sync secret. The SSRF
     // guard in the container gets the registry's values, so both apply one
     // policy; the registry here sets only GITHUB_EXTRA_HOSTS, and the rest
     // stay at their shared defaults.
     if (config.openapiMcp.enabled) {
-      new McpServerService(this, 'OpenapiMcpSvc', {
+      const openapiMcpService = new McpServerService(this, 'OpenapiMcpSvc', {
         serviceName: 'openapi-mcp',
         imageUri: config.images.openapiMcp,
         containerPort: OPENAPI_MCP_PORT,
@@ -616,6 +623,16 @@ export class RegistryServiceStack extends cdk.Stack {
         namePrefix,
         desiredCount: config.openapiMcp.replicas,
       });
+      // Auth-server mcp-proxy forwards per-user-credential calls to
+      // openapi-mcp:9876 (parity with the terraform auth_server ingress rule
+      // on module.ecs_service_openapi_mcp).
+      if (openapiMcpService.securityGroup) {
+        openapiMcpService.securityGroup.addIngressRule(
+          authService.securityGroup,
+          ec2.Port.tcp(OPENAPI_MCP_PORT),
+          'Allow auth-server mcp-proxy to reach openapi-mcp',
+        );
+      }
     }
 
     new McpServerService(this, 'RealServerFakeToolsSvc', {

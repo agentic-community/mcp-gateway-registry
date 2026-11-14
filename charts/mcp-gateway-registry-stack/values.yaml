@@ -577,8 +577,9 @@ registry:
     customEntityTypesEnabled: false # Main switch for dynamic tabs + endpoints; off = no behavior change
     customTypeCacheTtlSeconds: 60 # TTL (s) for the in-process custom-type descriptor cache
     maxCustomRecordsPerType: 0 # Soft cap on records per type (0 = unlimited); rejects create at cap
-    # OpenAPI MCP servers (issue #2022). Must equal openapiMcp.enabled below; a
-    # render-time check fails when they differ.
+    # OpenAPI MCP servers (issue #2022). Must equal openapiMcp.enabled and
+    # auth-server.app.openapiMcpEnabled below; a render-time check fails when
+    # they differ.
     openapiMcpEnabled: false
     openapiMcpMaxServers: 10 # 1 to 100
     openapiMcpMaxTargetsPerServer: 10 # 1 to 50
@@ -698,8 +699,9 @@ registry:
   extraEnvFrom: []
 # OpenAPI MCP servers (issue #2022, disabled by default). Deploys one
 # openapi-mcp pod that serves REST APIs from OpenAPI specs as MCP servers. Only
-# the registry pods can reach it (NetworkPolicy). Set registry.app.openapiMcpEnabled
-# to the same value. The SSRF settings under openapiMcp.app must match the
+# the registry and auth-server pods can reach it (NetworkPolicy). Set
+# registry.app.openapiMcpEnabled and auth-server.app.openapiMcpEnabled to the
+# same value. The SSRF settings under openapiMcp.app must match the
 # registry's (ssrfAllowedHosts, gatewayProxyAllowPrivateTargets,
 # egressOauthTrustedIdpHosts, egressForwardProxyEnabled); a render-time check
 # fails when they differ. global.ssrfAllowedCidrs applies to both.
@@ -788,6 +790,11 @@ auth-server:
     # SHARED master switch. Stack rendering fails unless this exactly matches
     # registry.app.gatewayGenericProxyEnabled and an egress policy is declared.
     gatewayGenericProxyEnabled: false
+    # OpenAPI MCP servers (issue #2022). The mcp-proxy hop forwards
+    # per-user-credential calls to the openapi-mcp container. Must equal
+    # openapiMcp.enabled and registry.app.openapiMcpEnabled; a render-time check
+    # fails when they differ. The auth server never receives the sync secret.
+    openapiMcpEnabled: false
     genericProxyTokenTtlSeconds: 30
     genericProxyMaxBodyBytes: "10485760" # string to avoid Helm float sci-notation
     gatewayGenericRequireBearerForWrites: true

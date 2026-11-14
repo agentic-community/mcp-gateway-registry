@@ -41,7 +41,10 @@ tests:
       # NOTE: positions assume entra.clientSecretExistingSecret is set (above),
       # that no other conditional secrets (okta/auth0) are configured, and that
       # metrics.otelExporterOtlpEndpoint is empty (its OTEL_EXPORTER_OTLP_ENDPOINT block does
-      # not render, so it does not shift the extraEnv indices).
+      # not render, so it does not shift the extraEnv indices), and that
+      # app.openapiMcpEnabled=false (the OPENAPI_MCP_ENABLED / OPENAPI_MCP_INTERNAL_URL
+      # pair after SSRF_ALLOWED_CIDRS does not render; the next test covers the
+      # shifted positions when it does).
       # Index map:
       #   env[0] = ENTRA_CLIENT_SECRET (conditional valueFrom)
       #   env[1] = METRICS_LEGACY_HTTP_POST  (Issue #1122, unconditional)
@@ -104,6 +107,36 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].env[28].name
           value: MY_SECRET_VAR
+
+  - it: appends extraEnv after the OpenAPI MCP pair when app.openapiMcpEnabled is true
+    set:
+      entra:
+        clientSecretExistingSecret: my-entra
+        clientSecretExistingSecretKey: ENTRA_CLIENT_SECRET
+      app:
+        openapiMcpEnabled: true
+      extraEnv:
+        - name: MY_FLAG
+          value: "on"
+    asserts:
+      # NOTE: same assumptions as the test above, except app.openapiMcpEnabled=true,
+      # which renders two entries after SSRF_ALLOWED_CIDRS (issue #2022):
+      #   env[26] = SSRF_ALLOWED_CIDRS
+      #   env[27] = OPENAPI_MCP_ENABLED
+      #   env[28] = OPENAPI_MCP_INTERNAL_URL
+      #   env[29] = MY_FLAG (extraEnv[0])
+      - equal:
+          path: spec.template.spec.containers[0].env[26].name
+          value: SSRF_ALLOWED_CIDRS
+      - equal:
+          path: spec.template.spec.containers[0].env[27].name
+          value: OPENAPI_MCP_ENABLED
+      - equal:
+          path: spec.template.spec.containers[0].env[28].name
+          value: OPENAPI_MCP_INTERNAL_URL
+      - equal:
+          path: spec.template.spec.containers[0].env[29].name
+          value: MY_FLAG
 
   - it: enables Entra overage recovery with a 300-second positive cache by default
     set:

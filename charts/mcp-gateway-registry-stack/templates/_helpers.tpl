@@ -183,10 +183,12 @@ Usage:
 {{- end -}}
 
 {{/*
-OpenAPI MCP servers (issue #2022): the feature needs the registry flag and the
-openapi-mcp subchart together, and the container's SSRF guard must apply the
-registry's policy. Fails the render when they disagree, instead of deploying a
-registry that pushes to a missing pod or a pod with a looser guard.
+OpenAPI MCP servers (issue #2022): the feature needs the registry flag, the
+auth-server flag and the openapi-mcp subchart together, both services must call
+the container at the same internal URL, and the container's SSRF guard must
+apply the registry's policy. Fails the render when they disagree, instead of
+deploying a registry that pushes to a missing pod, an auth server that cannot
+forward per-user-credential calls, or a pod with a looser guard.
 */}}
 {{- define "mcp-gateway-registry-stack.validateOpenapiMcp" -}}
 {{- /* .Values itself is not a plain map, so dig starts one level down. */ -}}
@@ -196,6 +198,18 @@ registry that pushes to a missing pod or a pod with a looser guard.
 {{- $registryEnabled := dig "app" "openapiMcpEnabled" false $registry -}}
 {{- if ne (toString $stackEnabled) (toString $registryEnabled) -}}
 {{- fail (printf "openapiMcp.enabled (%v) and registry.app.openapiMcpEnabled (%v) must be equal. Set both to true to turn on OpenAPI MCP servers, or both to false." $stackEnabled $registryEnabled) -}}
+{{- end -}}
+{{- /* The auth server's mcp-proxy hop forwards per-user-credential calls to the container. */ -}}
+{{- $authServer := index .Values "auth-server" | default dict -}}
+{{- $authServerEnabled := dig "app" "openapiMcpEnabled" false $authServer -}}
+{{- if ne (toString $stackEnabled) (toString $authServerEnabled) -}}
+{{- fail (printf "openapiMcp.enabled (%v) and auth-server.app.openapiMcpEnabled (%v) must be equal. Set openapiMcp.enabled, registry.app.openapiMcpEnabled and auth-server.app.openapiMcpEnabled to the same value." $stackEnabled $authServerEnabled) -}}
+{{- end -}}
+{{- $defaultInternalUrl := "http://openapi-mcp:9876" -}}
+{{- $registryUrl := dig "app" "openapiMcpInternalUrl" $defaultInternalUrl $registry -}}
+{{- $authServerUrl := dig "app" "openapiMcpInternalUrl" $defaultInternalUrl $authServer -}}
+{{- if ne (toString $registryUrl) (toString $authServerUrl) -}}
+{{- fail (printf "registry.app.openapiMcpInternalUrl (%q) and auth-server.app.openapiMcpInternalUrl (%q) must be equal. Both services call the same openapi-mcp container." (toString $registryUrl) (toString $authServerUrl)) -}}
 {{- end -}}
 {{- if $stackEnabled -}}
   {{- $pairs := list

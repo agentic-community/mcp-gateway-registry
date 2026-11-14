@@ -1,7 +1,8 @@
 # openapi-mcp: serves REST APIs described by OpenAPI specs as MCP servers
 # (issue #2022). The registry pushes each server's state to this pod, and nginx
-# inside the registry pod proxies MCP traffic to it. Nothing else may reach it:
-# the NetworkPolicy below admits only the registry pods.
+# inside the registry pod proxies MCP traffic to it. The auth server's mcp-proxy
+# hop forwards per-user-credential calls to it. Nothing else may reach it: the
+# NetworkPolicy below admits only the registry and auth-server pods.
 
 # Global configuration
 global:
@@ -77,12 +78,16 @@ caBundle:
   existingSecret: "" # or a Secret
   key: ca-bundle.pem
   mountPath: /etc/ssl/mcp-gateway
-# Only the registry pods may connect. Set fromNamespaceSelector when the
-# registry runs in another namespace.
+# Only the registry and auth-server pods may connect. fromPodSelector matches
+# the registry pods; authServerPodSelector matches the auth-server pods (the
+# auth-server chart labels them app.kubernetes.io/name: <app.name>). Set
+# fromNamespaceSelector when they run in another namespace; it applies to both.
 networkPolicy:
   enabled: true
   fromPodSelector:
     app.kubernetes.io/name: registry
+  authServerPodSelector:
+    app.kubernetes.io/name: auth-server
   fromNamespaceSelector: {}
 service:
   type: ClusterIP

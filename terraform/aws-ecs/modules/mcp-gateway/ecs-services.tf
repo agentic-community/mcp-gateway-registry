@@ -717,6 +717,18 @@ module "ecs_service_auth" {
         {
           name  = "EGRESS_OBO_CACHE_EXPIRY_SKEW_SECONDS"
           value = tostring(var.egress_obo_cache_expiry_skew_seconds)
+        },
+        # OpenAPI MCP servers (issue #2022). The mcp-proxy hop forwards
+        # per-user-credential calls to the openapi-mcp container. The auth
+        # server never receives OPENAPI_MCP_SYNC_SECRET: the registry signs
+        # the per-user credential envelope.
+        {
+          name  = "OPENAPI_MCP_ENABLED"
+          value = tostring(var.openapi_mcp_enabled)
+        },
+        {
+          name  = "OPENAPI_MCP_INTERNAL_URL"
+          value = local.openapi_mcp_internal_url
         }
         ],
         # PR #947: MongoDB connection string override (plain-text variant).
@@ -3114,6 +3126,13 @@ module "ecs_service_openapi_mcp" {
       to_port                      = local.openapi_mcp_port
       ip_protocol                  = "tcp"
       referenced_security_group_id = module.ecs_service_registry.security_group_id
+    }
+    auth_server = {
+      description                  = "openapi-mcp from the auth server (mcp-proxy hop for per-user credentials)"
+      from_port                    = local.openapi_mcp_port
+      to_port                      = local.openapi_mcp_port
+      ip_protocol                  = "tcp"
+      referenced_security_group_id = module.ecs_service_auth.security_group_id
     }
   }
   # Egress to any address: the container calls operator-registered REST APIs.

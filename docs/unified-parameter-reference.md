@@ -494,7 +494,7 @@ enable flag to `false` for air-gapped clusters or to silence the banner.
 
 ## Group 13d - OpenAPI MCP Servers (Issue #2022)
 
-REST APIs served as MCP servers by the `openapi-mcp` container. See [`docs/design/openapi-mcp-servers-design.md`](design/openapi-mcp-servers-design.md). Off by default, so there is no behavior change. The registry turns the feature off at startup in `registry-only` mode or when `REGISTRY_MODE` excludes MCP servers. The sync secret must be the same value for the registry and the container, and must differ from `SECRET_KEY`. On Helm, set both `openapiMcp.enabled` (deploys the container) and `registry.app.openapiMcpEnabled` (turns the registry side on); the stack chart fails the render if they differ.
+REST APIs served as MCP servers by the `openapi-mcp` container. See [`docs/design/openapi-mcp-servers-design.md`](design/openapi-mcp-servers-design.md). Off by default, so there is no behavior change. The registry turns the feature off at startup in `registry-only` mode or when `REGISTRY_MODE` excludes MCP servers. The sync secret must be the same value for the registry and the container, and must differ from `SECRET_KEY`. On Helm, set `openapiMcp.enabled` (deploys the container), `registry.app.openapiMcpEnabled` (turns the registry side on) and `auth-server.app.openapiMcpEnabled` (turns the auth server side on) to the same value; the stack chart fails the render if they differ.
 
 Registry settings:
 
@@ -508,6 +508,21 @@ Registry settings:
 | Max tools per target | `OPENAPI_MCP_MAX_TOOLS_PER_TARGET` | `openapi_mcp_max_tools_per_target` | `registry.app.openapiMcpMaxToolsPerTarget` | Tools one target may produce after its include filters (1 to 500). Default `100`. |
 | Max spec size (bytes) | `OPENAPI_MCP_SPEC_MAX_BYTES` | `openapi_mcp_spec_max_bytes` | `registry.app.openapiMcpSpecMaxBytes` | Largest spec the registry fetches (1024 to 20971520). Default `5242880`. |
 | Reconcile interval (s) | `OPENAPI_MCP_RECONCILE_INTERVAL_SECONDS` | `openapi_mcp_reconcile_interval_seconds` | `registry.app.openapiMcpReconcileIntervalSeconds` | Seconds between full reconcile passes (10 to 3600). Default `60`. |
+
+Auth server settings:
+
+The auth server's mcp-proxy hop forwards calls for per-user credentials to the container, so the auth server also takes `OPENAPI_MCP_ENABLED` and `OPENAPI_MCP_INTERNAL_URL`, with the same values as the registry.
+The auth server never receives `OPENAPI_MCP_SYNC_SECRET`, because the registry signs the per-user credential envelope.
+On Helm, `OPENAPI_MCP_SYNC_SECRET` is a reserved name in the auth-server chart, so `auth-server.extraEnv` cannot set it.
+
+| Parameter | Docker (`.env`) | Terraform (`.tfvars`) | Helm (`values.yaml`) | Purpose |
+|-----------|-----------------|-----------------------|----------------------|---------|
+| Enable OpenAPI MCP servers | `OPENAPI_MCP_ENABLED` | `openapi_mcp_enabled` | `auth-server.app.openapiMcpEnabled` | Same value as the registry's. Default `false`. The Helm chart renders both auth server variables only when this is `true`. |
+| Container URL | `OPENAPI_MCP_INTERNAL_URL` | | `auth-server.app.openapiMcpInternalUrl` | How the auth server reaches the container. Same value as the registry's; the stack chart fails the render if they differ. Default `http://openapi-mcp:9876`. Terraform and CDK set it from Service Connect. |
+
+The container accepts connections from the registry and the auth server only, on TCP 9876.
+Terraform and CDK add a security group ingress rule from each of the two services.
+The Helm NetworkPolicy admits the registry pods (`openapiMcp.networkPolicy.fromPodSelector`) and the auth-server pods (`openapiMcp.networkPolicy.authServerPodSelector`, default `app.kubernetes.io/name: auth-server`).
 
 Container settings (the container also receives the registry's `SSRF_*`, `GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS`, forward-proxy and `EGRESS_HTTP_POOL_*` values, so its SSRF guard applies the same policy):
 
