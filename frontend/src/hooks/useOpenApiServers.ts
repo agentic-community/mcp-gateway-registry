@@ -9,6 +9,9 @@ import {
   UpdateOpenApiTargetRequest,
   OpenApiTargetWriteResponse,
   OpenApiTarget,
+  MyCredentialStatus,
+  MyCredentialsResponse,
+  SetMyCredentialRequest,
 } from '../types/openApiServer';
 import { extractErrorDetail } from '../utils/apiError';
 
@@ -219,6 +222,56 @@ export async function deleteOpenApiTarget(
 ): Promise<void> {
   const headers = await _csrfHeaders();
   await axios.delete(_targetUrl(slug, name), { headers });
+}
+
+
+function _myCredentialUrl(slug: string, name: string): string {
+  return `${_targetUrl(slug, name)}/my-credential`;
+}
+
+
+/**
+ * Store or replace the caller's own key for a per-user target. The secret is
+ * write-only: it is sent once and never returned or logged.
+ */
+export async function setMyCredential(
+  slug: string,
+  name: string,
+  body: SetMyCredentialRequest,
+): Promise<MyCredentialStatus> {
+  const headers = await _csrfHeaders();
+  const response = await axios.put(_myCredentialUrl(slug, name), body, { headers });
+  return response.data;
+}
+
+
+/** The caller's key status for one per-user target (presence and expiry only). */
+export async function getMyCredential(
+  slug: string,
+  name: string,
+): Promise<MyCredentialStatus> {
+  const response = await axios.get(_myCredentialUrl(slug, name));
+  return response.data;
+}
+
+
+/** Delete the caller's own key for a per-user target. */
+export async function deleteMyCredential(
+  slug: string,
+  name: string,
+): Promise<void> {
+  const headers = await _csrfHeaders();
+  await axios.delete(_myCredentialUrl(slug, name), { headers });
+}
+
+
+/** The caller's key status for every per-user target of a server. */
+export async function listMyCredentials(
+  slug: string,
+): Promise<MyCredentialStatus[]> {
+  const response = await axios.get(`${_serverUrl(slug)}/my-credentials`);
+  const data = response.data as MyCredentialsResponse | undefined;
+  return Array.isArray(data?.targets) ? data.targets : [];
 }
 
 
