@@ -82,8 +82,9 @@ tests:
     asserts:
       # NOTE: HOST is env[0], PORT env[1], the three container settings
       # env[2]-env[4], OPENAPI_MCP_SYNC_SECRET env[5], the SSRF guard and pool
-      # settings env[6]-env[14], the forward-proxy pair env[15]/env[16];
-      # extraEnv starts at env[17]. Update these indices when a chart-managed
+      # settings env[6]-env[14], the forward-proxy pair env[15]/env[16], the
+      # six APP_LOG_* settings env[17]-env[22]; extraEnv starts at env[23].
+      # Update these indices when a chart-managed
       # entry is added before the extraEnv append.
       - equal:
           path: spec.template.spec.containers[0].env[0]
@@ -118,6 +119,16 @@ tests:
           value: EGRESS_FORWARD_PROXY_CA_BUNDLE
       - equal:
           path: spec.template.spec.containers[0].env[17]
+          value:
+            name: APP_LOG_DIR
+            value: ""
+      - equal:
+          path: spec.template.spec.containers[0].env[22]
+          value:
+            name: APP_LOG_BACKUP_COUNT
+            value: "5"
+      - equal:
+          path: spec.template.spec.containers[0].env[23]
           value:
             name: MY_FLAG
             value: "on"
@@ -247,3 +258,28 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: "neither existingConfigMap nor existingSecret"
+
+  - it: passes the application log settings through
+    set:
+      app.appLogLevel: DEBUG
+      app.appLogConsoleFormat: text
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: APP_LOG_LEVEL
+            value: DEBUG
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: APP_LOG_CONSOLE_FORMAT
+            value: text
+
+  - it: rejects APP_LOG_DIR in extraEnv
+    set:
+      extraEnv:
+        - name: APP_LOG_DIR
+          value: /tmp
+    asserts:
+      - failedTemplate:
+          errorPattern: "is a reserved variable managed by the chart"

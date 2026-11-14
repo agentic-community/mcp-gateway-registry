@@ -19,6 +19,13 @@ EGRESS_HTTP_POOL_CONNECT_RETRIES
 # Forward-proxy egress read by registry/utils/url_guard.py from os.environ.
 EGRESS_FORWARD_PROXY_ENABLED
 EGRESS_FORWARD_PROXY_CA_BUNDLE
+# Application logs, read by servers/openapi-mcp/logging_setup.py.
+APP_LOG_DIR
+APP_LOG_FILE_FORMAT
+APP_LOG_CONSOLE_FORMAT
+APP_LOG_LEVEL
+APP_LOG_MAX_BYTES
+APP_LOG_BACKUP_COUNT
 # Read by the guard but owned by the registry: the container must not turn on
 # the registry-side OpenAPI identity or move the reserved host.
 OPENAPI_MCP_ENABLED

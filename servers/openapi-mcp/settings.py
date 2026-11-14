@@ -5,6 +5,8 @@ holds only the fields ``registry/utils/url_guard.py`` reads, so the guard runs
 here without the registry's ``Settings`` class (which requires ``SECRET_KEY``).
 """
 
+from typing import Literal
+
 from pydantic import (
     Field,
     SecretStr,
@@ -15,6 +17,7 @@ from pydantic_settings import (
 )
 
 DEFAULT_PORT: int = 9876
+LogFormat = Literal["json", "text"]
 # Inside a container the server must listen on every interface so nginx and the
 # registry can reach it. Compose publishes the port on loopback only, and ECS and
 # Kubernetes restrict ingress with a security group and a NetworkPolicy.
@@ -51,6 +54,17 @@ class ContainerSettings(BaseSettings):
     host: str = Field(default=DEFAULT_HOST)
     port: int = Field(default=DEFAULT_PORT, ge=1, le=65535)
     build_version: str = Field(default="dev")
+    # Application logs (docs/logging-standard.md). The same APP_LOG_* knobs as
+    # the registry, auth server and mcpgw, read in logging_setup.py.
+    app_log_dir: str = Field(
+        default="",
+        description="Directory for openapi-mcp.log. Empty means /var/log/containers/ai-registry.",
+    )
+    app_log_file_format: LogFormat = Field(default="json")
+    app_log_console_format: LogFormat = Field(default="json")
+    app_log_level: str = Field(default="INFO")
+    app_log_max_bytes: int = Field(default=52_428_800, ge=1024)
+    app_log_backup_count: int = Field(default=5, ge=0)
 
 
 class GuardSettings(BaseSettings):
