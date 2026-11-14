@@ -32,11 +32,11 @@ When an agent calls a tool, the call goes through the gateway to the container. 
 
 ### How it stays safe
 
-Only admins can add or change APIs. The registry stores keys encrypted and never shows them again after they are entered. A new server starts private, so only admins can use it until an admin opens it to a group or to everyone. The container can call only the addresses the registry's own network guard allows, so a spec cannot point it at internal services or cloud metadata. It also strips the gateway's identity headers before it calls an outside API.
+Only admins can add or change APIs. An admin can enter one shared key for an API, or make it per-user, so that each user adds their own key from the API provider. The registry stores every key encrypted and never shows it again after it is entered. A new server starts private, so only admins can use it until an admin opens it to a group or to everyone. The container can call only the addresses the registry's own network guard allows, so a spec cannot point it at internal services or cloud metadata. It also strips the gateway's identity headers before it calls an outside API.
 
 ### What this version leaves out
 
-Each API has one key that every caller shares, so there are no per-user keys yet. The registry refuses Swagger 2.0 specs, and the admin has to convert those to OpenAPI 3 first. A later version will use an LLM to review spec quality. Until then an admin can rewrite any tool's description by hand.
+The registry does not fetch API keys for anyone: a user gets a per-user key from the API provider and adds it. The registry refuses Swagger 2.0 specs, and the admin has to convert those to OpenAPI 3 first. A later version will use an LLM to review spec quality. Until then an admin can rewrite any tool's description by hand.
 
 ## 200-level: how it is built
 
@@ -129,6 +129,12 @@ The gateway treats the server like any other: nginx asks the auth server's `/val
 
 Each tool carries a hint taken from its HTTP method: `GET` is read-only and `DELETE` is destructive. Clients that ask before a destructive call, such as Claude Code, then ask before a `DELETE`.
 
+### Per-user credentials
+
+A target with `credential_mode: per_user` stores no key. Each user submits their own at `/api/openapi-servers/{slug}/targets/{name}/my-credential`, and the registry keeps it in the egress vault exactly like an egress PAT: write-only, keyed on the user's immutable id, with a lifetime of at most 30 days. It is bound to the target's canonical base URL, so a repointed target cannot reuse it.
+
+A server with a per-user target routes through the auth server's mcp-proxy hop, the same path egress PAT servers use. For each call the hop asks the registry to vend a credential. The registry sees an OpenAPI MCP server and returns all of the caller's keys for that server in one envelope: a JWT valid for 60 seconds and once, bound to the server's slug, and signed with a key derived from `OPENAPI_MCP_SYNC_SECRET`. The hop forwards it in the `X-OpenAPI-MCP-User-Credentials` header without reading it; the auth server never holds the sync secret. The container verifies the envelope, keeps the header away from FastMCP, and gives each per-user target its key for that call only. A target with no key in the envelope returns a tool error, and never falls back to a shared key. The registry's own health checks and scans call the container without an envelope, which works because listing tools never calls the REST API.
+
 ### Keeping the container in step
 
 Only the registry starts calls between the two; the container never calls the registry. Each push carries a server's full state and its generation number. The container ignores a push that is not newer than the hub it is running, so two registry replicas pushing at once do no harm.
@@ -149,6 +155,7 @@ Every change also starts a background security scan of the server. A scan cut of
 | A spec or base URL points at internal services or cloud metadata | The same SSRF guard runs on the spec fetch and on every backend call |
 | An ordinary server registers the container as its backend | The container's hostname is reserved. Only a server whose path and target match `/<slug>` and `<container>/s/<slug>/mcp` exactly gets the built-in profile. That profile reaches only `/s/<slug>/mcp`, never `/internal/*` |
 | Gateway headers reach a third-party API | The dispatcher keeps only an allowlist of MCP headers |
+| One user's key is used for another user, or sent to another host | Per-user keys are keyed on the immutable user id, bound to the target's base URL, and delivered per call in a signed, single-use, slug-bound envelope; a missing key is an error, never a fallback to a shared key |
 | A spec that expands into gigabytes, or takes a long time to convert | YAML aliases are refused, specs are capped at 5 MiB, and each conversion has 10 seconds |
 | A spec carries text aimed at the model | The security scanner runs after every tool change. Admins can replace any description, and can block a single tool with the existing per-tool block |
 

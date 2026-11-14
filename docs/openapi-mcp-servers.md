@@ -1,6 +1,6 @@
 # OpenAPI MCP servers
 
-An OpenAPI MCP server turns REST APIs into MCP tools without anyone writing an MCP server. An admin creates the server in the registry and adds REST APIs to it, each one given as an OpenAPI 3.x spec URL, a base URL and one credential. Every operation in the spec becomes a tool, and agents connect to the server like any other MCP server, through the gateway, with the same login and access rules.
+An OpenAPI MCP server turns REST APIs into MCP tools without anyone writing an MCP server. An admin creates the server in the registry and adds REST APIs to it, each one given as an OpenAPI 3.x spec URL, a base URL and a credential: either one key the admin enters for every caller, or a key each user brings for themselves. Every operation in the spec becomes a tool, and agents connect to the server like any other MCP server, through the gateway, with the same login and access rules.
 
 The design, with diagrams, is in [design/openapi-mcp-servers-design.md](design/openapi-mcp-servers-design.md). Every setting is listed in [unified-parameter-reference.md](unified-parameter-reference.md) under Group 13d.
 
@@ -50,13 +50,41 @@ Adding a target stores nothing until every check passes:
 - One target may produce at most `OPENAPI_MCP_MAX_TOOLS_PER_TARGET` tools (100 by default). A larger spec gets a `too_many_tools` error that lists the spec's tags with their operation counts. Choose operations with `include_tags` and `include_operations`; an `include_operations` entry is an `operationId` or `"METHOD /path"`.
 - Tool names may be at most 64 characters. Rename long or clashing ones with `tool_name_overrides`, keyed by `operationId`, or by `"METHOD /path"` for an operation that has none.
 
-Each target uses one credential for every caller: an API key in a header or a query parameter, a bearer token, or HTTP basic auth. The registry stores it encrypted and never returns it. Responses show only `credential_set`. To rotate it, send a new `auth` in a `PATCH` on the target.
+## Shared or per-user credentials
+
+Each target chooses one `credential_mode`:
+
+- `shared` (the default): the admin enters one credential, which every caller uses. It can be an API key in a header or a query parameter, a bearer token, or HTTP basic auth. The registry stores it encrypted with `SECRET_KEY` and never returns it; responses show only `credential_set`. To rotate it, send a new `auth` in a `PATCH` on the target.
+- `per_user`: each user brings their own API key or personal access token, which they get from the API provider themselves. The registry never obtains keys for anyone. The admin sets only the shape, `bearer` or `api_key_header` with its header name. Per-user targets need `EGRESS_AUTH_ENABLED=true` and a vault (`SECRET_STORE_BACKEND`), because the keys are stored there, like egress PATs.
+
+One server can mix both kinds of target. A per-user target, as the admin adds it:
+
+```json
+{"name": "nasa", "spec_url": "https://example.com/nasa-openapi.json", "base_url": "https://api.nasa.gov",
+ "auth": {"scheme": "api_key_header", "header_name": "X-Api-Key", "credential_mode": "per_user"}}
+```
+
+Each user then adds their key, in the UI ("Your API keys" on the server card, or Connected Accounts) or through the API:
+
+```bash
+curl -X PUT "$REGISTRY_URL/api/openapi-servers/nasa/targets/nasa/my-credential" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" -H "Content-Type: application/json" \
+  -d '{"secret": "YOUR_NASA_KEY", "ttl_value": 30, "ttl_unit": "days"}'
+```
+
+- A key is write-only. `GET .../my-credential` and `GET /api/openapi-servers/{slug}/my-credentials` return only whether a key is set and when it expires. `DELETE .../my-credential` removes it.
+- A key lasts at most 30 days, and the user adds a new one after that.
+- A key is bound to the target's base URL. If an admin points the target somewhere else, stored keys stop working, and users add them again.
+- An admin can store a key on a user's behalf by adding `sub` and that user's `auth_method` to the request, as with egress PATs.
+- A call to a per-user tool without a key returns a tool error asking the user to add one. It never falls back to a shared key.
+
+At call time the gateway sends a per-user server's traffic through the auth server, which forwards the caller's keys to the container in a signed, single-use envelope. The auth server never holds the key that signs it.
 
 The registry keeps the exact spec it checked. A change to the spec at its URL reaches agents only after an admin refreshes the target (`refresh_spec: true`), which runs every check again.
 
 ## Who can use a server
 
-A new server is `private`: only admins can see and call it. This differs from `POST /api/servers/register`, where the default is `public`. Every caller spends the targets' shared credentials, so open a server to a group (`group-restricted`) or to everyone (`public`) only when it is ready. The server is an ordinary registry server, so scopes, the gateway's access check, search and the per-tool block all apply to it unchanged.
+A new server is `private`: only admins can see and call it. This differs from `POST /api/servers/register`, where the default is `public`. Every caller spends the targets' shared credentials, so open a server with shared targets to a group (`group-restricted`) or to everyone (`public`) only when it is ready. A server whose targets are all per-user spends no one's key but the caller's. The server is an ordinary registry server, so scopes, the gateway's access check, search and the per-tool block all apply to it unchanged.
 
 Each tool is marked from its HTTP method: `GET`, `HEAD` and `OPTIONS` are read-only, and `DELETE` is destructive. Clients that confirm destructive calls, such as Claude Code, ask before a `DELETE`. To remove a tool entirely, block it with the existing per-tool block (`tool_overrides`) on the server, or leave its operation out with the include filters.
 

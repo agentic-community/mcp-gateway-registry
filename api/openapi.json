@@ -9166,6 +9166,229 @@
         ]
       }
     },
+    "/api/openapi-servers/{slug}/targets/{name}/my-credential": {
+      "put": {
+        "tags": [
+          "openapi-servers"
+        ],
+        "summary": "Put My Credential",
+        "description": "Store your own key for a per-user target (an admin may store one for another user).",
+        "operationId": "put_my_credential_api_openapi_servers__slug__targets__name__my_credential_put",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9]{1,23}$",
+              "title": "Name"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MyCredentialRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      },
+      "get": {
+        "tags": [
+          "openapi-servers"
+        ],
+        "summary": "Get My Credential",
+        "description": "Whether you have a key for this target, and when it expires. Never the key.",
+        "operationId": "get_my_credential_api_openapi_servers__slug__targets__name__my_credential_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9]{1,23}$",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "openapi-servers"
+        ],
+        "summary": "Delete My Credential",
+        "description": "Delete your key for this target.",
+        "operationId": "delete_my_credential_api_openapi_servers__slug__targets__name__my_credential_delete",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9]{1,23}$",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/openapi-servers/{slug}/my-credentials": {
+      "get": {
+        "tags": [
+          "openapi-servers"
+        ],
+        "summary": "List My Credentials",
+        "description": "Your key status for every per-user target on this server.",
+        "operationId": "list_my_credentials_api_openapi_servers__slug__my_credentials_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
     "/api/custom-types": {
       "get": {
         "tags": [
@@ -22023,6 +22246,62 @@
         "title": "MissingEmbeddingsResponse",
         "description": "Response for the missing embeddings scan."
       },
+      "MyCredentialRequest": {
+        "properties": {
+          "secret": {
+            "type": "string",
+            "format": "password",
+            "title": "Secret",
+            "writeOnly": true
+          },
+          "ttl_value": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Ttl Value"
+          },
+          "ttl_unit": {
+            "type": "string",
+            "enum": [
+              "minutes",
+              "hours",
+              "days"
+            ],
+            "title": "Ttl Unit"
+          },
+          "sub": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sub",
+            "description": "Admin only: store the key for this user instead"
+          },
+          "auth_method": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auth Method",
+            "description": "Admin only, with sub: the user's ingress auth method"
+          }
+        },
+        "type": "object",
+        "required": [
+          "secret",
+          "ttl_value",
+          "ttl_unit"
+        ],
+        "title": "MyCredentialRequest",
+        "description": "Body of PUT .../targets/{name}/my-credential: the caller's own key for a per-user target."
+      },
       "OAuthBackendConfigRequest": {
         "properties": {
           "token_url": {
@@ -22496,6 +22775,15 @@
             ],
             "title": "Scheme",
             "default": "none"
+          },
+          "credential_mode": {
+            "type": "string",
+            "enum": [
+              "shared",
+              "per_user"
+            ],
+            "title": "Credential Mode",
+            "default": "shared"
           },
           "header_name": {
             "anyOf": [
