@@ -19,7 +19,7 @@ The sync secret signs the registry's calls to the container. Both read the same 
 
 Terraform: set `openapi_mcp_enabled = true` and `openapi_mcp_image_uri` to a pinned image. Terraform generates the sync secret in AWS Secrets Manager.
 
-Helm: set both `openapiMcp.enabled: true` (deploys the container) and `registry.app.openapiMcpEnabled: true` (turns the registry side on). The stack chart refuses to render when the two differ.
+Helm: set `openapiMcp.enabled: true` (deploys the container), `registry.app.openapiMcpEnabled: true` (turns the registry side on) and `auth-server.app.openapiMcpEnabled: true` (lets the auth server forward calls that use per-user credentials). The stack chart refuses to render when the three differ.
 
 ## Create a server and add an API
 

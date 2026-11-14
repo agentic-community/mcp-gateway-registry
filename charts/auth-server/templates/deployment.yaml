@@ -347,6 +347,16 @@ spec:
             # 240.240.0.0/16). global.ssrfAllowedCidrs (stack chart) wins over app.ssrfAllowedCidrs. #2018
             - name: SSRF_ALLOWED_CIDRS
               value: {{ .Values.global.ssrfAllowedCidrs | default .Values.app.ssrfAllowedCidrs | default "" | quote }}
+            # OpenAPI MCP servers (issue #2022): the mcp-proxy hop forwards
+            # per-user-credential calls to the openapi-mcp container. Rendered
+            # only when enabled. Never OPENAPI_MCP_SYNC_SECRET: the registry
+            # signs the per-user credential envelope.
+            {{- if .Values.app.openapiMcpEnabled }}
+            - name: OPENAPI_MCP_ENABLED
+              value: "true"
+            - name: OPENAPI_MCP_INTERNAL_URL
+              value: {{ required "auth-server.app.openapiMcpInternalUrl must be set when app.openapiMcpEnabled is true" .Values.app.openapiMcpInternalUrl | quote }}
+            {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
