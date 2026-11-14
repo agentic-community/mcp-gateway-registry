@@ -1884,7 +1884,7 @@ def test_registry_api_locations_forward_internal_token():
         assert "proxy_set_header X-Registry-Api-Auth $registry_api_auth;" in text, conf.name
 
 
-OPENAPI_NESTED_LOCATION: str = "location {{ROOT_PATH}}/api/openapi-servers/ {"
+OPENAPI_NESTED_LOCATION: str = "location {{ROOT_PATH}}/api/openapi-servers {"
 
 
 def _nested_openapi_blocks(
@@ -1920,9 +1920,12 @@ def test_openapi_upload_location_is_nested_in_every_api_block():
             assert "auth_request /validate;" in outer, name
             assert "client_max_body_size 8m;" in nested, name
             assert 'set $registry_api_auth "1";' in nested, name
-            assert "proxy_pass http://127.0.0.1:7860/api/openapi-servers/;" in nested, name
+            assert "proxy_pass http://127.0.0.1:7860/api/openapi-servers;" in nested, name
             for inherited in ("proxy_set_header", "auth_request", "error_page", "limit_req"):
                 assert inherited not in nested, f"{name}: nested block overrides {inherited}"
+        # A trailing-slash prefix makes nginx 301 the bare list/create path
+        # (/api/openapi-servers) to a path the registry does not serve.
+        assert "location {{ROOT_PATH}}/api/openapi-servers/ {" not in text, name
         # Every other API route keeps nginx's 1m default.
         assert text.count("client_max_body_size 8m;") == len(blocks), name
 
