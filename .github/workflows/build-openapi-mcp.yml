@@ -1,14 +1,13 @@
 name: Build OpenAPI MCP Image
 
-# Builds the openapi-mcp container (issue #2022) and publishes it to ECR Public.
-# Every build gets an immutable tag: the full commit SHA on main, and the release
-# version (for example 1.38.0) when a release tag is pushed. No :latest tag is
-# published, because every deployment surface pins the image by version.
+# Builds the openapi-mcp container (issue #2022) and publishes it to ECR Public on
+# every push to main, the same way build-mcpgw.yml publishes mcpgw: tagged with
+# the full commit SHA, plus latest on main. Release tags (1.38.0, 1.38, 1) come
+# from release-images.yml, which builds all four images for each release.
 
 on:
   push:
     branches: [main]
-    tags: ['[0-9]+.[0-9]+.[0-9]+']
     paths:
       - 'servers/openapi-mcp/**'
       - 'docker/Dockerfile.openapi-mcp'
@@ -75,10 +74,8 @@ jobs:
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          flavor: |
-            latest=false
           tags: |
-            type=semver,pattern={{version}}
+            type=raw,value=latest,enable={{is_default_branch}}
             type=sha,prefix=,format=long
 
       - name: Build and push
@@ -92,7 +89,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            BUILD_VERSION=${{ steps.meta.outputs.version }}
+            BUILD_VERSION=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
