@@ -33,7 +33,7 @@ async def _remove_search_entry(
         logger.warning(f"Failed to remove search index for {path}: {e}")
 
 
-async def _flush_nginx() -> None:
+async def flush_nginx() -> None:
     from ..core.nginx_service import nginx_reload_scheduler
 
     nginx_reload_scheduler.mark_dirty()
@@ -66,7 +66,7 @@ async def clean_up_removed_server(
 
     logger.info(f"Service removed successfully: {path} by user {performed_by}")
     await _remove_search_entry(path)
-    await _flush_nginx()
+    await flush_nginx()
     await health_service.broadcast_health_update(path)
     await _remove_scopes(path)
     asyncio.create_task(
@@ -156,7 +156,7 @@ async def register_and_enable_managed_server(
     from ..repositories.factory import get_search_repository
 
     await get_search_repository().index_server(path, server_entry, True)
-    await _flush_nginx()
+    await flush_nginx()
     # The same scan and webhook as POST /api/servers/register. The caller runs
     # the health check and tool refresh itself, after pushing the hub.
     from ..api.server_routes import start_post_registration_tasks

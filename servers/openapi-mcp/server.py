@@ -23,6 +23,7 @@ from conversion import (
     ConversionError,
     preview,
 )
+from guarded_transport import USER_CREDENTIALS_SCOPE_KEY
 from models import (
     ApplyResponse,
     HubServerState,
@@ -43,8 +44,10 @@ from starlette.responses import (
 from starlette.routing import Route
 
 from registry.auth.openapi_mcp_sync import (
+    ENVELOPE_HEADER,
     JtiCache,
     SyncTokenError,
+    verify_credential_envelope,
     verify_sync_token,
 )
 from registry.common.secret_key import validate_signing_secret
@@ -198,6 +201,27 @@ async def _not_found(
     await response(scope, receive, send)
 
 
+def _user_credentials(
+    scope,
+    slug: str,
+) -> dict | None:
+    """Verified per-user keys from the gateway's envelope; {} when there is none; None when invalid."""
+    wanted = ENVELOPE_HEADER.lower().encode()
+    raw = next((v for k, v in scope.get("headers", []) if k.lower() == wanted), None)
+    if raw is None:
+        return {}
+    try:
+        return verify_credential_envelope(
+            raw.decode("latin-1"),
+            settings.openapi_mcp_sync_secret.get_secret_value(),
+            slug,
+            _seen_jtis,
+        )
+    except SyncTokenError as e:
+        logger.warning(f"Rejected credential envelope for '{slug}': {e}")
+        return None
+
+
 async def app(
     scope,
     receive,
@@ -213,6 +237,12 @@ async def app(
     if entry is None:
         await _not_found(scope, receive, send)
         return
+    credentials = _user_credentials(scope, slug)
+    if credentials is None:
+        await _error(401, "unauthorized", "invalid credential envelope")(scope, receive, send)
+        return
+    # The envelope header is not in the allowlist, so FastMCP never sees it and
+    # cannot forward it; the verified keys travel on the scope instead.
     headers = [
         (k, v) for k, v in scope.get("headers", []) if k.lower() in MCP_REQUEST_HEADER_ALLOWLIST
     ]
@@ -223,6 +253,7 @@ async def app(
         root_path=scope.get("root_path", "") + SLUG_PREFIX + slug,
         headers=headers,
     )
+    child_scope[USER_CREDENTIALS_SCOPE_KEY] = credentials
     await entry.app(child_scope, receive, send)
 
 

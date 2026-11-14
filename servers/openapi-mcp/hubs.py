@@ -22,7 +22,10 @@ from conversion import (
     convert_target,
 )
 from fastmcp import FastMCP
-from guarded_transport import GuardedHttpx2Transport
+from guarded_transport import (
+    GuardedHttpx2Transport,
+    PerUserAuth,
+)
 from models import (
     HubServerState,
     HubTargetState,
@@ -72,6 +75,8 @@ def _auth_client_kwargs(
     target: HubTargetState,
 ) -> dict[str, Any]:
     """Client headers, params or auth for the target's one auth scheme."""
+    if target.auth_credential_mode == "per_user":
+        return {}
     credential = target.auth_credential.get_secret_value() if target.auth_credential else ""
     if target.auth_scheme == "api_key_header" and target.auth_header_name:
         return {"headers": {target.auth_header_name: credential}}
@@ -89,11 +94,16 @@ def _backend_client(
     settings: ContainerSettings,
 ) -> httpx2.AsyncClient:
     """An httpx2 client for one target, routed through the SSRF guard."""
+    per_user = None
+    if target.auth_credential_mode == "per_user":
+        per_user = PerUserAuth(
+            target.name, target.auth_scheme, target.auth_header_name, target.base_url
+        )
     return httpx2.AsyncClient(
         base_url=target.base_url,
         timeout=settings.openapi_mcp_backend_timeout_seconds,
         transport=GuardedHttpx2Transport(
-            max_response_bytes=settings.openapi_mcp_max_response_bytes
+            max_response_bytes=settings.openapi_mcp_max_response_bytes, per_user=per_user
         ),
         follow_redirects=False,
         **_auth_client_kwargs(target),
