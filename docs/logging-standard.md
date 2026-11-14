@@ -53,8 +53,7 @@ Python services (registry, auth-server, mcpgw, openapi-mcp) emit JSON Lines (JSO
 their `.log` files by default. One JSON object per line, UTF-8 encoded,
 newline terminated.
 
-Console / stdout output remains the existing human-readable comma-separated
-format so `docker logs <container>` stays skimmable without a JSON parser.
+Console output uses the same JSON Lines by default (`APP_LOG_CONSOLE_FORMAT=json`), so a log agent that scrapes container stdout gets the same records as the files. Set `APP_LOG_CONSOLE_FORMAT=text` to get the comma-separated format back for reading `docker logs` by eye. Uvicorn's request lines (`INFO:     172.18.0.16:47900 - "GET /validate HTTP/1.1" 200 OK`) stay plain text in both modes in every container, because uvicorn writes them through its own handler rather than the service's.
 
 ### Mandatory fields (every record)
 
@@ -117,6 +116,7 @@ Expected total on-disk footprint per deployment is roughly 1 GB worst case.
 | --- | --- | --- |
 | `APP_LOG_DIR` | `/var/log/containers/ai-registry` | Directory where service `.log` files are written. Must be absolute; `..` segments are rejected. |
 | `APP_LOG_FILE_FORMAT` | `json` | `json` for JSONL (default) or `text` for the legacy comma-separated format. Console format is not affected. |
+| `APP_LOG_CONSOLE_FORMAT` | `json` | Console (stdout) format: `json` for the same JSONL records as the files (default), or `text` for the comma-separated format. File format is not affected. |
 | `APP_LOG_LEVEL` | `INFO` | Root log level. `DEBUG` / `INFO` / `WARNING` / `ERROR` / `CRITICAL`. |
 | `APP_LOG_MAX_BYTES` | `52428800` (50 MB) | Python file rotation size threshold. |
 | `APP_LOG_BACKUP_COUNT` | `5` | Number of rotated backups to keep. |
