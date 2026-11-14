@@ -35,6 +35,10 @@ logger = logging.getLogger(__name__)
 
 
 MCP_PATH: str = "/mcp"
+# How long a replaced hub keeps serving requests that started before the swap.
+# Closing it at once cut off in-flight calls, including the registry's security
+# scan that every change starts, and a cut-off scan disables the server.
+RETIRED_HUB_GRACE_SECONDS: float = 30.0
 
 
 @dataclass
@@ -51,6 +55,7 @@ class HubEntry:
 
 _hubs: dict[str, HubEntry] = {}
 _locks: dict[str, asyncio.Lock] = {}
+_retiring: dict[asyncio.Task, HubEntry] = {}
 
 
 def _lock_for(
@@ -193,6 +198,20 @@ async def _close_entry(
         await client.aclose()
 
 
+def _retire_later(
+    entry: HubEntry,
+) -> None:
+    """Close a replaced hub after the grace period, so in-flight requests finish."""
+
+    async def _close_after_grace() -> None:
+        await asyncio.sleep(RETIRED_HUB_GRACE_SECONDS)
+        await _close_entry(entry)
+
+    task = asyncio.create_task(_close_after_grace())
+    _retiring[task] = entry
+    task.add_done_callback(lambda done: _retiring.pop(done, None))
+
+
 async def apply_server_state(
     state: HubServerState,
     settings: ContainerSettings,
@@ -209,7 +228,7 @@ async def apply_server_state(
         new_entry = await _build_hub(state, settings)
         _hubs[state.slug] = new_entry
         if current is not None:
-            await _close_entry(current)
+            _retire_later(current)
         return new_entry
 
 
@@ -245,6 +264,10 @@ def hub_count() -> int:
 
 
 async def close_all() -> None:
-    """Close every hub at shutdown."""
+    """Close every hub at shutdown, including replaced hubs still in their grace period."""
     for slug in list(_hubs):
         await delete_server(slug)
+    for task, entry in list(_retiring.items()):
+        task.cancel()
+        await _close_entry(entry)
+    _retiring.clear()
