@@ -137,6 +137,8 @@ Only the registry starts calls between the two; the container never calls the re
 
 A container restart loses every hub. The reconciler checks the container's `/health` every 10 seconds. When the start time changes, it reads the container's status and pushes every server it finds missing or stale. It also runs a full pass at registry startup and every 60 seconds. Until the push lands, calls to those servers return 404. In a load test with 10 servers of 10 targets each, every target was serving again 23 seconds after the restart. The registry does not restart the container itself, because Compose, ECS and Kubernetes each do that their own way.
 
+Every change also starts a background security scan of the server. A scan cut off by a container restart or a delete counts as failed, and the registry's fail-closed scan policy then disables the server; it stays disabled until an admin turns it on again. This is deliberate: a server is never re-enabled without a passing scan. A replaced hub keeps serving its in-flight calls for 30 seconds, so an ordinary change does not cut off the scan the previous change started.
+
 ### Security model
 
 | Risk | Control |
