@@ -155,7 +155,7 @@ describe('OpenApiTargetForm writes', () => {
     await waitFor(() => expect(onSaved).toHaveBeenCalled());
     expect(mockedAxios.post).toHaveBeenCalledWith(
       '/api/openapi-servers/weather-apis/targets',
-      expect.objectContaining({ name: 'petstore', auth: { scheme: 'none' } }),
+      expect.objectContaining({ name: 'petstore', auth: { scheme: 'none', credential_mode: 'shared' } }),
       { headers: { 'X-CSRF-Token': 'csrf-123' } },
     );
   });
@@ -253,5 +253,119 @@ describe('OpenApiTargetForm error placement', () => {
     _submit();
 
     expect(await screen.findByTestId('openapi-target-error-name')).toHaveTextContent('Taken.');
+  });
+});
+
+
+describe('OpenApiTargetForm per-user credentials', () => {
+  function _perUserTarget(): OpenApiTarget {
+    return _target({
+      auth: {
+        scheme: 'api_key_header',
+        header_name: 'X-API-Key',
+        credential_set: false,
+        credential_mode: 'per_user',
+      },
+    });
+  }
+
+  it('defaults to shared and offers both credential choices', () => {
+    _renderCreate();
+
+    expect(screen.getByLabelText('Shared: one admin key for every caller')).toBeChecked();
+    expect(screen.getByLabelText('Per user: each user adds their own key')).not.toBeChecked();
+  });
+
+  it('hides the credential field and limits the schemes in per-user mode', () => {
+    _renderCreate();
+
+    fireEvent.click(screen.getByLabelText('Per user: each user adds their own key'));
+
+    const options = Array.from(
+      (screen.getByLabelText('Auth scheme') as HTMLSelectElement).options,
+    ).map((o) => o.value);
+    expect(options).toEqual(['api_key_header', 'bearer']);
+    expect(document.querySelector('input[type="password"]')).toBeNull();
+    expect(screen.getByTestId('openapi-per-user-hint')).toHaveTextContent(
+      'Each user adds their own key from the API provider. The registry never fetches keys.',
+    );
+  });
+
+  it('sends a per-user auth body with no credential on create', async () => {
+    mockedAxios.post.mockResolvedValue({ data: { name: 'petstore', sync_status: 'applied' } });
+    const onSaved = _renderCreate();
+
+    _fillCreate();
+    fireEvent.click(screen.getByLabelText('Per user: each user adds their own key'));
+    _submit();
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    const body = mockedAxios.post.mock.calls[0][1] as { auth: Record<string, unknown> };
+    expect(body.auth).toEqual({ scheme: 'bearer', credential_mode: 'per_user' });
+  });
+
+  it('drops the credential from the PATCH when switching shared to per user', async () => {
+    mockedAxios.patch.mockResolvedValue({ data: { name: 'petstore', sync_status: 'applied' } });
+    const onSaved = jest.fn();
+    render(
+      <OpenApiTargetForm serverSlug="weather-apis" intent="edit" target={_target()}
+        onSaved={onSaved} onCancel={jest.fn()} />,
+    );
+
+    fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'typed-then-dropped' } });
+    fireEvent.click(screen.getByLabelText('Per user: each user adds their own key'));
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    const body = mockedAxios.patch.mock.calls[0][1] as { auth: Record<string, unknown> };
+    expect(body.auth).toEqual({
+      scheme: 'api_key_header',
+      header_name: 'api_key',
+      credential_mode: 'per_user',
+    });
+    expect(body.auth).not.toHaveProperty('credential');
+    expect(body.auth).not.toHaveProperty('query_param');
+    expect(body.auth).not.toHaveProperty('username');
+  });
+
+  it('opens a per-user target in per-user mode and leaves auth out of an unchanged PATCH', async () => {
+    mockedAxios.patch.mockResolvedValue({ data: { name: 'petstore', sync_status: 'applied' } });
+    const onSaved = jest.fn();
+    render(
+      <OpenApiTargetForm serverSlug="weather-apis" intent="edit" target={_perUserTarget()}
+        onSaved={onSaved} onCancel={jest.fn()} />,
+    );
+
+    expect(screen.getByLabelText('Per user: each user adds their own key')).toBeChecked();
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    const body = mockedAxios.patch.mock.calls[0][1] as Record<string, unknown>;
+    expect(body).not.toHaveProperty('auth');
+  });
+
+  it('asks for the credential when switching a per-user target to shared', async () => {
+    render(
+      <OpenApiTargetForm serverSlug="weather-apis" intent="edit" target={_perUserTarget()}
+        onSaved={jest.fn()} onCancel={jest.fn()} />,
+    );
+
+    fireEvent.click(screen.getByLabelText('Shared: one admin key for every caller'));
+    expect(screen.getByLabelText('API key')).toHaveValue('');
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    expect(await screen.findByTestId('openapi-target-error-auth')).toBeInTheDocument();
+    expect(mockedAxios.patch).not.toHaveBeenCalled();
+  });
+
+  it('shows egress_auth_disabled as a banner sentence', async () => {
+    _rejectPost(409, { error: 'egress_auth_disabled', detail: 'Egress auth is disabled' });
+    _renderCreate();
+
+    _fillCreate();
+    fireEvent.click(screen.getByLabelText('Per user: each user adds their own key'));
+    _submit();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/egress auth, which is turned off/);
   });
 });

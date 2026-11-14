@@ -17,6 +17,18 @@ export type OpenApiAuthScheme =
   | 'basic';
 
 
+/**
+ * Who supplies a target's credential. `shared`: one admin key for every
+ * caller (stored with the target). `per_user`: each user adds their own key,
+ * stored in the egress vault, and the target stores none.
+ */
+export type OpenApiCredentialMode = 'shared' | 'per_user';
+
+
+/** The schemes a per-user target may use. */
+export const PER_USER_SCHEMES: ReadonlyArray<OpenApiAuthScheme> = ['bearer', 'api_key_header'];
+
+
 /** Whether the container has confirmed the latest generation of a server. */
 export type OpenApiSyncStatus = 'applied' | 'pending';
 
@@ -32,6 +44,8 @@ export interface OpenApiTargetAuthResponse {
   query_param?: string | null;
   username?: string | null;
   credential_set: boolean;
+  /** Missing on targets written before per-user credentials; treat as `shared`. */
+  credential_mode?: OpenApiCredentialMode;
 }
 
 
@@ -104,9 +118,14 @@ export interface UpdateOpenApiServerRequest {
 }
 
 
-/** A target's auth as the admin sends it. The credential is write-only. */
+/**
+ * A target's auth as the admin sends it. The credential is write-only. A
+ * `per_user` target sends only `scheme` and, for `api_key_header`,
+ * `header_name`: never `credential`, `query_param` or `username`.
+ */
 export interface OpenApiTargetAuthInput {
   scheme: OpenApiAuthScheme;
+  credential_mode?: OpenApiCredentialMode;
   header_name?: string;
   query_param?: string;
   username?: string;
@@ -173,7 +192,36 @@ export type OpenApiErrorCode =
   | 'conversion_failed'
   | 'too_many_tools'
   | 'tool_name_invalid'
-  | 'spec_fetch_failed';
+  | 'spec_fetch_failed'
+  | 'egress_auth_disabled'
+  | 'not_per_user';
+
+
+/** The lifetime units a per-user key accepts. */
+export type OpenApiKeyTtlUnit = 'minutes' | 'hours' | 'days';
+
+
+/** Body of PUT .../targets/{name}/my-credential. The secret is write-only. */
+export interface SetMyCredentialRequest {
+  secret: string;
+  ttl_value: number;
+  ttl_unit: OpenApiKeyTtlUnit;
+}
+
+
+/** The caller's key status for one per-user target. Never carries the key. */
+export interface MyCredentialStatus {
+  target: string;
+  configured: boolean;
+  expires_at: string | null;
+}
+
+
+/** Response of GET /api/openapi-servers/{slug}/my-credentials. */
+export interface MyCredentialsResponse {
+  slug: string;
+  targets: MyCredentialStatus[];
+}
 
 
 /**
