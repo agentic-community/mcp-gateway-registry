@@ -154,13 +154,52 @@ class TestHubLifecycle:
         assert targets["broken"]["status"] == "error"
         assert targets["items"]["status"] == "ok"
 
-    async def test_swap_closes_old_clients(self, items_spec, backend):
+    async def test_swap_keeps_old_hub_open_during_grace(self, items_spec, backend):
         async with _client() as client:
             await _put(client, _state([_target(items_spec)], generation=1))
             old_clients = list(hubs.get_hub("demo").clients)
             await _put(client, _state([_target(items_spec)], generation=2))
 
+        assert not any(c.is_closed for c in old_clients)
+
+    async def test_swap_closes_old_clients_after_grace(self, items_spec, backend, monkeypatch):
+        import asyncio
+
+        monkeypatch.setattr(hubs, "RETIRED_HUB_GRACE_SECONDS", 0.05)
+        async with _client() as client:
+            await _put(client, _state([_target(items_spec)], generation=1))
+            old_clients = list(hubs.get_hub("demo").clients)
+            await _put(client, _state([_target(items_spec)], generation=2))
+        await asyncio.sleep(0.3)
+
         assert all(c.is_closed for c in old_clients)
+
+    async def test_request_in_flight_survives_a_swap(self, items_spec, monkeypatch):
+        import asyncio
+
+        import guarded_transport
+        import httpx as _httpx
+
+        release = asyncio.Event()
+
+        async def _slow_backend(request):
+            await release.wait()
+            return _httpx.Response(200, json={"id": 1})
+
+        monkeypatch.setattr(
+            guarded_transport.url_guard,
+            "GuardedAsyncTransport",
+            lambda **kw: _httpx.MockTransport(_slow_backend),
+        )
+        async with _client() as client:
+            await _put(client, _state([_target(items_spec)], generation=1))
+            call = asyncio.create_task(_call_tool(client, "items_getItem", {"item_id": 1}))
+            await asyncio.sleep(0.2)
+            await _put(client, _state([_target(items_spec)], generation=2))
+            release.set()
+            result = await call
+
+        assert result["result"]["structuredContent"] == {"id": 1}
 
     async def test_delete_then_404(self, items_spec, backend):
         async with _client() as client:

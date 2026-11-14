@@ -74,6 +74,8 @@ The registry database is the only stored state. The container keeps each server 
 - After a container restart, calls to OpenAPI MCP servers return 404 until the registry notices the restart and pushes every server again. With 10 servers of 10 targets each, that took 23 seconds.
 - After a registry restart, the registry compares what it stores with what the container runs and pushes anything stale.
 - A change that cannot reach the container in time returns `sync_status: "pending"`. The registry retries every `OPENAPI_MCP_RECONCILE_INTERVAL_SECONDS` (60 by default).
+- Every change starts a background security scan of the server, which takes a few seconds. If the container restarts or the server is deleted during that scan, the scan fails, and the registry's scan policy tags the server `security-pending` and disables it. The hub comes back, but the server stays disabled until an admin turns it on again with `POST /api/servers/toggle`.
+- A change replaces a server's hub without cutting off calls already running on the old one: the old hub keeps serving for 30 seconds before it closes.
 
 The registry's calls to the container carry each target's credential in plain HTTP on the internal network, signed with the sync token. Only the registry and nginx can reach the container. A cluster that needs TLS on internal hops can set `OPENAPI_MCP_INTERNAL_URL` to an `https` URL.
 
@@ -86,7 +88,7 @@ Metrics are under `mcpgw_openapi_mcp_*` on the registry's Prometheus endpoint. A
 `tests/integration/test_openapi_mcp_e2e.py` runs against a local Compose stack with the feature on, and is skipped otherwise. It uses a mock REST API (`tests/integration/openapi_mock_api.py`) that serves its own spec, checks each auth scheme, and echoes the headers it receives.
 
 ```bash
-docker run -d --name openapi-mock-api --network mcp-gateway-registry_default \
+docker run -d --name openapi-mock-api --network mcp-gateway-registry_default --no-healthcheck \
     -v "$PWD/tests/integration/openapi_mock_api.py:/mock/openapi_mock_api.py:ro" \
     --entrypoint /app/.venv/bin/python mcp-gateway-registry-registry \
     -m uvicorn --app-dir /mock openapi_mock_api:app --host 0.0.0.0 --port 8000
