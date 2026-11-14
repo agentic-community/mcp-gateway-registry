@@ -24,6 +24,11 @@ from pydantic import (
 from ..utils.header_validation import validate_header_name
 
 OpenApiAuthScheme = Literal["none", "api_key_header", "api_key_query", "bearer", "basic"]
+# shared: one admin-entered credential for every caller. per_user: each user
+# submits their own key (my-credential routes), stored in the egress vault.
+CredentialMode = Literal["shared", "per_user"]
+PER_USER_SCHEMES: frozenset[str] = frozenset({"bearer", "api_key_header"})
+PER_USER_PROVIDER_PREFIX: str = "openapi-"
 OpenApiVisibility = Literal["public", "private", "group-restricted"]
 SyncStatus = Literal["applied", "pending"]
 
@@ -39,10 +44,31 @@ FORBIDDEN_AUTH_HEADERS: frozenset[str] = frozenset(
 )
 
 
+def _check_per_user_fields(
+    auth: "OpenApiTargetAuthInput",
+) -> None:
+    """A per-user target names the header shape; each user brings the key."""
+    if auth.scheme not in PER_USER_SCHEMES:
+        raise ValueError(
+            f"credential_mode 'per_user' supports {sorted(PER_USER_SCHEMES)}, not '{auth.scheme}'"
+        )
+    if auth.credential is not None:
+        raise ValueError(
+            "credential_mode 'per_user' takes no credential: each user submits their own key"
+        )
+    if auth.scheme == "api_key_header" and not auth.header_name:
+        raise ValueError("auth scheme 'api_key_header' needs: header_name")
+    if auth.query_param or auth.username:
+        raise ValueError("credential_mode 'per_user' does not use query_param or username")
+
+
 def _check_scheme_fields(
     auth: "OpenApiTargetAuthInput",
 ) -> None:
     """Each scheme needs exactly the fields it uses."""
+    if auth.credential_mode == "per_user":
+        _check_per_user_fields(auth)
+        return
     required = {
         "none": set(),
         "api_key_header": {"header_name", "credential"},
@@ -67,6 +93,7 @@ class OpenApiTargetAuthInput(BaseModel):
     """Auth for one REST target, as the admin sends it. The credential is write-only."""
 
     scheme: OpenApiAuthScheme = "none"
+    credential_mode: CredentialMode = "shared"
     header_name: str | None = Field(default=None, max_length=128)
     query_param: str | None = Field(default=None, pattern=QUERY_PARAM_PATTERN)
     username: str | None = Field(default=None, max_length=256)
@@ -246,6 +273,7 @@ class StoredTargetAuth(BaseModel):
     """Auth as stored. The credential is Fernet-encrypted (credential_encryption.py)."""
 
     scheme: OpenApiAuthScheme = "none"
+    credential_mode: CredentialMode = "shared"
     header_name: str | None = None
     query_param: str | None = None
     username: str | None = None
@@ -302,6 +330,7 @@ class TargetAuthResponse(BaseModel):
     """Auth as returned. No credential, only whether one is set."""
 
     scheme: OpenApiAuthScheme
+    credential_mode: CredentialMode = "shared"
     header_name: str | None = None
     query_param: str | None = None
     username: str | None = None
@@ -355,3 +384,36 @@ class AddTargetResponse(OpenApiTargetResponse):
     findings: list[dict] = Field(default_factory=list)
     generation: int
     sync_status: SyncStatus
+
+
+class MyCredentialRequest(BaseModel):
+    """Body of PUT .../targets/{name}/my-credential: the caller's own key for a per-user target."""
+
+    secret: SecretStr
+    ttl_value: int = Field(..., ge=1)
+    ttl_unit: Literal["minutes", "hours", "days"]
+    sub: str | None = Field(
+        default=None, description="Admin only: store the key for this user instead"
+    )
+    auth_method: str | None = Field(
+        default=None, description="Admin only, with sub: the user's ingress auth method"
+    )
+
+    @field_validator("secret")
+    @classmethod
+    def _usable_secret(
+        cls,
+        value: SecretStr,
+    ) -> SecretStr:
+        secret = value.get_secret_value()
+        if not secret.strip() or any(ch in secret for ch in "\r\n\x00"):
+            raise ValueError("secret must be non-empty and contain no line breaks or NUL")
+        return value
+
+
+class MyCredentialStatus(BaseModel):
+    """Whether the caller has a key for a per-user target. Never the key itself."""
+
+    target: str
+    configured: bool
+    expires_at: str | None = None

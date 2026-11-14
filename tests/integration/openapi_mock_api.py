@@ -81,7 +81,88 @@ def _spec() -> dict:
         "/secure/basic": _get("secureBasic", "secure"),
         "/echo-headers": _get("echoHeaders", "debug"),
     }
-    return {"openapi": "3.1.0", "info": {"title": "Mock REST API", "version": "1.0.0"}, "paths": paths}
+    return {
+        "openapi": "3.1.0",
+        "info": {"title": "Mock REST API", "version": "1.0.0"},
+        "paths": paths,
+    }
+
+
+# A hand-written OpenAPI 3.0 spec for three NASA endpoints (api.nasa.gov does not
+# publish one). The key is not a spec parameter: per-user targets send each
+# user's key in the X-Api-Key header, which api.nasa.gov accepts.
+NASA_SPEC: dict = {
+    "openapi": "3.0.3",
+    "info": {"title": "NASA Open APIs (subset)", "version": "1.0.0"},
+    "servers": [{"url": "https://api.nasa.gov"}],
+    "paths": {
+        "/planetary/apod": {
+            "get": {
+                "operationId": "getApod",
+                "tags": ["apod"],
+                "summary": "Astronomy Picture of the Day",
+                "parameters": [
+                    {
+                        "name": "date",
+                        "in": "query",
+                        "required": False,
+                        "schema": {"type": "string", "format": "date"},
+                        "description": "Date of the picture, YYYY-MM-DD. Defaults to today.",
+                    }
+                ],
+                "responses": {"200": {"description": "The picture's title, explanation and URL"}},
+            }
+        },
+        "/mars-photos/api/v1/rovers/{rover}/photos": {
+            "get": {
+                "operationId": "getMarsRoverPhotos",
+                "tags": ["mars"],
+                "summary": "Photos from a Mars rover",
+                "parameters": [
+                    {
+                        "name": "rover",
+                        "in": "path",
+                        "required": True,
+                        "schema": {"type": "string"},
+                        "description": "Rover name, for example curiosity",
+                    },
+                    {
+                        "name": "sol",
+                        "in": "query",
+                        "required": False,
+                        "schema": {"type": "integer"},
+                        "description": "Martian sol (day) the photos were taken",
+                    },
+                ],
+                "responses": {"200": {"description": "Photos taken on that sol"}},
+            }
+        },
+        "/neo/rest/v1/feed": {
+            "get": {
+                "operationId": "getNeoFeed",
+                "tags": ["neo"],
+                "summary": "Near-Earth objects (asteroids) by date range",
+                "parameters": [
+                    {
+                        "name": "start_date",
+                        "in": "query",
+                        "required": True,
+                        "schema": {"type": "string", "format": "date"},
+                        "description": "First day, YYYY-MM-DD",
+                    },
+                    {
+                        "name": "end_date",
+                        "in": "query",
+                        "required": False,
+                        "schema": {"type": "string", "format": "date"},
+                        "description": "Last day, YYYY-MM-DD, at most 7 days after start_date",
+                    },
+                ],
+                "responses": {"200": {"description": "Asteroids approaching Earth in that range"}},
+            }
+        },
+    },
+}
 
 
 app = FastAPI(title="openapi-mcp mock REST API", openapi_url=None, docs_url=None, redoc_url=None)
@@ -90,6 +171,11 @@ app = FastAPI(title="openapi-mcp mock REST API", openapi_url=None, docs_url=None
 @app.get("/spec.json")
 async def spec() -> dict:
     return _spec()
+
+
+@app.get("/nasa-spec.json")
+async def nasa_spec() -> dict:
+    return NASA_SPEC
 
 
 @app.get("/swagger2.json")
@@ -105,7 +191,9 @@ async def alias_spec() -> PlainTextResponse:
 
 @app.get("/big-spec.json")
 async def big_spec() -> dict:
-    paths = {f"/op{i}": _get(f"op{i}", "bulk" if i % 2 else "other") for i in range(TOO_MANY_OPERATIONS)}
+    paths = {
+        f"/op{i}": _get(f"op{i}", "bulk" if i % 2 else "other") for i in range(TOO_MANY_OPERATIONS)
+    }
     return {"openapi": "3.1.0", "info": {"title": "big", "version": "1"}, "paths": paths}
 
 
@@ -122,7 +210,11 @@ async def huge_spec() -> dict:
 
 @app.get("/long-name-spec.json")
 async def long_name_spec() -> dict:
-    return {"openapi": "3.1.0", "info": {"title": "long", "version": "1"}, "paths": {"/long": _get(LONG_OPERATION_ID, "x")}}
+    return {
+        "openapi": "3.1.0",
+        "info": {"title": "long", "version": "1"},
+        "paths": {"/long": _get(LONG_OPERATION_ID, "x")},
+    }
 
 
 @app.get("/items")
@@ -152,14 +244,22 @@ def _denied() -> JSONResponse:
 async def secure_header(
     request: Request,
 ):
-    return {"ok": True, "scheme": "api_key_header"} if request.headers.get("x-api-key") == HEADER_KEY else _denied()
+    return (
+        {"ok": True, "scheme": "api_key_header"}
+        if request.headers.get("x-api-key") == HEADER_KEY
+        else _denied()
+    )
 
 
 @app.get("/secure/query")
 async def secure_query(
     request: Request,
 ):
-    return {"ok": True, "scheme": "api_key_query"} if request.query_params.get("apikey") == QUERY_KEY else _denied()
+    return (
+        {"ok": True, "scheme": "api_key_query"}
+        if request.query_params.get("apikey") == QUERY_KEY
+        else _denied()
+    )
 
 
 @app.get("/secure/bearer")
@@ -167,7 +267,11 @@ async def secure_bearer(
     request: Request,
 ):
     expected = f"Bearer {BEARER_TOKEN}"
-    return {"ok": True, "scheme": "bearer"} if request.headers.get("authorization") == expected else _denied()
+    return (
+        {"ok": True, "scheme": "bearer"}
+        if request.headers.get("authorization") == expected
+        else _denied()
+    )
 
 
 @app.get("/secure/basic")
@@ -175,7 +279,11 @@ async def secure_basic(
     request: Request,
 ):
     expected = "Basic " + base64.b64encode(f"{BASIC_USER}:{BASIC_PASSWORD}".encode()).decode()
-    return {"ok": True, "scheme": "basic"} if request.headers.get("authorization") == expected else _denied()
+    return (
+        {"ok": True, "scheme": "basic"}
+        if request.headers.get("authorization") == expected
+        else _denied()
+    )
 
 
 @app.get("/echo-headers")

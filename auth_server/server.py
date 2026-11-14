@@ -9861,6 +9861,30 @@ async def _authorize_forwarded_mcp_body(
     )
 
 
+def _egress_upstream_profile(
+    registered_server: str,
+    signed_upstream_url: str,
+    default_profile,
+):
+    """SSRF profile for the credential-injected upstream hop.
+
+    An OpenAPI MCP server's upstream is the openapi-mcp container, whose hostname
+    the guard reserves; the exact-identity profile admits only that server's own
+    /s/<slug>/mcp path there (issue #2022). Every other upstream keeps the
+    egress-upstream profile.
+    """
+    from registry.utils.url_guard import (
+        BUILTIN_OPENAPI_MCP_PROFILE,
+        is_builtin_openapi_mcp_target,
+    )
+
+    if is_builtin_openapi_mcp_target(
+        "mcp_server", "/" + registered_server.strip("/"), signed_upstream_url
+    ):
+        return BUILTIN_OPENAPI_MCP_PROFILE
+    return default_profile
+
+
 @app.post("/mcp-proxy/{server_name:path}", dependencies=[Depends(verify_mcp_proxy_token)])
 async def mcp_proxy(
     server_name: str,
@@ -10363,7 +10387,11 @@ async def mcp_proxy(
     # credential to protect and many internal upstreams are private, so keep the
     # per-call plain client (closed in the finally). Timeout is passed per-request.
     if egress_token_injected:
-        proxy_client = shared_guarded_async_client(profile=EGRESS_UPSTREAM_PROFILE)
+        proxy_client = shared_guarded_async_client(
+            profile=_egress_upstream_profile(
+                registered_server, claims["upstream_url"], EGRESS_UPSTREAM_PROFILE
+            )
+        )
         close_proxy_client = False
     else:
         proxy_client = httpx.AsyncClient(timeout=proxy_timeout)

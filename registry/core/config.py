@@ -2775,22 +2775,15 @@ class Settings(BaseSettings):
         return stripped
 
     def _validate_openapi_mcp_config(self) -> None:
-        """Startup checks for OpenAPI MCP servers. Runs only when the feature is on.
+        """URL checks for OpenAPI MCP servers. Runs only when the feature is on.
 
-        The auth server shares this class and never sets OPENAPI_MCP_ENABLED, so
-        it never needs the sync secret. The deployment-mode gate runs later, in
-        registry/main.py, after mode auto-correction.
+        The auth server shares this class and also sets OPENAPI_MCP_ENABLED (its
+        mcp-proxy hop reaches the container for per-user credentials), but it
+        must never hold the sync secret. So the secret is checked in
+        apply_openapi_mcp_mode_gate, which only the registry runs.
         """
         if not self.openapi_mcp_enabled:
             return
-        self.openapi_mcp_sync_secret = validate_signing_secret(
-            self.openapi_mcp_sync_secret, "OPENAPI_MCP_SYNC_SECRET"
-        )
-        if self.openapi_mcp_sync_secret == self.secret_key:
-            raise ValueError(
-                "OPENAPI_MCP_SYNC_SECRET must differ from SECRET_KEY: the openapi-mcp "
-                "container holds the sync secret and must never hold the master key."
-            )
         parsed = urlparse(self.openapi_mcp_internal_url)
         if (
             parsed.scheme not in ("http", "https")
@@ -3118,6 +3111,21 @@ def _validate_mode_combination(
     return (deployment_mode, registry_mode, False)
 
 
+def _validate_openapi_mcp_sync_secret(
+    settings_instance: "Settings",
+) -> None:
+    """Fail startup on a missing or weak sync secret, or one equal to SECRET_KEY. Registry only."""
+    secret = validate_signing_secret(
+        settings_instance.openapi_mcp_sync_secret, "OPENAPI_MCP_SYNC_SECRET"
+    )
+    if secret == settings_instance.secret_key:
+        raise ValueError(
+            "OPENAPI_MCP_SYNC_SECRET must differ from SECRET_KEY: the openapi-mcp "
+            "container holds the sync secret and must never hold the master key."
+        )
+    object.__setattr__(settings_instance, "openapi_mcp_sync_secret", secret)
+
+
 def apply_openapi_mcp_mode_gate(
     settings_instance: "Settings",
 ) -> bool:
@@ -3142,6 +3150,7 @@ def apply_openapi_mcp_mode_gate(
     elif registry_mode not in (RegistryMode.FULL, RegistryMode.MCP_SERVERS_ONLY):
         reason = f"REGISTRY_MODE={registry_mode.value} turns MCP servers off"
     if reason is None:
+        _validate_openapi_mcp_sync_secret(settings_instance)
         return True
     logger.warning(f"OPENAPI_MCP_ENABLED=true ignored: {reason}. OpenAPI MCP servers are off.")
     object.__setattr__(settings_instance, "openapi_mcp_enabled", False)

@@ -137,3 +137,98 @@ class TestJtiCache:
 
         assert cache.consume("new", time.time() + 60)
         assert len(cache) == 1
+
+
+class TestCredentialEnvelope:
+    """The per-user credential envelope the vend mints and the container verifies."""
+
+    CREDS: dict = {
+        "petstore": {"key": "user-key-1", "base_url": "https://petstore.example.com/api"}
+    }
+
+    def test_round_trip(self):
+        from registry.auth.openapi_mcp_sync import (
+            mint_credential_envelope,
+            verify_credential_envelope,
+        )
+
+        token = mint_credential_envelope(SECRET, "weather-apis", self.CREDS)
+
+        assert verify_credential_envelope(token, SECRET, "weather-apis", JtiCache()) == self.CREDS
+
+    def test_empty_credentials_allowed(self):
+        from registry.auth.openapi_mcp_sync import (
+            mint_credential_envelope,
+            verify_credential_envelope,
+        )
+
+        token = mint_credential_envelope(SECRET, "weather-apis", {})
+
+        assert verify_credential_envelope(token, SECRET, "weather-apis", JtiCache()) == {}
+
+    def test_other_server_rejected(self):
+        from registry.auth.openapi_mcp_sync import (
+            mint_credential_envelope,
+            verify_credential_envelope,
+        )
+
+        token = mint_credential_envelope(SECRET, "weather-apis", self.CREDS)
+
+        with pytest.raises(SyncTokenError, match="another server"):
+            verify_credential_envelope(token, SECRET, "other", JtiCache())
+
+    def test_replay_rejected(self):
+        from registry.auth.openapi_mcp_sync import (
+            mint_credential_envelope,
+            verify_credential_envelope,
+        )
+
+        token = mint_credential_envelope(SECRET, "weather-apis", self.CREDS)
+        cache = JtiCache()
+        verify_credential_envelope(token, SECRET, "weather-apis", cache)
+
+        with pytest.raises(SyncTokenError, match="already used"):
+            verify_credential_envelope(token, SECRET, "weather-apis", cache)
+
+    def test_sync_token_is_not_an_envelope(self):
+        from registry.auth.openapi_mcp_sync import verify_credential_envelope
+
+        token = mint_sync_token(SECRET, "put_server")
+
+        with pytest.raises(SyncTokenError):
+            verify_credential_envelope(token, SECRET, "weather-apis", JtiCache())
+
+    def test_wrong_secret_rejected(self):
+        from registry.auth.openapi_mcp_sync import (
+            mint_credential_envelope,
+            verify_credential_envelope,
+        )
+
+        token = mint_credential_envelope(OTHER_SECRET, "weather-apis", self.CREDS)
+
+        with pytest.raises(SyncTokenError, match="InvalidSignatureError"):
+            verify_credential_envelope(token, SECRET, "weather-apis", JtiCache())
+
+    def test_malformed_entry_rejected(self):
+        from registry.auth.openapi_mcp_sync import (
+            ENVELOPE_AUDIENCE,
+            ENVELOPE_TOKEN_KIND,
+            _envelope_key,
+            verify_credential_envelope,
+        )
+
+        now = int(time.time())
+        claims = {
+            "iss": SYNC_ISSUER,
+            "aud": ENVELOPE_AUDIENCE,
+            "token_kind": ENVELOPE_TOKEN_KIND,
+            "server": "weather-apis",
+            "credentials": {"petstore": {"key": 5}},
+            "jti": "x",
+            "iat": now,
+            "exp": now + 60,
+        }
+        token = pyjwt.encode(claims, _envelope_key(SECRET), algorithm="HS256")
+
+        with pytest.raises(SyncTokenError, match="key and base_url"):
+            verify_credential_envelope(token, SECRET, "weather-apis", JtiCache())

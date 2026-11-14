@@ -40,15 +40,24 @@ class TestValidation:
             "YOUR_OPENAPI_MCP_SYNC_SECRET",
         ],
     )
-    def test_missing_or_weak_secret_rejected(self, secret):
+    def test_missing_or_weak_secret_rejected_by_registry_gate(self, secret):
+        s = Settings(openapi_mcp_enabled=True, openapi_mcp_sync_secret=secret)
+
         with pytest.raises((RuntimeError, ValueError)):
-            Settings(openapi_mcp_enabled=True, openapi_mcp_sync_secret=secret)
+            apply_openapi_mcp_mode_gate(s)
+
+    def test_auth_server_can_enable_without_secret(self):
+        """The auth server shares Settings and never holds the sync secret."""
+        s = Settings(openapi_mcp_enabled=True, openapi_mcp_sync_secret="")
+
+        assert s.openapi_mcp_enabled is True
 
     def test_secret_equal_to_secret_key_rejected(self):
         base = Settings()
+        s = Settings(openapi_mcp_enabled=True, openapi_mcp_sync_secret=base.secret_key)
 
         with pytest.raises(ValueError, match="differ from SECRET_KEY"):
-            Settings(openapi_mcp_enabled=True, openapi_mcp_sync_secret=base.secret_key)
+            apply_openapi_mcp_mode_gate(s)
 
     @pytest.mark.parametrize(
         "url",

@@ -765,6 +765,11 @@ services:
       # admit a reserved IPv4 address (e.g. Istio ServiceEntry VIPs in
       # 240.240.0.0/16). Same value as the registry and mcpgw. #2018
       - SSRF_ALLOWED_CIDRS=${SSRF_ALLOWED_CIDRS:-}
+      # OpenAPI MCP servers (issue #2022): the mcp-proxy hop forwards per-user
+      # keys to the openapi-mcp container, so it must recognize the container's
+      # exact identity. The auth server never gets OPENAPI_MCP_SYNC_SECRET.
+      - OPENAPI_MCP_ENABLED=${OPENAPI_MCP_ENABLED:-false}
+      - OPENAPI_MCP_INTERNAL_URL=${OPENAPI_MCP_INTERNAL_URL:-http://openapi-mcp:9876}
       # Forward-proxy egress for the SSRF-guarded clients (issue #1832). OFF by
       # default; enabling it relaxes IP-rebind pinning for targets that resolve
       # exclusively to public addresses. Set HTTP_PROXY / HTTPS_PROXY / NO_PROXY

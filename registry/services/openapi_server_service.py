@@ -52,6 +52,8 @@ logger = logging.getLogger(__name__)
 REQUEST_WAIT_BUDGET_SECONDS: float = 45.0
 SAVE_RETRIES: int = 3
 SOURCE_API: str = "/api/openapi-servers"
+# egress_oauth.provider on the ServerInfo of a server with per-user targets.
+OPENAPI_EGRESS_PROVIDER: str = "openapi-mcp"
 MAX_SLUG_CHARS: int = 64
 # First path segments an OpenAPI MCP server may not take: nginx's proxy
 # namespaces, the registry's own routes, and the container's /s/ prefix.
@@ -121,7 +123,48 @@ def _server_info_entry(
         "allowed_groups": server.allowed_groups,
         "metadata": {"openapi_server": {"slug": server.slug}},
         "registered_by": server.created_by,
+        **_egress_fields(server),
     }
+
+
+def _egress_fields(
+    server: OpenApiServer,
+) -> dict[str, Any]:
+    """Route a server with per-user targets through the auth server's mcp-proxy hop.
+
+    The existing ``pat`` mode routes it there and asks the registry vend for a
+    credential; the vend sees ``metadata.openapi_server`` and returns the signed
+    per-user envelope instead of a single PAT.
+    """
+    if any(t.auth.credential_mode == "per_user" for t in server.targets):
+        return {"egress_auth_mode": "pat", "egress_oauth": {"provider": OPENAPI_EGRESS_PROVIDER}}
+    return {"egress_auth_mode": "none", "egress_oauth": None}
+
+
+def _require_egress_for(
+    auth: OpenApiTargetAuthInput | None,
+) -> None:
+    """Per-user targets keep each user's key in the egress vault, so they need egress auth on."""
+    if auth is not None and auth.credential_mode == "per_user" and not settings.egress_auth_enabled:
+        raise OpenApiServerError(
+            409,
+            "egress_auth_disabled",
+            "credential_mode 'per_user' stores each user's key in the egress vault; set "
+            "EGRESS_AUTH_ENABLED=true and configure SECRET_STORE_BACKEND first",
+        )
+
+
+async def _sync_server_info(
+    server: OpenApiServer,
+) -> None:
+    """Keep the ServerInfo's egress routing in step with the targets' credential modes."""
+    existing = await server_service.get_server_info(server.path) or {}
+    wanted = _egress_fields(server)
+    if existing.get("egress_auth_mode", "none") == wanted["egress_auth_mode"]:
+        return
+    await server_service.update_server(server.path, {**existing, **_server_info_entry(server)})
+    await server_lifecycle.flush_nginx()
+    logger.info(f"'{server.slug}' egress routing set to {wanted['egress_auth_mode']}")
 
 
 async def _load_specs(
@@ -327,6 +370,7 @@ def _stored_auth(
     encrypted = encrypt_credential(auth.credential.get_secret_value()) if auth.credential else None
     return StoredTargetAuth(
         scheme=auth.scheme,
+        credential_mode=auth.credential_mode,
         header_name=auth.header_name,
         query_param=auth.query_param,
         username=auth.username,
@@ -403,6 +447,7 @@ async def add_target(
     """Add a REST target. Fails closed: if any check fails, nothing is stored."""
     server = await get_server_or_404(slug)
     _check_target_slot(server, request.name)
+    _require_egress_for(request.auth)
     openapi_spec_checks.validate_target_url(str(request.base_url), "base_url")
     openapi_spec_checks.validate_target_url(str(request.spec_url), "spec_url")
     fetched, preview = await _admit_spec(
@@ -432,6 +477,7 @@ async def add_target(
         stored.targets.append(target)
 
     updated = await _save_with_retry(slug, _change)
+    await _sync_server_info(updated)
     logger.info(
         f"Target '{request.name}' ({len(target.tool_names)} tools, spec {fetched.sha256[:12]}) added to '{slug}' by {_actor(user_context)}"
     )
@@ -475,6 +521,7 @@ async def update_target(
 ) -> tuple[OpenApiServer, OpenApiTarget, list[str], str]:
     """Update a target. Re-runs every admission check before anything is stored."""
     server = await get_server_or_404(slug)
+    _require_egress_for(request.auth)
     candidate = get_target_or_404(server, name).model_copy(deep=True)
     old_sha = candidate.spec_sha256
     _apply_target_update(candidate, request)
@@ -505,6 +552,7 @@ async def update_target(
         stored.targets = [candidate if t.name == name else t for t in stored.targets]
 
     updated = await _save_with_retry(slug, _change)
+    await _sync_server_info(updated)
     if candidate.spec_sha256 != old_sha:
         await _delete_unused_specs({old_sha})
     logger.info(f"Target '{name}' on '{slug}' updated by {_actor(user_context)}")
@@ -529,6 +577,7 @@ async def delete_target(
         stored.targets = [t for t in stored.targets if t.name != name]
 
     updated = await _save_with_retry(slug, _change)
+    await _sync_server_info(updated)
     await _delete_unused_specs({target.spec_sha256})
     logger.info(f"Target '{name}' removed from '{slug}' by {_actor(user_context)}")
     return await _push_and_refresh(updated, rescan=False)

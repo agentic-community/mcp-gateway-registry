@@ -65,6 +65,7 @@ def target_response(
         openapi_version=target.openapi_version,
         auth=TargetAuthResponse(
             scheme=target.auth.scheme,
+            credential_mode=target.auth.credential_mode,
             header_name=target.auth.header_name,
             query_param=target.auth.query_param,
             username=None if redact else target.auth.username,
@@ -134,6 +135,7 @@ def _hub_target(
         "base_url": target.base_url,
         "spec": parse_spec(spec.content.encode("utf-8")).spec,
         "auth_scheme": target.auth.scheme,
+        "auth_credential_mode": target.auth.credential_mode,
         "auth_header_name": target.auth.header_name,
         "auth_query_param": target.auth.query_param,
         "auth_username": target.auth.username,
