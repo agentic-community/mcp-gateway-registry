@@ -112,6 +112,19 @@ spec:
               {{- else }}
               value: ""
               {{- end }}
+            # Application logs (docs/logging-standard.md), read by logging_setup.py.
+            - name: APP_LOG_DIR
+              value: {{ .Values.app.appLogDir | default "" | quote }}
+            - name: APP_LOG_FILE_FORMAT
+              value: {{ .Values.app.appLogFileFormat | default "json" | quote }}
+            - name: APP_LOG_CONSOLE_FORMAT
+              value: {{ .Values.app.appLogConsoleFormat | default "json" | quote }}
+            - name: APP_LOG_LEVEL
+              value: {{ .Values.app.appLogLevel | default "INFO" | quote }}
+            - name: APP_LOG_MAX_BYTES
+              value: {{ .Values.app.appLogMaxBytes | default "52428800" | toString | quote }}
+            - name: APP_LOG_BACKUP_COUNT
+              value: {{ .Values.app.appLogBackupCount | default "5" | toString | quote }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

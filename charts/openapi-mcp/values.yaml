@@ -61,6 +61,13 @@ app:
   # When true, extraEnv must carry HTTP_PROXY/HTTPS_PROXY and a NO_PROXY that
   # excludes 169.254.169.254, 169.254.170.2 and 169.254.170.23.
   egressForwardProxyEnabled: false
+  # Application logs (docs/logging-standard.md), the same knobs as the mcpgw chart.
+  appLogDir: "" # Empty uses the default: /var/log/containers/ai-registry
+  appLogFileFormat: "json" # "json" (default) or "text" (legacy comma-separated)
+  appLogConsoleFormat: "json" # "json" (default) or "text"
+  appLogLevel: "INFO" # DEBUG, INFO, WARNING, ERROR or CRITICAL
+  appLogMaxBytes: "52428800" # Size of one log file before rotation (default 50 MB)
+  appLogBackupCount: "5" # Rotated log files to keep
 # The sync secret signs registry-to-container pushes. The chart creates the
 # Secret unless global.openapiMcp.existingSyncSecret or syncSecret.existingSecret
 # names one you manage (it must hold the key OPENAPI_MCP_SYNC_SECRET). Both the
