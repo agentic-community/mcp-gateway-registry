@@ -15,6 +15,7 @@ SLUG_PATTERN: str = r"^[a-z0-9]+(-[a-z0-9]+)*$"
 TARGET_NAME_PATTERN: str = r"^[a-z][a-z0-9]{1,23}$"
 
 AuthScheme = Literal["none", "api_key_header", "api_key_query", "bearer", "basic"]
+CredentialMode = Literal["shared", "per_user"]
 TargetStatusValue = Literal["ok", "error"]
 
 
@@ -36,6 +37,9 @@ class HubTargetState(TargetOptions):
     base_url: str
     spec: dict[str, Any]
     auth_scheme: AuthScheme = "none"
+    # per_user: no stored credential; each request carries the caller's key in
+    # the verified credential envelope (see server.py and guarded_transport.py).
+    auth_credential_mode: CredentialMode = "shared"
     auth_header_name: str | None = None
     auth_query_param: str | None = None
     auth_username: str | None = None

@@ -28,10 +28,13 @@ from fastapi.responses import (
 from ..audit.context import set_audit_action
 from ..auth.csrf import verify_csrf_token_flexible
 from ..auth.dependencies import nginx_proxied_auth
+from ..core.config import settings
 from ..schemas.openapi_server_models import (
     SLUG_PATTERN,
     TARGET_NAME_PATTERN,
     AddTargetResponse,
+    MyCredentialRequest,
+    MyCredentialStatus,
     OpenApiServer,
     OpenApiServerCreateRequest,
     OpenApiServerUpdateRequest,
@@ -42,6 +45,7 @@ from ..schemas.openapi_server_models import (
 from ..services import (
     openapi_mcp_client,
     openapi_server_service,
+    openapi_user_credentials,
 )
 from ..services.openapi_errors import (
     OpenApiServerError,
@@ -372,3 +376,148 @@ async def delete_openapi_target(
     except OpenApiServerError as e:
         return _error(e)
     return Response(status_code=204)
+
+
+# ---------------------------------------------------------------------------
+# Per-user keys: each user brings their own key for a per-user target.
+# ---------------------------------------------------------------------------
+
+
+def _principal_for(
+    user_context: dict,
+    sub: str | None = None,
+    auth_method: str | None = None,
+):
+    """The caller's vault principal, or an admin's on-behalf target (same rules as egress-pat)."""
+    from .egress_auth_routes import _resolve_target_principal
+
+    if not settings.egress_auth_enabled:
+        raise OpenApiServerError(
+            409, "egress_auth_disabled", "per-user keys need EGRESS_AUTH_ENABLED=true"
+        )
+    principal = _resolve_target_principal(sub, auth_method, user_context)
+    if principal is None:
+        raise OpenApiServerError(
+            403, "no_user_identity", "this caller has no per-user identity to store a key under"
+        )
+    return principal
+
+
+async def _readable_target(
+    slug: str,
+    name: str,
+    user_context: dict,
+) -> tuple[OpenApiServer, OpenApiTarget]:
+    server = await openapi_server_service.get_server_or_404(slug)
+    if not await _can_read(server, user_context):
+        raise not_found(f"OpenAPI MCP server '{slug}'")
+    return server, openapi_server_service.get_target_or_404(server, name)
+
+
+def _status_body(
+    target_name: str,
+    token,
+) -> dict:
+    return MyCredentialStatus(
+        target=target_name,
+        configured=token is not None,
+        expires_at=token.expires_at if token else None,
+    ).model_dump()
+
+
+@router.put("/openapi-servers/{slug}/targets/{name}/my-credential")
+async def put_my_credential(
+    request: Request,
+    slug: SlugParam,
+    name: TargetNameParam,
+    body: MyCredentialRequest,
+    user_context: UserContext,
+    _csrf: Csrf = None,
+):
+    """Store your own key for a per-user target (an admin may store one for another user)."""
+    from .egress_auth_routes import _resolve_pat_ttl_seconds
+
+    set_audit_action(
+        request,
+        "update",
+        "openapi_user_credential",
+        resource_id=f"{slug}/{name}",
+        description="Store per-user key",
+    )
+    try:
+        server, target = await _readable_target(slug, name, user_context)
+        principal = _principal_for(user_context, body.sub, body.auth_method)
+        try:
+            ttl_seconds = _resolve_pat_ttl_seconds(body.ttl_value, body.ttl_unit)
+        except ValueError as e:
+            raise OpenApiServerError(400, "invalid_ttl", str(e)) from e
+        token = await openapi_user_credentials.store_key(
+            server, target, principal, body.secret.get_secret_value(), ttl_seconds
+        )
+    except OpenApiServerError as e:
+        return _error(e)
+    return _status_body(name, token)
+
+
+@router.get("/openapi-servers/{slug}/targets/{name}/my-credential")
+async def get_my_credential(
+    slug: SlugParam,
+    name: TargetNameParam,
+    user_context: UserContext,
+):
+    """Whether you have a key for this target, and when it expires. Never the key."""
+    try:
+        server, target = await _readable_target(slug, name, user_context)
+        openapi_user_credentials.require_per_user(target)
+        token = await openapi_user_credentials.key_status(
+            server, target, _principal_for(user_context)
+        )
+    except OpenApiServerError as e:
+        return _error(e)
+    return _status_body(name, token)
+
+
+@router.delete("/openapi-servers/{slug}/targets/{name}/my-credential", status_code=204)
+async def delete_my_credential(
+    request: Request,
+    slug: SlugParam,
+    name: TargetNameParam,
+    user_context: UserContext,
+    _csrf: Csrf = None,
+):
+    """Delete your key for this target."""
+    set_audit_action(
+        request,
+        "delete",
+        "openapi_user_credential",
+        resource_id=f"{slug}/{name}",
+        description="Delete per-user key",
+    )
+    try:
+        server, target = await _readable_target(slug, name, user_context)
+        openapi_user_credentials.require_per_user(target)
+        await openapi_user_credentials.delete_key(server, target, _principal_for(user_context))
+    except OpenApiServerError as e:
+        return _error(e)
+    return Response(status_code=204)
+
+
+@router.get("/openapi-servers/{slug}/my-credentials")
+async def list_my_credentials(
+    slug: SlugParam,
+    user_context: UserContext,
+):
+    """Your key status for every per-user target on this server."""
+    try:
+        server = await openapi_server_service.get_server_or_404(slug)
+        if not await _can_read(server, user_context):
+            raise not_found(f"OpenAPI MCP server '{slug}'")
+        principal = _principal_for(user_context)
+        statuses = []
+        for target in server.targets:
+            if target.auth.credential_mode == "per_user":
+                token = await openapi_user_credentials.key_status(server, target, principal)
+                statuses.append(_status_body(target.name, token))
+    except OpenApiServerError as e:
+        return _error(e)
+    return {"slug": slug, "targets": statuses}

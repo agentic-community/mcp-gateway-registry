@@ -177,3 +177,121 @@ def verify_sync_token(
     if not seen_jtis.consume(jti, expires_at):
         raise SyncTokenError("sync token rejected: jti already used")
     return claims
+
+
+# ---------------------------------------------------------------------------
+# Per-user credential envelope (per-user REST credentials).
+#
+# The registry's egress vend packs one user's keys for one OpenAPI MCP server
+# into a signed envelope. The auth server's mcp-proxy hop forwards it as an
+# opaque header value and never holds the signing key; the container verifies
+# it and reads each target's key for this one request.
+# ---------------------------------------------------------------------------
+
+ENVELOPE_AUDIENCE: str = "openapi-mcp-user-credentials"
+ENVELOPE_TOKEN_KIND: str = "openapi-mcp-user-credentials"
+ENVELOPE_KEY_INFO: bytes = b"openapi-mcp-user-cred-v1"
+ENVELOPE_TTL_SECONDS: int = 60
+ENVELOPE_HEADER: str = "X-OpenAPI-MCP-User-Credentials"
+ENVELOPE_REQUIRED_CLAIMS: tuple[str, ...] = (
+    "iss",
+    "aud",
+    "exp",
+    "iat",
+    "jti",
+    "token_kind",
+    "server",
+    "credentials",
+)
+
+
+def _envelope_key(
+    secret: str,
+) -> bytes:
+    return hmac.new(_require_secret(secret).encode(), ENVELOPE_KEY_INFO, hashlib.sha256).digest()
+
+
+def mint_credential_envelope(
+    secret: str,
+    server_slug: str,
+    credentials: dict[str, dict[str, str]],
+) -> str:
+    """Sign one user's per-target keys for one server.
+
+    Args:
+        secret: The value of ``OPENAPI_MCP_SYNC_SECRET``.
+        server_slug: The OpenAPI MCP server the keys are for.
+        credentials: ``{target_name: {"key": ..., "base_url": ...}}``. May be
+            empty, so a user with no keys still reaches the server's shared
+            targets.
+
+    Returns:
+        The encoded JWT. It is signed, not encrypted: it travels only on the
+        internal hops, like the registry's state push.
+    """
+    now = int(time.time())
+    claims = {
+        "iss": SYNC_ISSUER,
+        "aud": ENVELOPE_AUDIENCE,
+        "token_kind": ENVELOPE_TOKEN_KIND,
+        "server": server_slug,
+        "credentials": credentials,
+        "jti": uuid.uuid4().hex,
+        "iat": now,
+        "exp": now + ENVELOPE_TTL_SECONDS,
+    }
+    return pyjwt.encode(claims, _envelope_key(secret), algorithm=SYNC_ALGORITHM)
+
+
+def _check_envelope_credentials(
+    credentials: object,
+) -> dict[str, dict[str, str]]:
+    if not isinstance(credentials, dict):
+        raise SyncTokenError("credential envelope rejected: credentials is not an object")
+    for name, entry in credentials.items():
+        if not isinstance(name, str) or not isinstance(entry, dict):
+            raise SyncTokenError("credential envelope rejected: malformed entry")
+        if not isinstance(entry.get("key"), str) or not isinstance(entry.get("base_url"), str):
+            raise SyncTokenError("credential envelope rejected: entry needs key and base_url")
+    return credentials
+
+
+def verify_credential_envelope(
+    token: str,
+    secret: str,
+    server_slug: str,
+    seen_jtis: JtiCache,
+) -> dict[str, dict[str, str]]:
+    """Verify an envelope for this server and return its per-target keys.
+
+    Raises:
+        SyncTokenError: On a bad signature, wrong audience or kind, expiry, a
+            lifetime over 60 seconds, a reused jti, a different server, or a
+            malformed credentials claim. The message never contains a key.
+    """
+    if not token:
+        raise SyncTokenError("missing credential envelope")
+    try:
+        claims = pyjwt.decode(
+            token,
+            _envelope_key(secret),
+            algorithms=[SYNC_ALGORITHM],
+            audience=ENVELOPE_AUDIENCE,
+            issuer=SYNC_ISSUER,
+            leeway=SYNC_LEEWAY_SECONDS,
+            options={"require": list(ENVELOPE_REQUIRED_CLAIMS)},
+        )
+    except pyjwt.PyJWTError as e:
+        raise SyncTokenError(f"credential envelope rejected: {type(e).__name__}") from e
+    if claims.get("token_kind") != ENVELOPE_TOKEN_KIND:
+        raise SyncTokenError("credential envelope rejected: wrong token_kind")
+    if int(claims["exp"]) - int(claims["iat"]) > ENVELOPE_TTL_SECONDS:
+        raise SyncTokenError("credential envelope rejected: lifetime too long")
+    if claims.get("server") != server_slug:
+        raise SyncTokenError("credential envelope rejected: issued for another server")
+    jti = claims.get("jti")
+    if not isinstance(jti, str) or not jti:
+        raise SyncTokenError("credential envelope rejected: invalid jti")
+    if not seen_jtis.consume(f"env:{jti}", float(claims["exp"]) + SYNC_LEEWAY_SECONDS):
+        raise SyncTokenError("credential envelope rejected: jti already used")
+    return _check_envelope_credentials(claims.get("credentials"))
