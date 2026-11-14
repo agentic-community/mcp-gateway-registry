@@ -22888,11 +22888,32 @@
             "default": ""
           },
           "spec_url": {
-            "type": "string",
-            "maxLength": 2083,
-            "minLength": 1,
-            "format": "uri",
-            "title": "Spec Url"
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2083,
+                "minLength": 1,
+                "format": "uri"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spec Url",
+            "description": "Where the registry fetches the spec. Send this or spec_content."
+          },
+          "spec_content": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 8388608
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spec Content",
+            "description": "The spec itself, as JSON or YAML text. Send this or spec_url."
           },
           "base_url": {
             "type": "string",
@@ -22908,7 +22929,6 @@
         "type": "object",
         "required": [
           "name",
-          "spec_url",
           "base_url"
         ],
         "title": "OpenApiTargetCreateRequest",
@@ -23038,9 +23058,38 @@
             ],
             "title": "Keep Output Schemas"
           },
+          "spec_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2083,
+                "minLength": 1,
+                "format": "uri"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spec Url",
+            "description": "Fetch the spec from this URL instead and check it again."
+          },
+          "spec_content": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 8388608
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spec Content",
+            "description": "Replace the spec with this JSON or YAML text and check it again."
+          },
           "refresh_spec": {
             "type": "boolean",
             "title": "Refresh Spec",
+            "description": "Fetch the spec again from the stored spec_url.",
             "default": false
           }
         },

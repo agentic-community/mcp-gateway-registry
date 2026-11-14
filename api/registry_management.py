@@ -187,6 +187,13 @@ Virtual MCP Server Management:
         --base-url https://petstore3.swagger.io/api/v3 \\
         --auth-scheme api_key_header --header-name api_key --credential-env PETSTORE_KEY --include-tag pet
 
+    # Upload the spec from a local file instead of a URL, or replace it later
+    uv run python registry_management.py openapi-target-add --slug space-apis --name nasa \\
+        --spec-file docs/examples/openapi/nasa.json --base-url https://api.nasa.gov \\
+        --auth-scheme api_key_header --header-name X-Api-Key --credential-mode per_user
+    uv run python registry_management.py openapi-target-update --slug space-apis --name nasa \\
+        --spec-file docs/examples/openapi/nasa.json
+
     # Update a virtual server from JSON config
     uv run python registry_management.py vs-update --path /virtual/dev-tools --config updated-config.json
 
@@ -6535,7 +6542,7 @@ def _openapi_auth_body(
     if not args.auth_scheme:
         return None
     auth: dict[str, Any] = {"scheme": args.auth_scheme}
-    for field in ("header_name", "query_param", "username"):
+    for field in ("credential_mode", "header_name", "query_param", "username"):
         if getattr(args, field, None):
             auth[field] = getattr(args, field)
     credential = _read_openapi_credential(args)
@@ -6573,6 +6580,22 @@ def _print_json(
     value: Any,
 ) -> None:
     print(json.dumps(value, indent=2, default=str))
+
+
+def _openapi_spec_body(
+    args: argparse.Namespace,
+) -> dict[str, Any]:
+    """The spec part of a target body: the file's text for --spec-file, else --spec-url."""
+    spec_file = getattr(args, "spec_file", None)
+    if spec_file:
+        with open(spec_file, encoding="utf-8") as handle:
+            content = handle.read()
+        logger.info(f"Uploading spec from {spec_file} ({len(content.encode('utf-8'))} bytes)")
+        return {"spec_content": content}
+    spec_url = getattr(args, "spec_url", None)
+    if spec_url:
+        return {"spec_url": spec_url}
+    return {}
 
 
 def _run_openapi_command(
@@ -6656,8 +6679,8 @@ def cmd_openapi_target_add(args: argparse.Namespace) -> int:
     def _action() -> Any:
         body: dict[str, Any] = {
             "name": args.name,
-            "spec_url": args.spec_url,
             "base_url": args.base_url,
+            **_openapi_spec_body(args),
         }
         if args.description:
             body["description"] = args.description
@@ -6690,6 +6713,7 @@ def cmd_openapi_target_update(args: argparse.Namespace) -> int:
         if auth:
             body["auth"] = auth
         body.update(_openapi_target_options(args))
+        body.update(_openapi_spec_body(args))
         if args.refresh_spec:
             body["refresh_spec"] = True
         return _create_client(args).update_openapi_target(args.slug, args.name, body)
@@ -6714,6 +6738,11 @@ def _add_openapi_target_flags(
         "--auth-scheme",
         choices=["none", "api_key_header", "api_key_query", "bearer", "basic"],
         help="Auth scheme",
+    )
+    parser.add_argument(
+        "--credential-mode",
+        choices=["shared", "per_user"],
+        help="shared (default): one credential for every caller. per_user: each user adds their own key",
     )
     parser.add_argument("--header-name", help="Header that carries the key (api_key_header)")
     parser.add_argument(
@@ -6799,7 +6828,11 @@ def _add_openapi_parsers(
     )
     add.add_argument("--slug", required=True)
     add.add_argument("--name", required=True, help="Target name; it prefixes the tool names")
-    add.add_argument("--spec-url", required=True)
+    add_spec = add.add_mutually_exclusive_group(required=True)
+    add_spec.add_argument("--spec-url", help="URL the registry fetches the spec from")
+    add_spec.add_argument(
+        "--spec-file", help="Local JSON or YAML spec file to upload instead of a URL"
+    )
     add.add_argument("--base-url", required=True)
     _add_openapi_target_flags(add)
     tget = subparsers.add_parser("openapi-target-get", help="Get a REST target")
@@ -6809,8 +6842,15 @@ def _add_openapi_parsers(
     tupdate.add_argument("--slug", required=True)
     tupdate.add_argument("--name", required=True)
     tupdate.add_argument("--base-url")
-    tupdate.add_argument(
-        "--refresh-spec", action="store_true", help="Fetch the spec again and re-run every check"
+    update_spec = tupdate.add_mutually_exclusive_group()
+    update_spec.add_argument(
+        "--refresh-spec",
+        action="store_true",
+        help="Fetch the spec again from the stored URL and re-run every check",
+    )
+    update_spec.add_argument("--spec-url", help="Fetch the spec from this URL from now on")
+    update_spec.add_argument(
+        "--spec-file", help="Replace the spec with this local JSON or YAML file"
     )
     _add_openapi_target_flags(tupdate)
     remove = subparsers.add_parser(

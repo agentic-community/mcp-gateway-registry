@@ -64,7 +64,7 @@ The registry is the control plane. It owns all state and never carries REST traf
 Each OpenAPI MCP server is three things in DocumentDB:
 
 - A `ServerInfo` record with path `/<slug>` and `proxy_pass_url` set to `http://openapi-mcp:9876/s/<slug>/mcp`. It carries the tag `openapi`, and its visibility defaults to `private`.
-- One document in `openapi_servers_<namespace>`, keyed by slug, that holds the server's targets. Each target records its spec URL, base URL, auth scheme, encrypted credential, filters and overrides. The document also holds a `generation` number that goes up on every change.
+- One document in `openapi_servers_<namespace>`, keyed by slug, that holds the server's targets. Each target records where its spec came from (a URL, or `upload` when an admin sent the spec itself), its base URL, auth scheme, encrypted credential, filters and overrides. The document also holds a `generation` number that goes up on every change.
 - One document per distinct spec in `openapi_specs_<namespace>`, keyed by the SHA-256 of the spec bytes. Two targets with the same spec share one copy, and the registry deletes a spec when no target uses it any more.
 
 The specs live in their own collection so that a server with 50 large specs stays under DocumentDB's 16 MiB document limit.
@@ -108,8 +108,8 @@ Agents never see the container's paths. They call `/<slug>/mcp` on the gateway, 
 
 Adding a target is how third-party content, the spec, gets into the system, so the registry checks it before it stores anything:
 
-1. The SSRF guard checks the base URL and the spec URL.
-2. The registry fetches the spec without following redirects and stops reading at 5 MiB.
+1. The SSRF guard checks the base URL, and the spec URL when the admin gave one.
+2. The registry fetches the spec without following redirects and stops reading at 5 MiB. An admin can instead send the spec's text in `spec_content`; that skips only this fetch, and the same 5 MiB cap applies. The gateway accepts bodies up to 8 MiB on these routes and keeps the 1 MiB default on the rest of the API.
 3. It requires strict UTF-8 and refuses YAML anchors and aliases, which can expand a small file into gigabytes. It accepts only OpenAPI 3.x.
 4. The container converts the spec as a dry run and returns the tool names and the operation count per tag.
 5. The registry refuses more than 100 tools per target and tool names over 64 characters. The error lists the spec's tags, so the admin can narrow the target with `include_tags` or `include_operations`.
@@ -169,7 +169,7 @@ Every change also starts a background security scan of the server. A scan cut of
 | `OPENAPI_MCP_MAX_SERVERS` | 10 | Servers per deployment (1 to 100) |
 | `OPENAPI_MCP_MAX_TARGETS_PER_SERVER` | 10 | Targets per server (1 to 50) |
 | `OPENAPI_MCP_MAX_TOOLS_PER_TARGET` | 100 | Tools one target may produce after its filters (1 to 500) |
-| `OPENAPI_MCP_SPEC_MAX_BYTES` | 5 MiB | Largest spec the registry fetches |
+| `OPENAPI_MCP_SPEC_MAX_BYTES` | 5 MiB | Largest spec the registry fetches or accepts as an upload |
 | `OPENAPI_MCP_RECONCILE_INTERVAL_SECONDS` | 60 | Time between full reconcile passes |
 | `OPENAPI_MCP_BACKEND_TIMEOUT_SECONDS` | 30 | Container: timeout for each backend call |
 | `OPENAPI_MCP_MAX_RESPONSE_BYTES` | 2 MiB | Container: largest response passed to the agent |

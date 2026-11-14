@@ -54,6 +54,8 @@ export interface OpenApiTarget {
   name: string;
   description?: string;
   spec_url?: string;
+  /** `upload` when an admin sent the spec itself; such a target has no spec_url. */
+  spec_source?: OpenApiSpecSource;
   spec_sha256?: string;
   spec_title?: string;
   spec_version?: string;
@@ -133,11 +135,17 @@ export interface OpenApiTargetAuthInput {
 }
 
 
-/** Body of POST /api/openapi-servers/{slug}/targets. */
+/** Where a target's spec came from. Missing on older targets; treat as `url`. */
+export type OpenApiSpecSource = 'url' | 'upload';
+
+
+/** Body of POST /api/openapi-servers/{slug}/targets. Send spec_url or spec_content. */
 export interface CreateOpenApiTargetRequest {
   name: string;
   description: string;
-  spec_url: string;
+  spec_url?: string;
+  /** The spec's JSON or YAML text, uploaded instead of a URL. */
+  spec_content?: string;
   base_url: string;
   auth: OpenApiTargetAuthInput;
   tool_name_overrides: Record<string, string>;
@@ -152,7 +160,8 @@ export interface CreateOpenApiTargetRequest {
  * Body of PATCH /api/openapi-servers/{slug}/targets/{name}.
  *
  * Every field is optional. A missing `auth` leaves the stored credential as it
- * is. `refresh_spec` refetches the spec URL and runs the checks again.
+ * is. `refresh_spec` refetches the spec URL and runs the checks again;
+ * `spec_content` replaces the spec with uploaded text. Send at most one.
  */
 export interface UpdateOpenApiTargetRequest {
   description?: string;
@@ -164,6 +173,7 @@ export interface UpdateOpenApiTargetRequest {
   include_operations?: string[];
   keep_output_schemas?: boolean;
   refresh_spec?: boolean;
+  spec_content?: string;
 }
 
 

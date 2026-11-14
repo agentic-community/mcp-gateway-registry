@@ -210,6 +210,53 @@ class TestToolCalls:
         assert info.get("num_tools", 0) >= 8
 
 
+UPLOAD_PADDING_BYTES: int = 1_500_000
+
+
+def _uploaded_spec(
+    padding: int = UPLOAD_PADDING_BYTES,
+) -> str:
+    """A one-operation spec, padded past nginx's 1m default to prove the larger limit holds."""
+    spec = {
+        "openapi": "3.0.3",
+        "info": {"title": "Uploaded", "version": "1"},
+        "x-padding": "p" * padding,
+        "paths": {"/items": {"get": {"operationId": "listItems", "responses": {"200": {"description": "ok"}}}}},
+    }
+    return json.dumps(spec)
+
+
+class TestSpecUpload:
+    def test_uploaded_spec_over_one_mib_serves_tools(self, client, server):
+        added = client.post(
+            f"/api/openapi-servers/{SLUG}/targets",
+            json={"name": "upl", "spec_content": _uploaded_spec(), "base_url": MOCK_URL},
+        )
+        assert added.status_code == 201, added.text[:500]
+        target = client.get(f"/api/openapi-servers/{SLUG}/targets/upl").json()
+
+        assert (target["spec_source"], target["spec_url"]) == ("upload", None)
+        assert _tool_json(_call_2026(client, "upl_listItems", {}))["result"][0]["id"] == 1
+
+    def test_refresh_of_uploaded_spec_is_conflict(self, client, server):
+        response = client.patch(f"/api/openapi-servers/{SLUG}/targets/upl", json={"refresh_spec": True})
+
+        assert (response.status_code, response.json()["error"]) == (409, "spec_url_missing")
+
+    def test_upload_over_gateway_limit_is_413(self, client, server):
+        response = client.post(
+            f"/api/openapi-servers/{SLUG}/targets",
+            json={"name": "huge", "spec_content": _uploaded_spec(9 * 1024 * 1024), "base_url": MOCK_URL},
+        )
+
+        assert response.status_code == 413
+
+    def test_other_api_routes_keep_the_one_mib_limit(self, client, server):
+        response = client.post("/api/servers/register", content=b"x" * 2 * 1024 * 1024)
+
+        assert response.status_code == 413
+
+
 class TestRecovery:
     def test_tools_survive_container_restart(self, client, server):
         subprocess.run(["docker", "restart", CONTAINER_NAME], check=True, capture_output=True, timeout=120)  # nosec B603 B607 - local test container

@@ -506,7 +506,7 @@ Registry settings:
 | Max servers | `OPENAPI_MCP_MAX_SERVERS` | `openapi_mcp_max_servers` | `registry.app.openapiMcpMaxServers` | OpenAPI MCP servers per deployment (1 to 100). Default `10`. |
 | Max targets per server | `OPENAPI_MCP_MAX_TARGETS_PER_SERVER` | `openapi_mcp_max_targets_per_server` | `registry.app.openapiMcpMaxTargetsPerServer` | REST targets per server (1 to 50). Default `10`. |
 | Max tools per target | `OPENAPI_MCP_MAX_TOOLS_PER_TARGET` | `openapi_mcp_max_tools_per_target` | `registry.app.openapiMcpMaxToolsPerTarget` | Tools one target may produce after its include filters (1 to 500). Default `100`. |
-| Max spec size (bytes) | `OPENAPI_MCP_SPEC_MAX_BYTES` | `openapi_mcp_spec_max_bytes` | `registry.app.openapiMcpSpecMaxBytes` | Largest spec the registry fetches (1024 to 20971520). Default `5242880`. |
+| Max spec size (bytes) | `OPENAPI_MCP_SPEC_MAX_BYTES` | `openapi_mcp_spec_max_bytes` | `registry.app.openapiMcpSpecMaxBytes` | Largest spec the registry fetches or accepts in `spec_content` (1024 to 20971520). Default `5242880`. The gateway caps upload request bodies at 8 MiB, so above about 6 MiB give the spec by URL. |
 | Reconcile interval (s) | `OPENAPI_MCP_RECONCILE_INTERVAL_SECONDS` | `openapi_mcp_reconcile_interval_seconds` | `registry.app.openapiMcpReconcileIntervalSeconds` | Seconds between full reconcile passes (10 to 3600). Default `60`. |
 
 Auth server settings:

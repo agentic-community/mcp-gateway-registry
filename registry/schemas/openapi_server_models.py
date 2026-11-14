@@ -31,6 +31,9 @@ PER_USER_SCHEMES: frozenset[str] = frozenset({"bearer", "api_key_header"})
 PER_USER_PROVIDER_PREFIX: str = "openapi-"
 OpenApiVisibility = Literal["public", "private", "group-restricted"]
 SyncStatus = Literal["applied", "pending"]
+# url: the registry fetched the spec from spec_url. upload: an admin sent the
+# spec itself in spec_content, so there is no URL to refresh from.
+SpecSource = Literal["url", "upload"]
 
 SLUG_PATTERN: str = r"^[a-z0-9]+(-[a-z0-9]+)*$"
 TARGET_NAME_PATTERN: str = r"^[a-z][a-z0-9]{1,23}$"
@@ -39,6 +42,10 @@ MAX_OVERRIDE_ENTRIES: int = 500
 MAX_OVERRIDE_KEY_CHARS: int = 256
 MAX_TOOL_NAME_OVERRIDE_CHARS: int = 64
 MAX_DESCRIPTION_OVERRIDE_CHARS: int = 2000
+# Hard ceiling on an uploaded spec's length in characters, checked while the
+# body is parsed. The configured byte cap (OPENAPI_MCP_SPEC_MAX_BYTES) is
+# checked after; this only bounds what a request can make the registry hold.
+MAX_SPEC_CONTENT_CHARS: int = 8 * 1024 * 1024
 FORBIDDEN_AUTH_HEADERS: frozenset[str] = frozenset(
     {"host", "cookie", "content-length", "transfer-encoding", "authorization", "connection"}
 )
@@ -180,7 +187,14 @@ class OpenApiTargetCreateRequest(_TargetToolOptions):
 
     name: str = Field(..., pattern=TARGET_NAME_PATTERN)
     description: str = Field(default="", max_length=1000)
-    spec_url: HttpUrl
+    spec_url: HttpUrl | None = Field(
+        default=None, description="Where the registry fetches the spec. Send this or spec_content."
+    )
+    spec_content: str | None = Field(
+        default=None,
+        max_length=MAX_SPEC_CONTENT_CHARS,
+        description="The spec itself, as JSON or YAML text. Send this or spec_url.",
+    )
     base_url: HttpUrl
     auth: OpenApiTargetAuthInput = Field(default_factory=OpenApiTargetAuthInput)
 
@@ -202,6 +216,12 @@ class OpenApiTargetCreateRequest(_TargetToolOptions):
         }
     }
 
+    @model_validator(mode="after")
+    def _one_spec_source(self) -> "OpenApiTargetCreateRequest":
+        if (self.spec_url is None) == (self.spec_content is None):
+            raise ValueError("send exactly one of spec_url and spec_content")
+        return self
+
 
 class OpenApiTargetUpdateRequest(BaseModel):
     """Body of PATCH /api/openapi-servers/{slug}/targets/{name}. A missing auth keeps the stored one."""
@@ -214,7 +234,24 @@ class OpenApiTargetUpdateRequest(BaseModel):
     include_tags: list[str] | None = Field(default=None, max_length=100)
     include_operations: list[str] | None = Field(default=None, max_length=500)
     keep_output_schemas: bool | None = None
-    refresh_spec: bool = False
+    spec_url: HttpUrl | None = Field(
+        default=None, description="Fetch the spec from this URL instead and check it again."
+    )
+    spec_content: str | None = Field(
+        default=None,
+        max_length=MAX_SPEC_CONTENT_CHARS,
+        description="Replace the spec with this JSON or YAML text and check it again.",
+    )
+    refresh_spec: bool = Field(
+        default=False, description="Fetch the spec again from the stored spec_url."
+    )
+
+    @model_validator(mode="after")
+    def _one_spec_change(self) -> "OpenApiTargetUpdateRequest":
+        chosen = [self.spec_url is not None, self.spec_content is not None, self.refresh_spec]
+        if sum(chosen) > 1:
+            raise ValueError("send at most one of spec_url, spec_content and refresh_spec")
+        return self
 
     @field_validator("tool_name_overrides")
     @classmethod
@@ -286,7 +323,8 @@ class OpenApiTarget(_TargetToolOptions):
 
     name: str
     description: str = ""
-    spec_url: str
+    spec_url: str | None = None
+    spec_source: SpecSource = "url"
     spec_sha256: str
     spec_title: str = ""
     spec_version: str = ""
@@ -343,6 +381,7 @@ class OpenApiTargetResponse(BaseModel):
     name: str
     description: str
     spec_url: str | None = None
+    spec_source: SpecSource = "url"
     base_url: str | None = None
     spec_title: str
     spec_version: str

@@ -5,6 +5,7 @@ import {
   OpenApiApiError,
   OpenApiAuthScheme,
   OpenApiCredentialMode,
+  OpenApiSpecSource,
   OpenApiTargetAuthInput,
   PER_USER_SCHEMES,
   OpenApiTargetWriteResponse,
@@ -41,6 +42,22 @@ interface OverrideRow {
   key: string;
   value: string;
 }
+
+
+/** An uploaded spec file, read into text in the browser. */
+interface SpecFile {
+  name: string;
+  content: string;
+}
+
+
+/**
+ * Largest spec file the form will read. It matches the gateway's request body
+ * limit for these routes; the registry's own cap (OPENAPI_MCP_SPEC_MAX_BYTES,
+ * 5 MiB by default) is checked on the server and reported as spec_too_large.
+ */
+const SPEC_UPLOAD_MAX_BYTES: number = 8 * 1024 * 1024;
+const SPEC_FILE_ACCEPT: string = '.json,.yaml,.yml,application/json,application/yaml,text/yaml';
 
 
 const TARGET_NAME_PATTERN: RegExp = /^[a-z][a-z0-9]{1,23}$/;
@@ -223,6 +240,90 @@ function _buildAuth(
   }
   return { auth, error: null };
 }
+
+
+function _readFileText(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error('could not read the file'));
+    reader.readAsText(file);
+  });
+}
+
+
+interface SpecSectionProps {
+  isCreate: boolean;
+  source: OpenApiSpecSource;
+  setSource: (value: OpenApiSpecSource) => void;
+  storedSource: OpenApiSpecSource;
+  specUrl: string;
+  setSpecUrl: (value: string) => void;
+  specFile: SpecFile | null;
+  onFile: (file: File | null) => void;
+  error?: string;
+}
+
+
+/** Where the spec comes from: a URL the registry fetches, or a file uploaded here. */
+const _SpecSection: React.FC<SpecSectionProps> = (props) => {
+  const showUrl = props.isCreate ? props.source === 'url' : props.storedSource === 'url';
+  const showFile = !props.isCreate || props.source === 'upload';
+  return (
+    <div className="space-y-2">
+      {props.isCreate && (
+        <fieldset>
+          <legend className="block text-sm font-medium text-fg-muted mb-1">
+            Spec <span className="text-danger-500">*</span>
+          </legend>
+          <div className="flex gap-4 text-sm">
+            {(['url', 'upload'] as OpenApiSpecSource[]).map((value) => (
+              <label key={value} className="flex items-center gap-1.5">
+                <input type="radio" name="openapi-spec-source" value={value}
+                  checked={props.source === value} onChange={() => props.setSource(value)} />
+                {value === 'url' ? 'Fetch from a URL' : 'Upload a file'}
+              </label>
+            ))}
+          </div>
+        </fieldset>
+      )}
+      {showUrl && (
+        <div>
+          <label htmlFor="openapi-target-spec-url" className="block text-sm font-medium text-fg-muted mb-1">
+            Spec URL {props.isCreate && <span className="text-danger-500">*</span>}
+          </label>
+          <input id="openapi-target-spec-url" type="url" value={props.specUrl} disabled={!props.isCreate}
+            onChange={(e) => props.setSpecUrl(e.target.value)} className="input font-mono text-sm"
+            placeholder="https://petstore3.swagger.io/api/v3/openapi.json" autoComplete="off" />
+          {!props.isCreate && (
+            <p className="mt-1 text-xs text-fg-subtle">
+              To load a new version from this URL, use Refresh spec in the server details, or upload a file below.
+            </p>
+          )}
+        </div>
+      )}
+      {!props.isCreate && props.storedSource === 'upload' && (
+        <p className="text-xs text-fg-subtle">This target uses an uploaded spec.</p>
+      )}
+      {showFile && (
+        <div>
+          <label htmlFor="openapi-target-spec-file" className="block text-sm font-medium text-fg-muted mb-1">
+            {props.isCreate ? 'Spec file (JSON or YAML)' : 'Replace the spec with a file (optional)'}
+          </label>
+          <input id="openapi-target-spec-file" type="file" accept={SPEC_FILE_ACCEPT}
+            data-testid="openapi-target-spec-file"
+            onChange={(e) => props.onFile(e.target.files?.[0] || null)} className="block text-sm" />
+          {props.specFile && (
+            <p className="mt-1 text-xs text-fg-subtle" data-testid="openapi-target-spec-file-name">
+              {props.specFile.name} ({props.specFile.content.length.toLocaleString()} characters)
+            </p>
+          )}
+        </div>
+      )}
+      <_FieldError field="spec_url" message={props.error} />
+    </div>
+  );
+};
 
 
 const _FieldError: React.FC<{ field: FieldKey; message?: string }> = ({ field, message }) => {
@@ -494,6 +595,9 @@ const OpenApiTargetForm: React.FC<OpenApiTargetFormProps> = ({
   const [name, setName] = useState(target?.name || '');
   const [description, setDescription] = useState(target?.description || '');
   const [specUrl, setSpecUrl] = useState(target?.spec_url || '');
+  const storedSource: OpenApiSpecSource = target?.spec_source || 'url';
+  const [specSource, setSpecSource] = useState<OpenApiSpecSource>(storedSource);
+  const [specFile, setSpecFile] = useState<SpecFile | null>(null);
   const [baseUrl, setBaseUrl] = useState(target?.base_url || '');
   const [scheme, setScheme] = useState<OpenApiAuthScheme>(initialScheme);
   const [credentialMode, setCredentialMode] = useState<OpenApiCredentialMode>(initialMode);
@@ -524,6 +628,21 @@ const OpenApiTargetForm: React.FC<OpenApiTargetFormProps> = ({
   const [invalidNames, setInvalidNames] = useState<string[]>([]);
 
   useEscapeKey(onCancel, !saving);
+
+  const onSpecFile = async (file: File | null) => {
+    setSpecFile(null);
+    setFieldErrors((prev) => ({ ...prev, spec_url: undefined }));
+    if (!file) return;
+    if (file.size > SPEC_UPLOAD_MAX_BYTES) {
+      setFieldErrors((prev) => ({ ...prev, spec_url: 'That file is larger than 8 MiB, the most the gateway accepts.' }));
+      return;
+    }
+    try {
+      setSpecFile({ name: file.name, content: await _readFileText(file) });
+    } catch {
+      setFieldErrors((prev) => ({ ...prev, spec_url: 'Could not read that file.' }));
+    }
+  };
 
   const toggleTag = (tag: string) => {
     setSelectedTags((prev) => (prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]));
@@ -570,7 +689,7 @@ const OpenApiTargetForm: React.FC<OpenApiTargetFormProps> = ({
   const buildCreateBody = (auth: OpenApiTargetAuthInput): CreateOpenApiTargetRequest => ({
     name: name.trim(),
     description: description.trim(),
-    spec_url: specUrl.trim(),
+    ...(specSource === 'upload' ? { spec_content: specFile?.content || '' } : { spec_url: specUrl.trim() }),
     base_url: baseUrl.trim(),
     auth,
     tool_name_overrides: _mapFromRows(nameOverrides),
@@ -592,6 +711,7 @@ const OpenApiTargetForm: React.FC<OpenApiTargetFormProps> = ({
     };
     if (baseUrl.trim() !== (target?.base_url || '')) body.base_url = baseUrl.trim();
     if (auth) body.auth = auth;
+    if (specFile) body.spec_content = specFile.content;
     return body;
   };
 
@@ -600,7 +720,8 @@ const OpenApiTargetForm: React.FC<OpenApiTargetFormProps> = ({
     if (!TARGET_NAME_PATTERN.test(name.trim())) {
       errors.name = 'Use 2 to 24 lowercase letters and digits, starting with a letter. It becomes the tool prefix.';
     }
-    if (!specUrl.trim()) errors.spec_url = 'Enter the URL of the OpenAPI spec.';
+    if (specSource === 'url' && !specUrl.trim()) errors.spec_url = 'Enter the URL of the OpenAPI spec.';
+    if (specSource === 'upload' && !specFile) errors.spec_url = 'Choose a JSON or YAML spec file.';
     if (!baseUrl.trim()) errors.base_url = 'Enter the base URL the API is called at.';
     return errors;
   };
@@ -686,20 +807,9 @@ const OpenApiTargetForm: React.FC<OpenApiTargetFormProps> = ({
                 </div>
               </div>
 
-              <div>
-                <label htmlFor="openapi-target-spec-url" className="block text-sm font-medium text-fg-muted mb-1">
-                  Spec URL <span className="text-danger-500">*</span>
-                </label>
-                <input id="openapi-target-spec-url" type="url" value={specUrl} disabled={!isCreate}
-                  onChange={(e) => setSpecUrl(e.target.value)} className="input font-mono text-sm"
-                  placeholder="https://petstore3.swagger.io/api/v3/openapi.json" autoComplete="off" />
-                {!isCreate && (
-                  <p className="mt-1 text-xs text-fg-subtle">
-                    To load a new version of the spec, use Refresh spec in the server details.
-                  </p>
-                )}
-                <_FieldError field="spec_url" message={fieldErrors.spec_url} />
-              </div>
+              <_SpecSection isCreate={isCreate} source={specSource} setSource={setSpecSource}
+                storedSource={storedSource} specUrl={specUrl} setSpecUrl={setSpecUrl}
+                specFile={specFile} onFile={onSpecFile} error={fieldErrors.spec_url} />
 
               <div>
                 <label htmlFor="openapi-target-base-url" className="block text-sm font-medium text-fg-muted mb-1">

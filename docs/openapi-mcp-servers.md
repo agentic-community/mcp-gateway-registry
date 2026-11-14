@@ -36,6 +36,14 @@ uv run python api/registry_management.py openapi-target-add --slug weather-apis 
     --include-tag pet
 ```
 
+To send the spec itself instead of a URL, use `--spec-file` in place of `--spec-url`:
+
+```bash
+uv run python api/registry_management.py openapi-target-add --slug space-apis --name nasa \
+    --spec-file docs/examples/openapi/nasa.json --base-url https://api.nasa.gov \
+    --auth-scheme api_key_header --header-name X-Api-Key --credential-mode per_user
+```
+
 The CLI reads a credential from an environment variable (`--credential-env`) or from stdin (`--credential-stdin`), never from the command line. The same operations are under `/api/openapi-servers` in the REST API, and in the registry UI under the OpenAPI view, which only admins see.
 
 The server's name becomes its path, so "Weather APIs" is served at `/weather-apis/mcp` on the gateway. Tool names are the target name, an underscore, and the operation's `operationId`, for example `petstore_getPetById`.
@@ -44,12 +52,26 @@ The server's name becomes its path, so "Weather APIs" is served at `/weather-api
 
 Adding a target stores nothing until every check passes:
 
-- The SSRF guard checks the spec URL and the base URL, the same way it checks any registered backend. To reach an internal API, an operator adds its host to `SSRF_ALLOWED_HOSTS` or `SSRF_ALLOWED_CIDRS`.
-- The registry fetches the spec without following redirects, so give the final URL. Specs larger than `OPENAPI_MCP_SPEC_MAX_BYTES` (5 MiB by default) are refused.
+- The SSRF guard checks the base URL, and the spec URL when there is one, the same way it checks any registered backend. To reach an internal API, an operator adds its host to `SSRF_ALLOWED_HOSTS` or `SSRF_ALLOWED_CIDRS`.
+- The registry fetches the spec without following redirects, so give the final URL. It refuses a spec larger than `OPENAPI_MCP_SPEC_MAX_BYTES` (5 MiB by default), fetched or uploaded.
 - The spec must be OpenAPI 3.x in JSON or YAML, valid UTF-8, with no YAML anchors or aliases.
 - Every `$ref` must be a local `#/...` pointer. A spec split across files, or one that refers to a URL or a local file, is refused; bundle it into one document first (for example with `redocly bundle`). Convert a Swagger 2.0 spec first, for example with [converter.swagger.io](https://converter.swagger.io).
 - One target may produce at most `OPENAPI_MCP_MAX_TOOLS_PER_TARGET` tools (100 by default). A larger spec gets a `too_many_tools` error that lists the spec's tags with their operation counts. Choose operations with `include_tags` and `include_operations`; an `include_operations` entry is an `operationId` or `"METHOD /path"`.
 - Tool names may be at most 64 characters. Rename long or clashing ones with `tool_name_overrides`, keyed by `operationId`, or by `"METHOD /path"` for an operation that has none.
+
+## Upload a spec instead of a URL
+
+A target gets its spec in one of two ways. With `spec_url`, the registry fetches the spec. With `spec_content`, the admin sends the spec's JSON or YAML text in the request body, which suits a spec that is not published anywhere the registry can reach. The UI offers both on the target form ("Fetch from a URL" or "Upload a file"), and the CLI takes `--spec-url` or `--spec-file`.
+
+An uploaded spec goes through every check in the list above except the fetch. The registry stores it the same way as a fetched one, and the response shows `"spec_source": "upload"` with no `spec_url`.
+
+To change a target's spec later, send one of these in a `PATCH` on the target:
+
+- `spec_content` replaces the spec with new text.
+- `spec_url` switches the target to fetching from that URL.
+- `refresh_spec: true` fetches the spec again from the stored URL. A target with an uploaded spec has no URL, so this returns `409 spec_url_missing`; send `spec_content` instead.
+
+The gateway accepts request bodies up to 8 MiB on `/api/openapi-servers/`; the rest of `/api/` keeps nginx's 1 MiB default. A spec sent in `spec_content` is larger than the file, because JSON escaping turns every quote and line break into two characters, so a deployment that raises `OPENAPI_MCP_SPEC_MAX_BYTES` above about 6 MiB should give the spec by URL instead.
 
 ## Shared or per-user credentials
 
@@ -81,7 +103,7 @@ curl -X PUT "$REGISTRY_URL/api/openapi-servers/nasa/targets/nasa/my-credential" 
 
 At call time the gateway sends a per-user server's traffic through the auth server, which forwards the caller's keys to the container in a signed, single-use envelope. The auth server never holds the key that signs it.
 
-The registry keeps the exact spec it checked. A change to the spec at its URL reaches agents only after an admin refreshes the target (`refresh_spec: true`), which runs every check again.
+The registry keeps the exact spec it checked. A change to the spec at its URL reaches agents only after an admin refreshes the target (`refresh_spec: true`) or uploads the new version, and either one runs every check again.
 
 ## Who can use a server
 
