@@ -93,6 +93,7 @@ Each tool is marked from its HTTP method: `GET`, `HEAD` and `OPTIONS` are read-o
 
 - A JSON array response arrives wrapped as `{"result": [...]}`, because MCP structured output has to be an object.
 - Tools refuse arguments the spec does not define, so a misspelled argument returns an error.
+- If a backend echoes the target's credential in its response, as api.nasa.gov does in its `links` URLs, the container replaces it with `[REDACTED]` before the response reaches the agent. This covers the raw key, its URL-encoded forms and a basic-auth header value, for shared and per-user targets alike. A link copied from such a response therefore no longer works on its own; the agent calls the tool again instead.
 - Responses larger than `OPENAPI_MCP_MAX_RESPONSE_BYTES` (2 MiB by default) become a tool error, as do backend calls slower than `OPENAPI_MCP_BACKEND_TIMEOUT_SECONDS` (30 seconds).
 - By default tools carry no output schema, because many real APIs return responses that break their own spec. Set `keep_output_schemas` on a target to keep the spec's schemas.
 

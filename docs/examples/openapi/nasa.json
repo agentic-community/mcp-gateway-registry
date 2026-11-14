@@ -36,36 +36,27 @@
         }
       }
     },
-    "/mars-photos/api/v1/rovers/{rover}/photos": {
+    "/EPIC/api/natural/date/{date}": {
       "get": {
-        "operationId": "getMarsRoverPhotos",
+        "operationId": "getEpicNaturalImages",
         "tags": [
-          "mars"
+          "earth"
         ],
-        "summary": "Photos from a Mars rover",
+        "summary": "Earth images from the DSCOVR EPIC camera on one date",
         "parameters": [
           {
-            "name": "rover",
+            "name": "date",
             "in": "path",
             "required": true,
             "schema": {
               "type": "string"
             },
-            "description": "Rover name, for example curiosity"
-          },
-          {
-            "name": "sol",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer"
-            },
-            "description": "Martian sol (day) the photos were taken"
+            "description": "Date in YYYY-MM-DD format"
           }
         ],
         "responses": {
           "200": {
-            "description": "Photos taken on that sol"
+            "description": "Image metadata for that date"
           }
         }
       }
