@@ -12,6 +12,7 @@ Run (inside the compose network, so the registry and openapi-mcp can reach it):
 import base64
 import json
 import logging
+from pathlib import Path
 
 from fastapi import (
     FastAPI,
@@ -89,80 +90,12 @@ def _spec() -> dict:
 
 
 # A hand-written OpenAPI 3.0 spec for three NASA endpoints (api.nasa.gov does not
-# publish one). The key is not a spec parameter: per-user targets send each
-# user's key in the X-Api-Key header, which api.nasa.gov accepts.
-NASA_SPEC: dict = {
-    "openapi": "3.0.3",
-    "info": {"title": "NASA Open APIs (subset)", "version": "1.0.0"},
-    "servers": [{"url": "https://api.nasa.gov"}],
-    "paths": {
-        "/planetary/apod": {
-            "get": {
-                "operationId": "getApod",
-                "tags": ["apod"],
-                "summary": "Astronomy Picture of the Day",
-                "parameters": [
-                    {
-                        "name": "date",
-                        "in": "query",
-                        "required": False,
-                        "schema": {"type": "string", "format": "date"},
-                        "description": "Date of the picture, YYYY-MM-DD. Defaults to today.",
-                    }
-                ],
-                "responses": {"200": {"description": "The picture's title, explanation and URL"}},
-            }
-        },
-        "/mars-photos/api/v1/rovers/{rover}/photos": {
-            "get": {
-                "operationId": "getMarsRoverPhotos",
-                "tags": ["mars"],
-                "summary": "Photos from a Mars rover",
-                "parameters": [
-                    {
-                        "name": "rover",
-                        "in": "path",
-                        "required": True,
-                        "schema": {"type": "string"},
-                        "description": "Rover name, for example curiosity",
-                    },
-                    {
-                        "name": "sol",
-                        "in": "query",
-                        "required": False,
-                        "schema": {"type": "integer"},
-                        "description": "Martian sol (day) the photos were taken",
-                    },
-                ],
-                "responses": {"200": {"description": "Photos taken on that sol"}},
-            }
-        },
-        "/neo/rest/v1/feed": {
-            "get": {
-                "operationId": "getNeoFeed",
-                "tags": ["neo"],
-                "summary": "Near-Earth objects (asteroids) by date range",
-                "parameters": [
-                    {
-                        "name": "start_date",
-                        "in": "query",
-                        "required": True,
-                        "schema": {"type": "string", "format": "date"},
-                        "description": "First day, YYYY-MM-DD",
-                    },
-                    {
-                        "name": "end_date",
-                        "in": "query",
-                        "required": False,
-                        "schema": {"type": "string", "format": "date"},
-                        "description": "Last day, YYYY-MM-DD, at most 7 days after start_date",
-                    },
-                ],
-                "responses": {"200": {"description": "Asteroids approaching Earth in that range"}},
-            }
-        },
-    },
-}
+# publish one). The one copy lives in docs/examples/openapi/nasa.json, usable as an
+# upload or, through /nasa-spec.json here, as a spec URL. It declares no api_key
+# parameter: per-user targets send each user's key in the X-Api-Key header, which
+# api.nasa.gov accepts.
+NASA_SPEC_PATH: Path = Path(__file__).resolve().parents[2] / "docs" / "examples" / "openapi" / "nasa.json"
+NASA_SPEC: dict = json.loads(NASA_SPEC_PATH.read_text())
 
 
 app = FastAPI(title="openapi-mcp mock REST API", openapi_url=None, docs_url=None, redoc_url=None)

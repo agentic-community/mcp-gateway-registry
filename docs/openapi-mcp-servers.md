@@ -114,13 +114,14 @@ Metrics are under `mcpgw_openapi_mcp_*` on the registry's Prometheus endpoint. A
 
 ## End-to-end test
 
-`tests/integration/test_openapi_mcp_e2e.py` runs against a local Compose stack with the feature on, and is skipped otherwise. It uses a mock REST API (`tests/integration/openapi_mock_api.py`) that serves its own spec, checks each auth scheme, and echoes the headers it receives.
+`tests/integration/test_openapi_mcp_e2e.py` runs against a local Compose stack with the feature on, and is skipped otherwise. It uses a mock REST API (`tests/integration/openapi_mock_api.py`) that serves its own spec, checks each auth scheme, and echoes the headers it receives. The mock also serves the example NASA spec, [`docs/examples/openapi/nasa.json`](examples/openapi/nasa.json), at `/nasa-spec.json`; the same file is the example for registering a per-user target against `https://api.nasa.gov`.
 
 ```bash
 docker run -d --name openapi-mock-api --network mcp-gateway-registry_default --no-healthcheck \
-    -v "$PWD/tests/integration/openapi_mock_api.py:/mock/openapi_mock_api.py:ro" \
+    -v "$PWD/tests/integration/openapi_mock_api.py:/mock/tests/integration/openapi_mock_api.py:ro" \
+    -v "$PWD/docs/examples/openapi:/mock/docs/examples/openapi:ro" \
     --entrypoint /app/.venv/bin/python mcp-gateway-registry-registry \
-    -m uvicorn --app-dir /mock openapi_mock_api:app --host 0.0.0.0 --port 8000
+    -m uvicorn --app-dir /mock/tests/integration openapi_mock_api:app --host 0.0.0.0 --port 8000
 # add openapi-mock-api to SSRF_ALLOWED_HOSTS in .env, then recreate registry and openapi-mcp
 OPENAPI_MCP_E2E=1 uv run pytest tests/integration/test_openapi_mcp_e2e.py -v --no-cov
 ```
