@@ -10,8 +10,10 @@ that applies to all tests.
 # =============================================================================
 # This must run FIRST to avoid permission errors when nginx_service is imported
 
+import atexit
 import errno
 import os
+import shutil
 import re
 import uuid
 
@@ -248,6 +250,17 @@ os.environ.setdefault("SECRET_KEY", "test-secret-key-for-testing-only-do-not-use
 os.environ.setdefault(
     "AUTH_SERVER_NGINX_MARKER_SECRET", "test-marker-secret-for-testing-only-do-not-use"
 )
+
+# Application log files go to a per-process temp directory, never the host's
+# /var/log/containers/ai-registry. Services configure logging at import time
+# (servers/mcpgw/server.py calls setup_mcpgw_logging(), which reads APP_LOG_DIR
+# from the environment), so this has to be set before collection imports them.
+# Without it a test run on a host where that directory is writable appended
+# every later test's log records to the real ai-registry-tools.log. Assigned,
+# not setdefault, so a developer's own APP_LOG_DIR cannot point tests there.
+_TEST_APP_LOG_DIR: str = tempfile.mkdtemp(prefix="pytest-app-logs-")
+os.environ["APP_LOG_DIR"] = _TEST_APP_LOG_DIR
+atexit.register(shutil.rmtree, _TEST_APP_LOG_DIR, ignore_errors=True)
 
 # SSRF guard allowlist for tests: fixtures register proxy_pass_url / agent URLs
 # on localhost and Docker-service hostnames. Allowlisting them lets the guard
