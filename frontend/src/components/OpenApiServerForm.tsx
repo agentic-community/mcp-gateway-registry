@@ -10,6 +10,7 @@ import {
 import { parseOpenApiError } from '../hooks/useOpenApiServers';
 import { pathFromName } from '../utils/slug';
 import useEscapeKey from '../hooks/useEscapeKey';
+import GroupMultiSelect from './GroupMultiSelect';
 
 
 /**
@@ -211,8 +212,8 @@ const OpenApiServerForm: React.FC<OpenApiServerFormProps> = ({
                 ))}
               </select>
               <p className="mt-1 text-xs text-fg-subtle">
-                Each API on this server is called with one shared credential. Open it to
-                groups or everyone when it is ready.
+                Who can see and call this server. APIs with a shared credential use that one
+                key for every caller, so open the server to groups or everyone when it is ready.
               </p>
             </div>
           </div>
@@ -222,13 +223,10 @@ const OpenApiServerForm: React.FC<OpenApiServerFormProps> = ({
               <label htmlFor="openapi-server-groups" className="block text-sm font-medium text-fg-muted mb-1">
                 Allowed groups
               </label>
-              <input
+              <GroupMultiSelect
                 id="openapi-server-groups"
-                type="text"
-                value={allowedGroups}
-                onChange={(e) => setAllowedGroups(e.target.value)}
-                placeholder="weather-team, data-science (comma-separated)"
-                className="input"
+                selected={_splitList(allowedGroups)}
+                onChange={(groups) => setAllowedGroups(groups.join(', '))}
               />
             </div>
           )}
