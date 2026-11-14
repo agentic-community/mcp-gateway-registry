@@ -59,6 +59,7 @@ def target_response(
         name=target.name,
         description=target.description,
         spec_url=None if redact else target.spec_url,
+        spec_source=target.spec_source,
         base_url=None if redact else target.base_url,
         spec_title=target.spec_title,
         spec_version=target.spec_version,

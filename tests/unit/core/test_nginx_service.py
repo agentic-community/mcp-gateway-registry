@@ -1865,7 +1865,10 @@ def test_registry_api_locations_forward_internal_token():
         n_protected = text.count("auth_request /validate;")
         assert n_protected > 0, f"{conf.name}: expected protected /api/ locations"
         # Marker set + token capture + token forward appear once per protected location.
-        assert text.count('set $registry_api_auth "1";') == n_protected, conf.name
+        # The nested OpenAPI MCP location inherits everything but `set`, so it
+        # restates the marker: one extra per nested block.
+        n_nested = text.count(OPENAPI_NESTED_LOCATION)
+        assert text.count('set $registry_api_auth "1";') == n_protected + n_nested, conf.name
         assert (
             text.count(
                 "auth_request_set $auth_internal_token_registry "
@@ -1879,6 +1882,49 @@ def test_registry_api_locations_forward_internal_token():
         ), conf.name
         # The shared /validate block forwards the marker (once per server block).
         assert "proxy_set_header X-Registry-Api-Auth $registry_api_auth;" in text, conf.name
+
+
+OPENAPI_NESTED_LOCATION: str = "location {{ROOT_PATH}}/api/openapi-servers/ {"
+
+
+def _nested_openapi_blocks(
+    text: str,
+) -> list[tuple[str, str]]:
+    """(enclosing /api/ block, nested block) for each nested OpenAPI MCP location."""
+    found = []
+    start = 0
+    while (i := text.find("    location {{ROOT_PATH}}/api/ {\n", start)) >= 0:
+        end = text.find("\n    }\n", i)
+        outer = text[i:end]
+        j = outer.find(OPENAPI_NESTED_LOCATION)
+        if j >= 0:
+            found.append((outer[:j], outer[j : outer.find("\n        }", j)]))
+        start = end
+    return found
+
+
+def test_openapi_upload_location_is_nested_in_every_api_block():
+    """The larger body limit for spec uploads lives only in a nested location that
+    inherits the parent's auth wiring. A proxy_set_header of its own would stop
+    that inheritance and drop the header clearing, so it must define none.
+    """
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[3]
+    for name in ("nginx_rev_proxy_http_and_https.conf", "nginx_rev_proxy_http_only.conf"):
+        text = (repo_root / "docker" / name).read_text()
+        blocks = _nested_openapi_blocks(text)
+        assert len(blocks) == text.count("    location {{ROOT_PATH}}/api/ {\n"), name
+        assert len(blocks) == text.count(OPENAPI_NESTED_LOCATION), name
+        for outer, nested in blocks:
+            assert "auth_request /validate;" in outer, name
+            assert "client_max_body_size 8m;" in nested, name
+            assert 'set $registry_api_auth "1";' in nested, name
+            assert "proxy_pass http://127.0.0.1:7860/api/openapi-servers/;" in nested, name
+            for inherited in ("proxy_set_header", "auth_request", "error_page", "limit_req"):
+                assert inherited not in nested, f"{name}: nested block overrides {inherited}"
+        # Every other API route keeps nginx's 1m default.
+        assert text.count("client_max_body_size 8m;") == len(blocks), name
 
 
 def _nginx_size(value: str) -> int:
@@ -3289,3 +3335,22 @@ async def test_scheduler_writes_virtual_mappings_even_when_config_is_unchanged(
     commit.assert_awaited_once()
     write_and_validate.assert_not_called()
     reload_nginx.assert_not_called()
+
+
+def test_validate_skips_the_repeated_body_size_check():
+    """auth_request copies the parent's Content-Length into /validate. Without its
+    own `client_max_body_size 0`, nginx's 1m default turned every larger body that
+    the parent location allows into a 500. The location must stay internal, since
+    the parent location is what enforces the real limit.
+    """
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[3]
+    for name in ("nginx_rev_proxy_http_and_https.conf", "nginx_rev_proxy_http_only.conf"):
+        text = (repo_root / "docker" / name).read_text()
+        blocks = text.split("    location = /validate {\n")[1:]
+        assert blocks, name
+        for block in blocks:
+            body = block[: block.find("\n    }\n")]
+            assert body.lstrip().startswith("internal;"), name
+            assert "client_max_body_size 0;" in body, name

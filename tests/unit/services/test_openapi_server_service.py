@@ -377,6 +377,153 @@ class TestUpdateAndDelete:
         assert info.value.status_code == 404
 
 
+UPLOADED_YAML: str = """openapi: 3.0.3
+info: {title: Uploaded, version: "2"}
+paths:
+  /things:
+    get: {operationId: listThings}
+"""
+
+
+def _upload_request(
+    **overrides,
+) -> OpenApiTargetCreateRequest:
+    body = {
+        "name": "petstore",
+        "spec_content": UPLOADED_YAML,
+        "base_url": "https://petstore.example.com/api/v3",
+    }
+    body.update(overrides)
+    return OpenApiTargetCreateRequest(**body)
+
+
+class TestUploadedSpec:
+    """A spec sent in spec_content skips only the fetch; every other check still runs."""
+
+    async def test_upload_stores_spec_without_fetching(self, env):
+        servers, specs, mocks = env
+        await _create()
+
+        _updated, target, _warnings, _status = await service.add_target(
+            "weather-apis", _upload_request(), ADMIN
+        )
+
+        stored = servers.docs["weather-apis"].targets[0]
+        assert (stored.spec_source, stored.spec_url, stored.spec_title) == (
+            "upload",
+            None,
+            "Uploaded",
+        )
+        assert specs.docs[stored.spec_sha256].content == UPLOADED_YAML
+        mocks["fetch"].assert_not_awaited()
+        assert mocks["preview"].call_args.args[0]["spec"]["info"]["title"] == "Uploaded"
+
+    @pytest.mark.parametrize(
+        ("content", "code"),
+        [
+            ('{"swagger": "2.0", "paths": {"/a": {}}}', "spec_invalid"),
+            (
+                "openapi: 3.0.0\npaths: {/a: {get: {}}}\nx: {$ref: 'http://169.254.169.254/'}\n",
+                "spec_invalid",
+            ),
+            ("   ", "spec_invalid"),
+        ],
+    )
+    async def test_upload_runs_the_same_spec_checks(self, env, content, code):
+        servers, specs, _mocks = env
+        await _create()
+
+        with pytest.raises(OpenApiServerError) as info:
+            await service.add_target("weather-apis", _upload_request(spec_content=content), ADMIN)
+
+        assert info.value.code == code
+        assert servers.docs["weather-apis"].targets == [] and specs.docs == {}
+
+    async def test_upload_over_byte_cap_is_spec_too_large(self, env, monkeypatch):
+        await _create()
+        monkeypatch.setattr(service.settings, "openapi_mcp_spec_max_bytes", 64)
+
+        with pytest.raises(OpenApiServerError) as info:
+            await service.add_target("weather-apis", _upload_request(), ADMIN)
+
+        assert info.value.code == "spec_too_large"
+
+    async def test_upload_still_checks_tool_count(self, env, monkeypatch):
+        _servers, _specs, mocks = env
+        await _create()
+        mocks["preview"].return_value = {"tools": ["a", "b", "c"], "tags": {}, "warnings": []}
+        monkeypatch.setattr(service.settings, "openapi_mcp_max_tools_per_target", 2)
+
+        with pytest.raises(OpenApiServerError) as info:
+            await service.add_target("weather-apis", _upload_request(), ADMIN)
+
+        assert info.value.code == "too_many_tools"
+
+    async def test_patch_replaces_spec_and_drops_old_one(self, env):
+        servers, specs, _mocks = env
+        await _create()
+        await service.add_target("weather-apis", _target_request(), ADMIN)
+        old_sha = servers.docs["weather-apis"].targets[0].spec_sha256
+
+        await service.update_target(
+            "weather-apis",
+            "petstore",
+            OpenApiTargetUpdateRequest(spec_content=UPLOADED_YAML),
+            ADMIN,
+        )
+
+        stored = servers.docs["weather-apis"].targets[0]
+        assert (stored.spec_source, stored.spec_url) == ("upload", None)
+        assert old_sha not in specs.docs and stored.spec_sha256 in specs.docs
+
+    async def test_refresh_of_uploaded_spec_is_conflict(self, env):
+        _servers, _specs, mocks = env
+        await _create()
+        await service.add_target("weather-apis", _upload_request(), ADMIN)
+
+        with pytest.raises(OpenApiServerError) as info:
+            await service.update_target(
+                "weather-apis", "petstore", OpenApiTargetUpdateRequest(refresh_spec=True), ADMIN
+            )
+
+        assert (info.value.status_code, info.value.code) == (409, "spec_url_missing")
+        mocks["fetch"].assert_not_awaited()
+
+    async def test_patch_spec_url_switches_upload_back_to_fetching(self, env):
+        servers, _specs, mocks = env
+        await _create()
+        await service.add_target("weather-apis", _upload_request(), ADMIN)
+
+        await service.update_target(
+            "weather-apis",
+            "petstore",
+            OpenApiTargetUpdateRequest(spec_url="https://petstore.example.com/v2.json"),
+            ADMIN,
+        )
+
+        stored = servers.docs["weather-apis"].targets[0]
+        assert (stored.spec_source, stored.spec_url) == (
+            "url",
+            "https://petstore.example.com/v2.json",
+        )
+        mocks["fetch"].assert_awaited_once()
+
+
+class TestSpecSourceValidation:
+    def test_create_needs_exactly_one_source(self):
+        with pytest.raises(ValueError, match="exactly one"):
+            _target_request(spec_content=UPLOADED_YAML)
+        with pytest.raises(ValueError, match="exactly one"):
+            OpenApiTargetCreateRequest(name="petstore", base_url="https://a.example.com")
+
+    def test_update_takes_at_most_one_spec_change(self):
+        with pytest.raises(ValueError, match="at most one"):
+            OpenApiTargetUpdateRequest(spec_content=UPLOADED_YAML, refresh_spec=True)
+
+    def test_stored_target_without_source_reads_as_url(self):
+        assert service.OpenApiTarget.model_fields["spec_source"].default == "url"
+
+
 async def test_push_and_refresh_reports_pending_past_budget(env, monkeypatch):
     import asyncio
 

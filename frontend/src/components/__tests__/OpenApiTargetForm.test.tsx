@@ -369,3 +369,84 @@ describe('OpenApiTargetForm per-user credentials', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(/egress auth, which is turned off/);
   });
 });
+
+
+describe('OpenApiTargetForm spec upload', () => {
+  const SPEC_TEXT = '{"openapi": "3.0.3", "info": {"title": "Up", "version": "1"}, "paths": {"/a": {}}}';
+
+  function _chooseFile(text: string = SPEC_TEXT, name: string = 'spec.json') {
+    const file = new File([text], name, { type: 'application/json' });
+    fireEvent.change(screen.getByTestId('openapi-target-spec-file'), { target: { files: [file] } });
+  }
+
+  it('sends the file text as spec_content and no spec_url', async () => {
+    mockedAxios.post.mockResolvedValue({ data: { name: 'petstore', sync_status: 'applied' } });
+    _renderCreate();
+    fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: 'petstore' } });
+    fireEvent.click(screen.getByLabelText('Upload a file'));
+    _chooseFile();
+    await screen.findByTestId('openapi-target-spec-file-name');
+    fireEvent.change(screen.getByLabelText(/Base URL/), {
+      target: { value: 'https://petstore.example.com/api' },
+    });
+
+    _submit();
+
+    await waitFor(() => expect(mockedAxios.post).toHaveBeenCalled());
+    const body = mockedAxios.post.mock.calls[0][1] as Record<string, unknown>;
+    expect(body.spec_content).toBe(SPEC_TEXT);
+    expect(body).not.toHaveProperty('spec_url');
+  });
+
+  it('asks for a file when upload is chosen and none is picked', async () => {
+    _renderCreate();
+    fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: 'petstore' } });
+    fireEvent.click(screen.getByLabelText('Upload a file'));
+    fireEvent.change(screen.getByLabelText(/Base URL/), {
+      target: { value: 'https://petstore.example.com/api' },
+    });
+
+    _submit();
+
+    expect(await screen.findByTestId('openapi-target-error-spec_url')).toHaveTextContent('Choose a JSON or YAML');
+    expect(mockedAxios.post).not.toHaveBeenCalled();
+  });
+
+  it('refuses a file over the gateway limit without reading it', async () => {
+    _renderCreate();
+    fireEvent.click(screen.getByLabelText('Upload a file'));
+    const big = new File(['x'], 'big.json');
+    Object.defineProperty(big, 'size', { value: 9 * 1024 * 1024 });
+    fireEvent.change(screen.getByTestId('openapi-target-spec-file'), { target: { files: [big] } });
+
+    expect(await screen.findByTestId('openapi-target-error-spec_url')).toHaveTextContent('larger than 8 MiB');
+  });
+
+  it('replaces the spec on edit only when a file is chosen', async () => {
+    mockedAxios.patch.mockResolvedValue({ data: { name: 'petstore', sync_status: 'applied' } });
+    render(
+      <OpenApiTargetForm serverSlug="weather-apis" intent="edit" target={_target()}
+        onSaved={jest.fn()} onCancel={jest.fn()} />,
+    );
+    _chooseFile();
+    await screen.findByTestId('openapi-target-spec-file-name');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() => expect(mockedAxios.patch).toHaveBeenCalled());
+    const body = mockedAxios.patch.mock.calls[0][1] as Record<string, unknown>;
+    expect(body.spec_content).toBe(SPEC_TEXT);
+    expect(body).not.toHaveProperty('refresh_spec');
+  });
+
+  it('shows no spec URL field for a target with an uploaded spec', () => {
+    render(
+      <OpenApiTargetForm serverSlug="weather-apis" intent="edit"
+        target={_target({ spec_url: undefined, spec_source: 'upload' })}
+        onSaved={jest.fn()} onCancel={jest.fn()} />,
+    );
+
+    expect(screen.queryByLabelText(/Spec URL/)).not.toBeInTheDocument();
+    expect(screen.getByText('This target uses an uploaded spec.')).toBeInTheDocument();
+  });
+});

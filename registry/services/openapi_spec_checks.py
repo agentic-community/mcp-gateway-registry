@@ -132,6 +132,29 @@ async def fetch_spec_bytes(
     return raw, content_type
 
 
+def uploaded_spec_bytes(
+    spec_content: str,
+    max_bytes: int,
+) -> bytes:
+    """Turn an uploaded spec into the bytes parse_spec checks, under the same size cap.
+
+    An upload skips only the fetch: parse_spec, the dry-run conversion and the
+    tool checks run on it exactly as on a fetched spec.
+    """
+    try:
+        raw = spec_content.encode("utf-8", errors="strict")
+    except UnicodeEncodeError as e:
+        raise unprocessable("spec_invalid", "spec_content is not valid UTF-8 text") from e
+    if len(raw) > max_bytes:
+        raise unprocessable(
+            "spec_too_large",
+            f"the spec is larger than OPENAPI_MCP_SPEC_MAX_BYTES ({max_bytes} bytes)",
+        )
+    if not raw.strip():
+        raise unprocessable("spec_invalid", "spec_content is empty")
+    return raw
+
+
 async def _fetch(
     spec_url: str,
     max_bytes: int,
