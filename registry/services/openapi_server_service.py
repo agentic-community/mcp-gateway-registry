@@ -379,23 +379,46 @@ def _stored_auth(
     )
 
 
-async def _admit_spec(
-    spec_url: str,
+async def _spec_bytes(
+    spec_url: str | None,
+    spec_content: str | None,
+) -> tuple[bytes, str]:
+    """The spec's bytes and content type, fetched from spec_url or taken from an upload."""
+    max_bytes = settings.openapi_mcp_spec_max_bytes
+    if spec_content is not None:
+        return openapi_spec_checks.uploaded_spec_bytes(spec_content, max_bytes), ""
+    if spec_url is None:
+        raise OpenApiServerError(422, "spec_invalid", "send spec_url or spec_content")
+    openapi_spec_checks.validate_target_url(spec_url, "spec_url")
+    return await openapi_spec_checks.fetch_spec_bytes(spec_url, max_bytes)
+
+
+async def _preview_checked(
+    spec: dict[str, Any],
     target_name: str,
     options: dict[str, Any],
-) -> tuple[openapi_spec_checks.FetchedSpec, dict[str, Any]]:
-    """Fetch, parse and preview a spec. Raises on any failure; stores nothing."""
-    raw, content_type = await openapi_spec_checks.fetch_spec_bytes(
-        spec_url, settings.openapi_mcp_spec_max_bytes
-    )
-    fetched = openapi_spec_checks.parse_spec(raw, content_type)
+) -> dict[str, Any]:
+    """Dry-run the conversion and enforce the tool count and tool name checks."""
     preview = await openapi_mcp_client.preview(
-        {"spec": fetched.spec, "target_name": target_name, **options}
+        {"spec": spec, "target_name": target_name, **options}
     )
     openapi_spec_checks.check_tool_count(
         preview["tools"], preview.get("tags", {}), settings.openapi_mcp_max_tools_per_target
     )
     openapi_spec_checks.check_tool_names(preview["tools"])
+    return preview
+
+
+async def _admit_spec(
+    spec_url: str | None,
+    spec_content: str | None,
+    target_name: str,
+    options: dict[str, Any],
+) -> tuple[openapi_spec_checks.FetchedSpec, dict[str, Any]]:
+    """Fetch or take, parse and preview a spec. Raises on any failure; stores nothing."""
+    raw, content_type = await _spec_bytes(spec_url, spec_content)
+    fetched = openapi_spec_checks.parse_spec(raw, content_type)
+    preview = await _preview_checked(fetched.spec, target_name, options)
     return fetched, preview
 
 
@@ -449,16 +472,17 @@ async def add_target(
     _check_target_slot(server, request.name)
     _require_egress_for(request.auth)
     openapi_spec_checks.validate_target_url(str(request.base_url), "base_url")
-    openapi_spec_checks.validate_target_url(str(request.spec_url), "spec_url")
+    spec_url = str(request.spec_url) if request.spec_url is not None else None
     fetched, preview = await _admit_spec(
-        str(request.spec_url), request.name, _tool_options(request)
+        spec_url, request.spec_content, request.name, _tool_options(request)
     )
     await _store_spec(fetched)
     now = openapi_spec_checks.now_utc()
     target = OpenApiTarget(
         name=request.name,
         description=request.description,
-        spec_url=str(request.spec_url),
+        spec_url=spec_url,
+        spec_source="url" if spec_url is not None else "upload",
         spec_sha256=fetched.sha256,
         spec_title=fetched.title,
         spec_version=fetched.version,
@@ -503,7 +527,10 @@ def _apply_target_update(
     target: OpenApiTarget,
     request: OpenApiTargetUpdateRequest,
 ) -> None:
-    fields = request.model_dump(exclude_none=True, exclude={"auth", "refresh_spec", "base_url"})
+    fields = request.model_dump(
+        exclude_none=True,
+        exclude={"auth", "refresh_spec", "base_url", "spec_url", "spec_content"},
+    )
     for key, value in fields.items():
         setattr(target, key, value)
     if request.base_url is not None:
@@ -511,6 +538,46 @@ def _apply_target_update(
     if request.auth is not None:
         target.auth = _stored_auth(request.auth)
     target.updated_at = openapi_spec_checks.now_utc()
+
+
+def _changes_spec(
+    request: OpenApiTargetUpdateRequest,
+) -> bool:
+    return request.refresh_spec or request.spec_url is not None or request.spec_content is not None
+
+
+def _apply_spec_source(
+    candidate: OpenApiTarget,
+    request: OpenApiTargetUpdateRequest,
+) -> None:
+    """Record where the new spec comes from. Refresh needs a stored URL to fetch from."""
+    if request.spec_content is not None:
+        candidate.spec_url, candidate.spec_source = None, "upload"
+    elif request.spec_url is not None:
+        candidate.spec_url, candidate.spec_source = str(request.spec_url), "url"
+    elif candidate.spec_url is None:
+        raise conflict(
+            "spec_url_missing",
+            f"target '{candidate.name}' has an uploaded spec, so there is no URL to refresh "
+            "from; send the new spec in spec_content, or a spec_url",
+        )
+
+
+async def _preview_stored_spec(
+    sha256: str,
+    target_name: str,
+    options: dict[str, Any],
+) -> dict[str, Any]:
+    """Re-run the tool checks on the spec already stored, for changes that keep it."""
+    spec = (await get_openapi_spec_repository().get_many({sha256})).get(sha256)
+    if spec is None:
+        raise OpenApiServerError(
+            409,
+            "spec_missing",
+            "the stored spec is missing; send refresh_spec: true or a new spec_content",
+        )
+    parsed = openapi_spec_checks.parse_spec(spec.content.encode("utf-8"))
+    return await _preview_checked(parsed.spec, target_name, options)
 
 
 async def update_target(
@@ -526,26 +593,16 @@ async def update_target(
     old_sha = candidate.spec_sha256
     _apply_target_update(candidate, request)
     openapi_spec_checks.validate_target_url(candidate.base_url, "base_url")
-    if request.refresh_spec:
-        openapi_spec_checks.validate_target_url(candidate.spec_url, "spec_url")
-        fetched, preview = await _admit_spec(candidate.spec_url, name, _tool_options(candidate))
+    if _changes_spec(request):
+        _apply_spec_source(candidate, request)
+        fetched, preview = await _admit_spec(
+            candidate.spec_url, request.spec_content, name, _tool_options(candidate)
+        )
         await _store_spec(fetched)
         candidate.spec_sha256, candidate.spec_title = fetched.sha256, fetched.title
         candidate.spec_version, candidate.openapi_version = fetched.version, fetched.openapi_version
     else:
-        spec = (await get_openapi_spec_repository().get_many({old_sha})).get(old_sha)
-        if spec is None:
-            raise OpenApiServerError(
-                409, "spec_missing", "the stored spec is missing; send refresh_spec: true"
-            )
-        parsed = openapi_spec_checks.parse_spec(spec.content.encode("utf-8"))
-        preview = await openapi_mcp_client.preview(
-            {"spec": parsed.spec, "target_name": name, **_tool_options(candidate)}
-        )
-        openapi_spec_checks.check_tool_count(
-            preview["tools"], preview.get("tags", {}), settings.openapi_mcp_max_tools_per_target
-        )
-        openapi_spec_checks.check_tool_names(preview["tools"])
+        preview = await _preview_stored_spec(old_sha, name, _tool_options(candidate))
     candidate.tool_names = preview["tools"]
 
     def _change(stored: OpenApiServer) -> None:

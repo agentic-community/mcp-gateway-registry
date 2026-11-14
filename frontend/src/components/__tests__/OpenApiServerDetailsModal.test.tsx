@@ -128,6 +128,15 @@ describe('OpenApiServerDetailsModal rendering', () => {
     expect(screen.getByTestId('openapi-credential-set-petstore')).toHaveTextContent('yes');
   });
 
+  it('offers Refresh spec only for a target fetched from a URL', async () => {
+    const server = _server();
+    server.targets.push({ ...server.targets[0], name: 'uploaded', spec_source: 'upload' });
+    mockedAxios.get.mockResolvedValue({ data: server });
+    await _renderModal();
+
+    expect(screen.getAllByRole('button', { name: 'Refresh spec' })).toHaveLength(1);
+  });
+
   it('renders spec titles as plain text, not HTML', async () => {
     const server = _server();
     server.targets[0].spec_title = '<img src=x onerror="alert(1)">Evil';

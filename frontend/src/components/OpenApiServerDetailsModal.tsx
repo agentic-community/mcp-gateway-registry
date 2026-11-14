@@ -110,6 +110,11 @@ const _TargetToolList: React.FC<{ target: OpenApiTarget }> = ({ target }) => {
           </SafeLink>
         </p>
       )}
+      {target.spec_source === 'upload' && (
+        <p className="text-xs text-fg-muted">
+          Spec: uploaded{target.spec_title ? ` (${target.spec_title})` : ''}. Use Edit to upload a new version.
+        </p>
+      )}
       {target.description && <p className="text-xs text-fg-muted">{target.description}</p>}
       <input type="text" value={filter} onChange={(e) => setFilter(e.target.value)}
         placeholder="Filter tools" aria-label={`Filter tools of ${target.name}`}
@@ -175,9 +180,11 @@ const _TargetRow: React.FC<TargetRowProps> = (props) => {
               Rotate credential
             </button>
           )}
-          <button type="button" className={actionClass} onClick={props.onRefresh} disabled={props.busy}>
-            Refresh spec
-          </button>
+          {target.spec_source !== 'upload' && (
+            <button type="button" className={actionClass} onClick={props.onRefresh} disabled={props.busy}>
+              Refresh spec
+            </button>
+          )}
           <button type="button" onClick={props.onDelete} disabled={props.busy}
             className="px-2 py-1 text-xs font-medium rounded text-danger-700 dark:text-danger-300 hover:bg-danger-50 dark:hover:bg-danger-900/20">
             Delete
