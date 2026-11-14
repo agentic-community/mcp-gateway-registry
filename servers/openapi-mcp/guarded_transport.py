@@ -8,8 +8,13 @@ under ``PROXY_PROFILE``, and copies the response back, reading at most
 pinning and the metadata-address block all stay in ``url_guard.py``.
 """
 
+import base64
 import logging
 from dataclasses import dataclass
+from urllib.parse import (
+    quote,
+    quote_plus,
+)
 
 import httpx
 import httpx2
@@ -36,6 +41,13 @@ class BackendRequestFailedError(httpx2.RequestError):
 class MissingUserCredentialError(httpx2.RequestError):
     """A per-user target was called without the caller's key."""
 
+
+# Some APIs echo the caller's credential back (api.nasa.gov puts api_key=<key>
+# into every "links" URL, even when the key arrived in a header). A credential
+# must never reach the agent, so every echo of it is replaced in the response.
+REDACTED: bytes = b"[REDACTED]"
+# Shorter values are not redacted: they would match ordinary text everywhere.
+MIN_REDACT_CHARS: int = 6
 
 # Key under which the dispatcher stores the verified per-user keys on the ASGI
 # scope. FastMCP rebuilds the request from the scope inside the tool call.
@@ -73,11 +85,42 @@ def _same_destination(
         return False
 
 
-def _user_auth_header(
+def secret_forms(
+    *secrets: str | None,
+    basic_username: str | None = None,
+) -> tuple[bytes, ...]:
+    """Every form in which a backend is likely to echo a credential.
+
+    The raw value, its URL-encoded forms, and for basic auth the base64 of
+    "user:password". Longest first, so a longer form is replaced before a
+    shorter one inside it.
+    """
+    forms: set[str] = set()
+    for secret in secrets:
+        if not secret or len(secret) < MIN_REDACT_CHARS:
+            continue
+        forms.update({secret, quote(secret, safe=""), quote_plus(secret)})
+        if basic_username is not None:
+            forms.add(base64.b64encode(f"{basic_username}:{secret}".encode()).decode())
+    return tuple(sorted((f.encode() for f in forms), key=len, reverse=True))
+
+
+def redact(
+    data: bytes,
+    forms: tuple[bytes, ...],
+) -> bytes:
+    """Replace every form of a credential in a response body or header value."""
+    for form in forms:
+        if form in data:
+            data = data.replace(form, REDACTED)
+    return data
+
+
+def _user_key(
     per_user: PerUserAuth,
     request: httpx2.Request,
-) -> tuple[str, str]:
-    """The (header, value) carrying the caller's key. Fails closed when there is none."""
+) -> str:
+    """The caller's key for this per-user target. Fails closed when there is none."""
     entry = _request_credentials().get(per_user.target_name)
     if not entry or not _same_destination(entry.get("base_url", ""), per_user.base_url):
         raise MissingUserCredentialError(
@@ -85,9 +128,17 @@ def _user_auth_header(
             "registry (Connected Accounts, or the server's details), then call the tool again.",
             request=request,
         )
+    return entry["key"]
+
+
+def _user_auth_header(
+    per_user: PerUserAuth,
+    key: str,
+) -> tuple[str, str]:
+    """The (header, value) carrying the caller's key."""
     if per_user.scheme == "bearer":
-        return "Authorization", f"Bearer {entry['key']}"
-    return per_user.header_name or "X-API-Key", entry["key"]
+        return "Authorization", f"Bearer {key}"
+    return per_user.header_name or "X-API-Key", key
 
 
 async def _read_capped(
@@ -133,10 +184,12 @@ class GuardedHttpx2Transport(httpx2.AsyncBaseTransport):
         self,
         max_response_bytes: int,
         per_user: PerUserAuth | None = None,
+        shared_secret_forms: tuple[bytes, ...] = (),
     ) -> None:
         self._inner = url_guard.GuardedAsyncTransport(guard_profile=url_guard.PROXY_PROFILE)
         self._max_response_bytes = max_response_bytes
         self._per_user = per_user
+        self._shared_secret_forms = shared_secret_forms
 
     async def handle_async_request(
         self,
@@ -144,9 +197,12 @@ class GuardedHttpx2Transport(httpx2.AsyncBaseTransport):
     ) -> httpx2.Response:
         body = await request.aread()
         inner_request = _to_httpx_request(request, body)
+        forms = self._shared_secret_forms
         if self._per_user is not None:
-            name, value = _user_auth_header(self._per_user, request)
+            key = _user_key(self._per_user, request)
+            name, value = _user_auth_header(self._per_user, key)
             inner_request.headers[name] = value
+            forms = secret_forms(key)
         try:
             inner_response = await self._inner.handle_async_request(inner_request)
         except UrlValidationError as e:
@@ -163,9 +219,11 @@ class GuardedHttpx2Transport(httpx2.AsyncBaseTransport):
                 f"backend request failed ({type(e).__name__})", request=request
             ) from e
 
-        content = await _read_capped(inner_response, self._max_response_bytes, request)
+        content = redact(
+            await _read_capped(inner_response, self._max_response_bytes, request), forms
+        )
         headers = [
-            (k, v)
+            (k, redact(v, forms))
             for k, v in inner_response.headers.raw
             if k.lower() not in (b"content-encoding", b"transfer-encoding", b"content-length")
         ]

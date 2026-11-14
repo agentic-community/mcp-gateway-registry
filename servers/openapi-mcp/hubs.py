@@ -25,6 +25,7 @@ from fastmcp import FastMCP
 from guarded_transport import (
     GuardedHttpx2Transport,
     PerUserAuth,
+    secret_forms,
 )
 from models import (
     HubServerState,
@@ -95,15 +96,24 @@ def _backend_client(
 ) -> httpx2.AsyncClient:
     """An httpx2 client for one target, routed through the SSRF guard."""
     per_user = None
+    shared_forms: tuple[bytes, ...] = ()
     if target.auth_credential_mode == "per_user":
         per_user = PerUserAuth(
             target.name, target.auth_scheme, target.auth_header_name, target.base_url
+        )
+    elif target.auth_credential is not None:
+        # A shared key echoed by the backend would reach every caller.
+        shared_forms = secret_forms(
+            target.auth_credential.get_secret_value(),
+            basic_username=(target.auth_username or "") if target.auth_scheme == "basic" else None,
         )
     return httpx2.AsyncClient(
         base_url=target.base_url,
         timeout=settings.openapi_mcp_backend_timeout_seconds,
         transport=GuardedHttpx2Transport(
-            max_response_bytes=settings.openapi_mcp_max_response_bytes, per_user=per_user
+            max_response_bytes=settings.openapi_mcp_max_response_bytes,
+            per_user=per_user,
+            shared_secret_forms=shared_forms,
         ),
         follow_redirects=False,
         **_auth_client_kwargs(target),
