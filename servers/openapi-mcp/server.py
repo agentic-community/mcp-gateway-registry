@@ -24,6 +24,7 @@ from conversion import (
     preview,
 )
 from guarded_transport import USER_CREDENTIALS_SCOPE_KEY
+from logging_setup import setup_container_logging
 from models import (
     ApplyResponse,
     HubServerState,
@@ -292,8 +293,12 @@ Example usage:
 
 def main() -> None:
     args = _parse_args()
+    log_file = setup_container_logging(settings)
     if args.debug:
         logging.getLogger().setLevel(logging.DEBUG)
+        for handler in logging.getLogger().handlers:
+            handler.setLevel(logging.DEBUG)
+    logger.info(f"Logging to the console and {log_file or 'no file'}")
     _validate_startup()
     _configure_guard()
     config = settings.model_dump(exclude={"openapi_mcp_sync_secret"})

@@ -2468,6 +2468,12 @@ variable "openapi_mcp_extra_env" {
         "OPENAPI_MCP_BACKEND_TIMEOUT_SECONDS",
         "OPENAPI_MCP_MAX_RESPONSE_BYTES",
         "OPENAPI_MCP_CONVERSION_TIMEOUT_SECONDS",
+        "APP_LOG_DIR",
+        "APP_LOG_FILE_FORMAT",
+        "APP_LOG_CONSOLE_FORMAT",
+        "APP_LOG_LEVEL",
+        "APP_LOG_MAX_BYTES",
+        "APP_LOG_BACKUP_COUNT",
         "HOST",
         "PORT",
         "BUILD_VERSION",
@@ -2483,6 +2489,6 @@ variable "openapi_mcp_extra_env" {
         "NO_PROXY",
       ], upper(trimspace(entry.name)))
     ])
-    error_message = "openapi_mcp_extra_env must not override Terraform-managed variables (the OPENAPI_MCP_* container settings, HOST, PORT, BUILD_VERSION, the SSRF guard variables, or the forward-proxy variables, which come from registry_extra_env)."
+    error_message = "openapi_mcp_extra_env must not override Terraform-managed variables (the OPENAPI_MCP_* container settings, the APP_LOG_* settings, HOST, PORT, BUILD_VERSION, the SSRF guard variables, or the forward-proxy variables, which come from registry_extra_env)."
   }
 }

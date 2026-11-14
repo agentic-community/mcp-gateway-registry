@@ -21,6 +21,10 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-reco
     && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd -g 1000 appuser && useradd -u 1000 -g appuser appuser
+# File logging target (docs/logging-standard.md). Compose mounts the host
+# directory here; elsewhere the container writes inside its own filesystem.
+RUN mkdir -p /var/log/containers/ai-registry && \
+    chown -R appuser:appuser /var/log/containers/ai-registry
 
 WORKDIR /app
 
@@ -44,6 +48,7 @@ COPY --chown=appuser:appuser registry/exceptions.py               /app/registry/
 COPY --chown=appuser:appuser registry/utils/__init__.py           /app/registry/utils/__init__.py
 COPY --chown=appuser:appuser registry/utils/url_guard.py          /app/registry/utils/url_guard.py
 COPY --chown=appuser:appuser registry/utils/branding_files.py     /app/registry/utils/branding_files.py
+COPY --chown=appuser:appuser registry/utils/logging_setup.py      /app/registry/utils/logging_setup.py
 COPY --chown=appuser:appuser registry/common/__init__.py          /app/registry/common/__init__.py
 COPY --chown=appuser:appuser registry/common/log_redaction.py     /app/registry/common/log_redaction.py
 COPY --chown=appuser:appuser registry/common/secret_key.py        /app/registry/common/secret_key.py
@@ -54,7 +59,7 @@ COPY --chown=appuser:appuser registry/auth/openapi_mcp_sync.py    /app/registry/
 COPY --chown=appuser:appuser servers/openapi-mcp/*.py /app/
 
 # Fail the build if a copied module grew an import the image does not carry.
-RUN .venv/bin/python -c "import server, registry.utils.url_guard, registry.auth.openapi_mcp_sync"
+RUN .venv/bin/python -c "import server, logging_setup, registry.utils.url_guard, registry.auth.openapi_mcp_sync"
 
 ARG BUILD_VERSION="1.0.0"
 ENV BUILD_VERSION=$BUILD_VERSION

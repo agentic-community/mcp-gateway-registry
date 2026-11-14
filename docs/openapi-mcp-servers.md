@@ -133,6 +133,8 @@ The registry's calls to the container carry each target's credential in plain HT
 
 The container runs one replica, because the registry pushes state to one address. With 10 servers of 10 targets each, including one 4.4 MB spec, it peaked at 293 MiB. Turning the feature off leaves stored servers in place without a backend; the registry logs their names at startup. Turn the feature back on, or delete them with it on.
 
+The container logs in the same JSON lines format as the registry, the auth server and mcpgw, with `"service": "openapi-mcp"`, and writes `openapi-mcp.log` under `APP_LOG_DIR` (`/var/log/containers/ai-registry` by default). It reads the same `APP_LOG_*` settings; see [logging-standard.md](logging-standard.md).
+
 Metrics are under `mcpgw_openapi_mcp_*` on the registry's Prometheus endpoint. Alert when `mcpgw_openapi_mcp_state{kind="container_reachable"}` stays at 0 for five minutes.
 
 ## End-to-end test

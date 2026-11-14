@@ -810,6 +810,15 @@ services:
       - EGRESS_HTTP_POOL_MAX_KEEPALIVE=${EGRESS_HTTP_POOL_MAX_KEEPALIVE:-20}
       - EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS=${EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS:-30}
       - EGRESS_HTTP_POOL_CONNECT_RETRIES=${EGRESS_HTTP_POOL_CONNECT_RETRIES:-1}
+      # Application logs, the same knobs as mcpgw (docs/logging-standard.md).
+      - APP_LOG_DIR=${APP_LOG_DIR:-/var/log/containers/ai-registry}
+      - APP_LOG_FILE_FORMAT=${APP_LOG_FILE_FORMAT:-json}
+      - APP_LOG_CONSOLE_FORMAT=${APP_LOG_CONSOLE_FORMAT:-json}
+      - APP_LOG_LEVEL=${APP_LOG_LEVEL:-INFO}
+      - APP_LOG_MAX_BYTES=${APP_LOG_MAX_BYTES:-52428800}
+      - APP_LOG_BACKUP_COUNT=${APP_LOG_BACKUP_COUNT:-5}
+    volumes:
+      - /var/log/containers/ai-registry:/var/log/containers/ai-registry
     env_file:
       - path: ${MCP_EXTRA_ENV_DIR:-./extra_env}/openapi-mcp.env
         required: false

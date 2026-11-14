@@ -25,6 +25,7 @@ All service log files land on the Docker host under
 | registry | `/var/log/containers/ai-registry/registry.log` |
 | auth-server | `/var/log/containers/ai-registry/auth-server.log` |
 | mcpgw (a.k.a. ai-registry-tools) | `/var/log/containers/ai-registry/ai-registry-tools.log` |
+| openapi-mcp | `/var/log/containers/ai-registry/openapi-mcp.log` |
 | nginx access | `/var/log/containers/ai-registry/nginx-access.log` |
 | nginx error | `/var/log/containers/ai-registry/nginx-error.log` |
 
@@ -48,7 +49,7 @@ Placing our files one directory deeper means:
 
 ## Log Format Standard
 
-Python services (registry, auth-server, mcpgw) emit JSON Lines (JSONL) to
+Python services (registry, auth-server, mcpgw, openapi-mcp) emit JSON Lines (JSONL) to
 their `.log` files by default. One JSON object per line, UTF-8 encoded,
 newline terminated.
 
@@ -60,7 +61,7 @@ format so `docker logs <container>` stays skimmable without a JSON parser.
 | Field | Type | Source | Example |
 | --- | --- | --- | --- |
 | `timestamp` | string (ISO 8601 UTC, microsecond precision, with offset) | Python `datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat()` | `"2026-05-09T14:23:45.123456+00:00"` |
-| `service` | string | Fixed per container: `registry`, `auth-server`, `ai-registry-tools` | `"registry"` |
+| `service` | string | Fixed per container: `registry`, `auth-server`, `ai-registry-tools`, `openapi-mcp` | `"registry"` |
 | `level` | string | Python `record.levelname` | `"INFO"` |
 | `logger` | string | Python `record.name` | `"registry.core.config"` |
 | `filename` | string | Python `record.filename` | `"config.py"` |

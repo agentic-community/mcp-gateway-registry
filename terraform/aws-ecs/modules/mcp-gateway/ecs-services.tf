@@ -3043,6 +3043,24 @@ module "ecs_service_openapi_mcp" {
           name  = "OPENAPI_MCP_CONVERSION_TIMEOUT_SECONDS"
           value = tostring(var.openapi_mcp_conversion_timeout_seconds)
         },
+        # Application logs (docs/logging-standard.md), the same four settings
+        # the mcpgw task gets. Read by servers/openapi-mcp/logging_setup.py.
+        {
+          name  = "APP_LOG_DIR"
+          value = var.app_log_dir
+        },
+        {
+          name  = "APP_LOG_FILE_FORMAT"
+          value = var.app_log_file_format
+        },
+        {
+          name  = "APP_LOG_CONSOLE_FORMAT"
+          value = var.app_log_console_format
+        },
+        {
+          name  = "APP_LOG_LEVEL"
+          value = var.app_log_level
+        },
         # SSRF guard: the same values the registry gets, so the guard in this
         # container applies the registry's PROXY_PROFILE policy unchanged.
         {
