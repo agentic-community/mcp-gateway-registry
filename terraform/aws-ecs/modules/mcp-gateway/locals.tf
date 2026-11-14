@@ -21,4 +21,17 @@ locals {
       value = "${header_name}: ${var.embeddings_extra_headers[header_name]}"
     }
   ]
+
+  # OpenAPI MCP servers (issue #2022). The registry (and the nginx inside its
+  # container) reach the openapi-mcp service through this Service Connect name.
+  openapi_mcp_port         = 9876
+  openapi_mcp_internal_url = "http://openapi-mcp:${local.openapi_mcp_port}"
+
+  # The forward-proxy variables are standard ones that operators pass through
+  # registry_extra_env. Copy the same entries into the openapi-mcp task so its
+  # SSRF guard routes egress exactly as the registry's does.
+  openapi_mcp_forward_proxy_env = [
+    for entry in var.registry_extra_env : entry
+    if contains(["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"], upper(trimspace(entry.name)))
+  ]
 }

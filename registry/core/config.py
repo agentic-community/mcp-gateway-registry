@@ -1,3 +1,4 @@
+import ipaddress
 import logging
 import re
 from datetime import UTC
@@ -10,7 +11,10 @@ from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from registry.common.request_origin import normalize_origin
-from registry.common.secret_key import validate_secret_key
+from registry.common.secret_key import (
+    validate_secret_key,
+    validate_signing_secret,
+)
 from registry.common.session_cookie import (
     DEFAULT_SESSION_COOKIE_NAME,
     check_host_prefix_settings,
@@ -485,6 +489,55 @@ class Settings(BaseSettings):
             "(0 = unlimited). Guards against unbounded type creation, each of "
             "which carries its own embedding collection. Enforced at type create."
         ),
+    )
+
+    # OpenAPI MCP servers (issue #2022): REST APIs served as MCP servers by the
+    # openapi-mcp container. See docs/design/openapi-mcp-servers-design.md.
+    openapi_mcp_enabled: bool = Field(
+        default=False,
+        description=(
+            "Serve REST APIs as MCP servers through the openapi-mcp container. "
+            "Requires DEPLOYMENT_MODE=with-gateway and a REGISTRY_MODE that includes "
+            "MCP servers; otherwise the registry turns it off at startup and logs why."
+        ),
+    )
+    openapi_mcp_internal_url: str = Field(
+        default="http://openapi-mcp:9876",
+        description=(
+            "Internal URL of the openapi-mcp container, used by the registry and nginx. "
+            "Its host is reserved in the SSRF guard for OpenAPI MCP servers only."
+        ),
+    )
+    openapi_mcp_sync_secret: str = Field(
+        default="",
+        description=(
+            "Signs registry-to-container sync tokens. Required when the feature is on. "
+            "At least 32 characters, and different from SECRET_KEY."
+        ),
+    )
+    openapi_mcp_max_servers: int = Field(
+        default=10, ge=1, le=100, description="Most OpenAPI MCP servers a deployment can have."
+    )
+    openapi_mcp_max_targets_per_server: int = Field(
+        default=10, ge=1, le=50, description="Most REST targets on one OpenAPI MCP server."
+    )
+    openapi_mcp_max_tools_per_target: int = Field(
+        default=100,
+        ge=1,
+        le=500,
+        description="Most tools one target may produce after its include filters.",
+    )
+    openapi_mcp_spec_max_bytes: int = Field(
+        default=5_242_880,
+        ge=1024,
+        le=20_971_520,
+        description="Largest OpenAPI spec the registry will fetch, in bytes.",
+    )
+    openapi_mcp_reconcile_interval_seconds: int = Field(
+        default=60,
+        ge=10,
+        le=3600,
+        description="Seconds between full reconcile passes against the container.",
     )
 
     # LiteLLM-specific settings (only used when embeddings_provider='litellm')
@@ -2554,6 +2607,7 @@ class Settings(BaseSettings):
             self.egress_credential_encryption_key
         )
         self._validate_egress_auth_config()
+        self._validate_openapi_mcp_config()
         self._validate_embeddings_extra_header_slots()
         self._validate_embeddings_model_name()
         # The auth server reads these same fields, so both services set and read
@@ -2719,6 +2773,42 @@ class Settings(BaseSettings):
                 'print(secrets.token_urlsafe(32))"`).'
             )
         return stripped
+
+    def _validate_openapi_mcp_config(self) -> None:
+        """URL checks for OpenAPI MCP servers. Runs only when the feature is on.
+
+        The auth server shares this class and also sets OPENAPI_MCP_ENABLED (its
+        mcp-proxy hop reaches the container for per-user credentials), but it
+        must never hold the sync secret. So the secret is checked in
+        apply_openapi_mcp_mode_gate, which only the registry runs.
+        """
+        if not self.openapi_mcp_enabled:
+            return
+        parsed = urlparse(self.openapi_mcp_internal_url)
+        if (
+            parsed.scheme not in ("http", "https")
+            or not parsed.hostname
+            or parsed.path not in ("", "/")
+            or parsed.query
+            or parsed.fragment
+            or parsed.username
+            or parsed.password
+        ):
+            raise ValueError(
+                "OPENAPI_MCP_INTERNAL_URL must be an http or https origin with a host and "
+                f"no path, query, fragment or credentials (for example "
+                f"http://openapi-mcp:9876); got {self.openapi_mcp_internal_url!r}."
+            )
+        try:
+            ipaddress.ip_address(parsed.hostname)
+        except ValueError:
+            pass
+        else:
+            raise ValueError(
+                "OPENAPI_MCP_INTERNAL_URL must name the container by hostname, not an IP "
+                "address: the SSRF guard reserves that hostname for OpenAPI MCP servers."
+            )
+        self.openapi_mcp_internal_url = self.openapi_mcp_internal_url.rstrip("/")
 
     def _validate_egress_auth_config(self) -> None:
         """Cross-field startup checks for the egress credential vault.
@@ -3019,6 +3109,52 @@ def _validate_mode_combination(
         return (DeploymentMode.REGISTRY_ONLY, RegistryMode.SKILLS_ONLY, True)
 
     return (deployment_mode, registry_mode, False)
+
+
+def _validate_openapi_mcp_sync_secret(
+    settings_instance: "Settings",
+) -> None:
+    """Fail startup on a missing or weak sync secret, or one equal to SECRET_KEY. Registry only."""
+    secret = validate_signing_secret(
+        settings_instance.openapi_mcp_sync_secret, "OPENAPI_MCP_SYNC_SECRET"
+    )
+    if secret == settings_instance.secret_key:
+        raise ValueError(
+            "OPENAPI_MCP_SYNC_SECRET must differ from SECRET_KEY: the openapi-mcp "
+            "container holds the sync secret and must never hold the master key."
+        )
+    object.__setattr__(settings_instance, "openapi_mcp_sync_secret", secret)
+
+
+def apply_openapi_mcp_mode_gate(
+    settings_instance: "Settings",
+) -> bool:
+    """Turn OpenAPI MCP servers off when the deployment cannot serve them.
+
+    The feature needs the gateway (nginx routes agent traffic to the container)
+    and a registry mode that includes MCP servers. Uses the corrected mode
+    combination, because router registration runs before the lifespan applies
+    the correction.
+
+    Returns:
+        True when the feature stays on, False when it is off.
+    """
+    if not settings_instance.openapi_mcp_enabled:
+        return False
+    deployment_mode, registry_mode, _ = _validate_mode_combination(
+        settings_instance.deployment_mode, settings_instance.registry_mode
+    )
+    reason = None
+    if deployment_mode == DeploymentMode.REGISTRY_ONLY:
+        reason = "DEPLOYMENT_MODE is registry-only, so no gateway routes to the container"
+    elif registry_mode not in (RegistryMode.FULL, RegistryMode.MCP_SERVERS_ONLY):
+        reason = f"REGISTRY_MODE={registry_mode.value} turns MCP servers off"
+    if reason is None:
+        _validate_openapi_mcp_sync_secret(settings_instance)
+        return True
+    logger.warning(f"OPENAPI_MCP_ENABLED=true ignored: {reason}. OpenAPI MCP servers are off.")
+    object.__setattr__(settings_instance, "openapi_mcp_enabled", False)
+    return False
 
 
 def _print_config_warning_banner(

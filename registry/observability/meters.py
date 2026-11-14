@@ -757,6 +757,61 @@ ard_trust_mismatch_total = _meter.create_counter(
 )
 
 
+# OpenAPI MCP servers (issue #2022). Labels carry slugs and error codes,
+# never tool names, so the series count stays bounded by the server and
+# target limits.
+openapi_mcp_operation_total = _meter.create_counter(
+    name="mcpgw_openapi_mcp_operation_total",
+    description="OpenAPI MCP server and target create/update/delete calls by outcome",
+    unit="1",
+)
+openapi_mcp_operation_duration_ms = _meter.create_histogram(
+    name="mcpgw_openapi_mcp_operation_duration",
+    description="OpenAPI MCP CRUD latency, including spec fetch, push and tool refresh",
+    unit="ms",
+)
+openapi_mcp_spec_fetch_total = _meter.create_counter(
+    name="mcpgw_openapi_mcp_spec_fetch_total",
+    description="OpenAPI spec fetches by result",
+    unit="1",
+)
+openapi_mcp_sync_push_total = _meter.create_counter(
+    name="mcpgw_openapi_mcp_sync_push_total",
+    description="Pushes of server state to the openapi-mcp container by result and trigger",
+    unit="1",
+)
+openapi_mcp_reconcile_drift_total = _meter.create_counter(
+    name="mcpgw_openapi_mcp_reconcile_drift_total",
+    description="Drift the reconciler found between stored and running servers",
+    unit="1",
+)
+
+
+def _openapi_mcp_state_callback(
+    options: Any,
+):
+    """Stored servers and targets (as of the last reconcile pass) and container reachability."""
+    try:
+        from registry.services import openapi_mcp_reconciler as reconciler
+
+        yield metrics.Observation(reconciler.stored_server_count(), {"kind": "servers"})
+        yield metrics.Observation(reconciler.stored_target_count(), {"kind": "targets"})
+        yield metrics.Observation(
+            1 if reconciler.container_reachable() else 0, {"kind": "container_reachable"}
+        )
+    except Exception as exc:  # pragma: no cover - defensive; never break export
+        logger.debug(f"openapi_mcp state callback failed: {exc}")
+        return
+
+
+_meter.create_observable_gauge(
+    name="mcpgw_openapi_mcp_state",
+    callbacks=[_openapi_mcp_state_callback],
+    description="OpenAPI MCP servers: stored servers, stored targets, and container reachability (1 or 0)",
+    unit="1",
+)
+
+
 # =============================================================================
 # Public helpers
 # =============================================================================

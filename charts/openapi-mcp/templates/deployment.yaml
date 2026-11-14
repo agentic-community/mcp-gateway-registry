@@ -1,0 +1,169 @@
+{{- /* Resolve image coordinates: per-service image.* overrides global.image.* when set */ -}}
+{{- $imgRegistry := default .Values.global.image.registry .Values.image.registry }}
+{{- $imgRepository := required "image.repository must be set" .Values.image.repository }}
+{{- $imgTag := default .Values.global.image.tag .Values.image.tag }}
+{{- $imgPullPolicy := default .Values.global.image.pullPolicy .Values.image.pullPolicy }}
+{{- if or (not $imgTag) (eq (toString $imgTag) "latest") }}
+{{- fail "openapi-mcp image tag must be a pinned version (set image.tag or global.image.tag), not empty or \"latest\"" }}
+{{- end }}
+{{- /* One replica only: the registry pushes each server's state to the Service
+       address, so a second pod would miss pushes and serve stale tools. */ -}}
+{{- if ne (int .Values.app.replicas) 1 }}
+{{- fail (printf "openapi-mcp.app.replicas must be 1, got %v. The registry pushes state to one Service address, so a second replica would serve stale tools." .Values.app.replicas) }}
+{{- end }}
+{{- include "openapi-mcp.validateExtraEnv" . -}}
+{{- include "openapi-mcp.validateForwardProxy" . -}}
+{{- include "openapi-mcp.validateCaBundle" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.app.name }}
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    app.kubernetes.io/name: {{ .Values.app.name }}
+    app.kubernetes.io/component: {{ .Values.app.name }}
+spec:
+  replicas: 1
+  # Recreate, so a rollout never runs two pods side by side.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Values.app.name }}
+      app.kubernetes.io/component: {{ .Values.app.name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ .Values.app.name }}
+        app.kubernetes.io/component: {{ .Values.app.name }}
+    spec:
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: {{ .Values.app.name }}
+          image: "{{ $imgRegistry }}/{{ $imgRepository }}:{{ $imgTag }}"
+          imagePullPolicy: {{ $imgPullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          ports:
+            - containerPort: {{ .Values.app.port }}
+              name: http
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          {{- with .Values.extraEnvFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          env:
+            - name: HOST
+              value: {{ .Values.app.bindHost | quote }}
+            - name: PORT
+              value: {{ .Values.app.port | toString | quote }}
+            - name: OPENAPI_MCP_BACKEND_TIMEOUT_SECONDS
+              value: {{ .Values.app.backendTimeoutSeconds | toString | quote }}
+            - name: OPENAPI_MCP_MAX_RESPONSE_BYTES
+              value: {{ .Values.app.maxResponseBytes | int64 | toString | quote }}
+            - name: OPENAPI_MCP_CONVERSION_TIMEOUT_SECONDS
+              value: {{ .Values.app.conversionTimeoutSeconds | toString | quote }}
+            # The sync secret comes from a Secret, never a plain value.
+            - name: OPENAPI_MCP_SYNC_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "openapi-mcp.syncSecretName" . }}
+                  key: OPENAPI_MCP_SYNC_SECRET
+            # SSRF guard: the same values as the registry, so both apply one
+            # policy. global.ssrfAllowedCidrs (stack chart) wins over app.ssrfAllowedCidrs.
+            - name: SSRF_ALLOWED_HOSTS
+              value: {{ .Values.app.ssrfAllowedHosts | default "" | quote }}
+            - name: SSRF_ALLOWED_CIDRS
+              value: {{ .Values.global.ssrfAllowedCidrs | default .Values.app.ssrfAllowedCidrs | default "" | quote }}
+            - name: GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS
+              value: {{ .Values.app.gatewayProxyAllowPrivateTargets | toString | quote }}
+            - name: GITHUB_EXTRA_HOSTS
+              value: {{ .Values.app.githubExtraHosts | default "" | quote }}
+            - name: EGRESS_OAUTH_TRUSTED_IDP_HOSTS
+              value: {{ .Values.app.egressOauthTrustedIdpHosts | default "" | quote }}
+            - name: EGRESS_HTTP_POOL_MAX_CONNECTIONS
+              value: {{ .Values.app.httpPoolMaxConnections | toString | quote }}
+            - name: EGRESS_HTTP_POOL_MAX_KEEPALIVE
+              value: {{ .Values.app.httpPoolMaxKeepalive | toString | quote }}
+            - name: EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS
+              value: {{ .Values.app.httpPoolKeepaliveExpirySeconds | toString | quote }}
+            - name: EGRESS_HTTP_POOL_CONNECT_RETRIES
+              value: {{ .Values.app.httpPoolConnectRetries | toString | quote }}
+            # Forward-proxy egress (issue #1832). HTTP_PROXY, HTTPS_PROXY and
+            # NO_PROXY go in extraEnv, as on the registry.
+            - name: EGRESS_FORWARD_PROXY_ENABLED
+              value: {{ .Values.app.egressForwardProxyEnabled | toString | quote }}
+            - name: EGRESS_FORWARD_PROXY_CA_BUNDLE
+              {{- if .Values.caBundle.enabled }}
+              value: {{ printf "%s/%s" (trimSuffix "/" .Values.caBundle.mountPath) .Values.caBundle.key | quote }}
+              {{- else }}
+              value: ""
+              {{- end }}
+            # Application logs (docs/logging-standard.md), read by logging_setup.py.
+            - name: APP_LOG_DIR
+              value: {{ .Values.app.appLogDir | default "" | quote }}
+            - name: APP_LOG_FILE_FORMAT
+              value: {{ .Values.app.appLogFileFormat | default "json" | quote }}
+            - name: APP_LOG_CONSOLE_FORMAT
+              value: {{ .Values.app.appLogConsoleFormat | default "json" | quote }}
+            - name: APP_LOG_LEVEL
+              value: {{ .Values.app.appLogLevel | default "INFO" | quote }}
+            - name: APP_LOG_MAX_BYTES
+              value: {{ .Values.app.appLogMaxBytes | default "52428800" | toString | quote }}
+            - name: APP_LOG_BACKUP_COUNT
+              value: {{ .Values.app.appLogBackupCount | default "5" | toString | quote }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- if .Values.caBundle.enabled }}
+          volumeMounts:
+            - name: egress-forward-proxy-ca
+              mountPath: {{ .Values.caBundle.mountPath | quote }}
+              readOnly: true
+          {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+      {{- if .Values.caBundle.enabled }}
+      volumes:
+        - name: egress-forward-proxy-ca
+          {{- if .Values.caBundle.existingSecret }}
+          secret:
+            secretName: {{ .Values.caBundle.existingSecret | quote }}
+            items:
+              - key: {{ .Values.caBundle.key | quote }}
+                path: {{ .Values.caBundle.key | quote }}
+          {{- else }}
+          configMap:
+            name: {{ .Values.caBundle.existingConfigMap | quote }}
+            items:
+              - key: {{ .Values.caBundle.key | quote }}
+                path: {{ .Values.caBundle.key | quote }}
+          {{- end }}
+      {{- end }}

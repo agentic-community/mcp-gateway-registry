@@ -32,6 +32,11 @@ import { WafRules } from './constructs/waf-rules';
 import * as route53 from 'aws-cdk-lib/aws-route53';
 import * as route53targets from 'aws-cdk-lib/aws-route53-targets';
 
+// OpenAPI MCP servers (issue #2022): the registry and its nginx reach the
+// openapi-mcp container through this Service Connect name.
+const OPENAPI_MCP_PORT: number = 9876;
+const OPENAPI_MCP_INTERNAL_URL: string = `http://openapi-mcp:${OPENAPI_MCP_PORT}`;
+
 export interface RegistryServiceStackProps extends cdk.StackProps {
   readonly config: RegistryConfig;
   readonly networkStack: RegistryNetworkStack;
@@ -301,6 +306,15 @@ export class RegistryServiceStack extends cdk.Stack {
       // vector url_guard structurally cannot see. Kept in parity with
       // terraform/aws-ecs registry env.
       AWS_EC2_METADATA_DISABLED: 'true',
+      // OpenAPI MCP servers (issue #2022). OPENAPI_MCP_SYNC_SECRET is a
+      // container secret below, never an environment value.
+      OPENAPI_MCP_ENABLED: String(config.openapiMcp.enabled),
+      OPENAPI_MCP_INTERNAL_URL: OPENAPI_MCP_INTERNAL_URL,
+      OPENAPI_MCP_MAX_SERVERS: String(config.openapiMcp.maxServers),
+      OPENAPI_MCP_MAX_TARGETS_PER_SERVER: String(config.openapiMcp.maxTargetsPerServer),
+      OPENAPI_MCP_MAX_TOOLS_PER_TARGET: String(config.openapiMcp.maxToolsPerTarget),
+      OPENAPI_MCP_SPEC_MAX_BYTES: String(config.openapiMcp.specMaxBytes),
+      OPENAPI_MCP_RECONCILE_INTERVAL_SECONDS: String(config.openapiMcp.reconcileIntervalSeconds),
     };
 
     const authEnv: Record<string, string> = {
@@ -311,6 +325,12 @@ export class RegistryServiceStack extends cdk.Stack {
       // credentials remain available through the container credential URI.
       // Kept in parity with terraform/aws-ecs auth-server env.
       AWS_EC2_METADATA_DISABLED: 'true',
+      // OpenAPI MCP servers (issue #2022). The mcp-proxy hop forwards
+      // per-user-credential calls to the openapi-mcp container. The auth server
+      // never receives OPENAPI_MCP_SYNC_SECRET: the registry signs the
+      // per-user credential envelope.
+      OPENAPI_MCP_ENABLED: String(config.openapiMcp.enabled),
+      OPENAPI_MCP_INTERNAL_URL: OPENAPI_MCP_INTERNAL_URL,
     };
 
     // Container secrets (registry + auth share most of these)
@@ -343,10 +363,17 @@ export class RegistryServiceStack extends cdk.Stack {
       ),
     };
 
+    // The OpenAPI MCP sync secret goes to the registry and the openapi-mcp
+    // task only, so it is not in sharedSecrets (which auth-server also gets).
+    const openapiMcpSecrets: Record<string, ecs.Secret> = secretsBundle.openapiMcpSyncSecret
+      ? { OPENAPI_MCP_SYNC_SECRET: ecs.Secret.fromSecretsManager(secretsBundle.openapiMcpSyncSecret) }
+      : {};
+
     const registrySecrets: Record<string, ecs.Secret> = {
       ...sharedSecrets,
       KEYCLOAK_ADMIN_PASSWORD: ecs.Secret.fromSecretsManager(secretsBundle.keycloakAdminPassword),
       EMBEDDINGS_API_KEY: ecs.Secret.fromSecretsManager(secretsBundle.embeddingsApiKey),
+      ...openapiMcpSecrets,
     };
     const authSecrets = sharedSecrets;
 
@@ -559,6 +586,53 @@ export class RegistryServiceStack extends cdk.Stack {
       mcpgwService.securityGroup.addIngressRule(
         authService.securityGroup, ec2.Port.tcp(8003), 'Allow auth-server mcp-proxy to reach mcpgw',
       );
+    }
+
+    // OpenAPI MCP servers (issue #2022). One task, reachable only from the
+    // registry (sync pushes, and nginx inside the registry container proxying
+    // MCP traffic) and from the auth server (the mcp-proxy hop for per-user
+    // credentials). Its execution role reads only the sync secret. The SSRF
+    // guard in the container gets the registry's values, so both apply one
+    // policy; the registry here sets only GITHUB_EXTRA_HOSTS, and the rest
+    // stay at their shared defaults.
+    if (config.openapiMcp.enabled) {
+      const openapiMcpService = new McpServerService(this, 'OpenapiMcpSvc', {
+        serviceName: 'openapi-mcp',
+        imageUri: config.images.openapiMcp,
+        containerPort: OPENAPI_MCP_PORT,
+        vpc, subnets: privateSubnets, cluster: this.ecsCluster,
+        serviceConnectNamespaceArn: cloudMapNamespace.namespaceArn,
+        serviceConnectDnsName: 'openapi-mcp',
+        serviceConnectPortName: 'openapi-mcp',
+        environment: {
+          HOST: '0.0.0.0',
+          PORT: String(OPENAPI_MCP_PORT),
+          OPENAPI_MCP_BACKEND_TIMEOUT_SECONDS: String(config.openapiMcp.backendTimeoutSeconds),
+          OPENAPI_MCP_MAX_RESPONSE_BYTES: String(config.openapiMcp.maxResponseBytes),
+          OPENAPI_MCP_CONVERSION_TIMEOUT_SECONDS: String(config.openapiMcp.conversionTimeoutSeconds),
+          GITHUB_EXTRA_HOSTS: registryEnv.GITHUB_EXTRA_HOSTS,
+        },
+        secrets: openapiMcpSecrets,
+        ingressSecurityGroup: registryService.securityGroup,
+        healthCheckCommand: `curl -fsS http://127.0.0.1:${OPENAPI_MCP_PORT}/health || exit 1`,
+        // Load test (10 servers x 10 targets) peaked at 293 MiB; 1024 MiB is the
+        // smallest Fargate size for 0.5 vCPU.
+        memoryLimitMiB: 1024,
+        enableAutoScaling: false,
+        dropAllCapabilities: true,
+        namePrefix,
+        desiredCount: config.openapiMcp.replicas,
+      });
+      // Auth-server mcp-proxy forwards per-user-credential calls to
+      // openapi-mcp:9876 (parity with the terraform auth_server ingress rule
+      // on module.ecs_service_openapi_mcp).
+      if (openapiMcpService.securityGroup) {
+        openapiMcpService.securityGroup.addIngressRule(
+          authService.securityGroup,
+          ec2.Port.tcp(OPENAPI_MCP_PORT),
+          'Allow auth-server mcp-proxy to reach openapi-mcp',
+        );
+      }
     }
 
     new McpServerService(this, 'RealServerFakeToolsSvc', {

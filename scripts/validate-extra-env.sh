@@ -2,7 +2,7 @@
 #
 # validate-extra-env.sh - Preflight validation for Docker Compose extra_env files (Issue #1000).
 #
-# Scans ${HOME}/mcp-gateway/extra_env/{registry,auth-server,mcpgw}.env against
+# Scans ${HOME}/mcp-gateway/extra_env/{registry,auth-server,mcpgw,openapi-mcp}.env against
 # the chart-managed reserved name lists in charts/<subchart>/reserved-env-names.txt.
 # Rejects reserved-name collisions, warns on malformed lines, and logs the
 # number of custom variables applied per service.
@@ -130,12 +130,12 @@ _validate_one_service() {
 
 
 validate_extra_env_all() {
-    # Validate all three services, collecting every collision before
+    # Validate all four services, collecting every collision before
     # deciding pass/fail. Logs a summary line with the per-service
     # custom-variable count. Returns 0 on success, 1 if any collision was
     # found.
     COLLISIONS=()
-    local registry_count auth_count mcpgw_count
+    local registry_count auth_count mcpgw_count openapi_mcp_count
 
     _validate_one_service "registry" \
         "$REPO_ROOT/charts/registry/reserved-env-names.txt"
@@ -149,17 +149,21 @@ validate_extra_env_all() {
         "$REPO_ROOT/charts/mcpgw/reserved-env-names.txt"
     mcpgw_count=$LAST_VALID_COUNT
 
+    _validate_one_service "openapi-mcp" \
+        "$REPO_ROOT/charts/openapi-mcp/reserved-env-names.txt"
+    openapi_mcp_count=$LAST_VALID_COUNT
+
     if [ ${#COLLISIONS[@]} -gt 0 ]; then
         log "ERROR: extra_env validation found ${#COLLISIONS[@]} reserved-name collision(s) in ${EXTRA_ENV_DIR}:"
         local collision
         for collision in "${COLLISIONS[@]}"; do
             log "  - ${collision}"
         done
-        log "       Reserved lists: $REPO_ROOT/charts/{registry,auth-server,mcpgw}/reserved-env-names.txt"
+        log "       Reserved lists: $REPO_ROOT/charts/{registry,auth-server,mcpgw,openapi-mcp}/reserved-env-names.txt"
         return 1
     fi
 
-    log "extra_env validation passed (registry=${registry_count}, auth-server=${auth_count}, mcpgw=${mcpgw_count} custom var(s))"
+    log "extra_env validation passed (registry=${registry_count}, auth-server=${auth_count}, mcpgw=${mcpgw_count}, openapi-mcp=${openapi_mcp_count} custom var(s))"
     return 0
 }
 
@@ -171,7 +175,7 @@ _main() {
         all)
             validate_extra_env_all
             ;;
-        registry|auth-server|mcpgw)
+        registry|auth-server|mcpgw|openapi-mcp)
             COLLISIONS=()
             _validate_one_service "$service" "$REPO_ROOT/charts/${service}/reserved-env-names.txt"
             if [ ${#COLLISIONS[@]} -gt 0 ]; then
@@ -185,7 +189,7 @@ _main() {
             log "extra_env validation passed for ${service} (${LAST_VALID_COUNT} custom var(s))"
             ;;
         *)
-            log "ERROR: unknown service '${service}'. Expected one of: all, registry, auth-server, mcpgw"
+            log "ERROR: unknown service '${service}'. Expected one of: all, registry, auth-server, mcpgw, openapi-mcp"
             return 2
             ;;
     esac

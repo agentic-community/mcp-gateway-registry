@@ -122,6 +122,17 @@ images:
     build_args:
       SERVER_DIR: "servers/mcpgw"
 
+  # OpenAPI MCP server container (issue #2022). Built from the repo root because
+  # the image copies a few registry modules (the SSRF guard and sync-token verifier).
+  openapi_mcp:
+    repo_name: "mcp-gateway-openapi-mcp"
+    dockerfile: "docker/Dockerfile.openapi-mcp"
+    context: "."
+    description: "Serves REST APIs described by OpenAPI specs as MCP servers"
+    tags:
+      - latest
+    build_args: {}
+
   # Real Server Fake Tools MCP Server
   realserverfaketools:
     repo_name: "mcp-gateway-realserverfaketools"

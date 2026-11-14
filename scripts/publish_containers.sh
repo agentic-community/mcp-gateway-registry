@@ -42,6 +42,7 @@ declare -a COMPONENTS=(
     "currenttime-server:.:./docker/Dockerfile.mcp-server-light"
     "realserverfaketools-server:.:./docker/Dockerfile.mcp-server-light"
     "mcpgw-server:.:./docker/Dockerfile.mcp-server"
+    "openapi-mcp:.:./docker/Dockerfile.openapi-mcp"
     "metrics-service:metrics-service:./metrics-service/Dockerfile"
 )
 

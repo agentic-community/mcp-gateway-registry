@@ -422,6 +422,20 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("max_custom_types", "Max Custom Types (0 = unlimited)", False),
         ],
     },
+    "openapi_mcp": {
+        "title": "OpenAPI MCP Servers",
+        "order": 31,
+        "fields": [
+            ("openapi_mcp_enabled", "Enabled", False),
+            ("openapi_mcp_internal_url", "Container URL", False),
+            ("openapi_mcp_sync_secret", "Sync Secret", True),
+            ("openapi_mcp_max_servers", "Max Servers", False),
+            ("openapi_mcp_max_targets_per_server", "Max Targets Per Server", False),
+            ("openapi_mcp_max_tools_per_target", "Max Tools Per Target", False),
+            ("openapi_mcp_spec_max_bytes", "Max Spec Size (bytes)", False),
+            ("openapi_mcp_reconcile_interval_seconds", "Reconcile Interval (s)", False),
+        ],
+    },
     "update_check": {
         "title": "Update Check",
         "order": 24,
@@ -1009,6 +1023,7 @@ async def get_config(
             "federation": settings.registry_mode == RegistryMode.FULL,
             "gateway_proxy": settings.deployment_mode == DeploymentMode.WITH_GATEWAY,
             "custom_types": settings.custom_entity_types_enabled,
+            "openapi_servers": settings.openapi_mcp_enabled,
         },
         "custom_types": await _custom_type_tabs(),
     }

@@ -87,6 +87,9 @@ registry:
     keycloak: "quay.io/keycloak/keycloak:26.2.4"
     currenttime: ""
     mcpgw: "public.ecr.aws/p3v1o3c6/mcpgw:1.26.0"
+    # openapi-mcp container (issue #2022). Needs a pinned version tag, never
+    # :latest. Only used when openapiMcp.enabled is true.
+    openapiMcp: ""
     realserverfaketools: ""
     flightBookingAgent: ""
     travelAssistantAgent: ""
@@ -225,3 +228,20 @@ registry:
     enabled: true
     alarmEmail: ""
     alarmSnsTopicArn: ""
+
+  # OpenAPI MCP servers (issue #2022). Serves REST APIs described by OpenAPI
+  # specs as MCP servers. Enabling it deploys one openapi-mcp task, reachable
+  # only from the registry, and needs images.openapiMcp. The sync secret both
+  # tasks share is generated in Secrets Manager.
+  openapiMcp:
+    enabled: false
+    # Must be 1: the registry pushes state to one Service Connect address.
+    replicas: 1
+    maxServers: 10                # 1 to 100
+    maxTargetsPerServer: 10       # 1 to 50
+    maxToolsPerTarget: 100        # 1 to 500
+    specMaxBytes: 5242880         # 1 KiB to 20 MiB
+    reconcileIntervalSeconds: 60  # 10 to 3600
+    backendTimeoutSeconds: 30     # above 0, at most 300
+    maxResponseBytes: 2097152     # 1 KiB to 100 MiB
+    conversionTimeoutSeconds: 10  # above 0, at most 120

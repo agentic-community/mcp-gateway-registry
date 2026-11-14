@@ -43,6 +43,10 @@ jobs:
             dockerfile: docker/Dockerfile.mcp-server
             extra_build_args: |-
               SERVER_DIR=servers/mcpgw
+          # OpenAPI MCP servers (issue #2022). Built from the repo root because the
+          # image copies the registry's SSRF guard and sync-token verifier.
+          - service: openapi-mcp
+            dockerfile: docker/Dockerfile.openapi-mcp
 
     steps:
       - name: Checkout code

@@ -1,0 +1,83 @@
+suite: OpenAPI MCP servers on the auth server (issue #2022)
+templates:
+  - deployment.yaml
+release:
+  name: test
+  namespace: default
+tests:
+  - it: renders no OpenAPI MCP settings by default
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENAPI_MCP_ENABLED
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENAPI_MCP_INTERNAL_URL
+          any: true
+
+  - it: renders the enabled flag and the default internal URL when enabled
+    set:
+      app:
+        openapiMcpEnabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENAPI_MCP_ENABLED
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENAPI_MCP_INTERNAL_URL
+            value: http://openapi-mcp:9876
+
+  - it: follows an operator's internal URL
+    set:
+      app:
+        openapiMcpEnabled: true
+        openapiMcpInternalUrl: http://openapi-mcp.gateway.svc:9876
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENAPI_MCP_INTERNAL_URL
+            value: http://openapi-mcp.gateway.svc:9876
+
+  - it: fails when enabled with an empty internal URL
+    set:
+      app:
+        openapiMcpEnabled: true
+        openapiMcpInternalUrl: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: "openapiMcpInternalUrl must be set"
+
+  - it: never gives the auth server the sync secret
+    set:
+      app:
+        openapiMcpEnabled: true
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENAPI_MCP_SYNC_SECRET
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            secretRef:
+              name: openapi-mcp-sync-secret
+
+  - it: refuses the sync secret through extraEnv
+    set:
+      app:
+        openapiMcpEnabled: true
+      extraEnv:
+        - name: OPENAPI_MCP_SYNC_SECRET
+          value: YOUR_SYNC_SECRET # pragma: allowlist secret
+    asserts:
+      - failedTemplate:
+          errorPattern: "OPENAPI_MCP_SYNC_SECRET"

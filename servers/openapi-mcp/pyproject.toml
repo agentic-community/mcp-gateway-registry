@@ -1,0 +1,33 @@
+[project]
+name = "openapi-mcp-server"
+version = "0.1.0"
+description = "Serves REST APIs described by OpenAPI 3.x specs as MCP servers, with state pushed by the registry"
+requires-python = ">=3.14"
+dependencies = [
+    "certifi>=2026.10.19",
+    "fastmcp>=4.1.4,<5.0.0",
+    "httpx>=0.28.1",
+    "pydantic>=2.11.3",
+    "pydantic-settings>=2.6.0",
+    "pyjwt>=2.10.0",
+    "uvicorn>=0.30.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+]
+
+[tool.uv]
+# Local-only project - never resolve from PyPI
+package = false
+# Same per-package cutoffs the host uv config applies, declared here so the lock is
+# reproducible inside the image (mirrors servers/mcpgw/pyproject.toml).
+exclude-newer-package = { certifi = "2026-10-22T00:00:00Z" }
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+pythonpath = [".", "../.."]

@@ -18,6 +18,7 @@ DOCKERFILES=(
     "docker/Dockerfile.mcp-server-light"
     "docker/Dockerfile.scopes-init"
     "docker/Dockerfile.metrics-db"
+    "docker/Dockerfile.openapi-mcp"
     "docker/keycloak/Dockerfile"
     "metrics-service/Dockerfile"
     "terraform/aws-ecs/grafana/Dockerfile"

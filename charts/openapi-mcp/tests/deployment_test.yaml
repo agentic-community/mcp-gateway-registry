@@ -1,0 +1,285 @@
+suite: openapi-mcp deployment
+templates:
+  - deployment.yaml
+release:
+  name: test
+  namespace: default
+tests:
+  - it: renders one pod with the pinned global image and port 9876
+    asserts:
+      - isKind:
+          of: Deployment
+      - equal:
+          path: spec.replicas
+          value: 1
+      - equal:
+          path: spec.strategy.type
+          value: Recreate
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: public.ecr.aws/p3v1o3c6/openapi-mcp:1.37.0
+      - equal:
+          path: spec.template.spec.containers[0].ports[0].containerPort
+          value: 9876
+
+  - it: probes /health on the http port
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
+          value: /health
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.port
+          value: http
+
+  - it: runs as non-root with every capability dropped
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          value: [ALL]
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: false
+
+  - it: reads the sync secret through secretKeyRef from the chart-created Secret
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENAPI_MCP_SYNC_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: openapi-mcp-sync-secret
+                key: OPENAPI_MCP_SYNC_SECRET
+
+  - it: reads the sync secret from global.openapiMcp.existingSyncSecret when set
+    set:
+      global.openapiMcp.existingSyncSecret: my-sync
+      syncSecret.existingSecret: ignored-sync
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENAPI_MCP_SYNC_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: my-sync
+                key: OPENAPI_MCP_SYNC_SECRET
+
+  - it: renders the container settings in order before extraEnv
+    set:
+      app.backendTimeoutSeconds: "45"
+      app.maxResponseBytes: "4096"
+      app.conversionTimeoutSeconds: "20"
+      extraEnv:
+        - name: MY_FLAG
+          value: "on"
+    asserts:
+      # NOTE: HOST is env[0], PORT env[1], the three container settings
+      # env[2]-env[4], OPENAPI_MCP_SYNC_SECRET env[5], the SSRF guard and pool
+      # settings env[6]-env[14], the forward-proxy pair env[15]/env[16], the
+      # six APP_LOG_* settings env[17]-env[22]; extraEnv starts at env[23].
+      # Update these indices when a chart-managed
+      # entry is added before the extraEnv append.
+      - equal:
+          path: spec.template.spec.containers[0].env[0]
+          value:
+            name: HOST
+            value: 0.0.0.0
+      - equal:
+          path: spec.template.spec.containers[0].env[1]
+          value:
+            name: PORT
+            value: "9876"
+      - equal:
+          path: spec.template.spec.containers[0].env[2]
+          value:
+            name: OPENAPI_MCP_BACKEND_TIMEOUT_SECONDS
+            value: "45"
+      - equal:
+          path: spec.template.spec.containers[0].env[3]
+          value:
+            name: OPENAPI_MCP_MAX_RESPONSE_BYTES
+            value: "4096"
+      - equal:
+          path: spec.template.spec.containers[0].env[4]
+          value:
+            name: OPENAPI_MCP_CONVERSION_TIMEOUT_SECONDS
+            value: "20"
+      - equal:
+          path: spec.template.spec.containers[0].env[5].name
+          value: OPENAPI_MCP_SYNC_SECRET
+      - equal:
+          path: spec.template.spec.containers[0].env[16].name
+          value: EGRESS_FORWARD_PROXY_CA_BUNDLE
+      - equal:
+          path: spec.template.spec.containers[0].env[17]
+          value:
+            name: APP_LOG_DIR
+            value: ""
+      - equal:
+          path: spec.template.spec.containers[0].env[22]
+          value:
+            name: APP_LOG_BACKUP_COUNT
+            value: "5"
+      - equal:
+          path: spec.template.spec.containers[0].env[23]
+          value:
+            name: MY_FLAG
+            value: "on"
+
+  - it: lets global.ssrfAllowedCidrs win over app.ssrfAllowedCidrs
+    set:
+      global.ssrfAllowedCidrs: 240.240.0.0/16
+      app.ssrfAllowedCidrs: 10.0.0.0/8
+      app.ssrfAllowedHosts: internal.example.test
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSRF_ALLOWED_CIDRS
+            value: 240.240.0.0/16
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSRF_ALLOWED_HOSTS
+            value: internal.example.test
+
+  - it: renders GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS true when set
+    set:
+      app.gatewayProxyAllowPrivateTargets: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS
+            value: "true"
+
+  - it: renders GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS false by default
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS
+            value: "false"
+
+  - it: rejects a second replica
+    set:
+      app.replicas: 2
+    asserts:
+      - failedTemplate:
+          errorPattern: "openapi-mcp.app.replicas must be 1"
+
+  - it: rejects the latest image tag
+    set:
+      image.tag: latest
+    asserts:
+      - failedTemplate:
+          errorPattern: "must be a pinned version"
+
+  - it: rejects a reserved name in extraEnv, case-insensitively
+    set:
+      extraEnv:
+        - name: openapi_mcp_sync_secret
+          value: oops
+    asserts:
+      - failedTemplate:
+          errorPattern: "is a reserved variable managed by the chart"
+
+  - it: rejects SSRF_ALLOWED_HOSTS in extraEnv
+    set:
+      extraEnv:
+        - name: SSRF_ALLOWED_HOSTS
+          value: "*"
+    asserts:
+      - failedTemplate:
+          errorPattern: "SSRF_ALLOWED_HOSTS"
+
+  - it: rejects duplicate extraEnv names
+    set:
+      extraEnv:
+        - name: MY_FLAG
+          value: "a"
+        - name: MY_FLAG
+          value: "b"
+    asserts:
+      - failedTemplate:
+          errorPattern: "duplicate name"
+
+  - it: fails when the forward proxy is on and NO_PROXY misses a credential endpoint
+    set:
+      app.egressForwardProxyEnabled: true
+      extraEnv:
+        - name: HTTPS_PROXY
+          value: http://proxy.example.test:3128
+        - name: NO_PROXY
+          value: 169.254.169.254,169.254.170.23
+    asserts:
+      - failedTemplate:
+          errorPattern: "169.254.170.2"
+
+  - it: renders when the forward proxy is on and NO_PROXY excludes all credential endpoints
+    set:
+      app.egressForwardProxyEnabled: true
+      extraEnv:
+        - name: HTTPS_PROXY
+          value: http://proxy.example.test:3128
+        - name: NO_PROXY
+          value: 169.254.169.254,169.254.170.2,169.254.170.23
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EGRESS_FORWARD_PROXY_ENABLED
+            value: "true"
+
+  - it: mounts the CA bundle and points EGRESS_FORWARD_PROXY_CA_BUNDLE at it
+    set:
+      caBundle.enabled: true
+      caBundle.existingConfigMap: corp-ca
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EGRESS_FORWARD_PROXY_CA_BUNDLE
+            value: /etc/ssl/mcp-gateway/ca-bundle.pem
+      - equal:
+          path: spec.template.spec.volumes[0].configMap.name
+          value: corp-ca
+
+  - it: rejects a CA bundle with no source
+    set:
+      caBundle.enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "neither existingConfigMap nor existingSecret"
+
+  - it: passes the application log settings through
+    set:
+      app.appLogLevel: DEBUG
+      app.appLogConsoleFormat: text
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: APP_LOG_LEVEL
+            value: DEBUG
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: APP_LOG_CONSOLE_FORMAT
+            value: text
+
+  - it: rejects APP_LOG_DIR in extraEnv
+    set:
+      extraEnv:
+        - name: APP_LOG_DIR
+          value: /tmp
+    asserts:
+      - failedTemplate:
+          errorPattern: "is a reserved variable managed by the chart"

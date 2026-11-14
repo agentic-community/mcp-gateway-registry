@@ -704,6 +704,39 @@ async def _clear_server_security_pending(
     return True
 
 
+def start_post_registration_tasks(
+    path: str,
+    proxy_pass_url: str,
+    server_entry: dict,
+    performed_by: str | None,
+    headers_list: list | None = None,
+    run_scan: bool = True,
+    run_health_check: bool = True,
+) -> None:
+    """Start the background steps every server registration runs.
+
+    The security scan, the immediate health check, and the registration
+    webhook (issue #742). Used by POST /api/servers/register and by OpenAPI MCP
+    servers (issue #2022), so both register a server the same way.
+    """
+    from ..health.service import health_service
+
+    if run_scan:
+        asyncio.create_task(
+            _perform_security_scan_on_registration(path, proxy_pass_url, server_entry, headers_list)
+        )
+    if run_health_check:
+        asyncio.create_task(health_service.perform_immediate_health_check(path))
+    asyncio.create_task(
+        send_registration_webhook(
+            event_type="registration",
+            registration_type="server",
+            card_data=strip_credentials_from_dict(server_entry),
+            performed_by=performed_by,
+        )
+    )
+
+
 async def _perform_security_scan_on_registration(
     path: str,
     proxy_pass_url: str,
@@ -4505,7 +4538,6 @@ async def register_service_api(
     # with named status codes.
     from fastapi import status as fastapi_status
 
-    from ..health.service import health_service
     from ..utils.local_runtime_validation import (
         add_unpinned_warning_tag,
         parse_and_validate_local_runtime,
@@ -4893,25 +4925,15 @@ async def register_service_api(
                 f"it appears in default search results or the gateway route."
             )
 
-        # Security scanning (non-blocking). Skipped for local stdio servers.
-        if not is_local:
-            asyncio.create_task(
-                _perform_security_scan_on_registration(
-                    path, proxy_pass_url, server_entry, headers_list
-                )
-            )
-
-        # Trigger async task for health check
-        asyncio.create_task(health_service.perform_immediate_health_check(path))
-
-        # Registration webhook (Issue #742)
-        asyncio.create_task(
-            send_registration_webhook(
-                event_type="registration",
-                registration_type="server",
-                card_data=strip_credentials_from_dict(server_entry),
-                performed_by=user_context.get("username"),
-            )
+        # Security scan (skipped for local stdio servers), health check and
+        # registration webhook, shared with OpenAPI MCP servers (issue #2022).
+        start_post_registration_tasks(
+            path,
+            proxy_pass_url,
+            server_entry,
+            user_context.get("username"),
+            headers_list=headers_list,
+            run_scan=not is_local,
         )
 
         return JSONResponse(
@@ -5808,9 +5830,6 @@ async def remove_service_api(
       -F "path=/myservice"
     ```
     """
-    from ..health.service import health_service
-    from ..services.scope_service import remove_server_scopes
-
     # Set audit action for server removal
     set_audit_action(
         request, "delete", "server", resource_id=path, description=f"Remove server at {path}"
@@ -5907,42 +5926,10 @@ async def remove_service_api(
             },
         )
 
-    logger.info(f"Service removed successfully: {path} by user {user_context.get('username')}")
+    # Search, nginx, scopes, webhook: shared with OpenAPI MCP servers (issue #2022).
+    from ..services.server_lifecycle import clean_up_removed_server
 
-    # Remove from DocumentDB search index
-    try:
-        from ..repositories.factory import get_search_repository
-
-        search_repo = get_search_repository()
-        await search_repo.remove_entity(path)
-    except Exception as e:
-        logger.warning(f"Failed to remove search index for {path}: {e}")
-
-    # Flush nginx config immediately (delete must take effect before response)
-    from ..core.nginx_service import nginx_reload_scheduler
-
-    nginx_reload_scheduler.mark_dirty()
-    await nginx_reload_scheduler.flush_now()
-
-    # Broadcast health status update to WebSocket clients
-    await health_service.broadcast_health_update(path)
-
-    # Remove server from scopes and reload auth server
-    try:
-        await remove_server_scopes(path)
-        logger.info(f"Successfully removed server {path} from scopes")
-    except Exception as e:
-        logger.warning(f"Failed to remove server {path} from scopes: {e}")
-
-    # Deletion webhook (Issue #742): server_info was fetched before removal
-    asyncio.create_task(
-        send_registration_webhook(
-            event_type="deletion",
-            registration_type="server",
-            card_data=strip_credentials_from_dict(server_info),
-            performed_by=user_context.get("username"),
-        )
-    )
+    await clean_up_removed_server(path, server_info, user_context.get("username"))
 
     return JSONResponse(
         status_code=200,

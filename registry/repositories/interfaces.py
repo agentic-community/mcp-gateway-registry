@@ -9,6 +9,10 @@ from typing import Any
 
 from ..schemas.agent_models import AgentCard
 from ..schemas.federation_schema import FederationConfig
+from ..schemas.openapi_server_models import (
+    OpenApiServer,
+    StoredSpec,
+)
 from ..schemas.registry_card import RegistryCard
 
 # Import skill models with try/except to avoid circular import issues
@@ -2392,3 +2396,80 @@ class CustomEntityRepositoryBase(ABC):
             Total number of custom entity records, all types combined.
         """
         pass
+
+
+class OpenApiServerRepositoryBase(ABC):
+    """Data access for OpenAPI MCP servers (openapi_servers_<ns>, _id = slug)."""
+
+    @abstractmethod
+    async def count(self) -> int:
+        """Number of stored servers."""
+
+    @abstractmethod
+    async def list_all(self) -> list[OpenApiServer]:
+        """Every stored server, targets embedded."""
+
+    @abstractmethod
+    async def get(
+        self,
+        slug: str,
+    ) -> OpenApiServer | None:
+        """One server by slug, or None."""
+
+    @abstractmethod
+    async def create(
+        self,
+        server: OpenApiServer,
+    ) -> bool:
+        """Insert a new server. Returns False when the slug already exists."""
+
+    @abstractmethod
+    async def replace(
+        self,
+        server: OpenApiServer,
+        expected_generation: int,
+    ) -> bool:
+        """Replace a server only if its stored generation still equals expected_generation."""
+
+    @abstractmethod
+    async def delete(
+        self,
+        slug: str,
+    ) -> bool:
+        """Delete a server. Returns False when it did not exist."""
+
+    @abstractmethod
+    async def count_spec_references(
+        self,
+        sha256: str,
+    ) -> int:
+        """Number of servers with a target using this spec."""
+
+    @abstractmethod
+    async def count_targets(self) -> int:
+        """Total targets across every server."""
+
+
+class OpenApiSpecRepositoryBase(ABC):
+    """Data access for stored specs (openapi_specs_<ns>, _id = SHA-256 of the bytes)."""
+
+    @abstractmethod
+    async def upsert(
+        self,
+        spec: StoredSpec,
+    ) -> None:
+        """Store a spec. A spec with the same SHA-256 is identical, so this is idempotent."""
+
+    @abstractmethod
+    async def get_many(
+        self,
+        sha256s: set[str],
+    ) -> dict[str, StoredSpec]:
+        """Specs by SHA-256. Missing ones are absent from the result."""
+
+    @abstractmethod
+    async def delete(
+        self,
+        sha256: str,
+    ) -> None:
+        """Delete a spec. Deleting a missing spec is a no-op."""

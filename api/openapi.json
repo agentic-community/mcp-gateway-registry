@@ -3,7 +3,7 @@
   "info": {
     "title": "MCP Gateway Registry",
     "description": "A registry and management system for Model Context Protocol (MCP) servers",
-    "version": "1.37.0"
+    "version": "1.38.0"
   },
   "paths": {
     "/api/version": {
@@ -8689,6 +8689,685 @@
                   "additionalProperties": true,
                   "title": "Response Get Tool Catalog Api Tool Catalog Get"
                 }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/openapi-servers": {
+      "get": {
+        "tags": [
+          "openapi-servers"
+        ],
+        "summary": "List Openapi Servers",
+        "description": "List the OpenAPI MCP servers the caller can see.",
+        "operationId": "list_openapi_servers_api_openapi_servers_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "openapi-servers"
+        ],
+        "summary": "Create Openapi Server",
+        "description": "Create an empty OpenAPI MCP server and its gateway route. The name becomes the path.",
+        "operationId": "create_openapi_server_api_openapi_servers_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenApiServerCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/openapi-servers/{slug}": {
+      "get": {
+        "tags": [
+          "openapi-servers"
+        ],
+        "summary": "Get Openapi Server",
+        "description": "One server with its targets and the container's status for each target.",
+        "operationId": "get_openapi_server_api_openapi_servers__slug__get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "openapi-servers"
+        ],
+        "summary": "Update Openapi Server",
+        "description": "Update description, tags, visibility or allowed groups.",
+        "operationId": "update_openapi_server_api_openapi_servers__slug__patch",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+              "title": "Slug"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenApiServerUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "openapi-servers"
+        ],
+        "summary": "Delete Openapi Server",
+        "description": "Delete a server, its path, its tools and any spec no other target uses.",
+        "operationId": "delete_openapi_server_api_openapi_servers__slug__delete",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/openapi-servers/{slug}/targets": {
+      "post": {
+        "tags": [
+          "openapi-servers"
+        ],
+        "summary": "Add Openapi Target",
+        "description": "Add a REST target. Fails closed: if any check fails, nothing is stored.",
+        "operationId": "add_openapi_target_api_openapi_servers__slug__targets_post",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+              "title": "Slug"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenApiTargetCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/openapi-servers/{slug}/targets/{name}": {
+      "get": {
+        "tags": [
+          "openapi-servers"
+        ],
+        "summary": "Get Openapi Target",
+        "description": "One target. The credential appears only as credential_set.",
+        "operationId": "get_openapi_target_api_openapi_servers__slug__targets__name__get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9]{1,23}$",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "openapi-servers"
+        ],
+        "summary": "Update Openapi Target",
+        "description": "Update a target, rotate its credential, or refresh its spec.",
+        "operationId": "update_openapi_target_api_openapi_servers__slug__targets__name__patch",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9]{1,23}$",
+              "title": "Name"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenApiTargetUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "openapi-servers"
+        ],
+        "summary": "Delete Openapi Target",
+        "description": "Remove a target and its tools.",
+        "operationId": "delete_openapi_target_api_openapi_servers__slug__targets__name__delete",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9]{1,23}$",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/openapi-servers/{slug}/targets/{name}/my-credential": {
+      "put": {
+        "tags": [
+          "openapi-servers"
+        ],
+        "summary": "Put My Credential",
+        "description": "Store your own key for a per-user target (an admin may store one for another user).",
+        "operationId": "put_my_credential_api_openapi_servers__slug__targets__name__my_credential_put",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9]{1,23}$",
+              "title": "Name"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MyCredentialRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      },
+      "get": {
+        "tags": [
+          "openapi-servers"
+        ],
+        "summary": "Get My Credential",
+        "description": "Whether you have a key for this target, and when it expires. Never the key.",
+        "operationId": "get_my_credential_api_openapi_servers__slug__targets__name__my_credential_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9]{1,23}$",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "openapi-servers"
+        ],
+        "summary": "Delete My Credential",
+        "description": "Delete your key for this target.",
+        "operationId": "delete_my_credential_api_openapi_servers__slug__targets__name__my_credential_delete",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9]{1,23}$",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/openapi-servers/{slug}/my-credentials": {
+      "get": {
+        "tags": [
+          "openapi-servers"
+        ],
+        "summary": "List My Credentials",
+        "description": "Your key status for every per-user target on this server.",
+        "operationId": "list_my_credentials_api_openapi_servers__slug__my_credentials_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
               }
             }
           },
@@ -21567,6 +22246,62 @@
         "title": "MissingEmbeddingsResponse",
         "description": "Response for the missing embeddings scan."
       },
+      "MyCredentialRequest": {
+        "properties": {
+          "secret": {
+            "type": "string",
+            "format": "password",
+            "title": "Secret",
+            "writeOnly": true
+          },
+          "ttl_value": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Ttl Value"
+          },
+          "ttl_unit": {
+            "type": "string",
+            "enum": [
+              "minutes",
+              "hours",
+              "days"
+            ],
+            "title": "Ttl Unit"
+          },
+          "sub": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sub",
+            "description": "Admin only: store the key for this user instead"
+          },
+          "auth_method": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auth Method",
+            "description": "Admin only, with sub: the user's ingress auth method"
+          }
+        },
+        "type": "object",
+        "required": [
+          "secret",
+          "ttl_value",
+          "ttl_unit"
+        ],
+        "title": "MyCredentialRequest",
+        "description": "Body of PUT .../targets/{name}/my-credential: the caller's own key for a per-user target."
+      },
       "OAuthBackendConfigRequest": {
         "properties": {
           "token_url": {
@@ -21905,6 +22640,462 @@
         ],
         "title": "OktaSyncResponse",
         "description": "Response from Okta M2M sync operation."
+      },
+      "OpenApiServerCreateRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 1000,
+            "title": "Description",
+            "default": ""
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 20,
+            "title": "Tags"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "public",
+              "private",
+              "group-restricted"
+            ],
+            "title": "Visibility",
+            "default": "private"
+          },
+          "allowed_groups": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 50,
+            "title": "Allowed Groups"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "OpenApiServerCreateRequest",
+        "description": "Body of POST /api/openapi-servers. The name becomes the path.",
+        "example": {
+          "description": "Forecast and air quality from Open-Meteo",
+          "name": "Weather APIs",
+          "tags": [
+            "weather"
+          ],
+          "visibility": "private"
+        }
+      },
+      "OpenApiServerUpdateRequest": {
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 1000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 20
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tags"
+          },
+          "visibility": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "public",
+                  "private",
+                  "group-restricted"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visibility"
+          },
+          "allowed_groups": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 50
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allowed Groups"
+          }
+        },
+        "type": "object",
+        "title": "OpenApiServerUpdateRequest",
+        "description": "Body of PATCH /api/openapi-servers/{slug}. The name and path cannot change."
+      },
+      "OpenApiTargetAuthInput": {
+        "properties": {
+          "scheme": {
+            "type": "string",
+            "enum": [
+              "none",
+              "api_key_header",
+              "api_key_query",
+              "bearer",
+              "basic"
+            ],
+            "title": "Scheme",
+            "default": "none"
+          },
+          "credential_mode": {
+            "type": "string",
+            "enum": [
+              "shared",
+              "per_user"
+            ],
+            "title": "Credential Mode",
+            "default": "shared"
+          },
+          "header_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Header Name"
+          },
+          "query_param": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_.\\-]{1,128}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Query Param"
+          },
+          "username": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 256
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Username"
+          },
+          "credential": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "password",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credential"
+          }
+        },
+        "type": "object",
+        "title": "OpenApiTargetAuthInput",
+        "description": "Auth for one REST target, as the admin sends it. The credential is write-only."
+      },
+      "OpenApiTargetCreateRequest": {
+        "properties": {
+          "tool_name_overrides": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Tool Name Overrides"
+          },
+          "description_overrides": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Description Overrides"
+          },
+          "include_tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "title": "Include Tags"
+          },
+          "include_operations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 500,
+            "title": "Include Operations"
+          },
+          "keep_output_schemas": {
+            "type": "boolean",
+            "title": "Keep Output Schemas",
+            "default": false
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9]{1,23}$",
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 1000,
+            "title": "Description",
+            "default": ""
+          },
+          "spec_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2083,
+                "minLength": 1,
+                "format": "uri"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spec Url",
+            "description": "Where the registry fetches the spec. Send this or spec_content."
+          },
+          "spec_content": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 8388608
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spec Content",
+            "description": "The spec itself, as JSON or YAML text. Send this or spec_url."
+          },
+          "base_url": {
+            "type": "string",
+            "maxLength": 2083,
+            "minLength": 1,
+            "format": "uri",
+            "title": "Base Url"
+          },
+          "auth": {
+            "$ref": "#/components/schemas/OpenApiTargetAuthInput"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "base_url"
+        ],
+        "title": "OpenApiTargetCreateRequest",
+        "description": "Body of POST /api/openapi-servers/{slug}/targets.",
+        "example": {
+          "auth": {
+            "credential": "YOUR_PETSTORE_KEY",
+            "header_name": "api_key",
+            "scheme": "api_key_header"
+          },
+          "base_url": "https://petstore3.swagger.io/api/v3",
+          "description": "Swagger Petstore sample API",
+          "include_operations": [
+            "getInventory"
+          ],
+          "include_tags": [
+            "pet"
+          ],
+          "name": "petstore",
+          "spec_url": "https://petstore3.swagger.io/api/v3/openapi.json"
+        }
+      },
+      "OpenApiTargetUpdateRequest": {
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 1000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "base_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2083,
+                "minLength": 1,
+                "format": "uri"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Url"
+          },
+          "auth": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OpenApiTargetAuthInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tool_name_overrides": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool Name Overrides"
+          },
+          "description_overrides": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description Overrides"
+          },
+          "include_tags": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Include Tags"
+          },
+          "include_operations": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Include Operations"
+          },
+          "keep_output_schemas": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Keep Output Schemas"
+          },
+          "spec_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2083,
+                "minLength": 1,
+                "format": "uri"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spec Url",
+            "description": "Fetch the spec from this URL instead and check it again."
+          },
+          "spec_content": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 8388608
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spec Content",
+            "description": "Replace the spec with this JSON or YAML text and check it again."
+          },
+          "refresh_spec": {
+            "type": "boolean",
+            "title": "Refresh Spec",
+            "description": "Fetch the spec again from the stored spec_url.",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "OpenApiTargetUpdateRequest",
+        "description": "Body of PATCH /api/openapi-servers/{slug}/targets/{name}. A missing auth keeps the stored one."
       },
       "Package": {
         "properties": {

@@ -574,6 +574,17 @@ services:
       - CUSTOM_TYPE_CACHE_TTL_SECONDS=${CUSTOM_TYPE_CACHE_TTL_SECONDS:-60}
       - MAX_CUSTOM_RECORDS_PER_TYPE=${MAX_CUSTOM_RECORDS_PER_TYPE:-1000}
       - MAX_CUSTOM_TYPES=${MAX_CUSTOM_TYPES:-50}
+      # OpenAPI MCP servers (issue #2022). Off by default. When on, also start the
+      # openapi-mcp service (build_and_run.sh adds --profile openapi-mcp) and set
+      # OPENAPI_MCP_SYNC_SECRET to the same value for both services.
+      - OPENAPI_MCP_ENABLED=${OPENAPI_MCP_ENABLED:-false}
+      - OPENAPI_MCP_INTERNAL_URL=${OPENAPI_MCP_INTERNAL_URL:-http://openapi-mcp:9876}
+      - OPENAPI_MCP_SYNC_SECRET=${OPENAPI_MCP_SYNC_SECRET:-}
+      - OPENAPI_MCP_MAX_SERVERS=${OPENAPI_MCP_MAX_SERVERS:-10}
+      - OPENAPI_MCP_MAX_TARGETS_PER_SERVER=${OPENAPI_MCP_MAX_TARGETS_PER_SERVER:-10}
+      - OPENAPI_MCP_MAX_TOOLS_PER_TARGET=${OPENAPI_MCP_MAX_TOOLS_PER_TARGET:-100}
+      - OPENAPI_MCP_SPEC_MAX_BYTES=${OPENAPI_MCP_SPEC_MAX_BYTES:-5242880}
+      - OPENAPI_MCP_RECONCILE_INTERVAL_SECONDS=${OPENAPI_MCP_RECONCILE_INTERVAL_SECONDS:-60}
       # Registry-UI internal token verification (the /api/ hop; mints in auth-server)
       - INTERNAL_TOKEN_TTL_SECONDS=${INTERNAL_TOKEN_TTL_SECONDS:-30}
       - INTERNAL_TOKEN_LEEWAY_SECONDS=${INTERNAL_TOKEN_LEEWAY_SECONDS:-5}
@@ -754,6 +765,11 @@ services:
       # admit a reserved IPv4 address (e.g. Istio ServiceEntry VIPs in
       # 240.240.0.0/16). Same value as the registry and mcpgw. #2018
       - SSRF_ALLOWED_CIDRS=${SSRF_ALLOWED_CIDRS:-}
+      # OpenAPI MCP servers (issue #2022): the mcp-proxy hop forwards per-user
+      # keys to the openapi-mcp container, so it must recognize the container's
+      # exact identity. The auth server never gets OPENAPI_MCP_SYNC_SECRET.
+      - OPENAPI_MCP_ENABLED=${OPENAPI_MCP_ENABLED:-false}
+      - OPENAPI_MCP_INTERNAL_URL=${OPENAPI_MCP_INTERNAL_URL:-http://openapi-mcp:9876}
       # Forward-proxy egress for the SSRF-guarded clients (issue #1832). OFF by
       # default; enabling it relaxes IP-rebind pinning for targets that resolve
       # exclusively to public addresses. Set HTTP_PROXY / HTTPS_PROXY / NO_PROXY
@@ -1030,6 +1046,55 @@ services:
       - "${HOST_BIND_IP:-127.0.0.1}:8003:8003"
     depends_on:
       - registry
+    restart: unless-stopped
+
+  # OpenAPI MCP servers (issue #2022): serves REST APIs as MCP servers. The
+  # registry pushes its state; only the registry and nginx call it.
+  # Start with: docker compose --profile openapi-mcp up -d (build_and_run.sh
+  # does this when OPENAPI_MCP_ENABLED=true in .env). The sync secret is not
+  # required here with :? because Compose interpolates every service, even ones
+  # whose profile is off; the container itself refuses to start without a
+  # strong OPENAPI_MCP_SYNC_SECRET.
+  openapi-mcp:
+    profiles: ["openapi-mcp"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.openapi-mcp
+      args:
+        BUILD_VERSION: ${BUILD_VERSION:-1.0.0}
+    environment:
+      - HOST=0.0.0.0
+      - PORT=9876
+      - OPENAPI_MCP_SYNC_SECRET=${OPENAPI_MCP_SYNC_SECRET:-}
+      - OPENAPI_MCP_BACKEND_TIMEOUT_SECONDS=${OPENAPI_MCP_BACKEND_TIMEOUT_SECONDS:-30}
+      - OPENAPI_MCP_MAX_RESPONSE_BYTES=${OPENAPI_MCP_MAX_RESPONSE_BYTES:-2097152}
+      - OPENAPI_MCP_CONVERSION_TIMEOUT_SECONDS=${OPENAPI_MCP_CONVERSION_TIMEOUT_SECONDS:-10}
+      # The SSRF guard in the container applies the registry's policy, so pass
+      # the same values the registry gets.
+      - SSRF_ALLOWED_HOSTS=${SSRF_ALLOWED_HOSTS:-}
+      - SSRF_ALLOWED_CIDRS=${SSRF_ALLOWED_CIDRS:-}
+      - GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS=${GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS:-false}
+      - EGRESS_FORWARD_PROXY_ENABLED=${EGRESS_FORWARD_PROXY_ENABLED:-false}
+      - EGRESS_FORWARD_PROXY_CA_BUNDLE=${EGRESS_FORWARD_PROXY_CA_BUNDLE:-}
+      - EGRESS_HTTP_POOL_MAX_CONNECTIONS=${EGRESS_HTTP_POOL_MAX_CONNECTIONS:-100}
+      - EGRESS_HTTP_POOL_MAX_KEEPALIVE=${EGRESS_HTTP_POOL_MAX_KEEPALIVE:-20}
+      - EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS=${EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS:-30}
+      - EGRESS_HTTP_POOL_CONNECT_RETRIES=${EGRESS_HTTP_POOL_CONNECT_RETRIES:-1}
+      # Application logs, the same knobs as mcpgw (docs/logging-standard.md).
+      - APP_LOG_DIR=${APP_LOG_DIR:-/var/log/containers/ai-registry}
+      - APP_LOG_FILE_FORMAT=${APP_LOG_FILE_FORMAT:-json}
+      - APP_LOG_CONSOLE_FORMAT=${APP_LOG_CONSOLE_FORMAT:-json}
+      - APP_LOG_LEVEL=${APP_LOG_LEVEL:-INFO}
+      - APP_LOG_MAX_BYTES=${APP_LOG_MAX_BYTES:-52428800}
+      - APP_LOG_BACKUP_COUNT=${APP_LOG_BACKUP_COUNT:-5}
+    volumes:
+      - /var/log/containers/ai-registry:/var/log/containers/ai-registry
+    env_file:
+      - path: ${MCP_EXTRA_ENV_DIR:-./extra_env}/openapi-mcp.env
+        required: false
+    # Loopback only: the registry and nginx reach it on the compose network.
+    ports:
+      - "${HOST_BIND_IP:-127.0.0.1}:9876:9876"
     restart: unless-stopped
 
   # Real Server Fake Tools MCP Server

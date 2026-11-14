@@ -1,0 +1,318 @@
+suite: OpenAPI MCP servers across the stack (issue #2022)
+release:
+  name: test
+  namespace: default
+tests:
+  - it: leaves the feature off in the registry by default
+    templates:
+      - charts/registry/templates/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENAPI_MCP_ENABLED
+            value: "false"
+
+  - it: deploys the openapi-mcp pod when both flags are on
+    templates:
+      - charts/openapiMcp/templates/deployment.yaml
+    set:
+      openapiMcp:
+        enabled: true
+      auth-server:
+        app:
+          openapiMcpEnabled: true
+      registry:
+        app:
+          openapiMcpEnabled: true
+    asserts:
+      - isKind:
+          of: Deployment
+      - equal:
+          path: metadata.name
+          value: openapi-mcp
+
+  - it: points the registry and openapi-mcp at the same sync Secret
+    templates:
+      - charts/registry/templates/deployment.yaml
+      - charts/openapiMcp/templates/deployment.yaml
+    set:
+      openapiMcp:
+        enabled: true
+      auth-server:
+        app:
+          openapiMcpEnabled: true
+      registry:
+        app:
+          openapiMcpEnabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENAPI_MCP_SYNC_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: openapi-mcp-sync-secret
+                key: OPENAPI_MCP_SYNC_SECRET
+        template: charts/registry/templates/deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENAPI_MCP_SYNC_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: openapi-mcp-sync-secret
+                key: OPENAPI_MCP_SYNC_SECRET
+        template: charts/openapiMcp/templates/deployment.yaml
+
+  - it: global.openapiMcp.existingSyncSecret reaches both pods and suppresses the chart Secret
+    templates:
+      - charts/registry/templates/deployment.yaml
+      - charts/openapiMcp/templates/deployment.yaml
+      - charts/openapiMcp/templates/secret.yaml
+    set:
+      global:
+        openapiMcp:
+          existingSyncSecret: my-sync
+      openapiMcp:
+        enabled: true
+      auth-server:
+        app:
+          openapiMcpEnabled: true
+      registry:
+        app:
+          openapiMcpEnabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENAPI_MCP_SYNC_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: my-sync
+                key: OPENAPI_MCP_SYNC_SECRET
+        template: charts/registry/templates/deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENAPI_MCP_SYNC_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: my-sync
+                key: OPENAPI_MCP_SYNC_SECRET
+        template: charts/openapiMcp/templates/deployment.yaml
+      - hasDocuments:
+          count: 0
+        template: charts/openapiMcp/templates/secret.yaml
+
+  - it: global.ssrfAllowedCidrs reaches the openapi-mcp deployment
+    templates:
+      - charts/openapiMcp/templates/deployment.yaml
+    set:
+      global:
+        ssrfAllowedCidrs: "240.240.0.0/16"
+      openapiMcp:
+        enabled: true
+      auth-server:
+        app:
+          openapiMcpEnabled: true
+      registry:
+        app:
+          openapiMcpEnabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSRF_ALLOWED_CIDRS
+            value: "240.240.0.0/16"
+
+  - it: fails when openapiMcp.enabled is on but the registry flag is off
+    templates:
+      - templates/validate-values.yaml
+    set:
+      openapiMcp:
+        enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "openapiMcp.enabled .* and registry.app.openapiMcpEnabled .* must be equal"
+
+  - it: fails when the registry flag is on but the openapi-mcp subchart is off
+    templates:
+      - templates/validate-values.yaml
+    set:
+      registry:
+        app:
+          openapiMcpEnabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "must be equal"
+
+  - it: fails when the SSRF allowlists differ between the registry and openapi-mcp
+    templates:
+      - templates/validate-values.yaml
+    set:
+      openapiMcp:
+        enabled: true
+      auth-server:
+        app:
+          openapiMcpEnabled: true
+      registry:
+        app:
+          openapiMcpEnabled: true
+          ssrfAllowedHosts: internal.example.test
+    asserts:
+      - failedTemplate:
+          errorPattern: "registry app.ssrfAllowedHosts is \"internal.example.test\" but openapiMcp has \"\""
+
+  - it: fails when gatewayProxyAllowPrivateTargets differs
+    templates:
+      - templates/validate-values.yaml
+    set:
+      openapiMcp:
+        enabled: true
+        app:
+          gatewayProxyAllowPrivateTargets: true
+      auth-server:
+        app:
+          openapiMcpEnabled: true
+      registry:
+        app:
+          openapiMcpEnabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "gatewayProxyAllowPrivateTargets"
+
+  - it: renders when the SSRF settings match on both
+    templates:
+      - charts/openapiMcp/templates/deployment.yaml
+    set:
+      openapiMcp:
+        enabled: true
+        app:
+          ssrfAllowedHosts: internal.example.test
+      auth-server:
+        app:
+          openapiMcpEnabled: true
+      registry:
+        app:
+          openapiMcpEnabled: true
+          ssrfAllowedHosts: internal.example.test
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSRF_ALLOWED_HOSTS
+            value: internal.example.test
+
+  - it: leaves the OpenAPI MCP settings off the auth server by default
+    templates:
+      - charts/auth-server/templates/deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENAPI_MCP_ENABLED
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENAPI_MCP_INTERNAL_URL
+          any: true
+
+  - it: gives the auth server the flag and internal URL, never the sync secret
+    templates:
+      - charts/auth-server/templates/deployment.yaml
+    set:
+      openapiMcp:
+        enabled: true
+      auth-server:
+        app:
+          openapiMcpEnabled: true
+      registry:
+        app:
+          openapiMcpEnabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENAPI_MCP_ENABLED
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENAPI_MCP_INTERNAL_URL
+            value: http://openapi-mcp:9876
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENAPI_MCP_SYNC_SECRET
+          any: true
+
+  - it: admits the registry and auth-server pods to openapi-mcp
+    templates:
+      - charts/openapiMcp/templates/networkpolicy.yaml
+    set:
+      openapiMcp:
+        enabled: true
+      auth-server:
+        app:
+          openapiMcpEnabled: true
+      registry:
+        app:
+          openapiMcpEnabled: true
+    asserts:
+      - equal:
+          path: spec.ingress[0].from
+          value:
+            - podSelector:
+                matchLabels:
+                  app.kubernetes.io/name: registry
+            - podSelector:
+                matchLabels:
+                  app.kubernetes.io/name: auth-server
+      - equal:
+          path: spec.ingress[0].ports
+          value:
+            - protocol: TCP
+              port: 9876
+
+  - it: fails when the auth-server flag is off but the feature is on
+    templates:
+      - templates/validate-values.yaml
+    set:
+      openapiMcp:
+        enabled: true
+      registry:
+        app:
+          openapiMcpEnabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "openapiMcp.enabled .* and auth-server.app.openapiMcpEnabled .* must be equal"
+
+  - it: fails when the auth-server flag is on but the feature is off
+    templates:
+      - templates/validate-values.yaml
+    set:
+      auth-server:
+        app:
+          openapiMcpEnabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "auth-server.app.openapiMcpEnabled .* must be equal"
+
+  - it: fails when the registry and auth server use different internal URLs
+    templates:
+      - templates/validate-values.yaml
+    set:
+      openapiMcp:
+        enabled: true
+      auth-server:
+        app:
+          openapiMcpEnabled: true
+          openapiMcpInternalUrl: http://other:9876
+      registry:
+        app:
+          openapiMcpEnabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "openapiMcpInternalUrl .* must be equal"

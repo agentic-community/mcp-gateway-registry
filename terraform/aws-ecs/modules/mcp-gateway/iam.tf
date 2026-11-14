@@ -322,3 +322,40 @@ resource "aws_iam_policy" "ecs_exec_task" {
 
   tags = local.common_tags
 }
+
+
+# Read access to the OpenAPI MCP sync secret only (issue #2022). Attached to the
+# task execution roles of the registry and openapi-mcp services, and to no other
+# service, so the auth server and mcpgw cannot read it. The openapi-mcp task gets
+# no other Secrets Manager grant.
+resource "aws_iam_policy" "openapi_mcp_sync_secret_access" {
+  count       = var.openapi_mcp_enabled ? 1 : 0
+  name_prefix = "${local.name_prefix}-openapi-mcp-sync-"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:GetSecretValue"
+        ]
+        Resource = [
+          aws_secretsmanager_secret.openapi_mcp_sync_secret[0].arn
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "kms:Decrypt",
+          "kms:DescribeKey"
+        ]
+        Resource = [
+          aws_kms_key.secrets.arn
+        ]
+      }
+    ]
+  })
+
+  tags = local.common_tags
+}

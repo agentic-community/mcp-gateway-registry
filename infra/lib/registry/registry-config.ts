@@ -68,6 +68,8 @@ export interface ImagesConfig {
   currenttime: string;
   /** Container image URI for mcpgw MCP server */
   mcpgw: string;
+  /** Container image URI for the openapi-mcp container (pinned tag, never :latest) */
+  openapiMcp: string;
   /** Container image URI for realserverfaketools MCP server */
   realserverfaketools: string;
   /** Container image URI for flight booking A2A agent */
@@ -349,6 +351,30 @@ export interface MonitoringConfig {
   alarmSnsTopicArn: string;
 }
 
+/** OpenAPI MCP servers (issue #2022). Mirrors the openapi_mcp_* Terraform variables. */
+export interface OpenapiMcpConfig {
+  /** Deploy the openapi-mcp service and turn the feature on in the registry */
+  enabled: boolean;
+  /** Task count. Must be 1: the registry pushes state to one Service Connect address */
+  replicas: number;
+  /** Most OpenAPI MCP servers a deployment can have (1 to 100) */
+  maxServers: number;
+  /** Most REST targets per server (1 to 50) */
+  maxTargetsPerServer: number;
+  /** Most tools one target may produce after its filters (1 to 500) */
+  maxToolsPerTarget: number;
+  /** Largest spec in bytes the registry will fetch (1024 to 20971520) */
+  specMaxBytes: number;
+  /** Seconds between reconciler passes (10 to 3600) */
+  reconcileIntervalSeconds: number;
+  /** Timeout in seconds for each backend REST call (above 0, at most 300) */
+  backendTimeoutSeconds: number;
+  /** Largest backend response in bytes passed to the agent (1024 to 104857600) */
+  maxResponseBytes: number;
+  /** Longest one spec conversion may take, in seconds (above 0, at most 120) */
+  conversionTimeoutSeconds: number;
+}
+
 // ---------------------------------------------------------------------------
 // Top-level RegistryConfig interface
 // ---------------------------------------------------------------------------
@@ -415,6 +441,7 @@ export interface RegistryConfig {
   uiTabs: UiTabsConfig;
   staticTokenAuth: StaticTokenAuthConfig;
   monitoring: MonitoringConfig;
+  openapiMcp: OpenapiMcpConfig;
 }
 
 // ---------------------------------------------------------------------------
@@ -473,6 +500,7 @@ export const DEFAULT_REGISTRY_CONFIG: RegistryConfig = {
     keycloak: 'quay.io/keycloak/keycloak:26.2.4',
     currenttime: '',
     mcpgw: '',
+    openapiMcp: '',
     realserverfaketools: '',
     flightBookingAgent: '',
     travelAssistantAgent: '',
@@ -627,6 +655,19 @@ export const DEFAULT_REGISTRY_CONFIG: RegistryConfig = {
     alarmEmail: '',
     alarmSnsTopicArn: '',
   },
+
+  openapiMcp: {
+    enabled: false,
+    replicas: 1,
+    maxServers: 10,
+    maxTargetsPerServer: 10,
+    maxToolsPerTarget: 100,
+    specMaxBytes: 5242880,
+    reconcileIntervalSeconds: 60,
+    backendTimeoutSeconds: 30,
+    maxResponseBytes: 2097152,
+    conversionTimeoutSeconds: 10,
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -692,6 +733,62 @@ function _injectSecrets(config: RegistryConfig): void {
     let target: any = config;
     for (const k of keys) target = target[k];
     target[last] = value;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Helper: validate the OpenAPI MCP settings (parity with Terraform validation)
+// ---------------------------------------------------------------------------
+
+// [config key, minimum, maximum] for each integer limit.
+const OPENAPI_MCP_INT_RANGES: Array<[keyof OpenapiMcpConfig, number, number]> = [
+  ['maxServers', 1, 100],
+  ['maxTargetsPerServer', 1, 50],
+  ['maxToolsPerTarget', 1, 500],
+  ['specMaxBytes', 1024, 20971520],
+  ['reconcileIntervalSeconds', 10, 3600],
+  ['maxResponseBytes', 1024, 104857600],
+];
+
+// [config key, exclusive minimum, maximum] for each timeout.
+const OPENAPI_MCP_TIMEOUT_RANGES: Array<[keyof OpenapiMcpConfig, number, number]> = [
+  ['backendTimeoutSeconds', 0, 300],
+  ['conversionTimeoutSeconds', 0, 120],
+];
+
+function _validateOpenapiMcpConfig(config: RegistryConfig): void {
+  const openapiMcp = config.openapiMcp;
+  const problems: string[] = [];
+
+  for (const [key, min, max] of OPENAPI_MCP_INT_RANGES) {
+    const value = openapiMcp[key] as number;
+    if (!Number.isInteger(value) || value < min || value > max) {
+      problems.push(`openapiMcp.${key} must be an integer from ${min} to ${max}, got ${JSON.stringify(value)}`);
+    }
+  }
+  for (const [key, min, max] of OPENAPI_MCP_TIMEOUT_RANGES) {
+    const value = openapiMcp[key] as number;
+    if (typeof value !== 'number' || value <= min || value > max) {
+      problems.push(`openapiMcp.${key} must be above ${min} and at most ${max}, got ${JSON.stringify(value)}`);
+    }
+  }
+  if (openapiMcp.replicas !== 1) {
+    problems.push(
+      `openapiMcp.replicas must be 1, got ${JSON.stringify(openapiMcp.replicas)}. ` +
+      'The registry pushes state to one Service Connect address, so a second task would serve stale tools',
+    );
+  }
+
+  const image = (config.images.openapiMcp ?? '').trim();
+  if (openapiMcp.enabled && image === '') {
+    problems.push('images.openapiMcp must be set when openapiMcp.enabled is true');
+  }
+  if (image.endsWith(':latest')) {
+    problems.push('images.openapiMcp must use a pinned version tag or digest, not :latest');
+  }
+
+  if (problems.length > 0) {
+    throw new Error(`Invalid OpenAPI MCP configuration in config.yaml: ${problems.join('; ')}.`);
   }
 }
 
@@ -780,6 +877,9 @@ export function loadRegistryConfig(configPath: string): RegistryConfig {
       );
     }
   }
+
+  // OpenAPI MCP servers: fail at synth, as Terraform's validation blocks do at plan.
+  _validateOpenapiMcpConfig(config);
 
   // Keycloak sslRequired=external blocks admin ops over plain HTTP, so a
   // public HTTPS front is required. Fail fast at synth if neither option is

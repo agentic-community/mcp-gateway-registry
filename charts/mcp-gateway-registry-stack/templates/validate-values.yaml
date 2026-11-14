@@ -3,3 +3,4 @@ Render-time checks that span subcharts. This template renders no manifest; it
 only fails the render when the values disagree across charts.
 */ -}}
 {{- include "mcp-gateway-registry-stack.validateSessionSettings" . -}}
+{{- include "mcp-gateway-registry-stack.validateOpenapiMcp" . -}}

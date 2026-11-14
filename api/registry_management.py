@@ -179,6 +179,21 @@ Virtual MCP Server Management:
     # Get virtual server details
     uv run python registry_management.py vs-get --path /virtual/dev-tools
 
+    # OpenAPI MCP servers: create a server, add a REST API with a key read from an env var
+    uv run python registry_management.py openapi-server-create --name "Weather APIs"
+    export PETSTORE_KEY=...
+    uv run python registry_management.py openapi-target-add --slug weather-apis --name petstore \\
+        --spec-url https://petstore3.swagger.io/api/v3/openapi.json \\
+        --base-url https://petstore3.swagger.io/api/v3 \\
+        --auth-scheme api_key_header --header-name api_key --credential-env PETSTORE_KEY --include-tag pet
+
+    # Upload the spec from a local file instead of a URL, or replace it later
+    uv run python registry_management.py openapi-target-add --slug space-apis --name nasa \\
+        --spec-file docs/examples/openapi/nasa.json --base-url https://api.nasa.gov \\
+        --auth-scheme api_key_header --header-name X-Api-Key --credential-mode per_user
+    uv run python registry_management.py openapi-target-update --slug space-apis --name nasa \\
+        --spec-file docs/examples/openapi/nasa.json
+
     # Update a virtual server from JSON config
     uv run python registry_management.py vs-update --path /virtual/dev-tools --config updated-config.json
 
@@ -270,6 +285,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import requests
 from registry_client import (
     AgentProvider,
     AgentRegistration,
@@ -6491,6 +6507,359 @@ def cmd_embeddings_stale_cleanup(args: argparse.Namespace) -> int:
         return 1
 
 
+def _read_openapi_credential(
+    args: argparse.Namespace,
+) -> str | None:
+    """Read a target credential from an environment variable or stdin, never from argv."""
+    if getattr(args, "credential_env", None):
+        value = os.environ.get(args.credential_env)
+        if not value:
+            raise ValueError(f"environment variable {args.credential_env} is empty or unset")
+        return value
+    if getattr(args, "credential_stdin", False):
+        return sys.stdin.readline().rstrip("\n")
+    return None
+
+
+def _parse_key_value_pairs(
+    pairs: list[str] | None,
+    flag: str,
+) -> dict[str, str]:
+    """Turn repeated KEY=VALUE flags into a dict."""
+    result: dict[str, str] = {}
+    for pair in pairs or []:
+        key, sep, value = pair.partition("=")
+        if not sep or not key:
+            raise ValueError(f"{flag} expects KEY=VALUE, got {pair!r}")
+        result[key] = value
+    return result
+
+
+def _openapi_auth_body(
+    args: argparse.Namespace,
+) -> dict[str, Any] | None:
+    """Build the auth object from the flags, or None when no auth flag was given."""
+    if not args.auth_scheme:
+        return None
+    auth: dict[str, Any] = {"scheme": args.auth_scheme}
+    for field in ("credential_mode", "header_name", "query_param", "username"):
+        if getattr(args, field, None):
+            auth[field] = getattr(args, field)
+    credential = _read_openapi_credential(args)
+    if credential:
+        auth["credential"] = credential
+    return auth
+
+
+def _openapi_target_options(
+    args: argparse.Namespace,
+) -> dict[str, Any]:
+    """Filters and overrides from flags, merged over --overrides-file."""
+    body: dict[str, Any] = {}
+    if args.overrides_file:
+        with open(args.overrides_file) as handle:
+            body.update(json.load(handle))
+    if args.include_tag:
+        body["include_tags"] = args.include_tag
+    if args.include_operation:
+        body["include_operations"] = args.include_operation
+    if args.tool_name_override:
+        body["tool_name_overrides"] = _parse_key_value_pairs(
+            args.tool_name_override, "--tool-name-override"
+        )
+    if args.description_override:
+        body["description_overrides"] = _parse_key_value_pairs(
+            args.description_override, "--description-override"
+        )
+    if args.keep_output_schemas:
+        body["keep_output_schemas"] = True
+    return body
+
+
+def _print_json(
+    value: Any,
+) -> None:
+    print(json.dumps(value, indent=2, default=str))
+
+
+def _openapi_spec_body(
+    args: argparse.Namespace,
+) -> dict[str, Any]:
+    """The spec part of a target body: the file's text for --spec-file, else --spec-url."""
+    spec_file = getattr(args, "spec_file", None)
+    if spec_file:
+        with open(spec_file, encoding="utf-8") as handle:
+            content = handle.read()
+        logger.info(f"Uploading spec from {spec_file} ({len(content.encode('utf-8'))} bytes)")
+        return {"spec_content": content}
+    spec_url = getattr(args, "spec_url", None)
+    if spec_url:
+        return {"spec_url": spec_url}
+    return {}
+
+
+def _run_openapi_command(
+    label: str,
+    action: Any,
+) -> int:
+    """Run one OpenAPI MCP command, print its JSON result, and map errors to exit code 1."""
+    try:
+        result = action()
+    except requests.HTTPError as e:
+        body = e.response.text if e.response is not None else ""
+        logger.error(f"{label} failed: {e}\n{body}")
+        return 1
+    except (ValueError, OSError) as e:
+        logger.error(f"{label} failed: {e}")
+        return 1
+    if result is not None:
+        _print_json(result)
+    return 0
+
+
+def cmd_openapi_server_create(args: argparse.Namespace) -> int:
+    """Create an OpenAPI MCP server."""
+    body: dict[str, Any] = {
+        "name": args.name,
+        "description": args.description or "",
+        "visibility": args.visibility,
+    }
+    if args.tags:
+        body["tags"] = [t.strip() for t in args.tags.split(",") if t.strip()]
+    if args.allowed_groups:
+        body["allowed_groups"] = [g.strip() for g in args.allowed_groups.split(",") if g.strip()]
+    return _run_openapi_command(
+        "openapi-server-create", lambda: _create_client(args).create_openapi_server(body)
+    )
+
+
+def cmd_openapi_server_list(args: argparse.Namespace) -> int:
+    """List OpenAPI MCP servers."""
+    return _run_openapi_command(
+        "openapi-server-list", lambda: _create_client(args).list_openapi_servers()
+    )
+
+
+def cmd_openapi_server_get(args: argparse.Namespace) -> int:
+    """Get one OpenAPI MCP server."""
+    return _run_openapi_command(
+        "openapi-server-get", lambda: _create_client(args).get_openapi_server(args.slug)
+    )
+
+
+def cmd_openapi_server_update(args: argparse.Namespace) -> int:
+    """Update an OpenAPI MCP server."""
+    body: dict[str, Any] = {}
+    if args.description is not None:
+        body["description"] = args.description
+    if args.visibility:
+        body["visibility"] = args.visibility
+    if args.tags is not None:
+        body["tags"] = [t.strip() for t in args.tags.split(",") if t.strip()]
+    if args.allowed_groups is not None:
+        body["allowed_groups"] = [g.strip() for g in args.allowed_groups.split(",") if g.strip()]
+    return _run_openapi_command(
+        "openapi-server-update", lambda: _create_client(args).update_openapi_server(args.slug, body)
+    )
+
+
+def cmd_openapi_server_delete(args: argparse.Namespace) -> int:
+    """Delete an OpenAPI MCP server."""
+    if not args.force:
+        logger.error(f"Refusing to delete '{args.slug}' and all of its tools without --force")
+        return 1
+    return _run_openapi_command(
+        "openapi-server-delete", lambda: _create_client(args).delete_openapi_server(args.slug)
+    )
+
+
+def cmd_openapi_target_add(args: argparse.Namespace) -> int:
+    """Add a REST target to an OpenAPI MCP server."""
+
+    def _action() -> Any:
+        body: dict[str, Any] = {
+            "name": args.name,
+            "base_url": args.base_url,
+            **_openapi_spec_body(args),
+        }
+        if args.description:
+            body["description"] = args.description
+        auth = _openapi_auth_body(args)
+        if auth:
+            body["auth"] = auth
+        body.update(_openapi_target_options(args))
+        return _create_client(args).add_openapi_target(args.slug, body)
+
+    return _run_openapi_command("openapi-target-add", _action)
+
+
+def cmd_openapi_target_get(args: argparse.Namespace) -> int:
+    """Get one REST target."""
+    return _run_openapi_command(
+        "openapi-target-get", lambda: _create_client(args).get_openapi_target(args.slug, args.name)
+    )
+
+
+def cmd_openapi_target_update(args: argparse.Namespace) -> int:
+    """Update a REST target, rotate its credential, or refresh its spec."""
+
+    def _action() -> Any:
+        body: dict[str, Any] = {}
+        if args.description is not None:
+            body["description"] = args.description
+        if args.base_url:
+            body["base_url"] = args.base_url
+        auth = _openapi_auth_body(args)
+        if auth:
+            body["auth"] = auth
+        body.update(_openapi_target_options(args))
+        body.update(_openapi_spec_body(args))
+        if args.refresh_spec:
+            body["refresh_spec"] = True
+        return _create_client(args).update_openapi_target(args.slug, args.name, body)
+
+    return _run_openapi_command("openapi-target-update", _action)
+
+
+def cmd_openapi_target_remove(args: argparse.Namespace) -> int:
+    """Remove a REST target."""
+    return _run_openapi_command(
+        "openapi-target-remove",
+        lambda: _create_client(args).remove_openapi_target(args.slug, args.name),
+    )
+
+
+def _add_openapi_target_flags(
+    parser: argparse.ArgumentParser,
+) -> None:
+    """Auth, filter and override flags shared by openapi-target-add and -update."""
+    parser.add_argument("--description", help="Target description")
+    parser.add_argument(
+        "--auth-scheme",
+        choices=["none", "api_key_header", "api_key_query", "bearer", "basic"],
+        help="Auth scheme",
+    )
+    parser.add_argument(
+        "--credential-mode",
+        choices=["shared", "per_user"],
+        help="shared (default): one credential for every caller. per_user: each user adds their own key",
+    )
+    parser.add_argument("--header-name", help="Header that carries the key (api_key_header)")
+    parser.add_argument(
+        "--query-param", help="Query parameter that carries the key (api_key_query)"
+    )
+    parser.add_argument("--username", help="Username (basic)")
+    parser.add_argument(
+        "--credential-env", metavar="VAR", help="Read the credential from this environment variable"
+    )
+    parser.add_argument(
+        "--credential-stdin",
+        action="store_true",
+        help="Read the credential from the first line of stdin",
+    )
+    parser.add_argument(
+        "--include-tag",
+        action="append",
+        metavar="TAG",
+        help="Keep operations with this tag (repeatable)",
+    )
+    parser.add_argument(
+        "--include-operation",
+        action="append",
+        metavar="OP",
+        help="Keep this operationId or 'METHOD /path' (repeatable)",
+    )
+    parser.add_argument(
+        "--tool-name-override",
+        action="append",
+        metavar="OLD=NEW",
+        help="Rename a tool (repeatable)",
+    )
+    parser.add_argument(
+        "--description-override",
+        action="append",
+        metavar="TOOL=TEXT",
+        help="Replace a tool description (repeatable)",
+    )
+    parser.add_argument(
+        "--overrides-file",
+        metavar="FILE",
+        help="JSON file with tool_name_overrides and description_overrides",
+    )
+    parser.add_argument(
+        "--keep-output-schemas",
+        action="store_true",
+        help="Keep the spec's response schemas on tools",
+    )
+
+
+def _add_openapi_parsers(
+    subparsers: Any,
+) -> None:
+    """Register the openapi-server-* and openapi-target-* commands (issue #2022)."""
+    create = subparsers.add_parser("openapi-server-create", help="Create an OpenAPI MCP server")
+    create.add_argument(
+        "--name",
+        required=True,
+        help="Server name; it becomes the path (Weather APIs -> /weather-apis)",
+    )
+    create.add_argument("--description", help="Server description")
+    create.add_argument("--tags", help="Comma-separated tags")
+    create.add_argument(
+        "--visibility", default="private", choices=["private", "public", "group-restricted"]
+    )
+    create.add_argument("--allowed-groups", help="Comma-separated groups (group-restricted)")
+    subparsers.add_parser("openapi-server-list", help="List OpenAPI MCP servers")
+    get = subparsers.add_parser("openapi-server-get", help="Get an OpenAPI MCP server")
+    get.add_argument("--slug", required=True)
+    update = subparsers.add_parser("openapi-server-update", help="Update an OpenAPI MCP server")
+    update.add_argument("--slug", required=True)
+    update.add_argument("--description")
+    update.add_argument("--tags", help="Comma-separated tags (replaces the list)")
+    update.add_argument("--visibility", choices=["private", "public", "group-restricted"])
+    update.add_argument("--allowed-groups", help="Comma-separated groups (replaces the list)")
+    delete = subparsers.add_parser(
+        "openapi-server-delete", help="Delete an OpenAPI MCP server and its tools"
+    )
+    delete.add_argument("--slug", required=True)
+    delete.add_argument("--force", action="store_true", help="Required: confirms the deletion")
+    add = subparsers.add_parser(
+        "openapi-target-add", help="Add a REST target from an OpenAPI 3.x spec"
+    )
+    add.add_argument("--slug", required=True)
+    add.add_argument("--name", required=True, help="Target name; it prefixes the tool names")
+    add_spec = add.add_mutually_exclusive_group(required=True)
+    add_spec.add_argument("--spec-url", help="URL the registry fetches the spec from")
+    add_spec.add_argument(
+        "--spec-file", help="Local JSON or YAML spec file to upload instead of a URL"
+    )
+    add.add_argument("--base-url", required=True)
+    _add_openapi_target_flags(add)
+    tget = subparsers.add_parser("openapi-target-get", help="Get a REST target")
+    tget.add_argument("--slug", required=True)
+    tget.add_argument("--name", required=True)
+    tupdate = subparsers.add_parser("openapi-target-update", help="Update a REST target")
+    tupdate.add_argument("--slug", required=True)
+    tupdate.add_argument("--name", required=True)
+    tupdate.add_argument("--base-url")
+    update_spec = tupdate.add_mutually_exclusive_group()
+    update_spec.add_argument(
+        "--refresh-spec",
+        action="store_true",
+        help="Fetch the spec again from the stored URL and re-run every check",
+    )
+    update_spec.add_argument("--spec-url", help="Fetch the spec from this URL from now on")
+    update_spec.add_argument(
+        "--spec-file", help="Replace the spec with this local JSON or YAML file"
+    )
+    _add_openapi_target_flags(tupdate)
+    remove = subparsers.add_parser(
+        "openapi-target-remove", help="Remove a REST target and its tools"
+    )
+    remove.add_argument("--slug", required=True)
+    remove.add_argument("--name", required=True)
+
+
 def main() -> int:
     """
     Main entry point for the CLI.
@@ -8262,6 +8631,8 @@ Examples:
     )
 
     # Get virtual server command
+    _add_openapi_parsers(subparsers)
+
     vs_get_parser = subparsers.add_parser("vs-get", help="Get virtual MCP server details")
     vs_get_parser.add_argument(
         "--path", required=True, help="Virtual server path (e.g., /virtual/dev-tools)"
@@ -8564,6 +8935,16 @@ Examples:
         "vs-create": cmd_vs_create,
         "vs-list": cmd_vs_list,
         "vs-get": cmd_vs_get,
+        # OpenAPI MCP server commands (issue #2022)
+        "openapi-server-create": cmd_openapi_server_create,
+        "openapi-server-list": cmd_openapi_server_list,
+        "openapi-server-get": cmd_openapi_server_get,
+        "openapi-server-update": cmd_openapi_server_update,
+        "openapi-server-delete": cmd_openapi_server_delete,
+        "openapi-target-add": cmd_openapi_target_add,
+        "openapi-target-get": cmd_openapi_target_get,
+        "openapi-target-update": cmd_openapi_target_update,
+        "openapi-target-remove": cmd_openapi_target_remove,
         "vs-update": cmd_vs_update,
         "vs-delete": cmd_vs_delete,
         "vs-toggle": cmd_vs_toggle,

@@ -152,6 +152,7 @@ import http.cookiejar
 import ipaddress
 import logging
 import os
+import re
 import socket
 import ssl
 import threading
@@ -487,6 +488,17 @@ _BUILTIN_AIREGISTRY_TOOLS_OUTBOUND_IDENTITIES: frozenset[str] = frozenset(
     }
 )
 _RESERVED_BUILTIN_PROXY_HOSTS: frozenset[str] = frozenset({"mcpgw-server"})
+
+# The second built-in private target: the openapi-mcp container that serves
+# OpenAPI MCP servers (issue #2022). Each server registered at /<slug>/ is
+# trusted only when its target is exactly <container>/s/<slug>/mcp, and a
+# request through the selected profile may reach only /s/<slug>/mcp paths,
+# never the container's /internal/* control API. The container host stays
+# reserved in every other profile, even with the feature off.
+_OPENAPI_MCP_ENTITY_TYPE = "mcp_server"
+_OPENAPI_MCP_SLUG_PATTERN = r"[a-z0-9]+(?:-[a-z0-9]+)*"
+_OPENAPI_MCP_SLUG_RE = re.compile(rf"^{_OPENAPI_MCP_SLUG_PATTERN}$")
+_OPENAPI_MCP_SERVER_PREFIX = "/s/"
 
 # Nginx metacharacters that must never appear in a proxy_pass_url. A valid URL
 # never legitimately contains these; their presence indicates an attempt to
@@ -1099,6 +1111,83 @@ def is_builtin_airegistry_tools_target(
         return False
 
 
+def _openapi_mcp_reserved_host() -> str | None:
+    """Host of OPENAPI_MCP_INTERNAL_URL, lower-cased. Reserved even when the feature is off."""
+    url = getattr(_get_settings(), "openapi_mcp_internal_url", "")
+    if not isinstance(url, str) or not url:
+        return None
+    host = urlsplit(url).hostname
+    return host.lower() if host else None
+
+
+def _openapi_mcp_base() -> str | None:
+    """Normalized container origin (no trailing slash) when the feature is on, else None."""
+    s = _get_settings()
+    # Strict checks: only a real True enables the identity, and only a real
+    # string is a URL, so a partial or mocked settings object fails closed.
+    if getattr(s, "openapi_mcp_enabled", False) is not True:
+        return None
+    url = getattr(s, "openapi_mcp_internal_url", "")
+    if not isinstance(url, str) or not url:
+        return None
+    try:
+        return normalize_url_identity(url).rstrip("/")
+    except UrlValidationError:
+        return None
+
+
+def openapi_mcp_target_url(
+    slug: str,
+) -> str:
+    """Return the exact container URL an OpenAPI MCP server must register as its target.
+
+    Raises:
+        UrlValidationError: When the feature is off or the slug is not valid.
+    """
+    base = _openapi_mcp_base()
+    if base is None or not _OPENAPI_MCP_SLUG_RE.fullmatch(slug or ""):
+        raise UrlValidationError(str(slug), "OpenAPI MCP servers are off or the slug is invalid")
+    return f"{base}{_OPENAPI_MCP_SERVER_PREFIX}{slug}/mcp"
+
+
+def is_builtin_openapi_mcp_target(
+    entity_type: str,
+    entity_path: str | None,
+    target_url: str | None,
+) -> bool:
+    """True only for the MCP server /<slug>/ pointing at exactly <container>/s/<slug>/mcp."""
+    if entity_type != _OPENAPI_MCP_ENTITY_TYPE:
+        return False
+    slug = _normalized_registered_path(entity_path).strip("/")
+    try:
+        expected = openapi_mcp_target_url(slug)
+        return normalize_url_identity(target_url) == expected
+    except UrlValidationError:
+        return False
+
+
+def _openapi_mcp_outbound_pattern() -> re.Pattern[str] | None:
+    """The only URLs the built-in OpenAPI MCP profile may reach: <container>/s/<slug>/mcp[/]."""
+    base = _openapi_mcp_base()
+    if base is None:
+        return None
+    return re.compile(
+        rf"{re.escape(base)}{re.escape(_OPENAPI_MCP_SERVER_PREFIX)}{_OPENAPI_MCP_SLUG_PATTERN}/mcp/?"
+    )
+
+
+def _builtin_openapi_mcp_allowlist() -> _Allowlist:
+    """Proxy policy plus the one container hostname. Not cached: it follows settings."""
+    ordinary = _proxy_allowlist()
+    host = _openapi_mcp_reserved_host()
+    extra = frozenset({host}) if host else frozenset()
+    return _Allowlist(
+        hosts=ordinary.hosts | extra,
+        cidrs=ordinary.cidrs,
+        allow_private=ordinary.allow_private,
+    )
+
+
 @lru_cache(maxsize=1)
 def _skill_allowlist() -> _Allowlist:
     """Return the skill-fetch bypass allowlist (github_extra_hosts only).
@@ -1232,6 +1321,10 @@ class _Profile:
     name: str
     allowlist_factory: object  # callable returning _Allowlist
     allowed_url_identities: frozenset[str] | None = None
+    # Callable returning a compiled pattern the normalized URL must fully match,
+    # or None to deny every URL. For identities that depend on settings (the
+    # openapi-mcp container's per-server paths), where a fixed set cannot work.
+    allowed_url_pattern_factory: object | None = None
     require_https: bool = False
     allow_private: bool = False
     # Profiles whose requests carry a secret (client secret, refresh token,
@@ -1250,6 +1343,11 @@ BUILTIN_AIREGISTRY_TOOLS_PROFILE = _Profile(
     name="builtin-airegistry-tools",
     allowlist_factory=_builtin_airegistry_tools_allowlist,
     allowed_url_identities=_BUILTIN_AIREGISTRY_TOOLS_OUTBOUND_IDENTITIES,
+)
+BUILTIN_OPENAPI_MCP_PROFILE = _Profile(
+    name="builtin-openapi-mcp",
+    allowlist_factory=_builtin_openapi_mcp_allowlist,
+    allowed_url_pattern_factory=_openapi_mcp_outbound_pattern,
 )
 FEDERATION_PROFILE = _Profile(
     name="federation",
@@ -1276,6 +1374,22 @@ EGRESS_UPSTREAM_PROFILE = _Profile(
 )
 
 
+def _select_openapi_mcp_profile(
+    registered_target_url: str | None,
+    outbound_url: str | None,
+) -> _Profile:
+    """Admit only the registered target and the same URL with a trailing slash."""
+    target = normalize_url_identity(registered_target_url)
+    candidate = outbound_url or registered_target_url
+    normalized = normalize_url_identity(candidate)
+    if normalized not in (target, target + "/"):
+        raise UrlValidationError(
+            candidate,
+            "outbound URL does not match the exact OpenAPI MCP server identity",
+        )
+    return BUILTIN_OPENAPI_MCP_PROFILE
+
+
 def proxy_profile_for_entity_target(
     entity_type: str,
     entity_path: str | None,
@@ -1289,6 +1403,8 @@ def proxy_profile_for_entity_target(
     different override URL fails closed instead of silently falling back to the
     ordinary profile, even when that different URL is otherwise public.
     """
+    if is_builtin_openapi_mcp_target(entity_type, entity_path, registered_target_url):
+        return _select_openapi_mcp_profile(registered_target_url, outbound_url)
     if not is_builtin_airegistry_tools_target(entity_type, entity_path, registered_target_url):
         return PROXY_PROFILE
 
@@ -1466,6 +1582,12 @@ def validate_url(
         and normalized not in profile.allowed_url_identities
     ):
         raise UrlValidationError(url, "URL does not match the selected exact outbound identity")
+    if profile.allowed_url_pattern_factory is not None:
+        pattern = profile.allowed_url_pattern_factory()  # type: ignore[operator]
+        if pattern is None or not pattern.fullmatch(normalized):
+            raise UrlValidationError(
+                url, "URL does not match the selected outbound identity pattern"
+            )
     parsed = urlparse(normalized)
 
     allowed_schemes = ("https",) if require_https or profile.require_https else ("http", "https")
@@ -1502,6 +1624,11 @@ def validate_url(
         raise UrlValidationError(
             url, "hostname is reserved for the built-in airegistry-tools server"
         )
+    if (
+        hostname_lower == _openapi_mcp_reserved_host()
+        and profile is not BUILTIN_OPENAPI_MCP_PROFILE
+    ):
+        raise UrlValidationError(url, "hostname is reserved for OpenAPI MCP servers")
 
     if not resolve:
         # Registration-time structural validation only. The DNS-aware service

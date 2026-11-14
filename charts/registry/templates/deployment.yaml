@@ -536,6 +536,30 @@ spec:
               {{- else }}
               value: ""
               {{- end }}
+            # OpenAPI MCP servers (issue #2022). The seven settings always
+            # render; the sync secret renders only when the feature is on, and
+            # only through secretKeyRef.
+            - name: OPENAPI_MCP_ENABLED
+              value: {{ .Values.app.openapiMcpEnabled | toString | quote }}
+            - name: OPENAPI_MCP_INTERNAL_URL
+              value: {{ .Values.app.openapiMcpInternalUrl | quote }}
+            - name: OPENAPI_MCP_MAX_SERVERS
+              value: {{ .Values.app.openapiMcpMaxServers | int64 | toString | quote }}
+            - name: OPENAPI_MCP_MAX_TARGETS_PER_SERVER
+              value: {{ .Values.app.openapiMcpMaxTargetsPerServer | int64 | toString | quote }}
+            - name: OPENAPI_MCP_MAX_TOOLS_PER_TARGET
+              value: {{ .Values.app.openapiMcpMaxToolsPerTarget | int64 | toString | quote }}
+            - name: OPENAPI_MCP_SPEC_MAX_BYTES
+              value: {{ .Values.app.openapiMcpSpecMaxBytes | int64 | toString | quote }}
+            - name: OPENAPI_MCP_RECONCILE_INTERVAL_SECONDS
+              value: {{ .Values.app.openapiMcpReconcileIntervalSeconds | int64 | toString | quote }}
+            {{- if .Values.app.openapiMcpEnabled }}
+            - name: OPENAPI_MCP_SYNC_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "registry.openapiMcpSyncSecretName" . }}
+                  key: OPENAPI_MCP_SYNC_SECRET
+            {{- end }}
             # UI branding folder (manifest.json, theme.css, logos, fonts). Points
             # the registry at the mounted ConfigMap; rendered only when enabled,
             # so the image default (/app/branding) applies otherwise.
