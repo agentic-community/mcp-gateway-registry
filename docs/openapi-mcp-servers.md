@@ -46,7 +46,8 @@ Adding a target stores nothing until every check passes:
 
 - The SSRF guard checks the spec URL and the base URL, the same way it checks any registered backend. To reach an internal API, an operator adds its host to `SSRF_ALLOWED_HOSTS` or `SSRF_ALLOWED_CIDRS`.
 - The registry fetches the spec without following redirects, so give the final URL. Specs larger than `OPENAPI_MCP_SPEC_MAX_BYTES` (5 MiB by default) are refused.
-- The spec must be OpenAPI 3.x in JSON or YAML, valid UTF-8, with no YAML anchors or aliases. Convert a Swagger 2.0 spec first, for example with [converter.swagger.io](https://converter.swagger.io).
+- The spec must be OpenAPI 3.x in JSON or YAML, valid UTF-8, with no YAML anchors or aliases.
+- Every `$ref` must be a local `#/...` pointer. A spec split across files, or one that refers to a URL or a local file, is refused; bundle it into one document first (for example with `redocly bundle`). Convert a Swagger 2.0 spec first, for example with [converter.swagger.io](https://converter.swagger.io).
 - One target may produce at most `OPENAPI_MCP_MAX_TOOLS_PER_TARGET` tools (100 by default). A larger spec gets a `too_many_tools` error that lists the spec's tags with their operation counts. Choose operations with `include_tags` and `include_operations`; an `include_operations` entry is an `operationId` or `"METHOD /path"`.
 - Tool names may be at most 64 characters. Rename long or clashing ones with `tool_name_overrides`, keyed by `operationId`, or by `"METHOD /path"` for an operation that has none.
 

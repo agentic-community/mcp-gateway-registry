@@ -84,6 +84,69 @@ class TestParseSpec:
         assert _code(raw) == "spec_invalid"
 
 
+class TestExternalRefs:
+    """Only local '#/...' references are accepted, whatever the conversion library does."""
+
+    BASE: str = "openapi: 3.0.3\ninfo: {title: t, version: '1'}\npaths:\n  /a:\n    get:\n      responses: {'200': {description: ok}}\n"
+
+    @pytest.mark.parametrize(
+        "ref",
+        [
+            "http://169.254.169.254/latest/meta-data/",
+            "https://example.com/defs.json#/A",
+            "file:///etc/passwd",
+            "other.json#/A",
+            "//example.com/defs.json",
+        ],
+    )
+    def test_non_local_ref_rejected(self, ref):
+        raw = (
+            self.BASE
+            + f"components:\n  schemas:\n    A:\n      properties:\n        p: {{$ref: '{ref}'}}\n"
+        ).encode()
+
+        with pytest.raises(OpenApiServerError) as info:
+            openapi_spec_checks.parse_spec(raw)
+
+        assert info.value.code == "spec_invalid"
+        assert info.value.extra["refs"] == [ref]
+
+    def test_ref_in_a_list_is_found(self):
+        raw = (
+            self.BASE
+            + "components:\n  schemas:\n    A: {allOf: [{$ref: 'https://evil.example/x.json'}]}\n"
+        ).encode()
+
+        with pytest.raises(OpenApiServerError, match="not local"):
+            openapi_spec_checks.parse_spec(raw)
+
+    def test_non_string_ref_rejected(self):
+        raw = (self.BASE + "components:\n  schemas:\n    A: {$ref: 5}\n").encode()
+
+        with pytest.raises(OpenApiServerError):
+            openapi_spec_checks.parse_spec(raw)
+
+    def test_local_refs_accepted(self):
+        raw = (
+            self.BASE
+            + "components:\n  schemas:\n    A: {type: object}\n    B: {$ref: '#/components/schemas/A'}\n"
+        ).encode()
+
+        assert (
+            openapi_spec_checks.parse_spec(raw).spec["components"]["schemas"]["B"]["$ref"]
+            == "#/components/schemas/A"
+        )
+
+    def test_property_named_ref_inside_properties_is_checked_too(self):
+        """A schema property literally called "$ref" is rare; refusing it fails closed."""
+        raw = (
+            self.BASE + "components:\n  schemas:\n    A: {properties: {$ref: {type: string}}}\n"
+        ).encode()
+
+        with pytest.raises(OpenApiServerError):
+            openapi_spec_checks.parse_spec(raw)
+
+
 class TestToolChecks:
     """Tool count and tool name checks."""
 

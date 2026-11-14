@@ -36,6 +36,8 @@ logger = logging.getLogger(__name__)
 
 SPEC_FETCH_TIMEOUT_SECONDS: float = 15.0
 MAX_TOOL_NAME_CHARS: int = 64
+LOCAL_REF_PREFIX: str = "#"
+MAX_REPORTED_REFS: int = 5
 TOOL_NAME_RE = re.compile(r"^[A-Za-z0-9_.\-]+$")
 SPEC_ACCEPT_HEADER: str = (
     "application/json, application/yaml, application/x-yaml, text/yaml, */*;q=0.5"
@@ -183,6 +185,29 @@ def _decode_document(
     return json.loads(json.dumps(document, default=str))
 
 
+def _non_local_refs(
+    document: object,
+) -> list[str]:
+    """Every $ref that is not a local "#/..." pointer, found without recursion.
+
+    FastMCP refuses external references today, but that is the library's
+    behavior, not ours: a later version could start fetching URLs or reading
+    files named in a spec. Refusing them here keeps the guarantee in the registry.
+    """
+    found: list[str] = []
+    stack = [document]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            ref = node.get("$ref")
+            if "$ref" in node and not (isinstance(ref, str) and ref.startswith(LOCAL_REF_PREFIX)):
+                found.append(str(ref)[:200])
+            stack.extend(node.values())
+        elif isinstance(node, list):
+            stack.extend(node)
+    return found
+
+
 def parse_spec(
     raw: bytes,
     content_type: str = "",
@@ -191,6 +216,15 @@ def parse_spec(
     document = _decode_document(raw)
     if not isinstance(document, dict):
         raise unprocessable("spec_invalid", "the spec is not a JSON or YAML object")
+    external_refs = _non_local_refs(document)
+    if external_refs:
+        raise unprocessable(
+            "spec_invalid",
+            "the spec uses $ref values that are not local '#/...' pointers, such as "
+            f"{external_refs[:MAX_REPORTED_REFS]}. Bundle the spec into one document "
+            "(for example with 'redocly bundle') and add the target again",
+            {"refs": external_refs[:MAX_REPORTED_REFS]},
+        )
     if "swagger" in document:
         raise unprocessable(
             "spec_invalid",

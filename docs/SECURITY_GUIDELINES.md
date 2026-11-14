@@ -379,6 +379,8 @@ sanitizer that isn't called) is equivalent to no check.
 
 - **Sign forwarded user credentials where they are vended, and verify them where they are used.** OpenAPI MCP per-user keys (issue #2022) pass through the auth server's mcp-proxy hop on their way to the openapi-mcp container. The registry vend signs them into one envelope with a key the hop never holds, valid for 60 seconds and once, bound to one server, with each key bound to its target's base URL. The container verifies all of that before using a key, and drops the header before the library that forwards headers can see it. A hop that only relays a credential should never be able to forge one, and a missing key must fail the call, never fall back to a shared credential.
 
+- **Refuse external references in an admitted document; do not rely on a library to ignore them.** An OpenAPI spec can carry `$ref` values that name a URL or a local file. FastMCP and openapi-core refuse them today (probed 2026-11-14: no request was made at conversion, listing or call), but that is library behavior a later version could change into an unguarded fetch or a file read. The registry's spec checks therefore refuse every `$ref` that is not a local `#/...` pointer before the spec is stored or converted, with a test that does not depend on the library. Apply the same rule to any document format with includes or references (JSON Schema, YAML includes, XML entities).
+
 ## Injection (nginx config generation, NoSQL/regex)
 
 - **Sanitize at EVERY interpolation site AND validate at the source.** A
