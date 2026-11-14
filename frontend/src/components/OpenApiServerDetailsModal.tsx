@@ -4,9 +4,11 @@ import {
   OpenApiServer,
   OpenApiTarget,
   OpenApiTargetWriteResponse,
+  MyCredentialStatus,
 } from '../types/openApiServer';
 import {
   getOpenApiServer,
+  listMyCredentials,
   updateOpenApiTarget,
   deleteOpenApiTarget,
   parseOpenApiError,
@@ -16,6 +18,8 @@ import { SafeLink } from './SafeLink';
 import ConfirmModal from './ConfirmModal';
 import OpenApiTargetForm, { OpenApiTargetFormIntent } from './OpenApiTargetForm';
 import { OpenApiStatusBadge, openApiServerStatus } from './OpenApiServerCard';
+import OpenApiMyKeyControl, { keyErrorText } from './OpenApiMyKeyControl';
+import Badge from './Badge';
 
 
 /** Poll every 5 seconds while a target is pending. */
@@ -38,6 +42,48 @@ interface OpenApiServerDetailsModalProps {
   /** Called after any write, so the caller can refresh its list. */
   onChanged?: () => void;
 }
+
+
+/** Whether each user brings their own key for this target. */
+export function isPerUserTarget(target: OpenApiTarget): boolean {
+  return target.auth?.credential_mode === 'per_user';
+}
+
+
+/** The credential cell: a "Per user" badge, or whether a shared credential is set. */
+const _CredentialCell: React.FC<{ target: OpenApiTarget }> = ({ target }) => {
+  if (isPerUserTarget(target)) {
+    return <Badge tone="blue" title="Each user adds their own key">Per user</Badge>;
+  }
+  return <>{target.auth?.credential_set ? 'yes' : 'no'}</>;
+};
+
+
+interface YourKeysSectionProps {
+  slug: string;
+  targets: OpenApiTarget[];
+  statuses: Record<string, MyCredentialStatus> | null;
+  error: string | null;
+  onChanged: () => void;
+  onShowToast?: ToastFn;
+}
+
+
+/** The current user's own key for each per-user target. */
+const _YourKeysSection: React.FC<YourKeysSectionProps> = (props) => (
+  <div className="border-t border-line pt-4 space-y-3" data-testid="openapi-your-keys">
+    <p className="text-xs font-semibold text-fg-subtle uppercase tracking-wide">Your key</p>
+    <p className="text-xs text-fg-muted">
+      These APIs call the provider with each user&apos;s own key. Manage yours here.
+    </p>
+    {props.error && <p className="text-xs text-danger-600 dark:text-danger-400">{props.error}</p>}
+    {props.targets.map((t) => (
+      <OpenApiMyKeyControl key={t.name} slug={props.slug} targetName={t.name}
+        status={props.statuses ? props.statuses[t.name] || null : null}
+        onChanged={props.onChanged} onShowToast={props.onShowToast} />
+    ))}
+  </div>
+);
 
 
 /** The tool names, filter and error message of one expanded target row. */
@@ -118,13 +164,13 @@ const _TargetRow: React.FC<TargetRowProps> = (props) => {
         </td>
         <td className="px-3 py-2 text-xs text-fg-muted">{target.auth?.scheme || 'none'}</td>
         <td className="px-3 py-2 text-xs text-fg-muted" data-testid={`openapi-credential-set-${target.name}`}>
-          {target.auth?.credential_set ? 'yes' : 'no'}
+          <_CredentialCell target={target} />
         </td>
         <td className="px-3 py-2 text-xs text-fg-muted">{target.tool_names?.length || 0}</td>
         <td className="px-3 py-2"><OpenApiStatusBadge status={target.status || 'ok'} /></td>
         <td className="px-3 py-2 whitespace-nowrap text-right">
           <button type="button" className={actionClass} onClick={props.onEdit} disabled={props.busy}>Edit</button>
-          {target.auth?.scheme && target.auth.scheme !== 'none' && (
+          {target.auth?.scheme && target.auth.scheme !== 'none' && !isPerUserTarget(target) && (
             <button type="button" className={actionClass} onClick={props.onRotate} disabled={props.busy}>
               Rotate credential
             </button>
@@ -183,6 +229,9 @@ const OpenApiServerDetailsModal: React.FC<OpenApiServerDetailsModalProps> = ({
   const [form, setForm] = useState<{ intent: OpenApiTargetFormIntent; target: OpenApiTarget | null } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<OpenApiTarget | null>(null);
   const [busy, setBusy] = useState(false);
+  const [myKeys, setMyKeys] = useState<Record<string, MyCredentialStatus> | null>(null);
+  const [myKeysError, setMyKeysError] = useState<string | null>(null);
+  const [myKeysVersion, setMyKeysVersion] = useState(0);
 
   const load = useCallback(async (showSpinner: boolean) => {
     if (showSpinner) setLoading(true);
@@ -204,6 +253,32 @@ const OpenApiServerDetailsModal: React.FC<OpenApiServerDetailsModalProps> = ({
     setPollCount(0);
     load(true);
   }, [isOpen, load]);
+
+  const perUserTargets = server ? server.targets.filter(isPerUserTarget) : [];
+  // A string, so a poll that returns the same targets does not refetch the keys.
+  const perUserNames = perUserTargets.map((t) => t.name).join(',');
+
+  // Load the current user's key status once per change of the per-user targets.
+  useEffect(() => {
+    if (!isOpen || !perUserNames) {
+      return;
+    }
+    let cancelled = false;
+    listMyCredentials(slug)
+      .then((list) => {
+        if (cancelled) return;
+        const byName: Record<string, MyCredentialStatus> = {};
+        for (const item of list) byName[item.target] = item;
+        setMyKeys(byName);
+        setMyKeysError(null);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setMyKeysError(keyErrorText(err, 'Failed to load your key status'));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, slug, perUserNames, myKeysVersion]);
 
   const pending = !!server && openApiServerStatus(server) === 'pending';
   const pollTimedOut = pending && pollCount >= MAX_POLLS;
@@ -311,7 +386,7 @@ const OpenApiServerDetailsModal: React.FC<OpenApiServerDetailsModalProps> = ({
                 <table className="min-w-full divide-y divide-line">
                   <thead className="bg-surface-muted">
                     <tr>
-                      {['Name', 'Spec', 'Base URL', 'Auth', 'Credential set', 'Tools', 'Status', ''].map((h) => (
+                      {['Name', 'Spec', 'Base URL', 'Auth', 'Credential', 'Tools', 'Status', ''].map((h) => (
                         <th key={h} className="px-3 py-2 text-left text-xs font-medium text-fg-subtle uppercase">{h}</th>
                       ))}
                     </tr>
@@ -329,6 +404,11 @@ const OpenApiServerDetailsModal: React.FC<OpenApiServerDetailsModalProps> = ({
                   </tbody>
                 </table>
               </div>
+            )}
+            {perUserTargets.length > 0 && (
+              <_YourKeysSection slug={slug} targets={perUserTargets} statuses={myKeys}
+                error={myKeysError} onChanged={() => setMyKeysVersion((v) => v + 1)}
+                onShowToast={onShowToast} />
             )}
           </div>
         )}

@@ -4,7 +4,9 @@ import {
   OpenApiTarget,
   OpenApiApiError,
   OpenApiAuthScheme,
+  OpenApiCredentialMode,
   OpenApiTargetAuthInput,
+  PER_USER_SCHEMES,
   OpenApiTargetWriteResponse,
   CreateOpenApiTargetRequest,
   UpdateOpenApiTargetRequest,
@@ -51,6 +53,21 @@ const SCHEME_OPTIONS: Array<{ value: OpenApiAuthScheme; label: string }> = [
   { value: 'bearer', label: 'Bearer token' },
   { value: 'basic', label: 'Basic (username and password)' },
 ];
+
+
+const MODE_OPTIONS: Array<{ value: OpenApiCredentialMode; label: string }> = [
+  { value: 'shared', label: 'Shared: one admin key for every caller' },
+  { value: 'per_user', label: 'Per user: each user adds their own key' },
+];
+
+
+const PER_USER_HINT: string =
+  'Each user adds their own key from the API provider. The registry never fetches keys.';
+
+
+const EGRESS_AUTH_DISABLED_SENTENCE: string =
+  'Per-user keys need egress auth, which is turned off on this deployment ' +
+  '(EGRESS_AUTH_ENABLED). Use a shared credential, or ask an operator to turn egress auth on.';
 
 
 const CREDENTIAL_LABELS: Record<OpenApiAuthScheme, string> = {
@@ -131,6 +148,9 @@ function _errorSentence(error: OpenApiApiError): string {
 
 
 function _bannerText(error: OpenApiApiError): string {
+  if (error.code === 'egress_auth_disabled') {
+    return EGRESS_AUTH_DISABLED_SENTENCE;
+  }
   if (error.code === 'limit_reached') {
     const limit = error.limit !== undefined ? ` of ${error.limit}` : '';
     return `This server already has the maximum${limit} APIs ` +
@@ -150,18 +170,42 @@ function _toolKeySuggestions(target: OpenApiTarget | null | undefined): string[]
 }
 
 
+/**
+ * Build the auth body for a per-user target: the scheme and, for a header key,
+ * the header name. It never carries a credential, query parameter or username.
+ */
+function _buildPerUserAuth(
+  scheme: OpenApiAuthScheme,
+  headerName: string,
+): { auth: OpenApiTargetAuthInput; error: string | null } {
+  const auth: OpenApiTargetAuthInput = { scheme, credential_mode: 'per_user' };
+  if (!PER_USER_SCHEMES.includes(scheme)) {
+    return { auth, error: 'Per-user keys work with a bearer token or an API key header.' };
+  }
+  if (scheme === 'api_key_header') {
+    auth.header_name = headerName.trim();
+    if (!auth.header_name) return { auth, error: 'Enter the header name.' };
+  }
+  return { auth, error: null };
+}
+
+
 /** Build the auth body. Returns an error message when a required field is empty. */
 function _buildAuth(
+  mode: OpenApiCredentialMode,
   scheme: OpenApiAuthScheme,
   headerName: string,
   queryParam: string,
   username: string,
   credential: string,
 ): { auth: OpenApiTargetAuthInput; error: string | null } {
-  if (scheme === 'none') {
-    return { auth: { scheme }, error: null };
+  if (mode === 'per_user') {
+    return _buildPerUserAuth(scheme, headerName);
   }
-  const auth: OpenApiTargetAuthInput = { scheme, credential };
+  if (scheme === 'none') {
+    return { auth: { scheme, credential_mode: 'shared' }, error: null };
+  }
+  const auth: OpenApiTargetAuthInput = { scheme, credential_mode: 'shared', credential };
   if (scheme === 'api_key_header') {
     auth.header_name = headerName.trim();
     if (!auth.header_name) return { auth, error: 'Enter the header name.' };
@@ -195,6 +239,10 @@ const _FieldError: React.FC<{ field: FieldKey; message?: string }> = ({ field, m
 
 
 interface AuthFieldsProps {
+  /** Hide the credential choice (credential rotation keeps the mode). */
+  showMode: boolean;
+  mode: OpenApiCredentialMode;
+  setMode: (value: OpenApiCredentialMode) => void;
   scheme: OpenApiAuthScheme;
   setScheme: (value: OpenApiAuthScheme) => void;
   headerName: string;
@@ -210,11 +258,36 @@ interface AuthFieldsProps {
 }
 
 
-/** The auth scheme select and only the fields that scheme needs. */
+/** Shared or per user. */
+const _ModeChoice: React.FC<{
+  mode: OpenApiCredentialMode;
+  setMode: (value: OpenApiCredentialMode) => void;
+}> = ({ mode, setMode }) => (
+  <fieldset data-testid="openapi-credential-mode">
+    <legend className="block text-sm font-medium text-fg-muted mb-1">Credential</legend>
+    <div className="space-y-1 text-sm text-fg">
+      {MODE_OPTIONS.map((opt) => (
+        <label key={opt.value} className="flex items-center gap-2">
+          <input type="radio" name="openapi-credential-mode" value={opt.value}
+            checked={mode === opt.value} onChange={() => setMode(opt.value)} />
+          {opt.label}
+        </label>
+      ))}
+    </div>
+  </fieldset>
+);
+
+
+/** The credential choice, the auth scheme select, and only the fields that scheme needs. */
 const _AuthFields: React.FC<AuthFieldsProps> = (props) => {
-  const { scheme } = props;
+  const { scheme, mode } = props;
+  const perUser = mode === 'per_user';
+  const schemeOptions = perUser
+    ? SCHEME_OPTIONS.filter((opt) => PER_USER_SCHEMES.includes(opt.value))
+    : SCHEME_OPTIONS;
   return (
     <div className="space-y-3">
+      {props.showMode && <_ModeChoice mode={mode} setMode={props.setMode} />}
       <div>
         <label htmlFor="openapi-target-scheme" className="block text-sm font-medium text-fg-muted mb-1">
           Auth scheme
@@ -225,7 +298,7 @@ const _AuthFields: React.FC<AuthFieldsProps> = (props) => {
           onChange={(e) => props.setScheme(e.target.value as OpenApiAuthScheme)}
           className="input"
         >
-          {SCHEME_OPTIONS.map((opt) => (
+          {schemeOptions.map((opt) => (
             <option key={opt.value} value={opt.value}>{opt.label}</option>
           ))}
         </select>
@@ -240,7 +313,7 @@ const _AuthFields: React.FC<AuthFieldsProps> = (props) => {
             maxLength={128} className="input" autoComplete="off" />
         </div>
       )}
-      {scheme === 'api_key_query' && (
+      {!perUser && scheme === 'api_key_query' && (
         <div>
           <label htmlFor="openapi-target-query" className="block text-sm font-medium text-fg-muted mb-1">
             Query parameter
@@ -250,7 +323,7 @@ const _AuthFields: React.FC<AuthFieldsProps> = (props) => {
             maxLength={128} className="input" autoComplete="off" />
         </div>
       )}
-      {scheme === 'basic' && (
+      {!perUser && scheme === 'basic' && (
         <div>
           <label htmlFor="openapi-target-username" className="block text-sm font-medium text-fg-muted mb-1">
             Username
@@ -260,7 +333,10 @@ const _AuthFields: React.FC<AuthFieldsProps> = (props) => {
             maxLength={256} className="input" autoComplete="off" />
         </div>
       )}
-      {scheme !== 'none' && (
+      {perUser && (
+        <p className="text-xs text-fg-subtle" data-testid="openapi-per-user-hint">{PER_USER_HINT}</p>
+      )}
+      {!perUser && scheme !== 'none' && (
         <div>
           <label htmlFor="openapi-target-credential" className="block text-sm font-medium text-fg-muted mb-1">
             {CREDENTIAL_LABELS[scheme]}
@@ -400,6 +476,8 @@ const _OverridesEditor: React.FC<OverridesEditorProps> = ({
  *
  * The credential field is never pre-filled. On edit an empty credential keeps
  * the stored one. Each API error code is shown beside the field it concerns.
+ * A per-user target has no credential field: each user adds their own key,
+ * so its auth body carries only the scheme and header name.
  */
 const OpenApiTargetForm: React.FC<OpenApiTargetFormProps> = ({
   serverSlug,
@@ -411,12 +489,14 @@ const OpenApiTargetForm: React.FC<OpenApiTargetFormProps> = ({
   const isCreate = intent === 'create';
   const isRotate = intent === 'rotate';
   const initialScheme: OpenApiAuthScheme = target?.auth?.scheme || 'none';
+  const initialMode: OpenApiCredentialMode = target?.auth?.credential_mode || 'shared';
 
   const [name, setName] = useState(target?.name || '');
   const [description, setDescription] = useState(target?.description || '');
   const [specUrl, setSpecUrl] = useState(target?.spec_url || '');
   const [baseUrl, setBaseUrl] = useState(target?.base_url || '');
   const [scheme, setScheme] = useState<OpenApiAuthScheme>(initialScheme);
+  const [credentialMode, setCredentialMode] = useState<OpenApiCredentialMode>(initialMode);
   const [headerName, setHeaderName] = useState(target?.auth?.header_name || '');
   const [queryParam, setQueryParam] = useState(target?.auth?.query_param || '');
   const [username, setUsername] = useState(target?.auth?.username || '');
@@ -449,19 +529,32 @@ const OpenApiTargetForm: React.FC<OpenApiTargetFormProps> = ({
     setSelectedTags((prev) => (prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]));
   };
 
+  /** Per user allows only some schemes, so switching to it moves to bearer if needed. */
+  const changeMode = (value: OpenApiCredentialMode) => {
+    setCredentialMode(value);
+    if (value === 'per_user') {
+      setCredential('');
+      if (!PER_USER_SCHEMES.includes(scheme)) setScheme('bearer');
+    }
+  };
+
   const authChanged = scheme !== initialScheme ||
+    credentialMode !== initialMode ||
     headerName !== (target?.auth?.header_name || '') ||
     queryParam !== (target?.auth?.query_param || '') ||
     username !== (target?.auth?.username || '');
 
   /** Decide the auth to send. `undefined` means leave the stored auth alone. */
   const resolveAuth = (): { auth?: OpenApiTargetAuthInput; error: string | null } => {
-    const built = _buildAuth(scheme, headerName, queryParam, username, credential);
+    const built = _buildAuth(credentialMode, scheme, headerName, queryParam, username, credential);
     if (isCreate || isRotate) {
       return built;
     }
     if (!credential && !authChanged) {
       return { auth: undefined, error: null };
+    }
+    if (credentialMode === 'per_user') {
+      return built;
     }
     if (!credential && scheme !== 'none') {
       return { auth: undefined, error: 'Enter the credential again to change the auth settings.' };
@@ -625,7 +718,8 @@ const OpenApiTargetForm: React.FC<OpenApiTargetFormProps> = ({
             </>
           )}
 
-          <_AuthFields scheme={scheme} setScheme={setScheme} headerName={headerName}
+          <_AuthFields showMode={!isRotate} mode={credentialMode} setMode={changeMode}
+            scheme={scheme} setScheme={setScheme} headerName={headerName}
             setHeaderName={setHeaderName} queryParam={queryParam} setQueryParam={setQueryParam}
             username={username} setUsername={setUsername} credential={credential}
             setCredential={setCredential} credentialSet={!!target?.auth?.credential_set}

@@ -13,9 +13,12 @@ import {
   InformationCircleIcon,
   XMarkIcon,
   Cog6ToothIcon,
+  KeyIcon,
 } from '@heroicons/react/24/outline';
 import PlugIcon from './icons/PlugIcon';
 import OpenApiServerDetailsModal from './OpenApiServerDetailsModal';
+import OpenApiMyKeysModal from './OpenApiMyKeysModal';
+import { listMyCredentials } from '../hooks/useOpenApiServers';
 import { isSafeUrl } from '../utils/safeUrl';
 import type { EgressCardState } from '../utils/egressAuth';
 import { useEgressConnect } from '../contexts/EgressConnectContext';
@@ -294,6 +297,22 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
   const isAdmin = user?.is_admin === true;
   const [showOpenApiDetails, setShowOpenApiDetails] = useState(false);
   const canManageOpenApi = openApiEnabled && isAdmin && !!server.openapi_server_slug;
+  // Any user who can see an OpenAPI MCP server can manage their own keys for
+  // its per-user targets. The button shows only when the server has any.
+  const [perUserTargetCount, setPerUserTargetCount] = useState(0);
+  const [showMyKeys, setShowMyKeys] = useState(false);
+  useEffect(() => {
+    const slug = server.openapi_server_slug;
+    if (!slug) {
+      setPerUserTargetCount(0);
+      return;
+    }
+    let cancelled = false;
+    listMyCredentials(slug)
+      .then((list) => { if (!cancelled) setPerUserTargetCount(list.length); })
+      .catch(() => { if (!cancelled) setPerUserTargetCount(0); });
+    return () => { cancelled = true; };
+  }, [server.openapi_server_slug]);
   // Egress connect state: prefer the explicit prop (dashboard grid passes it),
   // else fall back to the shared context so render paths that don't thread the
   // prop (discover/search rows via DiscoverListRow) still show the affordance.
@@ -761,6 +780,17 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
               >
                 <Cog6ToothIcon className="h-3.5 w-3.5" />
                 Manage APIs
+              </button>
+            )}
+
+            {perUserTargetCount > 0 && (
+              <button
+                onClick={() => setShowMyKeys(true)}
+                className="flex items-center gap-1 px-2 py-1.5 text-xs font-medium text-fg-muted hover:bg-surface-hover rounded-lg transition-all duration-200 flex-shrink-0 border border-line"
+                title="Add your own keys for the APIs behind this server"
+              >
+                <KeyIcon className="h-3.5 w-3.5" />
+                Your API keys
               </button>
             )}
 
@@ -1269,6 +1299,16 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
           onClose={() => setShowOpenApiDetails(false)}
           onShowToast={(message, type) => onShowToast?.(message, type === 'error' ? 'error' : 'success')}
           onChanged={onRefreshSuccess}
+        />
+      )}
+
+      {showMyKeys && server.openapi_server_slug && (
+        <OpenApiMyKeysModal
+          slug={server.openapi_server_slug}
+          serverName={server.name}
+          isOpen={showMyKeys}
+          onClose={() => setShowMyKeys(false)}
+          onShowToast={(message, type) => onShowToast?.(message, type === 'error' ? 'error' : 'success')}
         />
       )}
 

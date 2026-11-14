@@ -149,3 +149,52 @@ describe('OpenApiServerDetailsModal rendering', () => {
     expect(node.closest('a')).toBeNull();
   });
 });
+
+
+describe('OpenApiServerDetailsModal per-user targets', () => {
+  function _perUserServer(): OpenApiServer {
+    const server = _server();
+    server.targets[0].auth = { scheme: 'bearer', credential_set: false, credential_mode: 'per_user' };
+    return server;
+  }
+
+  function _mockGets(server: OpenApiServer) {
+    mockedAxios.get.mockImplementation((url: string) => {
+      if (url === '/api/openapi-servers/weather-apis/my-credentials') {
+        return Promise.resolve({
+          data: {
+            slug: 'weather-apis',
+            targets: [{ target: 'petstore', configured: false, expires_at: null }],
+          },
+        });
+      }
+      return Promise.resolve({ data: server });
+    });
+  }
+
+  it('shows a Per user badge and no Rotate credential', async () => {
+    _mockGets(_perUserServer());
+    await _renderModal();
+
+    expect(screen.getByTestId('openapi-credential-set-petstore')).toHaveTextContent('Per user');
+    expect(screen.queryByRole('button', { name: 'Rotate credential' })).not.toBeInTheDocument();
+  });
+
+  it("shows the current user's key status from my-credentials", async () => {
+    _mockGets(_perUserServer());
+    await _renderModal();
+
+    expect(await screen.findByTestId('openapi-your-keys')).toBeInTheDocument();
+    expect(screen.getByTestId('openapi-my-key-status-petstore')).toHaveTextContent('Not set');
+    expect(screen.getByRole('button', { name: 'Add key' })).toBeInTheDocument();
+  });
+
+  it('does not load or show Your key for shared targets', async () => {
+    mockedAxios.get.mockResolvedValue({ data: _server() });
+    await _renderModal();
+
+    expect(screen.queryByTestId('openapi-your-keys')).not.toBeInTheDocument();
+    const urls = mockedAxios.get.mock.calls.map((c) => c[0]);
+    expect(urls).not.toContain('/api/openapi-servers/weather-apis/my-credentials');
+  });
+});
