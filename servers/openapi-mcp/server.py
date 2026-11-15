@@ -124,7 +124,9 @@ async def _put_server(
     if state.slug != slug:
         return _error(400, "invalid_state", "slug in the path and the body differ")
     entry = await hubs.apply_server_state(state, settings)
-    body = ApplyResponse(slug=slug, generation=entry.generation, targets=entry.status)
+    body = ApplyResponse(
+        slug=slug, generation=entry.generation, incarnation=entry.incarnation, targets=entry.status
+    )
     return JSONResponse(body.model_dump())
 
 

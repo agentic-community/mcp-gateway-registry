@@ -8,6 +8,7 @@ from registry.schemas.openapi_server_models import OpenApiServer
 from registry.services import openapi_mcp_reconciler as reconciler
 from registry.services import openapi_spec_checks
 from registry.services.openapi_errors import container_unavailable
+from registry.services.openapi_server_views import server_incarnation
 
 
 def _server(
@@ -47,7 +48,44 @@ def env(monkeypatch):
     return stored, mocks
 
 
+@pytest.fixture(autouse=True)
+def _clear_owed_refreshes():
+    from registry.services import openapi_server_service
+
+    openapi_server_service._tool_refresh_owed.clear()
+    yield
+    openapi_server_service._tool_refresh_owed.clear()
+
+
 class TestReconcileOnce:
+    async def test_owed_refresh_of_a_current_hub_is_done_and_settled(self, env):
+        from registry.services import openapi_server_service
+
+        stored, mocks = env
+        server = _server("weather", 2)
+        stored.append(server)
+        mocks["status"].return_value = {
+            "servers": {"weather": {"generation": 2, "incarnation": server_incarnation(server)}}
+        }
+        openapi_server_service._tool_refresh_owed["weather"] = 2
+
+        result = await reconciler.reconcile_once()
+
+        assert (result.pushed, result.refreshed) == (0, 1)
+        mocks["refresh"].assert_awaited_once()
+        assert openapi_server_service.owed_tool_refreshes() == {}
+
+    async def test_owed_refresh_for_a_deleted_server_is_dropped(self, env):
+        from registry.services import openapi_server_service
+
+        _stored, mocks = env
+        openapi_server_service._tool_refresh_owed["gone"] = 3
+
+        await reconciler.reconcile_once()
+
+        mocks["refresh"].assert_not_awaited()
+        assert openapi_server_service.owed_tool_refreshes() == {}
+
     async def test_missing_server_is_pushed(self, env):
         stored, mocks = env
         stored.append(_server("weather", 3))
@@ -60,15 +98,31 @@ class TestReconcileOnce:
 
     async def test_stale_generation_is_pushed_and_current_is_left(self, env):
         stored, mocks = env
-        stored.extend([_server("old", 3), _server("current", 2)])
+        current = _server("current", 2)
+        stored.extend([_server("old", 3), current])
         mocks["status"].return_value = {
-            "servers": {"old": {"generation": 2}, "current": {"generation": 2}}
+            "servers": {
+                "old": {"generation": 2, "incarnation": server_incarnation(current)},
+                "current": {"generation": 2, "incarnation": server_incarnation(current)},
+            }
         }
 
         result = await reconciler.reconcile_once()
 
         assert result.pushed == 1
         assert mocks["push"].call_args.args[0].slug == "old"
+
+    async def test_hub_left_by_an_earlier_server_is_pushed(self, env):
+        """Same slug and generation, but the hub belongs to a deleted server."""
+        stored, mocks = env
+        stored.append(_server("weather", 1))
+        mocks["status"].return_value = {
+            "servers": {"weather": {"generation": 1, "incarnation": "2020-01-01T00:00:00+00:00"}}
+        }
+
+        result = await reconciler.reconcile_once()
+
+        assert (result.pushed, result.deleted) == (1, 0)
 
     async def test_extra_hub_is_deleted(self, env):
         _stored, mocks = env

@@ -149,6 +149,17 @@ def _hub_target(
     }
 
 
+def server_incarnation(
+    server: OpenApiServer,
+) -> str:
+    """Tell this server apart from an earlier one with the same slug.
+
+    A server deleted and created again restarts at generation 1, so the
+    container compares this value too before it ignores a push as old.
+    """
+    return server.created_at.isoformat()
+
+
 def build_hub_state(
     server: OpenApiServer,
     specs: dict[str, StoredSpec],
@@ -172,5 +183,6 @@ def build_hub_state(
         "name": server.name,
         "description": server.description,
         "generation": server.generation,
+        "incarnation": server_incarnation(server),
         "targets": targets,
     }

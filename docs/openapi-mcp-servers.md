@@ -127,7 +127,10 @@ The registry database is the only stored state. The container keeps each server 
 
 - After a container restart, calls to OpenAPI MCP servers return 404 until the registry notices the restart and pushes every server again. With 10 servers of 10 targets each, that took 23 seconds.
 - After a registry restart, the registry compares what it stores with what the container runs and pushes anything stale.
-- A change that cannot reach the container in time returns `sync_status: "pending"`. The registry retries every `OPENAPI_MCP_RECONCILE_INTERVAL_SECONDS` (60 by default).
+- A change that cannot reach the container in time returns `sync_status: "pending"`. The registry retries every `OPENAPI_MCP_RECONCILE_INTERVAL_SECONDS` (60 by default), and it also finishes refreshing the server's tool list, which search and the UI read, even when the push itself landed late.
+- If the container cannot load a target, the add or update still returns, and its `warnings` name the target and the reason. That target serves no tools until it is fixed.
+- A server deleted while the container was unreachable and then created again under the same name replaces the old hub on its first push. Each push carries the server's creation time, so the container does not mistake the new server for the old one.
+- Two requests that change the same target at once do not overwrite each other: the later one returns `409 target_changed`, and the client reloads the target and tries again.
 - Every change starts a background security scan of the server, which takes a few seconds. If the container restarts or the server is deleted during that scan, the scan fails, and the registry's scan policy tags the server `security-pending` and disables it. The hub comes back, but the server stays disabled until an admin turns it on again with `POST /api/servers/toggle`.
 - A change replaces a server's hub without cutting off calls already running on the old one: the old hub keeps serving for 30 seconds before it closes.
 

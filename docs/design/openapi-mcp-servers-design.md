@@ -137,7 +137,7 @@ A server with a per-user target routes through the auth server's mcp-proxy hop, 
 
 ### Keeping the container in step
 
-Only the registry starts calls between the two; the container never calls the registry. Each push carries a server's full state and its generation number. The container ignores a push that is not newer than the hub it is running, so two registry replicas pushing at once do no harm.
+Only the registry starts calls between the two; the container never calls the registry. Each push carries a server's full state, its generation number, and its incarnation (the server's creation time). The container ignores a push that is not newer than the hub it is running for the same incarnation, so two registry replicas pushing at once do no harm. A push with a different incarnation always replaces the hub: a server deleted and created again under the same slug restarts at generation 1, and without the incarnation the container would keep serving the old server's hub and credentials.
 
 ![Recovering after the container restarts](../images/openapi-mcp-servers-200-recovery.png)
 
