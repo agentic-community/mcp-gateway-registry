@@ -192,4 +192,35 @@ describe('ConnectedAccountsPage', () => {
     );
     expect(mocked.disconnect).not.toHaveBeenCalled();
   });
+
+  it.each([
+    [404, 'not_found'],
+    [409, 'not_per_user'],
+  ])('falls back to the generic disconnect for a key whose target is gone (%s %s)', async (status, error) => {
+    const actual = jest.requireActual('../../utils/egressAuth');
+    mocked.openApiTargetOf.mockImplementation(actual.openApiTargetOf);
+    mocked.listConnections
+      .mockResolvedValueOnce([
+        {
+          provider: 'openapi-petstore',
+          server_path: '/deleted-server',
+          scopes: [],
+          expires_at: null,
+          status: 'active',
+          last_refreshed_at: null,
+        },
+      ])
+      .mockResolvedValueOnce([]);
+    mockedDeleteMyCredential.mockRejectedValue({ response: { status, data: { error } } });
+    mocked.disconnect.mockResolvedValue();
+
+    renderPage();
+    fireEvent.click(
+      await screen.findByRole('button', { name: /disconnect openapi target petstore/i }),
+    );
+
+    await waitFor(() =>
+      expect(mocked.disconnect).toHaveBeenCalledWith('openapi-petstore', '/deleted-server'),
+    );
+  });
 });

@@ -35,14 +35,33 @@ function _connectionLabel(conn: EgressConnection): string {
 }
 
 
-/** Delete a vault entry. OpenAPI keys go through their own my-credential route. */
+/**
+ * True when the OpenAPI route cannot remove a key because its target is gone:
+ * the server or target was deleted (404) or switched to a shared credential.
+ */
+function _isOrphanedKeyError(err: unknown): boolean {
+  const response = (err as { response?: { status?: number; data?: { error?: string } } })?.response;
+  return response?.status === 404 || response?.data?.error === 'not_per_user';
+}
+
+
+/**
+ * Delete a vault entry. OpenAPI keys go through their own my-credential route;
+ * a key whose target no longer exists falls back to the generic disconnect,
+ * which needs only the caller's own identity.
+ */
 async function _removeConnection(conn: EgressConnection): Promise<void> {
   const target = openApiTargetOf(conn.provider);
-  if (target) {
-    await deleteMyCredential(conn.server_path.replace(/^\//, ''), target);
+  if (!target) {
+    await disconnect(conn.provider, conn.server_path);
     return;
   }
-  await disconnect(conn.provider, conn.server_path);
+  try {
+    await deleteMyCredential(conn.server_path.replace(/^\//, ''), target);
+  } catch (err) {
+    if (!_isOrphanedKeyError(err)) throw err;
+    await disconnect(conn.provider, conn.server_path);
+  }
 }
 
 

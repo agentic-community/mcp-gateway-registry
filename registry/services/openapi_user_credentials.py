@@ -32,6 +32,7 @@ from .openapi_errors import (
     OpenApiServerError,
     conflict,
 )
+from .openapi_server_views import server_incarnation
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,21 @@ def bound_upstream(
         raise OpenApiServerError(
             500, "invalid_base_url", f"target '{target.name}' has an invalid base_url"
         ) from e
+
+
+def key_binding(
+    server: OpenApiServer,
+    target: OpenApiTarget,
+) -> str:
+    """What a stored key is bound to: the target's destination and this incarnation of the server.
+
+    The vault cannot delete every user's keys when a target or server goes
+    away (it lists entries one user at a time), so the binding makes leftover
+    keys unusable instead: a server deleted and created again under the same
+    name has a new incarnation and never picks up the old server's keys.
+    Leftover rows still expire within the 30-day maximum key lifetime.
+    """
+    return f"{bound_upstream(target)}#incarnation={server_incarnation(server)}"
 
 
 def require_per_user(
@@ -86,7 +102,7 @@ async def store_key(
         token_type="Bearer",  # nosec B106 - token type label, not a credential
         created_at=now.isoformat(),
         expires_at=(now + timedelta(seconds=ttl_seconds)).isoformat(),
-        bound_upstreams=[bound_upstream(target)],
+        bound_upstreams=[key_binding(server, target)],
     )
     await _egress_service().set_pat(
         principal.auth_method, principal.user_id, provider_for(target.name), server.path, token
@@ -102,10 +118,17 @@ async def key_status(
     target: OpenApiTarget,
     principal,
 ) -> StoredToken | None:
-    """The stored entry for presence and expiry. Callers must never return its key."""
-    return await _egress_service().get_pat_status(
+    """The stored entry for presence and expiry, or None. Callers must never return its key.
+
+    A key bound to another destination or an earlier server with the same name
+    counts as absent, because the vend would never use it.
+    """
+    token = await _egress_service().get_pat_status(
         principal.auth_method, principal.user_id, provider_for(target.name), server.path
     )
+    if token is None or key_binding(server, target) not in (token.bound_upstreams or []):
+        return None
+    return token
 
 
 async def delete_key(
@@ -130,7 +153,7 @@ async def _key_for(
         user_id=user_id,
         provider=provider_for(target.name),
         server_path=server.path,
-        requested_upstream=bound_upstream(target),
+        requested_upstream=key_binding(server, target),
     )
 
 
