@@ -194,6 +194,11 @@ Virtual MCP Server Management:
     uv run python registry_management.py openapi-target-update --slug space-apis --name nasa \\
         --spec-file docs/examples/openapi/nasa.json
 
+    # Store your own key for a per-user target (read from an env var, never argv)
+    export NASA_KEY=...
+    uv run python registry_management.py openapi-key-set --slug space-apis --name nasa --key-env NASA_KEY
+    uv run python registry_management.py openapi-key-status --slug space-apis
+
     # Update a virtual server from JSON config
     uv run python registry_management.py vs-update --path /virtual/dev-tools --config updated-config.json
 
@@ -6758,6 +6763,44 @@ def cmd_openapi_target_update(args: argparse.Namespace) -> int:
     return _run_openapi_command("openapi-target-update", _action)
 
 
+def cmd_openapi_key_set(args: argparse.Namespace) -> int:
+    """Store your own key for a per-user OpenAPI target. The key is read from env or stdin."""
+
+    def _action() -> Any:
+        secret = _read_openapi_credential(args)
+        if not secret:
+            raise ValueError("give the key with --key-env VAR or --key-stdin")
+        return _create_client(args).set_openapi_key(
+            args.slug,
+            args.name,
+            secret,
+            args.ttl_value,
+            args.ttl_unit,
+            sub=args.sub,
+            auth_method=args.auth_method,
+        )
+
+    return _run_openapi_command("openapi-key-set", _action)
+
+
+def cmd_openapi_key_status(args: argparse.Namespace) -> int:
+    """Show whether you have a key for one target, or for every per-user target of a server."""
+    client = _create_client(args)
+    if args.name:
+        return _run_openapi_command(
+            "openapi-key-status", lambda: client.get_openapi_key_status(args.slug, args.name)
+        )
+    return _run_openapi_command("openapi-key-status", lambda: client.list_openapi_keys(args.slug))
+
+
+def cmd_openapi_key_delete(args: argparse.Namespace) -> int:
+    """Remove your key for a per-user OpenAPI target."""
+    return _run_openapi_command(
+        "openapi-key-delete",
+        lambda: _create_client(args).delete_openapi_key(args.slug, args.name),
+    )
+
+
 def cmd_openapi_target_remove(args: argparse.Namespace) -> int:
     """Remove a REST target."""
     return _run_openapi_command(
@@ -6895,6 +6938,44 @@ def _add_openapi_parsers(
     )
     remove.add_argument("--slug", required=True)
     remove.add_argument("--name", required=True)
+    key_set = subparsers.add_parser(
+        "openapi-key-set", help="Store your own key for a per-user REST target (write-only)"
+    )
+    key_set.add_argument("--slug", required=True)
+    key_set.add_argument("--name", required=True, help="Target name")
+    key_source = key_set.add_mutually_exclusive_group(required=True)
+    key_source.add_argument(
+        "--key-env", dest="credential_env", metavar="VAR", help="Read the key from this variable"
+    )
+    key_source.add_argument(
+        "--key-stdin", dest="credential_stdin", action="store_true", help="Read the key from stdin"
+    )
+    key_set.add_argument(
+        "--ttl-value",
+        type=int,
+        default=30,
+        help="How long the key lasts (default: 30, capped at 30 days)",
+    )
+    key_set.add_argument(
+        "--ttl-unit",
+        choices=["minutes", "hours", "days"],
+        default="days",
+        help="Unit (default: days)",
+    )
+    key_set.add_argument("--sub", help="Admin only: store the key for this user")
+    key_set.add_argument(
+        "--auth-method", help="Admin only, with --sub: that user's auth method (e.g. oauth2)"
+    )
+    key_status = subparsers.add_parser(
+        "openapi-key-status", help="Show whether you have keys for a server's per-user targets"
+    )
+    key_status.add_argument("--slug", required=True)
+    key_status.add_argument("--name", help="One target; omit for every per-user target")
+    key_delete = subparsers.add_parser(
+        "openapi-key-delete", help="Remove your key for a per-user REST target"
+    )
+    key_delete.add_argument("--slug", required=True)
+    key_delete.add_argument("--name", required=True)
 
 
 def main() -> int:
@@ -8989,6 +9070,9 @@ Examples:
         "openapi-target-get": cmd_openapi_target_get,
         "openapi-target-update": cmd_openapi_target_update,
         "openapi-target-remove": cmd_openapi_target_remove,
+        "openapi-key-set": cmd_openapi_key_set,
+        "openapi-key-status": cmd_openapi_key_status,
+        "openapi-key-delete": cmd_openapi_key_delete,
         "vs-update": cmd_vs_update,
         "vs-delete": cmd_vs_delete,
         "vs-toggle": cmd_vs_toggle,

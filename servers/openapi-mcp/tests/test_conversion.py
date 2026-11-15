@@ -127,6 +127,26 @@ class TestComponentAdjustments:
         assert tools["createItem"].annotations.read_only_hint is False
         assert tools["createItem"].annotations.destructive_hint is False
 
+    async def test_every_tool_is_open_world_and_put_delete_are_idempotent(self, items_spec):
+        items_spec["paths"]["/items/{item_id}"]["put"] = {
+            "operationId": "replaceItem",
+            "parameters": [
+                {"name": "item_id", "in": "path", "required": True, "schema": {"type": "integer"}}
+            ],
+            "responses": {"200": {"description": "ok"}},
+        }
+        tools = await _tools_by_name(items_spec)
+
+        assert all(tool.annotations.open_world_hint is True for tool in tools.values())
+        assert tools["replaceItem"].annotations.idempotent_hint is True
+        assert tools["deleteItem"].annotations.idempotent_hint is True
+        assert tools["createItem"].annotations.idempotent_hint is False
+
+    async def test_title_comes_from_the_operation_summary(self, items_spec):
+        tools = await _tools_by_name(items_spec)
+
+        assert tools["listItems"].annotations.title == "List items"
+
     async def test_input_schema_is_closed(self, items_spec):
         tools = await _tools_by_name(items_spec)
 

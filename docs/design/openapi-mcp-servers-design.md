@@ -2,7 +2,7 @@
 
 *Created: 2026-11-13. Issue #2022.*
 
-*Status: the container (slice 1 of 5) is built on branch `feat/openapi-mcp-servers-2022`. The registry backend, UI and deployment wiring are still to come.*
+*Status: all five slices are built on branch `feat/openapi-mcp-servers-2022` (PR #2039), including per-user credentials and uploaded specs.*
 
 Every diagram exists as SVG and PNG in `docs/images/`, named `openapi-mcp-servers-*`.
 
@@ -197,7 +197,7 @@ The registry exports these metrics on its Prometheus endpoint:
 | `mcpgw_openapi_mcp_reconcile_drift_total` | Counter | `kind` (missing, stale, extra) |
 | `mcpgw_openapi_mcp_state` | Gauge | `kind`: `servers` and `targets` (as of the last reconcile pass), `container_reachable` (1 or 0) |
 
-Labels carry server slugs, target names and error codes, never tool names, so the number of series stays bounded. Alert when `mcpgw_openapi_mcp_state{kind="container_reachable"}` stays at 0 for five minutes, and on any rise in `mcpgw_openapi_mcp_reconcile_drift_total{kind="missing"}`, which means the container restarted.
+Labels carry only small fixed sets of values (`result` is `ok` or an error code, plus `trigger`, `kind`, `entity` and `operation`), never server slugs, target names or tool names, so the number of series stays bounded. The `mcpgw_openapi_mcp_state` gauge reports only while the feature is on. Alert when `mcpgw_openapi_mcp_state{kind="container_reachable"}` stays at 0 for five minutes, and on any rise in `mcpgw_openapi_mcp_reconcile_drift_total{kind="missing"}`, which means the container restarted.
 
 ### Choices we rejected
 
@@ -215,7 +215,7 @@ Labels carry server slugs, target names and error codes, never tool names, so th
 | Slice | Contents | Status |
 |-------|----------|--------|
 | 1 | Container, sync token, image | Done, commit `a37f0ca5d` |
-| 2 | Registry backend: settings, models, repositories, guard identity, service, reconciler, routes, metrics | Next |
-| 3 | Compose, CLI and client, mock REST API, integration test, docs | Planned |
-| 4 | Registry UI | Planned |
-| 5 | Terraform, CDK, Helm, image publishing | Planned |
+| 2 | Registry backend: settings, models, repositories, guard identity, service, reconciler, routes, metrics | Done |
+| 3 | Compose, CLI and client, mock REST API, integration test, docs | Done |
+| 4 | Registry UI | Done |
+| 5 | Terraform, CDK, Helm, image publishing | Done |
