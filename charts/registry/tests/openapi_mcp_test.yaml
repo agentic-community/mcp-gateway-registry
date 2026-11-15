@@ -81,7 +81,7 @@ tests:
     set:
       global:
         openapiMcp:
-          existingSyncSecret: my-sync
+          existingSyncSecret: my-sync  # pragma: allowlist secret
       app:
         openapiMcpEnabled: true
     asserts:

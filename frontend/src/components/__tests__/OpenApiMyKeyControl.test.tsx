@@ -90,7 +90,7 @@ describe('OpenApiMyKeyControl', () => {
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
     expect(mockedAxios.put).toHaveBeenCalledWith(
       KEY_URL,
-      { secret: 'my-secret', ttl_value: 12, ttl_unit: 'hours' },
+      { secret: 'my-secret', ttl_value: 12, ttl_unit: 'hours' },  // pragma: allowlist secret
       CSRF,
     );
   });
@@ -108,7 +108,7 @@ describe('OpenApiMyKeyControl', () => {
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
     expect(mockedAxios.put).toHaveBeenCalledWith(
       KEY_URL,
-      { secret: 'new-secret', ttl_value: 30, ttl_unit: 'days' },
+      { secret: 'new-secret', ttl_value: 30, ttl_unit: 'days' },  // pragma: allowlist secret
       CSRF,
     );
   });

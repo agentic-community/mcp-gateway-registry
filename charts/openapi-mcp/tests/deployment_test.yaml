@@ -59,8 +59,8 @@ tests:
 
   - it: reads the sync secret from global.openapiMcp.existingSyncSecret when set
     set:
-      global.openapiMcp.existingSyncSecret: my-sync
-      syncSecret.existingSecret: ignored-sync
+      global.openapiMcp.existingSyncSecret: my-sync  # pragma: allowlist secret
+      syncSecret.existingSecret: ignored-sync  # pragma: allowlist secret
     asserts:
       - contains:
           path: spec.template.spec.containers[0].env

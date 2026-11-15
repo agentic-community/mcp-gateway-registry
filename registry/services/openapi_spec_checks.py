@@ -298,7 +298,12 @@ def check_tool_names(
     too_long = [name for name in tools if len(name) > MAX_TOOL_NAME_CHARS]
     bad_chars = [name for name in tools if not TOOL_NAME_RE.fullmatch(name)]
     seen: set[str] = set()
-    duplicates = sorted({name for name in tools if name in seen or seen.add(name)})
+    repeated: set[str] = set()
+    for name in tools:
+        if name in seen:
+            repeated.add(name)
+        seen.add(name)
+    duplicates = sorted(repeated)
     problems = sorted(set(too_long) | set(bad_chars) | set(duplicates))
     if not problems:
         return

@@ -208,7 +208,7 @@ export type OpenApiErrorCode =
 
 
 /** The lifetime units a per-user key accepts. */
-export type OpenApiKeyTtlUnit = 'minutes' | 'hours' | 'days';
+export type OpenApiKeyTtlUnit = 'minutes' | 'hours' | 'days';  // pragma: allowlist secret
 
 
 /** Body of PUT .../targets/{name}/my-credential. The secret is write-only. */

@@ -15,7 +15,7 @@ type ToastFn = (message: string, type: 'success' | 'error' | 'info') => void;
 
 /** The default lifetime of a new key: 30 days, the maximum the backend allows. */
 const DEFAULT_TTL_VALUE: number = 30;
-const DEFAULT_TTL_UNIT: OpenApiKeyTtlUnit = 'days';
+const DEFAULT_TTL_UNIT: OpenApiKeyTtlUnit = 'days';  // pragma: allowlist secret
 
 
 /** The largest lifetime per unit. Each equals 30 days. */

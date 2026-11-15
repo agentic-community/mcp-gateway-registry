@@ -365,7 +365,7 @@ app:
   openapiMcpReconcileIntervalSeconds: 60 # 10 to 3600
   # Name of the Secret holding OPENAPI_MCP_SYNC_SECRET. Matches the openapi-mcp
   # chart's syncSecret.name; global.openapiMcp.existingSyncSecret wins when set.
-  openapiMcpSyncSecretName: openapi-mcp-sync-secret
+  openapiMcpSyncSecretName: openapi-mcp-sync-secret  # pragma: allowlist secret
   # Gateway generic-proxy feature (registry-consumed). Ships DISABLED. Do NOT
   # enable gatewayGenericProxyEnabled until the network egress policy (SSRF layer 1)
   # is deployed and the registration-time validation + CSRF defenses are in place.

@@ -28,7 +28,7 @@ GATEWAY_HEADERS: dict = {
     "x-forwarded-host": "registry.example.com",
     "x-real-ip": "10.0.0.5",
     "x-resolved-upstream": "http://openapi-mcp:9876/s/demo/mcp",
-    "x-validate-source-secret": "nginx-marker",
+    "x-validate-source-secret": "nginx-marker",  # pragma: allowlist secret
     "x-auth-method": "keycloak",
     "x-client-id": "agent",
     "user-agent": "claude-code/2.0",

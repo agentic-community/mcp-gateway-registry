@@ -13,8 +13,8 @@ that applies to all tests.
 import atexit
 import errno
 import os
-import shutil
 import re
+import shutil
 import uuid
 
 _original_stat = os.stat

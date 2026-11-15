@@ -30,7 +30,9 @@ from tests.integration.openapi_mock_api import (
 
 pytestmark = [
     pytest.mark.integration,
-    pytest.mark.skipif(os.environ.get("OPENAPI_MCP_E2E") != "1", reason="set OPENAPI_MCP_E2E=1 on a running stack"),
+    pytest.mark.skipif(
+        os.environ.get("OPENAPI_MCP_E2E") != "1", reason="set OPENAPI_MCP_E2E=1 on a running stack"
+    ),
 ]
 
 REGISTRY_URL: str = os.environ.get("REGISTRY_URL", "http://localhost").rstrip("/")
@@ -40,15 +42,26 @@ SERVER_NAME: str = "E2E OpenAPI"
 SLUG: str = "e2e-openapi"
 RESTART_WAIT_SECONDS: int = 90
 TIMEOUT: float = 60.0
-MCP_HEADERS: dict = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+MCP_HEADERS: dict = {
+    "Content-Type": "application/json",
+    "Accept": "application/json, text/event-stream",
+}
 META_2026: dict = {
     "io.modelcontextprotocol/protocolVersion": "2026-07-28",
     "io.modelcontextprotocol/clientInfo": {"name": "e2e", "version": "1"},
     "io.modelcontextprotocol/clientCapabilities": {},
 }
 GATEWAY_ONLY_HEADERS: tuple[str, ...] = (
-    "x-user", "x-username", "x-scopes", "x-auth-method", "x-client-id", "x-forwarded-for",
-    "x-real-ip", "x-resolved-upstream", "x-validate-source-secret", "cookie",
+    "x-user",
+    "x-username",
+    "x-scopes",
+    "x-auth-method",
+    "x-client-id",
+    "x-forwarded-for",
+    "x-real-ip",
+    "x-resolved-upstream",
+    "x-validate-source-secret",
+    "cookie",
 )
 
 
@@ -62,7 +75,9 @@ def _token() -> str:
 
 @pytest.fixture(scope="module")
 def client():
-    with httpx.Client(base_url=REGISTRY_URL, headers={"Authorization": f"Bearer {_token()}"}, timeout=TIMEOUT) as c:
+    with httpx.Client(
+        base_url=REGISTRY_URL, headers={"Authorization": f"Bearer {_token()}"}, timeout=TIMEOUT
+    ) as c:
         yield c
 
 
@@ -82,8 +97,18 @@ def _call_2026(
     arguments: dict,
 ) -> dict:
     """Session-less call (MCP 2026-07-28)."""
-    headers = {**MCP_HEADERS, "MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "tools/call", "Mcp-Name": tool}
-    body = {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": tool, "arguments": arguments, "_meta": META_2026}}
+    headers = {
+        **MCP_HEADERS,
+        "MCP-Protocol-Version": "2026-07-28",
+        "Mcp-Method": "tools/call",
+        "Mcp-Name": tool,
+    }
+    body = {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {"name": tool, "arguments": arguments, "_meta": META_2026},
+    }
     response = client.post(f"/{SLUG}/mcp", json=body, headers=headers)
     assert response.status_code == 200, response.text
     return _parse(response)
@@ -94,15 +119,25 @@ def _session_2025(
 ) -> dict:
     """Handshake (MCP 2025-11-25). Returns the headers to send on later calls."""
     body = {
-        "jsonrpc": "2.0", "id": 0, "method": "initialize",
-        "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "e2e", "version": "1"}},
+        "jsonrpc": "2.0",
+        "id": 0,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-11-25",
+            "capabilities": {},
+            "clientInfo": {"name": "e2e", "version": "1"},
+        },
     }
     response = client.post(f"/{SLUG}/mcp", json=body, headers=MCP_HEADERS)
     assert response.status_code == 200, response.text
     headers = {**MCP_HEADERS, "MCP-Protocol-Version": "2025-11-25"}
     if response.headers.get("mcp-session-id"):
         headers["Mcp-Session-Id"] = response.headers["mcp-session-id"]
-    client.post(f"/{SLUG}/mcp", json={"jsonrpc": "2.0", "method": "notifications/initialized"}, headers=headers)
+    client.post(
+        f"/{SLUG}/mcp",
+        json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+        headers=headers,
+    )
     return headers
 
 
@@ -127,14 +162,48 @@ def _add_target(
 @pytest.fixture(scope="module")
 def server(client):
     client.delete(f"/api/openapi-servers/{SLUG}")
-    response = client.post("/api/openapi-servers", json={"name": SERVER_NAME, "description": "end-to-end test"})
+    response = client.post(
+        "/api/openapi-servers", json={"name": SERVER_NAME, "description": "end-to-end test"}
+    )
     assert response.status_code == 201, response.text
     targets = [
         ("items", {"include_tags": ["items", "admin", "debug"]}),
-        ("hdr", {"include_operations": ["secureHeader"], "auth": {"scheme": "api_key_header", "header_name": "X-Api-Key", "credential": HEADER_KEY}}),
-        ("qry", {"include_operations": ["secureQuery"], "auth": {"scheme": "api_key_query", "query_param": "apikey", "credential": QUERY_KEY}}),
-        ("brr", {"include_operations": ["secureBearer"], "auth": {"scheme": "bearer", "credential": BEARER_TOKEN}}),
-        ("bas", {"include_operations": ["secureBasic"], "auth": {"scheme": "basic", "username": BASIC_USER, "credential": BASIC_PASSWORD}}),
+        (
+            "hdr",
+            {
+                "include_operations": ["secureHeader"],
+                "auth": {
+                    "scheme": "api_key_header",
+                    "header_name": "X-Api-Key",
+                    "credential": HEADER_KEY,
+                },
+            },
+        ),
+        (
+            "qry",
+            {
+                "include_operations": ["secureQuery"],
+                "auth": {
+                    "scheme": "api_key_query",
+                    "query_param": "apikey",
+                    "credential": QUERY_KEY,
+                },
+            },
+        ),
+        (
+            "brr",
+            {
+                "include_operations": ["secureBearer"],
+                "auth": {"scheme": "bearer", "credential": BEARER_TOKEN},
+            },
+        ),
+        (
+            "bas",
+            {
+                "include_operations": ["secureBasic"],
+                "auth": {"scheme": "basic", "username": BASIC_USER, "credential": BASIC_PASSWORD},
+            },
+        ),
     ]
     for name, body in targets:
         added = _add_target(client, name, **body)
@@ -179,7 +248,12 @@ class TestRejections:
 class TestToolCalls:
     @pytest.mark.parametrize(
         ("tool", "scheme"),
-        [("hdr_secureHeader", "api_key_header"), ("qry_secureQuery", "api_key_query"), ("brr_secureBearer", "bearer"), ("bas_secureBasic", "basic")],
+        [
+            ("hdr_secureHeader", "api_key_header"),
+            ("qry_secureQuery", "api_key_query"),
+            ("brr_secureBearer", "bearer"),
+            ("bas_secureBasic", "basic"),
+        ],
     )
     def test_each_auth_scheme_reaches_backend(self, client, server, tool, scheme):
         assert _tool_json(_call_2026(client, tool, {})) == {"ok": True, "scheme": scheme}
@@ -197,7 +271,13 @@ class TestToolCalls:
 
     def test_handshake_era_lists_tools_with_hints(self, client, server):
         headers = _session_2025(client)
-        listed = _parse(client.post(f"/{SLUG}/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}, headers=headers))
+        listed = _parse(
+            client.post(
+                f"/{SLUG}/mcp",
+                json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+                headers=headers,
+            )
+        )
         tools = {t["name"]: t for t in listed["result"]["tools"]}
 
         assert tools["items_getItem"]["annotations"]["readOnlyHint"] is True
@@ -221,7 +301,11 @@ def _uploaded_spec(
         "openapi": "3.0.3",
         "info": {"title": "Uploaded", "version": "1"},
         "x-padding": "p" * padding,
-        "paths": {"/items": {"get": {"operationId": "listItems", "responses": {"200": {"description": "ok"}}}}},
+        "paths": {
+            "/items": {
+                "get": {"operationId": "listItems", "responses": {"200": {"description": "ok"}}}
+            }
+        },
     }
     return json.dumps(spec)
 
@@ -239,14 +323,20 @@ class TestSpecUpload:
         assert _tool_json(_call_2026(client, "upl_listItems", {}))["result"][0]["id"] == 1
 
     def test_refresh_of_uploaded_spec_is_conflict(self, client, server):
-        response = client.patch(f"/api/openapi-servers/{SLUG}/targets/upl", json={"refresh_spec": True})
+        response = client.patch(
+            f"/api/openapi-servers/{SLUG}/targets/upl", json={"refresh_spec": True}
+        )
 
         assert (response.status_code, response.json()["error"]) == (409, "spec_url_missing")
 
     def test_upload_over_gateway_limit_is_413(self, client, server):
         response = client.post(
             f"/api/openapi-servers/{SLUG}/targets",
-            json={"name": "huge", "spec_content": _uploaded_spec(9 * 1024 * 1024), "base_url": MOCK_URL},
+            json={
+                "name": "huge",
+                "spec_content": _uploaded_spec(9 * 1024 * 1024),
+                "base_url": MOCK_URL,
+            },
         )
 
         assert response.status_code == 413
@@ -259,16 +349,34 @@ class TestSpecUpload:
 
 class TestRecovery:
     def test_tools_survive_container_restart(self, client, server):
-        subprocess.run(["docker", "restart", CONTAINER_NAME], check=True, capture_output=True, timeout=120)  # nosec B603 B607 - local test container
+        subprocess.run(
+            ["docker", "restart", CONTAINER_NAME], check=True, capture_output=True, timeout=120
+        )  # nosec B603 B607 - local test container
         deadline = time.time() + RESTART_WAIT_SECONDS
         while time.time() < deadline:
             response = client.post(
                 f"/{SLUG}/mcp",
-                json={"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "items_getItem", "arguments": {"item_id": 7}, "_meta": META_2026}},
-                headers={**MCP_HEADERS, "MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "tools/call", "Mcp-Name": "items_getItem"},
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "items_getItem",
+                        "arguments": {"item_id": 7},
+                        "_meta": META_2026,
+                    },
+                },
+                headers={
+                    **MCP_HEADERS,
+                    "MCP-Protocol-Version": "2026-07-28",
+                    "Mcp-Method": "tools/call",
+                    "Mcp-Name": "items_getItem",
+                },
             )
             if response.status_code == 200:
                 assert _tool_json(_parse(response)) == {"id": 7, "name": "item-7"}
                 return
             time.sleep(3)
-        pytest.fail(f"tools did not come back within {RESTART_WAIT_SECONDS}s of a container restart")
+        pytest.fail(
+            f"tools did not come back within {RESTART_WAIT_SECONDS}s of a container restart"
+        )

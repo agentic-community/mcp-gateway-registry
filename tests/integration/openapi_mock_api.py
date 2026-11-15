@@ -94,7 +94,9 @@ def _spec() -> dict:
 # upload or, through /nasa-spec.json here, as a spec URL. It declares no api_key
 # parameter: per-user targets send each user's key in the X-Api-Key header, which
 # api.nasa.gov accepts.
-NASA_SPEC_PATH: Path = Path(__file__).resolve().parents[2] / "docs" / "examples" / "openapi" / "nasa.json"
+NASA_SPEC_PATH: Path = (
+    Path(__file__).resolve().parents[2] / "docs" / "examples" / "openapi" / "nasa.json"
+)
 NASA_SPEC: dict = json.loads(NASA_SPEC_PATH.read_text())
 
 

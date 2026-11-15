@@ -7,7 +7,6 @@ from unittest.mock import patch
 class TestAuthServerHopProfile:
     def test_container_identity_selects_the_openapi_profile(self):
         from auth_server.server import _egress_upstream_profile
-
         from registry.utils import url_guard
 
         settings = SimpleNamespace(
