@@ -178,7 +178,7 @@ The registry's calls to the container carry each target's credential in plain HT
 
 To look at the container directly in Compose, run a command inside it: `docker compose exec openapi-mcp curl -s http://127.0.0.1:9876/health`. A REST API that you run as another Compose service has to join the `openapi-mcp` network, or the container cannot call it.
 
-The container runs one replica, because the registry pushes state to one address. With 10 servers of 10 targets each, including one 4.4 MB spec, it peaked at 293 MiB. Turning the feature off leaves stored servers in place without a backend; the registry logs their names at startup. Turn the feature back on, or delete them with it on.
+The container runs one replica, because the registry pushes state to one address. With 10 servers of 10 targets each, including one 4.4 MB spec, it peaked at 293 MiB. Turning the feature off leaves stored servers in place without a backend; the registry logs their names at startup. While it is off, those servers drop out of the server list, search, health checks and the gateway's routes, so nobody sees or connects to a server that cannot answer. Nothing stored changes: turn the feature back on and every server returns, with its users' keys. To remove them for good, delete them with the feature on.
 
 The container logs in the same JSON lines format as the registry, the auth server and mcpgw, with `"service": "openapi-mcp"`, and writes `openapi-mcp.log` under `APP_LOG_DIR` (`/var/log/containers/ai-registry` by default). It reads the same `APP_LOG_*` settings; see [logging-standard.md](logging-standard.md).
 

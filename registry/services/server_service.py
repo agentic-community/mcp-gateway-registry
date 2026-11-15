@@ -20,7 +20,11 @@ from ..utils.url_guard import (
     validate_server_path,
     validate_url,
 )
-from .openapi_ownership import check_openapi_ownership
+from .openapi_ownership import (
+    check_openapi_ownership,
+    openapi_mcp_feature_on,
+    without_hidden_records,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -667,7 +671,7 @@ class ServerService:
                 if server_info.get("is_active", True)  # Default to True for backward compatibility
             }
 
-        return all_servers
+        return without_hidden_records(all_servers)
 
     async def get_servers_paginated(
         self,
@@ -716,6 +720,15 @@ class ServerService:
             for path, server_info in servers.items()
             if server_info.get("is_active", True)
         }
+
+        # While OpenAPI MCP servers are off, their records are hidden. Filter by
+        # path: metadata_paths can project the ownership marker away. A page
+        # that held hidden records comes back short; the total stays exact.
+        if not openapi_mcp_feature_on():
+            hidden = await self._repo.list_openapi_managed_paths()
+            if hidden:
+                servers = {path: info for path, info in servers.items() if path not in hidden}
+                total = max(0, total - len(hidden))
 
         return servers, total
 
@@ -798,7 +811,7 @@ class ServerService:
         logger.info(
             f"Filtered {len(filtered_servers)} servers from {len(all_servers)} total servers"
         )
-        return filtered_servers
+        return without_hidden_records(filtered_servers)
 
     async def get_all_servers_with_permissions(
         self,
@@ -868,7 +881,7 @@ class ServerService:
                 f"Filtered access: fetched {len(filtered_servers)} servers "
                 f"for {len(accessible_servers)} accessible entries"
             )
-            return filtered_servers
+            return without_hidden_records(filtered_servers)
 
     async def user_can_access_server_path(self, path: str, accessible_servers: list[str]) -> bool:
         """
@@ -911,7 +924,9 @@ class ServerService:
         (those with is_active=False) are skipped since health checks should
         only run on the currently active version of each server.
         """
-        all_servers = await self._repo.list_all()
+        # OpenAPI MCP records have no backend while the feature is off, so no
+        # gateway route or health check is built for them.
+        all_servers = without_hidden_records(await self._repo.list_all())
         enabled_paths = []
 
         # Extract state from list_all() response instead of N+1 queries

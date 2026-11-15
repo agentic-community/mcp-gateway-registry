@@ -225,6 +225,19 @@ class ServerRepositoryBase(ABC):
         """
         pass
 
+    async def list_openapi_managed_paths(self) -> set[str]:
+        """Paths of records an OpenAPI MCP server owns (metadata.openapi_server.slug).
+
+        This default reads every record; a backend overrides it with a query.
+        """
+        servers = await self.list_all(exclude_tool_list=True)
+        managed = set()
+        for path, info in servers.items():
+            entry = (info.get("metadata") or {}).get("openapi_server")
+            if isinstance(entry, dict) and entry.get("slug"):
+                managed.add(path)
+        return managed
+
     @abstractmethod
     async def count_tools(self) -> int:
         """Get the total number of tools exposed across all servers.
