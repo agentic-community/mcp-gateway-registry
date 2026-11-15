@@ -1142,6 +1142,20 @@ def _openapi_mcp_reserved_host() -> str | None:
     return host.lower() if host else None
 
 
+def is_openapi_mcp_container_url(
+    url: str | None,
+) -> bool:
+    """True when the URL's host is the openapi-mcp container's (reserved even with the feature off)."""
+    host = _openapi_mcp_reserved_host()
+    if not host or not isinstance(url, str) or not url:
+        return False
+    try:
+        target_host = urlsplit(url).hostname
+    except ValueError:
+        return False
+    return (target_host or "").lower().rstrip(".") == host
+
+
 def _openapi_mcp_base() -> str | None:
     """Normalized container origin (no trailing slash) when the feature is on, else None."""
     s = _get_settings()

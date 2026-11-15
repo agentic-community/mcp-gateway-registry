@@ -84,6 +84,10 @@ from registry.schemas.proxy_mixin import resolve_proxy_target
 from registry.secrets import keys
 from registry.secrets.factory import get_secret_store
 from registry.secrets.interfaces import SecretStoreError
+from registry.services.openapi_ownership import (
+    managed_openapi_slug,
+    points_at_own_hub,
+)
 from registry.services.server_service import server_service
 from registry.utils.credential_encryption import (
     decrypt_custom_headers,
@@ -262,8 +266,17 @@ async def _openapi_envelope_response(
     from registry.repositories.factory import get_openapi_server_repository
     from registry.services.openapi_user_credentials import build_envelope
 
-    slug = (server.get("metadata") or {}).get("openapi_server", {}).get("slug")
-    stored = await get_openapi_server_repository().get(slug) if isinstance(slug, str) else None
+    slug = managed_openapi_slug(server)
+    if not points_at_own_hub(server):
+        # The envelope carries every per-user key in plain text (signed, not
+        # encrypted), so it goes only to the server's own hub. A record repointed
+        # anywhere else gets nothing (issue #2022).
+        logger.warning(
+            "egress vend: refusing per-user keys for %s: it does not point at its own hub",
+            server.get("path"),
+        )
+        return EgressTokenResponse(consent_required=True)
+    stored = await get_openapi_server_repository().get(slug) if slug else None
     if stored is None or stored.path != server.get("path"):
         logger.warning("egress vend: OpenAPI MCP server record missing for %s", server.get("path"))
         return EgressTokenResponse(consent_required=True)
@@ -1033,7 +1046,7 @@ async def vend_egress_token(
     # OAuth provider and rejects a token stored with client_id=None). A miss
     # (never submitted OR expired) is TERMINAL: set mode="pat" so auth_server
     # emits the PAT-missing message; NO connect_url (not interactive).
-    if egress_mode == "pat" and (server.get("metadata") or {}).get("openapi_server"):
+    if egress_mode == "pat" and managed_openapi_slug(server):
         # An OpenAPI MCP server (issue #2022): one key per per-user target, packed
         # into a signed envelope for the container. Always minted, even empty, so
         # the server's shared targets keep working for a caller with no keys.
@@ -1701,7 +1714,7 @@ async def configure_egress_auth(
     server = await server_service.get_server_info(server_path, include_credentials=True)
     if not server:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="server not found")
-    if (server.get("metadata") or {}).get("openapi_server"):
+    if managed_openapi_slug(server):
         # The OpenAPI MCP server service sets this server's egress mode from its
         # targets' credential modes (issue #2022); a manual change would break it.
         raise HTTPException(
@@ -1874,7 +1887,7 @@ async def _resolve_pat_server(
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="server not found")
     if server.get("egress_auth_mode") != "pat" or not server.get("egress_oauth"):
         raise HTTPException(status.HTTP_409_CONFLICT, detail="server is not configured for pat")
-    if (server.get("metadata") or {}).get("openapi_server"):
+    if managed_openapi_slug(server):
         # One key per target, bound to the target's base URL (issue #2022).
         raise HTTPException(
             status.HTTP_409_CONFLICT,
@@ -2074,7 +2087,7 @@ async def list_available_egress_servers(
         mode = server.get("egress_auth_mode")
         if mode not in ("oauth_user", "pat") or not server.get("egress_oauth"):
             continue
-        if (server.get("metadata") or {}).get("openapi_server"):
+        if managed_openapi_slug(server):
             # OpenAPI MCP servers take one key per target through
             # /api/openapi-servers/{slug}/targets/{name}/my-credential (issue #2022).
             continue

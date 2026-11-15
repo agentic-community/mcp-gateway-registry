@@ -109,6 +109,8 @@ The registry keeps the exact spec it checked. A change to the spec at its URL re
 
 A new server is `private`: only admins can see and call it. This differs from `POST /api/servers/register`, where the default is `public`. Every caller spends the targets' shared credentials, so open a server with shared targets to a group (`group-restricted`) or to everyone (`public`) only when it is ready. A server whose targets are all per-user spends no one's key but the caller's. The server is an ordinary registry server, so scopes, the gateway's access check, search and the per-tool block all apply to it unchanged.
 
+The OpenAPI MCP server owns that registry record. The generic `/api/servers/*` routes that would change or remove it (edit, replace through register, remove, the credential, OAuth and version routes) return `409` and point to `/api/openapi-servers/{slug}`. Toggle, refresh, rescan, rating and the per-tool block still work through the generic routes, so an admin can turn a server back on after an interrupted scan. No other registration may point at the openapi-mcp container.
+
 Each tool is marked from its HTTP method: `GET`, `HEAD` and `OPTIONS` are read-only, and `DELETE` is destructive. Clients that confirm destructive calls, such as Claude Code, ask before a `DELETE`. To remove a tool entirely, block it with the existing per-tool block (`tool_overrides`) on the server, or leave its operation out with the include filters.
 
 ## What callers should expect

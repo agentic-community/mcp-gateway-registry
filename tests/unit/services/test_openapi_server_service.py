@@ -198,12 +198,30 @@ class TestCreateServer:
     async def test_rollback_removes_serverinfo_when_registration_half_done(self, env):
         servers, _specs, mocks = env
         mocks["register"].side_effect = OpenApiServerError(500, "enable_failed", "x")
-        mocks["get_server_info"].side_effect = [None, {"path": "/weather-apis"}]
+        mocks["get_server_info"].side_effect = [
+            None,
+            {"path": "/weather-apis", "metadata": {"openapi_server": {"slug": "weather-apis"}}},
+        ]
 
         with pytest.raises(OpenApiServerError):
             await _create()
 
         mocks["remove_everywhere"].assert_awaited_once()
+        assert servers.docs == {}
+
+    async def test_rollback_leaves_a_record_another_registration_claimed(self, env):
+        """The path can be taken while the push is in flight; that record is not ours."""
+        servers, _specs, mocks = env
+        mocks["register"].side_effect = OpenApiServerError(409, "path_taken", "x")
+        mocks["get_server_info"].side_effect = [
+            None,
+            {"path": "/weather-apis", "proxy_pass_url": "https://other.example/mcp"},
+        ]
+
+        with pytest.raises(OpenApiServerError):
+            await _create()
+
+        mocks["remove_everywhere"].assert_not_awaited()
         assert servers.docs == {}
 
     async def test_rollback_is_safe_to_run_twice(self, env):

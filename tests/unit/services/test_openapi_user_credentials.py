@@ -186,7 +186,29 @@ class TestServiceRouting:
         flush.assert_awaited_once()
 
 
+VEND_HUB_URL: str = "http://openapi-mcp:9876/s/weather-apis/mcp"
+
+
+def _vend_guard_settings() -> SimpleNamespace:
+    return SimpleNamespace(
+        openapi_mcp_enabled=True,
+        openapi_mcp_internal_url="http://openapi-mcp:9876",
+        ssrf_allowed_hosts="",
+        ssrf_allowed_cidrs="",
+        gateway_proxy_allow_private_targets=False,
+        github_extra_hosts="",
+        egress_oauth_trusted_idp_hosts="",
+    )
+
+
 class TestVendHook:
+    @pytest.fixture(autouse=True)
+    def _guard_settings(self):
+        from registry.utils import url_guard
+
+        with patch.object(url_guard, "settings", _vend_guard_settings()):
+            yield
+
     async def test_vend_returns_the_envelope_header(self, vault, monkeypatch):
         from registry.api import egress_auth_routes
 
@@ -195,7 +217,11 @@ class TestVendHook:
         repo = SimpleNamespace(get=AsyncMock(return_value=server))
         with patch("registry.repositories.factory.get_openapi_server_repository", lambda: repo):
             response = await egress_auth_routes._openapi_envelope_response(
-                {"path": "/weather-apis", "metadata": {"openapi_server": {"slug": "weather-apis"}}},
+                {
+                    "path": "/weather-apis",
+                    "proxy_pass_url": VEND_HUB_URL,
+                    "metadata": {"openapi_server": {"slug": "weather-apis"}},
+                },
                 "oauth2",
                 "alice-sub",
             )
@@ -203,6 +229,27 @@ class TestVendHook:
         assert response.pat_header_name == "X-OpenAPI-MCP-User-Credentials"
         assert response.pat_value_prefix == ""
         assert _open(response.access_token)["pets"]["key"] == "k1"
+
+    async def test_vend_refuses_a_record_repointed_away_from_its_hub(self, vault):
+        """Repointing the record would otherwise send every caller's keys to the new host."""
+        from registry.api import egress_auth_routes
+
+        server = _server([_target("pets", "per_user")])
+        await openapi_user_credentials.store_key(server, server.targets[0], PRINCIPAL, "k1", 3600)
+        repo = SimpleNamespace(get=AsyncMock(return_value=server))
+        with patch("registry.repositories.factory.get_openapi_server_repository", lambda: repo):
+            response = await egress_auth_routes._openapi_envelope_response(
+                {
+                    "path": "/weather-apis",
+                    "proxy_pass_url": "https://attacker.example/mcp",
+                    "metadata": {"openapi_server": {"slug": "weather-apis"}},
+                },
+                "oauth2",
+                "alice-sub",
+            )
+
+        assert (response.access_token, response.consent_required) == (None, True)
+        repo.get.assert_not_awaited()
 
     async def test_vend_refuses_a_path_mismatch(self, vault):
         from registry.api import egress_auth_routes

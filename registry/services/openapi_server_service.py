@@ -42,6 +42,7 @@ from .openapi_errors import (
     conflict,
     not_found,
 )
+from .openapi_ownership import managed_openapi_slug
 from .openapi_server_views import build_hub_state
 from .server_service import server_service
 
@@ -259,8 +260,15 @@ async def _rollback_create(
     """Undo a failed create in reverse order. Every step tolerates a missing target."""
     try:
         info = await server_service.get_server_info(server.path)
-        if info:
+        # Remove only this server's own record. Another registration can claim
+        # the path while the push is in flight, and that one is not ours to remove.
+        if info and managed_openapi_slug(info) == server.slug:
             await server_lifecycle.remove_server_everywhere(server.path, info, actor)
+        elif info:
+            logger.warning(
+                f"Rollback of '{server.slug}': {server.path} now belongs to another "
+                "registration; leaving it in place"
+            )
     except Exception:
         logger.exception(f"Rollback of '{server.slug}': removing the ServerInfo failed")
     try:
