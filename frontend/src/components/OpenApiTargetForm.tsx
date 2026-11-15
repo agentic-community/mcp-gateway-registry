@@ -89,8 +89,8 @@ const EGRESS_AUTH_DISABLED_SENTENCE: string =
 
 const CREDENTIAL_LABELS: Record<OpenApiAuthScheme, string> = {
   none: '',
-  api_key_header: 'API key',
-  api_key_query: 'API key',
+  api_key_header: 'API key',  // pragma: allowlist secret
+  api_key_query: 'API key',  // pragma: allowlist secret
   bearer: 'Bearer token',
   basic: 'Password',
 };

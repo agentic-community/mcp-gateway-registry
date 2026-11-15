@@ -73,7 +73,7 @@ tests:
     set:
       global:
         openapiMcp:
-          existingSyncSecret: my-sync
+          existingSyncSecret: my-sync  # pragma: allowlist secret
       openapiMcp:
         enabled: true
       auth-server:

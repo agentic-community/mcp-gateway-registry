@@ -349,7 +349,7 @@ spec:
               value: {{ .Values.global.ssrfAllowedCidrs | default .Values.app.ssrfAllowedCidrs | default "" | quote }}
             # OpenAPI MCP servers (issue #2022): the mcp-proxy hop forwards
             # per-user-credential calls to the openapi-mcp container. Rendered
-            # only when enabled. Never OPENAPI_MCP_SYNC_SECRET: the registry
+            # only when enabled. Never OPENAPI_MCP_SYNC_SECRET: the registry  # pragma: allowlist secret
             # signs the per-user credential envelope.
             {{- if .Values.app.openapiMcpEnabled }}
             - name: OPENAPI_MCP_ENABLED

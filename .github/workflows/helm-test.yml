@@ -248,6 +248,7 @@ jobs:
               "global.ingress.routingMode=host",
               "openapiMcp.enabled=true",
               "registry.app.openapiMcpEnabled=true",
+              "auth-server.app.openapiMcpEnabled=true",
           ])
 
           out = subprocess.run(

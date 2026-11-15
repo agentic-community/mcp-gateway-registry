@@ -150,4 +150,3 @@ docker run -d --name openapi-mock-api --network mcp-gateway-registry_default --n
 # add openapi-mock-api to SSRF_ALLOWED_HOSTS in .env, then recreate registry and openapi-mcp
 OPENAPI_MCP_E2E=1 uv run pytest tests/integration/test_openapi_mcp_e2e.py -v --no-cov
 ```
-
