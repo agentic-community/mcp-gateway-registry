@@ -147,6 +147,9 @@ services:
 
   # Registry service (includes nginx, SSL, FAISS, models)
   registry:
+    networks:
+      - default
+      - openapi-mcp
     build:
       context: .
       dockerfile: docker/Dockerfile.registry
@@ -692,6 +695,9 @@ services:
 
   # Auth service (separate and scalable)
   auth-server:
+    networks:
+      - default
+      - openapi-mcp
     build:
       context: .
       dockerfile: docker/Dockerfile.auth
@@ -1095,9 +1101,10 @@ services:
     env_file:
       - path: ${MCP_EXTRA_ENV_DIR:-./extra_env}/openapi-mcp.env
         required: false
-    # Loopback only: the registry and nginx reach it on the compose network.
-    ports:
-      - "${HOST_BIND_IP:-127.0.0.1}:9876:9876"
+    # No published port: only the registry and the auth server may reach it.
+    # To debug: docker compose exec openapi-mcp curl -s http://127.0.0.1:9876/health
+    networks:
+      - openapi-mcp
     restart: unless-stopped
 
   # Real Server Fake Tools MCP Server
@@ -1371,3 +1378,11 @@ volumes:
   registry-scans:
   auth-logs:
   metrics-logs:
+
+networks:
+  # openapi-mcp answers /s/<slug>/mcp without authentication of its own (the
+  # gateway's auth_request guards it) and spends the targets' shared
+  # credentials, so only the registry and the auth server share a network
+  # with it. It is not internal: the container has to reach third-party APIs.
+  # A REST API run as a compose service must join this network to be reached.
+  openapi-mcp: {}

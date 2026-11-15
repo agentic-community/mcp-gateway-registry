@@ -981,6 +981,9 @@ export class RegistryServiceStack extends cdk.Stack {
         memoryLimitMiB: 1024,
         enableAutoScaling: false,
         dropAllCapabilities: true,
+        // Never two tasks at once: pushes go to one Service Connect address
+        // (parity with the Terraform deployment percentages and Helm Recreate).
+        replaceTaskOnDeploy: true,
         namePrefix,
         desiredCount: config.openapiMcp.replicas,
       });

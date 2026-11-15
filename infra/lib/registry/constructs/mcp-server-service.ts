@@ -91,6 +91,11 @@ export interface McpServerServiceProps {
   readonly enableAutoScaling?: boolean;
   /** Drop every Linux capability from the container (defaults to false) */
   readonly dropAllCapabilities?: boolean;
+  /**
+   * Stop the old task before starting the new one on a deploy (defaults to
+   * false). For single-instance services that must never run two tasks.
+   */
+  readonly replaceTaskOnDeploy?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -326,6 +331,7 @@ export class McpServerService extends Construct {
       cluster: props.cluster,
       taskDefinition: taskDef,
       desiredCount: props.desiredCount ?? 1,
+      ...(props.replaceTaskOnDeploy ? { maxHealthyPercent: 100, minHealthyPercent: 0 } : {}),
       assignPublicIp: false,
       vpcSubnets: { subnets: props.subnets },
       securityGroups: [sg],

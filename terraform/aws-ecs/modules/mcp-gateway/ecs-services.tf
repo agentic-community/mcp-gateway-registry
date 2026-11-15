@@ -2901,6 +2901,13 @@ module "ecs_service_openapi_mcp" {
   # One task only, so no autoscaling.
   enable_autoscaling = false
 
+  # Stop the old task before starting the new one. The module defaults (200%
+  # max, 66% min healthy) run two tasks during a deploy, and Service Connect
+  # would split registry pushes and /health polls between them, so one task
+  # serves stale tools. Matches the Helm chart's Recreate strategy.
+  deployment_maximum_percent         = 100
+  deployment_minimum_healthy_percent = 0
+
   enable_execute_command = true
 
   requires_compatibilities = ["FARGATE", "EC2"]

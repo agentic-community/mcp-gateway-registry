@@ -805,9 +805,18 @@ openapi_mcp_reconcile_drift_total = _meter.create_counter(
 def _openapi_mcp_state_callback(
     options: Any,
 ):
-    """Stored servers and targets (as of the last reconcile pass) and container reachability."""
+    """Stored servers and targets (as of the last reconcile pass) and container reachability.
+
+    Reports nothing while the feature is off: reachability starts at 0, so an
+    alert on "container_reachable stays at 0" would otherwise fire on every
+    deployment that never enabled OpenAPI MCP servers.
+    """
     try:
+        from registry.core.config import settings
         from registry.services import openapi_mcp_reconciler as reconciler
+
+        if getattr(settings, "openapi_mcp_enabled", False) is not True:
+            return
 
         yield metrics.Observation(reconciler.stored_server_count(), {"kind": "servers"})
         yield metrics.Observation(reconciler.stored_target_count(), {"kind": "targets"})

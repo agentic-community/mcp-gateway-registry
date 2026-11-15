@@ -182,7 +182,7 @@ In `REGISTRY_ONLY` mode, or when `REGISTRY_MODE` turns MCP servers off, the regi
 
 The container ships as its own image, built from `docker/Dockerfile.openapi-mcp`. Besides its own code, the image holds nine files from the registry: the SSRF guard and its imports, the signing-secret check, and the sync-token module. It holds nothing else from the registry, including the settings class that needs `SECRET_KEY`. One replica runs, because pushes go to one address. The same load test, which included one 4.4 MB spec, peaked at 293 MiB, so ECS and CDK give the container 1024 MiB (the smallest Fargate size for 0.5 vCPU) and Helm limits it to 1 Gi.
 
-On every surface, only the registry and nginx can reach the container: Compose keeps it on the internal network with a loopback-only port, ECS allows ingress from the registry security group, and Helm adds a NetworkPolicy. The hop between them is plain HTTP by default. A cluster that needs TLS inside can set an `https` URL.
+On every surface, only the registry (with its nginx) and the auth server can reach the container: Compose puts it on its own `openapi-mcp` network with no published port, ECS allows ingress from the registry and auth-server security groups, and Helm adds a NetworkPolicy. The container's `/s/<slug>/mcp` routes have no authentication of their own, because the gateway's `auth_request` guards them, so this isolation is what keeps other workloads from spending a target's shared credential. The hop between them is plain HTTP by default. A cluster that needs TLS inside can set an `https` URL.
 
 ### Observability
 
