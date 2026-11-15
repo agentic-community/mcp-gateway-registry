@@ -83,7 +83,7 @@ Each target chooses one `credential_mode`:
 One server can mix both kinds of target. A per-user target, as the admin adds it:
 
 ```json
-{"name": "nasa", "spec_url": "https://example.com/nasa-openapi.json", "base_url": "https://api.nasa.gov",
+{"name": "nasa", "spec_url": "https://raw.githubusercontent.com/agentic-community/mcp-gateway-registry/main/docs/examples/openapi/nasa.json", "base_url": "https://api.nasa.gov",
  "auth": {"scheme": "api_key_header", "header_name": "X-Api-Key", "credential_mode": "per_user"}}
 ```
 
@@ -114,6 +114,36 @@ uv run python api/registry_management.py openapi-key-delete --slug nasa --name n
 At call time the gateway sends a per-user server's traffic through the auth server, which forwards the caller's keys to the container in a signed, single-use envelope. The auth server never holds the key that signs it.
 
 The registry keeps the exact spec it checked. A change to the spec at its URL reaches agents only after an admin refreshes the target (`refresh_spec: true`) or uploads the new version, and either one runs every check again.
+
+## Try it with the NASA example
+
+[`docs/examples/openapi/nasa.json`](examples/openapi/nasa.json) is a small OpenAPI 3 spec for three NASA APIs: the Astronomy Picture of the Day, Earth images from the DSCOVR EPIC camera, and near-Earth asteroids. It works on any deployment (Compose, ECS or EKS), because the registry can fetch it from GitHub or you can upload the file. Each user needs a free key of their own from [api.nasa.gov](https://api.nasa.gov).
+
+1. Create a server named `NASA`, in the UI or with the CLI. It is served at `/nasa/mcp` on the gateway.
+
+   ```bash
+   uv run python api/registry_management.py openapi-server-create --name "NASA" \
+       --description "NASA open data; each user adds their own api.nasa.gov key"
+   ```
+
+2. Add the target. In the UI, choose "Fetch from a URL" and paste the spec URL below, or choose "Upload a file" and pick `docs/examples/openapi/nasa.json`. Set the base URL to `https://api.nasa.gov`, the credential mode to per user, the auth scheme to an API key in a header, and the header name to `X-Api-Key`.
+
+   ```bash
+   uv run python api/registry_management.py openapi-target-add --slug nasa --name nasa \
+       --spec-url https://raw.githubusercontent.com/agentic-community/mcp-gateway-registry/main/docs/examples/openapi/nasa.json \
+       --base-url https://api.nasa.gov \
+       --auth-scheme api_key_header --header-name X-Api-Key --credential-mode per_user
+   ```
+
+   Use `--spec-file docs/examples/openapi/nasa.json` instead of `--spec-url` to upload the file.
+
+3. Decide who can use it. The server starts `private`; set it to `group-restricted` with the groups that should see it.
+
+4. Each user adds their key, in the UI ("Your API keys" on the server card) or with `openapi-key-set` (see above).
+
+5. Connect an MCP client to `<gateway URL>/nasa/mcp` and call `nasa_getApod`. A user who has not added a key gets a tool error that tells them to add one.
+
+The registry must reach `raw.githubusercontent.com` to fetch the spec (upload the file if it cannot), and the openapi-mcp container must reach `api.nasa.gov` to call the API.
 
 ## Who can use a server
 
