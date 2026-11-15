@@ -111,3 +111,32 @@ def check_openapi_ownership(
             str(url),
             f"the openapi-mcp container serves only OpenAPI MCP servers; {OPENAPI_ROUTES_HINT}",
         )
+
+
+def openapi_mcp_feature_on() -> bool:
+    """True when OpenAPI MCP servers are on (after the startup mode gate)."""
+    from ..core.config import settings
+
+    return getattr(settings, "openapi_mcp_enabled", False) is True
+
+
+def hidden_while_feature_off(
+    server_info: dict[str, Any] | None,
+) -> bool:
+    """True for a record an OpenAPI MCP server owns while the feature is off.
+
+    Turning OPENAPI_MCP_ENABLED off leaves the records in place, so turning it
+    back on restores every server and its users' keys. While it is off they
+    have no backend, so listings, search, health checks and the gateway's
+    routes skip them. This is a filter on reads; nothing stored changes.
+    """
+    return managed_openapi_slug(server_info) is not None and not openapi_mcp_feature_on()
+
+
+def without_hidden_records(
+    servers: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """The servers minus OpenAPI MCP records while the feature is off."""
+    if openapi_mcp_feature_on():
+        return servers
+    return {path: info for path, info in servers.items() if managed_openapi_slug(info) is None}

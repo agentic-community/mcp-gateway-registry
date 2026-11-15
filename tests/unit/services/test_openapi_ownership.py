@@ -159,3 +159,75 @@ class TestGenericRoutes:
     )
     def test_ordinary_or_missing_record_passes(self, record):
         server_routes._refuse_openapi_managed(record, "remove")
+
+
+class TestHiddenWhileFeatureOff:
+    """With the feature off, managed records stay stored but drop out of reads."""
+
+    ORDINARY: dict = {
+        "path": "/x",
+        "proxy_pass_url": "https://api.example.com/mcp",
+        "is_enabled": True,
+    }
+
+    @pytest.fixture
+    def flag(self):
+        from registry.core.config import settings
+
+        def _set(value: bool):
+            return patch.object(settings, "openapi_mcp_enabled", value)
+
+        return _set
+
+    def test_managed_record_is_hidden_only_while_off(self, flag):
+        with flag(False):
+            assert openapi_ownership.hidden_while_feature_off(_managed()) is True
+            assert openapi_ownership.hidden_while_feature_off(self.ORDINARY) is False
+        with flag(True):
+            assert openapi_ownership.hidden_while_feature_off(_managed()) is False
+
+    def test_filter_keeps_ordinary_records(self, flag):
+        servers = {"/weather-apis": _managed(), "/x": self.ORDINARY}
+
+        with flag(False):
+            assert list(openapi_ownership.without_hidden_records(servers)) == ["/x"]
+        with flag(True):
+            assert list(openapi_ownership.without_hidden_records(servers)) == [
+                "/weather-apis",
+                "/x",
+            ]
+
+    async def test_listing_and_enabled_services_skip_hidden_records(self, flag):
+        managed = {**_managed(), "is_enabled": True}
+        svc = ServerService()
+        svc._repo = SimpleNamespace(
+            list_all=AsyncMock(return_value={"/weather-apis": managed, "/x": dict(self.ORDINARY)})
+        )
+
+        with flag(False):
+            listed = await svc.get_all_servers()
+            enabled = await svc.get_enabled_services()
+        with flag(True):
+            enabled_on = await svc.get_enabled_services()
+
+        assert list(listed) == ["/x"]
+        assert enabled == ["/x"]
+        assert sorted(enabled_on) == ["/weather-apis", "/x"]
+
+    async def test_paged_listing_hides_records_by_path_and_fixes_the_total(self, flag):
+        """metadata_paths can project the ownership marker away, so the page is filtered by path."""
+        page = {"/weather-apis": {"path": "/weather-apis"}, "/x": {"path": "/x"}}
+        svc = ServerService()
+        svc._repo = SimpleNamespace(
+            list_paginated=AsyncMock(return_value=page),
+            count=AsyncMock(return_value=10),
+            list_openapi_managed_paths=AsyncMock(return_value={"/weather-apis"}),
+        )
+
+        with flag(False):
+            servers, total = await svc.get_servers_paginated(skip=0, limit=2)
+        with flag(True):
+            servers_on, total_on = await svc.get_servers_paginated(skip=0, limit=2)
+
+        assert (list(servers), total) == (["/x"], 9)
+        assert (sorted(servers_on), total_on) == (["/weather-apis", "/x"], 10)
