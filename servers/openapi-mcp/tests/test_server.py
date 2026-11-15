@@ -157,6 +157,28 @@ class TestHubLifecycle:
         )
         assert status.json()["servers"]["demo"]["incarnation"] == "2026-11-15T09:00:00+00:00"
 
+    async def test_failed_build_closes_its_clients_and_reports_build_failed(
+        self, items_spec, backend, monkeypatch
+    ):
+        closed = []
+        real_close = hubs._close_entry
+
+        async def _record_close(entry):
+            closed.append(len(entry.clients))
+            await real_close(entry)
+
+        async def _fail_lifespan(entry):
+            raise RuntimeError("lifespan failed")
+
+        monkeypatch.setattr(hubs, "_close_entry", _record_close)
+        monkeypatch.setattr(hubs, "_start_lifespan", _fail_lifespan)
+        async with _client() as client:
+            response = await _put(client, _state([_target(items_spec)]))
+
+        assert (response.status_code, response.json()["error"]) == (500, "build_failed")
+        assert closed == [1]
+        assert hubs.get_hub("demo") is None
+
     async def test_stale_generation_ignored(self, items_spec, backend):
         async with _client() as client:
             await _put(client, _state([_target(items_spec)], generation=3))

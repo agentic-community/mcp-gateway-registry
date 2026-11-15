@@ -24,6 +24,10 @@ from registry.utils.logging_setup import (
 )
 
 SERVICE_NAME: str = "openapi-mcp"
+# httpx and httpx2 log every request's full URL at INFO, and a target whose
+# shared key is a query parameter (api_key_query) carries the key in that URL.
+# Tool arguments sent as query parameters can hold personal data too.
+QUIET_HTTP_LOGGERS: tuple[str, ...] = ("httpx", "httpx2")
 DEFAULT_LOG_DIR: Path = Path("/var/log/containers/ai-registry")
 
 logger = logging.getLogger(__name__)
@@ -99,4 +103,6 @@ def setup_container_logging(
     console.setLevel(level)
     console.setFormatter(_formatter(settings.app_log_console_format))
     root.addHandler(console)
+    for name in QUIET_HTTP_LOGGERS:
+        logging.getLogger(name).setLevel(logging.WARNING)
     return _add_file_handler(root, settings, level)

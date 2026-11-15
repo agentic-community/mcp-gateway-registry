@@ -8,6 +8,7 @@ import asyncio
 import logging
 import re
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import httpx2
@@ -25,6 +26,14 @@ from models import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Conversions run on this small pool, not the default executor. A conversion
+# that passes its timeout keeps its thread until it finishes, and a dedicated
+# pool caps how many such threads can pile up when a bad spec is retried.
+MAX_CONCURRENT_CONVERSIONS: int = 2
+_CONVERSION_POOL: ThreadPoolExecutor = ThreadPoolExecutor(
+    max_workers=MAX_CONCURRENT_CONVERSIONS, thread_name_prefix="openapi-convert"
+)
 
 
 HTTP_METHODS: tuple[str, ...] = (
@@ -178,8 +187,9 @@ async def convert_target(
             ``timeout_seconds``.
     """
     try:
+        loop = asyncio.get_running_loop()
         sub = await asyncio.wait_for(
-            asyncio.to_thread(_build_sub_server, spec, options, client),
+            loop.run_in_executor(_CONVERSION_POOL, _build_sub_server, spec, options, client),
             timeout=timeout_seconds,
         )
         tools = await sub.list_tools(run_middleware=False)
