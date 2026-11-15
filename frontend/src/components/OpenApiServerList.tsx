@@ -132,6 +132,7 @@ const OpenApiServerList: React.FC<OpenApiServerListProps> = ({ onShowToast }) =>
               onManage={(s) => setDetailsSlug(s.slug)}
               onEdit={(s) => setFormServer(s)}
               onDelete={(s) => setDeleteCandidate(s)}
+              onShowToast={onShowToast}
             />
           ))}
         </div>

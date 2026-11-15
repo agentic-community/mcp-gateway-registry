@@ -1,12 +1,12 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   PencilIcon,
   TrashIcon,
   Cog6ToothIcon,
+  LinkIcon,
 } from '@heroicons/react/24/outline';
 import { OpenApiServer } from '../types/openApiServer';
-import { SafeLink } from './SafeLink';
-import { CopyButton } from './modals';
+import ServerConfigModal from './ServerConfigModal';
 
 
 /** The status a server card shows. */
@@ -67,22 +67,35 @@ interface OpenApiServerCardProps {
   onManage: (server: OpenApiServer) => void;
   onEdit: (server: OpenApiServer) => void;
   onDelete: (server: OpenApiServer) => void;
+  onShowToast?: (message: string, type: 'success' | 'error') => void;
 }
 
 
 /**
  * OpenApiServerCard shows one OpenAPI MCP server in the admin OpenAPI view:
- * name, description, path, MCP URL with a copy button, target and tool
- * counts, and a status badge.
+ * name, description, path, target and tool counts, a status badge, and a
+ * Connect button that opens the same connection dialog (client configs and
+ * the gateway URL) as the other server cards.
  */
 const OpenApiServerCard: React.FC<OpenApiServerCardProps> = ({
   server,
   onManage,
   onEdit,
   onDelete,
+  onShowToast,
 }) => {
+  const [showConfig, setShowConfig] = useState(false);
   const targetCount = server.targets?.length || 0;
   const toolCount = openApiToolCount(server);
+  // Each OpenAPI MCP server is an ordinary registry server at its path, so the
+  // standard connection dialog works with these fields.
+  const serverForConfig = {
+    name: server.name,
+    path: server.path,
+    description: server.description,
+    enabled: true,
+    tags: server.tags || [],
+  };
 
   return (
     <div className="rounded-2xl shadow-sm hover:shadow-xl transition-all duration-300 h-full flex flex-col bg-surface border-2 border-server-200 dark:border-server-700">
@@ -100,6 +113,15 @@ const OpenApiServerCard: React.FC<OpenApiServerCardProps> = ({
             </code>
           </div>
           <div className="flex items-center gap-1 flex-shrink-0">
+            <button
+              onClick={() => setShowConfig(true)}
+              className="flex items-center gap-1 px-2 py-1.5 text-xs font-medium text-success-600 dark:text-success-400 hover:bg-success-50 dark:hover:bg-success-700/50 rounded-lg transition-all duration-200 flex-shrink-0 border border-success-200 dark:border-success-700"
+              title="Get connection details and mcp.json configuration"
+              aria-label={`Connect to ${server.name}`}
+            >
+              <LinkIcon className="h-3.5 w-3.5" />
+              Connect
+            </button>
             <button onClick={() => onEdit(server)} className="btn-icon" title="Edit server"
               aria-label={`Edit ${server.name}`}>
               <PencilIcon className="h-4 w-4" />
@@ -115,17 +137,6 @@ const OpenApiServerCard: React.FC<OpenApiServerCardProps> = ({
           {server.description || 'No description available'}
         </p>
 
-        {server.mcp_url && (
-          <div className="flex items-center gap-2 mb-3 min-w-0">
-            <SafeLink href={server.mcp_url} target="_blank" rel="noopener noreferrer"
-              className="text-xs font-mono text-primary-600 dark:text-primary-400 truncate">
-              {server.mcp_url}
-            </SafeLink>
-            <CopyButton getText={() => server.mcp_url || ''} label="Copy" variant="subtle"
-              title="Copy the MCP URL" />
-          </div>
-        )}
-
         <div className="flex items-center gap-4 text-sm text-fg-muted">
           <span>{targetCount} API{targetCount !== 1 ? 's' : ''}</span>
           <span>{toolCount} tool{toolCount !== 1 ? 's' : ''}</span>
@@ -140,6 +151,14 @@ const OpenApiServerCard: React.FC<OpenApiServerCardProps> = ({
           Manage APIs
         </button>
       </div>
+
+      <ServerConfigModal
+        server={serverForConfig as any}
+        isOpen={showConfig}
+        onClose={() => setShowConfig(false)}
+        onShowToast={onShowToast}
+        resourceType="server"
+      />
     </div>
   );
 };
