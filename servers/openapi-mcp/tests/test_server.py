@@ -137,6 +137,26 @@ class TestHubLifecycle:
         assert "items_getItem" in response.json()["targets"]["items"]["tools"]
         assert status.json()["servers"]["demo"]["generation"] == 1
 
+    async def test_recreated_server_replaces_a_leftover_hub(self, items_spec, backend):
+        """A server deleted and created again restarts at generation 1; its new
+        incarnation must still replace the old server's hub and credentials."""
+        old = _state([_target(items_spec, name="old")], generation=5)
+        old["incarnation"] = "2026-11-14T10:00:00+00:00"
+        new = _state([_target(items_spec, name="fresh")], generation=1)
+        new["incarnation"] = "2026-11-15T09:00:00+00:00"
+        async with _client() as client:
+            await _put(client, old)
+            response = await _put(client, new)
+            status = await client.get("/internal/status", headers=_auth())
+
+        body = response.json()
+        assert (body["generation"], body["incarnation"], list(body["targets"])) == (
+            1,
+            "2026-11-15T09:00:00+00:00",
+            ["fresh"],
+        )
+        assert status.json()["servers"]["demo"]["incarnation"] == "2026-11-15T09:00:00+00:00"
+
     async def test_stale_generation_ignored(self, items_spec, backend):
         async with _client() as client:
             await _put(client, _state([_target(items_spec)], generation=3))

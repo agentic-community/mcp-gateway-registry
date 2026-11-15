@@ -53,6 +53,11 @@ class HubServerState(BaseModel):
     name: str
     description: str = ""
     generation: int = Field(..., ge=0)
+    # Identifies this incarnation of the server: the registry sends its
+    # created_at. A server deleted and created again under the same slug
+    # restarts at generation 1, so the generation alone cannot tell the new
+    # server from a hub left behind by the old one.
+    incarnation: str = Field(default="", max_length=64)
     targets: list[HubTargetState] = Field(default_factory=list)
 
 
@@ -77,6 +82,7 @@ class ApplyResponse(BaseModel):
 
     slug: str
     generation: int
+    incarnation: str = ""
     targets: dict[str, TargetStatus]
 
 
@@ -92,6 +98,7 @@ class ServerStatus(BaseModel):
     """One running hub in GET /internal/status."""
 
     generation: int
+    incarnation: str = ""
     targets: dict[str, TargetStatus]
 
 

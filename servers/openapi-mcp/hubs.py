@@ -50,6 +50,7 @@ class HubEntry:
     """A running hub and everything that has to be closed with it."""
 
     generation: int
+    incarnation: str = ""
     app: Any = None
     lifespan_task: asyncio.Task | None = None
     stop: asyncio.Event = field(default_factory=asyncio.Event)
@@ -191,7 +192,7 @@ async def _build_hub(
         version=settings.build_version,
         strict_input_validation=True,
     )
-    entry = HubEntry(generation=state.generation)
+    entry = HubEntry(generation=state.generation, incarnation=state.incarnation)
     for target in state.targets:
         await _mount_target(hub, target, settings, entry)
 
@@ -239,12 +240,17 @@ async def apply_server_state(
     """Build a fresh hub for this server, swap it in, then close the old one."""
     async with _lock_for(state.slug):
         current = _hubs.get(state.slug)
-        if current is not None and current.generation >= state.generation:
+        same_server = current is not None and current.incarnation == state.incarnation
+        if same_server and current.generation >= state.generation:
             logger.info(
                 f"Ignoring push for '{state.slug}' generation {state.generation}; "
                 f"running generation is {current.generation}"
             )
             return current
+        if current is not None and not same_server:
+            logger.info(
+                f"Replacing hub '{state.slug}': it belongs to an earlier server with the same slug"
+            )
         new_entry = await _build_hub(state, settings)
         _hubs[state.slug] = new_entry
         if current is not None:
@@ -274,7 +280,9 @@ def get_hub(
 def status_snapshot() -> dict[str, ServerStatus]:
     """Generation and per-target status of every running hub."""
     return {
-        slug: ServerStatus(generation=entry.generation, targets=entry.status)
+        slug: ServerStatus(
+            generation=entry.generation, incarnation=entry.incarnation, targets=entry.status
+        )
         for slug, entry in _hubs.items()
     }
 

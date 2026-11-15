@@ -11,6 +11,7 @@ import asyncio
 import logging
 import re
 from collections.abc import Callable
+from datetime import datetime
 from typing import Any
 
 from ..core.config import settings
@@ -40,13 +41,20 @@ from . import (
 from .openapi_errors import (
     OpenApiServerError,
     conflict,
+    container_unavailable,
     not_found,
 )
 from .openapi_ownership import managed_openapi_slug
-from .openapi_server_views import build_hub_state
+from .openapi_server_views import (
+    build_hub_state,
+    server_incarnation,
+)
 from .server_service import server_service
 
 logger = logging.getLogger(__name__)
+
+# slug -> generation whose tool refresh has not finished yet (see _sync).
+_tool_refresh_owed: dict[str, int] = {}
 
 
 # Must stay below nginx's 60 s default proxy_read_timeout on /api/.
@@ -198,18 +206,59 @@ async def push_server(
     except OpenApiServerError as e:
         _count_push(e.code, trigger)
         raise
+    if reply.get("incarnation") != server_incarnation(server):
+        # The container kept a hub from another server with this slug. Report
+        # the push as failed so the change shows as pending and is retried.
+        _count_push("incarnation_mismatch", trigger)
+        logger.error(f"openapi-mcp kept another server's hub for '{server.slug}' after a push")
+        raise container_unavailable(f"openapi-mcp did not replace the hub for '{server.slug}'")
     _count_push("ok", trigger)
     return reply
 
 
-async def _push_and_refresh(
+def owed_tool_refreshes() -> dict[str, int]:
+    """Servers whose registry tool list may lag their hub: slug to the generation owed."""
+    return dict(_tool_refresh_owed)
+
+
+def settle_tool_refresh(
+    slug: str,
+    generation: int,
+) -> None:
+    """Forget an owed refresh once the tools of that generation (or a later one) are in."""
+    if _tool_refresh_owed.get(slug, generation + 1) <= generation:
+        _tool_refresh_owed.pop(slug, None)
+
+
+def _target_errors(
+    reply: dict[str, Any] | None,
+) -> dict[str, str]:
+    """Targets the container could not load, from its reply to a push."""
+    errors: dict[str, str] = {}
+    for name, entry in ((reply or {}).get("targets") or {}).items():
+        if isinstance(entry, dict) and entry.get("status") == "error":
+            errors[name] = str(entry.get("error") or "unknown error")[:300]
+    return errors
+
+
+async def _sync(
     server: OpenApiServer,
     rescan: bool,
-) -> str:
-    """Push, then refresh tools, within the request budget. Returns applied or pending."""
+) -> tuple[str, dict[str, str]]:
+    """Push, then refresh tools, within the request budget.
+
+    Returns ("applied" or "pending", targets the container could not load).
+    The refresh stays owed until it completes, so a push that lands after the
+    budget, or a refresh that fails, still gets its tool list refreshed by the
+    reconciler; without that, a hub already at the stored generation never
+    looks stale again and the registry's tool list stays old.
+    """
+    _tool_refresh_owed[server.slug] = server.generation
+    reply: dict[str, Any] | None = None
 
     async def _work() -> None:
-        await push_server(server)
+        nonlocal reply
+        reply = await push_server(server)
         await server_lifecycle.refresh_managed_server(server.path, rescan=rescan)
 
     try:
@@ -218,11 +267,35 @@ async def _push_and_refresh(
         logger.warning(
             f"Sync of '{server.slug}' generation {server.generation} passed the budget; reconciler will finish"
         )
-        return "pending"
+        return "pending", _target_errors(reply)
     except OpenApiServerError as e:
         logger.warning(f"Sync of '{server.slug}' failed ({e.code}); reconciler will retry")
-        return "pending"
-    return "applied"
+        return "pending", _target_errors(reply)
+    settle_tool_refresh(server.slug, server.generation)
+    errors = _target_errors(reply)
+    for name, error in errors.items():
+        logger.error(f"openapi-mcp could not load target '{name}' of '{server.slug}': {error}")
+    return "applied", errors
+
+
+async def _push_and_refresh(
+    server: OpenApiServer,
+    rescan: bool,
+) -> str:
+    """Push, then refresh tools, within the request budget. Returns applied or pending."""
+    status, _errors = await _sync(server, rescan)
+    return status
+
+
+def _with_target_errors(
+    warnings: list[str],
+    errors: dict[str, str],
+) -> list[str]:
+    """Add each target the container could not load to the response warnings."""
+    extra = [
+        f"target '{name}' did not load in openapi-mcp: {error}" for name, error in errors.items()
+    ]
+    return [*warnings, *extra]
 
 
 async def _save_with_retry(
@@ -513,12 +586,8 @@ async def add_target(
     logger.info(
         f"Target '{request.name}' ({len(target.tool_names)} tools, spec {fetched.sha256[:12]}) added to '{slug}' by {_actor(user_context)}"
     )
-    return (
-        updated,
-        target,
-        preview.get("warnings", []),
-        await _push_and_refresh(updated, rescan=True),
-    )
+    status, errors = await _sync(updated, rescan=True)
+    return updated, target, _with_target_errors(preview.get("warnings", []), errors), status
 
 
 def get_target_or_404(
@@ -588,6 +657,20 @@ async def _preview_stored_spec(
     return await _preview_checked(parsed.spec, target_name, options)
 
 
+def _check_target_unchanged(
+    server: OpenApiServer,
+    name: str,
+    read_at: datetime,
+) -> None:
+    current = get_target_or_404(server, name)
+    if current.updated_at != read_at:
+        raise conflict(
+            "target_changed",
+            f"target '{name}' on '{server.slug}' changed while this update ran; "
+            "reload it and try again",
+        )
+
+
 async def update_target(
     slug: str,
     name: str,
@@ -598,6 +681,7 @@ async def update_target(
     server = await get_server_or_404(slug)
     _require_egress_for(request.auth)
     candidate = get_target_or_404(server, name).model_copy(deep=True)
+    read_at = candidate.updated_at
     old_sha = candidate.spec_sha256
     _apply_target_update(candidate, request)
     openapi_spec_checks.validate_target_url(candidate.base_url, "base_url")
@@ -614,6 +698,10 @@ async def update_target(
     candidate.tool_names = preview["tools"]
 
     def _change(stored: OpenApiServer) -> None:
+        # candidate was built from the first read. If another request changed
+        # or removed the target since, writing it back would silently undo
+        # that change (a credential rotation, say), so refuse instead.
+        _check_target_unchanged(stored, name, read_at)
         stored.targets = [candidate if t.name == name else t for t in stored.targets]
 
     updated = await _save_with_retry(slug, _change)
@@ -621,12 +709,8 @@ async def update_target(
     if candidate.spec_sha256 != old_sha:
         await _delete_unused_specs({old_sha})
     logger.info(f"Target '{name}' on '{slug}' updated by {_actor(user_context)}")
-    return (
-        updated,
-        candidate,
-        preview.get("warnings", []),
-        await _push_and_refresh(updated, rescan=True),
-    )
+    status, errors = await _sync(updated, rescan=True)
+    return updated, candidate, _with_target_errors(preview.get("warnings", []), errors), status
 
 
 async def delete_target(

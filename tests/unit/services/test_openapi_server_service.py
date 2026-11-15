@@ -92,7 +92,14 @@ def env(monkeypatch):
     """Fakes for everything the service touches outside itself."""
     servers, specs = FakeServerRepo(), FakeSpecRepo()
     mocks = {
-        "put_server": AsyncMock(return_value={"generation": 1, "targets": {}}),
+        # Echo the pushed generation and incarnation back, as the container does.
+        "put_server": AsyncMock(
+            side_effect=lambda state: {
+                "generation": state["generation"],
+                "incarnation": state["incarnation"],
+                "targets": {},
+            }
+        ),
         "delete_server": AsyncMock(),
         "preview": AsyncMock(return_value={"tools": TOOLS, "tags": {"items": 1}, "warnings": []}),
         "register": AsyncMock(),
@@ -357,6 +364,27 @@ class TestUpdateAndDelete:
 
         assert servers.docs["weather-apis"].targets[0].auth.credential_encrypted == before
 
+    async def test_update_refuses_when_the_target_changed_meanwhile(self, env):
+        """A concurrent credential rotation must not be undone by a slower update."""
+        servers, _specs, mocks = env
+        await _create()
+        await service.add_target("weather-apis", _target_request(), ADMIN)
+        rotated_at = servers.docs["weather-apis"].targets[0].updated_at.replace(year=2099)
+
+        async def _rotate_during_preview(body):
+            servers.docs["weather-apis"].targets[0].updated_at = rotated_at
+            return {"tools": TOOLS, "tags": {}, "warnings": []}
+
+        mocks["preview"].side_effect = _rotate_during_preview
+
+        with pytest.raises(OpenApiServerError) as info:
+            await service.update_target(
+                "weather-apis", "petstore", OpenApiTargetUpdateRequest(description="d"), ADMIN
+            )
+
+        assert (info.value.status_code, info.value.code) == (409, "target_changed")
+        assert servers.docs["weather-apis"].targets[0].updated_at == rotated_at
+
     async def test_delete_target_removes_unused_spec(self, env):
         servers, specs, _mocks = env
         await _create()
@@ -540,6 +568,76 @@ class TestSpecSourceValidation:
 
     def test_stored_target_without_source_reads_as_url(self):
         assert service.OpenApiTarget.model_fields["spec_source"].default == "url"
+
+
+@pytest.fixture(autouse=True)
+def _clear_owed_refreshes():
+    service._tool_refresh_owed.clear()
+    yield
+    service._tool_refresh_owed.clear()
+
+
+class TestToolRefreshOwed:
+    """A refresh that does not finish stays owed until the reconciler does it."""
+
+    async def test_failed_refresh_stays_owed(self, env):
+        _servers, _specs, mocks = env
+        await _create()
+        mocks["refresh"].side_effect = container_unavailable("down")
+
+        _updated, _target, _warnings, status = await service.add_target(
+            "weather-apis", _target_request(), ADMIN
+        )
+
+        assert status == "pending"
+        assert service.owed_tool_refreshes() == {"weather-apis": 2}
+
+    async def test_completed_sync_owes_nothing(self, env):
+        await _create()
+
+        await service.add_target("weather-apis", _target_request(), ADMIN)
+
+        assert service.owed_tool_refreshes() == {}
+
+    def test_settling_an_older_generation_keeps_a_newer_debt(self):
+        service._tool_refresh_owed["weather-apis"] = 5
+
+        service.settle_tool_refresh("weather-apis", 4)
+
+        assert service.owed_tool_refreshes() == {"weather-apis": 5}
+
+
+async def test_target_the_container_could_not_load_is_a_warning(env):
+    _servers, _specs, mocks = env
+    await _create()
+    mocks["put_server"].side_effect = lambda state: {
+        "generation": state["generation"],
+        "incarnation": state["incarnation"],
+        "targets": {"petstore": {"status": "error", "error": "conversion failed"}},
+    }
+
+    _updated, _target, warnings, status = await service.add_target(
+        "weather-apis", _target_request(), ADMIN
+    )
+
+    assert status == "applied"
+    assert warnings == ["target 'petstore' did not load in openapi-mcp: conversion failed"]
+
+
+async def test_push_fails_when_the_container_keeps_another_servers_hub(env):
+    """A reply for a different incarnation means the old server's hub is still serving."""
+    servers, _specs, mocks = env
+    server = await _create()
+    mocks["put_server"].side_effect = lambda state: {
+        "generation": state["generation"] + 3,
+        "incarnation": "2020-01-01T00:00:00+00:00",
+        "targets": {},
+    }
+
+    with pytest.raises(OpenApiServerError) as info:
+        await service.push_server(server)
+
+    assert info.value.code == "container_unavailable"
 
 
 async def test_push_and_refresh_reports_pending_past_budget(env, monkeypatch):

@@ -23,7 +23,12 @@ from . import (
     server_lifecycle,
 )
 from .openapi_errors import OpenApiServerError
-from .openapi_server_service import push_server
+from .openapi_server_service import (
+    owed_tool_refreshes,
+    push_server,
+    settle_tool_refresh,
+)
+from .openapi_server_views import server_incarnation
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +43,7 @@ class ReconcileResult:
     reachable: bool
     pushed: int = 0
     deleted: int = 0
+    refreshed: int = 0
     failed: int = 0
 
 
@@ -71,6 +77,7 @@ async def _push_stale(
             await push_server(server, trigger="reconcile")
             result.pushed += 1
             await server_lifecycle.refresh_managed_server(server.path, rescan=False)
+            settle_tool_refresh(server.slug, server.generation)
         except OpenApiServerError as e:
             result.failed += 1
             logger.error(
@@ -79,6 +86,30 @@ async def _push_stale(
         except Exception:
             result.failed += 1
             logger.exception(f"Reconcile push of '{server.slug}' failed")
+
+
+async def _refresh_owed(
+    stored: dict,
+    stale: list,
+    result: ReconcileResult,
+) -> None:
+    """Refresh tool lists still owed for hubs that are already current."""
+    stale_slugs = {s.slug for s in stale}
+    for slug, generation in owed_tool_refreshes().items():
+        server = stored.get(slug)
+        if server is None:
+            settle_tool_refresh(slug, generation)
+            continue
+        if slug in stale_slugs:
+            continue
+        try:
+            await server_lifecycle.refresh_managed_server(server.path, rescan=False)
+        except Exception:
+            result.failed += 1
+            logger.exception(f"Reconcile tool refresh of '{slug}' failed; will retry")
+            continue
+        result.refreshed += 1
+        settle_tool_refresh(slug, server.generation)
 
 
 async def _delete_extra(
@@ -94,6 +125,17 @@ async def _delete_extra(
             logger.warning(f"Reconcile could not delete stray hub '{slug}': {e.code}")
 
 
+def _is_stale(
+    server,
+    running: dict | None,
+) -> bool:
+    """True when the container runs another generation of this server, or another server's hub."""
+    running = running or {}
+    if running.get("generation") != server.generation:
+        return True
+    return running.get("incarnation") != server_incarnation(server)
+
+
 async def reconcile_once() -> ReconcileResult:
     """One full comparison of stored and running state."""
     global _container_reachable
@@ -106,14 +148,11 @@ async def reconcile_once() -> ReconcileResult:
     _container_reachable = True
     stored = {s.slug: s for s in await get_openapi_server_repository().list_all()}
     _remember_counts(list(stored.values()))
-    stale = [
-        s
-        for slug, s in stored.items()
-        if (running.get(slug) or {}).get("generation") != s.generation
-    ]
+    stale = [s for slug, s in stored.items() if _is_stale(s, running.get(slug))]
     extra = [slug for slug in running if slug not in stored]
     result = ReconcileResult(reachable=True)
     await _push_stale(stale, result)
+    await _refresh_owed(stored, stale, result)
     await _delete_extra(extra, result)
     if stale or extra:
         logger.info(
