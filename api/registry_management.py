@@ -320,6 +320,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Used when neither --registry-url nor REGISTRY_URL is set: the local Compose stack.
+DEFAULT_REGISTRY_URL: str = "http://localhost"
+
 
 def _serialize_security_schemes(
     schemes: dict[str, Any],
@@ -348,26 +351,19 @@ def _serialize_security_schemes(
 
 def _get_registry_url(cli_value: str | None = None) -> str:
     """
-    Get registry URL from command-line argument or environment variable.
+    Get the registry URL: --registry-url, then REGISTRY_URL, then the local default.
+
+    The flag has no argparse default on purpose. A default there is always
+    set, so REGISTRY_URL from the environment was silently ignored and every
+    command went to the local stack.
 
     Args:
-        cli_value: Command-line argument value (overrides environment variable)
+        cli_value: The --registry-url value, or None when the flag was not given.
 
     Returns:
         Registry base URL
-
-    Raises:
-        ValueError: If REGISTRY_URL is not provided
     """
-    registry_url = cli_value or os.getenv("REGISTRY_URL")
-    if not registry_url:
-        raise ValueError(
-            "REGISTRY_URL is required.\n"
-            "Set via environment variable or --registry-url option:\n"
-            "  export REGISTRY_URL=https://registry.mycorp.click\n"
-            "  OR\n"
-            "  --registry-url https://registry.mycorp.click"
-        )
+    registry_url = cli_value or os.getenv("REGISTRY_URL") or DEFAULT_REGISTRY_URL
 
     logger.debug(f"Using registry URL: {registry_url}")
     return registry_url
@@ -673,10 +669,8 @@ def _create_client(args: argparse.Namespace) -> RegistryClient:
     # Check all required configuration upfront
     missing_params = []
 
-    # Check REGISTRY_URL
-    registry_url = args.registry_url or os.getenv("REGISTRY_URL")
-    if not registry_url:
-        missing_params.append("REGISTRY_URL")
+    # --registry-url, then REGISTRY_URL, then the local default; never missing.
+    registry_url = _get_registry_url(args.registry_url)
 
     # Check if token file is provided
     if hasattr(args, "token_file") and args.token_file:
@@ -729,9 +723,6 @@ def _create_client(args: argparse.Namespace) -> RegistryClient:
             for param in missing_params:
                 error_msg += f"  - {param}\n"
             error_msg += "\nSet via environment variables or command-line options:\n\n"
-            if "REGISTRY_URL" in missing_params:
-                error_msg += "  export REGISTRY_URL=https://registry.example.com\n"
-                error_msg += "  OR use --registry-url https://registry.example.com\n\n"
             if "AWS_REGION" in missing_params:
                 error_msg += "  export AWS_REGION=us-east-1\n"
                 error_msg += "  OR use --aws-region us-east-1\n\n"
@@ -742,16 +733,6 @@ def _create_client(args: argparse.Namespace) -> RegistryClient:
             raise ValueError(error_msg)
 
         token = _get_jwt_token(aws_region=aws_region, keycloak_url=keycloak_url)
-
-    # Final check for registry URL (in case token file path was provided)
-    if missing_params and "REGISTRY_URL" in missing_params:
-        raise ValueError(
-            "REGISTRY_URL is required.\n"
-            "Set via environment variable or --registry-url option:\n"
-            "  export REGISTRY_URL=https://registry.example.com\n"
-            "  OR\n"
-            "  --registry-url https://registry.example.com"
-        )
 
     return RegistryClient(registry_url=registry_url, token=token)
 
@@ -7029,8 +7010,11 @@ Examples:
 
     parser.add_argument(
         "--registry-url",
-        default="http://localhost",
-        help="Registry base URL (overrides REGISTRY_URL env var). Default: http://localhost",
+        default=None,
+        help=(
+            "Registry base URL. Wins over the REGISTRY_URL env var; with neither set, "
+            f"{DEFAULT_REGISTRY_URL} is used"
+        ),
     )
 
     parser.add_argument("--aws-region", help="AWS region (overrides AWS_REGION env var)")
