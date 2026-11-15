@@ -99,6 +99,30 @@ def _open(
 
 
 class TestStoreAndEnvelope:
+    async def test_recreated_server_neither_uses_nor_shows_the_old_servers_key(self, vault):
+        """The vault cannot delete every user's keys when a server goes away, so a
+        server created again under the same name must not inherit them."""
+        from datetime import timedelta
+
+        old = _server([_target("pets", "per_user")])
+        await openapi_user_credentials.store_key(old, old.targets[0], PRINCIPAL, "k1", 3600)
+        new = _server([_target("pets", "per_user")])
+        new.created_at = old.created_at + timedelta(days=1)
+
+        status = await openapi_user_credentials.key_status(new, new.targets[0], PRINCIPAL)
+        envelope = await openapi_user_credentials.build_envelope(new, "oauth2", "alice-sub")
+
+        assert status is None
+        assert _open(envelope) == {}
+
+    async def test_envelope_still_carries_the_plain_base_url(self, vault):
+        server = _server([_target("pets", "per_user")])
+        await openapi_user_credentials.store_key(server, server.targets[0], PRINCIPAL, "k1", 3600)
+
+        envelope = await openapi_user_credentials.build_envelope(server, "oauth2", "alice-sub")
+
+        assert _open(envelope)["pets"] == {"key": "k1", "base_url": "https://api.example.com/v1"}
+
     async def test_key_is_bound_to_the_canonical_base_url(self, vault):
         server = _server([_target("pets", "per_user")])
 
@@ -106,7 +130,10 @@ class TestStoreAndEnvelope:
             server, server.targets[0], PRINCIPAL, "k1", 3600
         )
 
-        assert token.bound_upstreams == ["https://api.example.com/v1"]
+        assert token.bound_upstreams == [
+            openapi_user_credentials.key_binding(server, server.targets[0])
+        ]
+        assert token.bound_upstreams[0].startswith("https://api.example.com/v1#incarnation=")
         assert ("oauth2", "alice-sub", "openapi-pets", "/weather-apis") in vault.tokens
 
     async def test_envelope_carries_only_per_user_keys(self, vault):

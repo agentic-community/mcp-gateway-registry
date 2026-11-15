@@ -97,7 +97,8 @@ curl -X PUT "$REGISTRY_URL/api/openapi-servers/nasa/targets/nasa/my-credential" 
 
 - A key is write-only. `GET .../my-credential` and `GET /api/openapi-servers/{slug}/my-credentials` return only whether a key is set and when it expires. `DELETE .../my-credential` removes it.
 - A key lasts at most 30 days, and the user adds a new one after that.
-- A key is bound to the target's base URL. If an admin points the target somewhere else, stored keys stop working, and users add them again.
+- A key is bound to the target's base URL and to this server. If an admin points the target somewhere else, or deletes the server and creates it again under the same name, stored keys stop working, and users add them again.
+- Deleting a target or a server does not delete users' stored keys, because the vault lists keys one user at a time. Those keys can no longer be used, they expire within their 30-day lifetime, and each user can remove theirs from Connected Accounts.
 - An admin can store a key on a user's behalf by adding `sub` and that user's `auth_method` to the request, as with egress PATs.
 - A call to a per-user tool without a key returns a tool error asking the user to add one. It never falls back to a shared key.
 
