@@ -316,3 +316,76 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: "openapiMcpInternalUrl .* must be equal"
+
+  - it: fails when only openapi-mcp names an existing sync Secret
+    templates:
+      - templates/validate-values.yaml
+    set:
+      openapiMcp:
+        enabled: true
+        syncSecret:
+          existingSecret: my-sec  # pragma: allowlist secret
+      auth-server:
+        app:
+          openapiMcpEnabled: true
+      registry:
+        app:
+          openapiMcpEnabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "openapi-mcp reads the sync secret from Secret \"my-sec\" but the registry reads"
+
+  - it: accepts an existing sync Secret named once for both pods
+    templates:
+      - templates/validate-values.yaml
+    set:
+      global:
+        openapiMcp:
+          existingSyncSecret: my-sec  # pragma: allowlist secret
+      openapiMcp:
+        enabled: true
+      auth-server:
+        app:
+          openapiMcpEnabled: true
+      registry:
+        app:
+          openapiMcpEnabled: true
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: fails when the openapi-mcp Service is renamed but the internal URL is not
+    templates:
+      - templates/validate-values.yaml
+    set:
+      openapiMcp:
+        enabled: true
+        app:
+          name: apis
+      auth-server:
+        app:
+          openapiMcpEnabled: true
+      registry:
+        app:
+          openapiMcpEnabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "does not reach the openapi-mcp Service at apis:9876"
+
+  - it: accepts a renamed Service when both internal URLs follow it
+    templates:
+      - templates/validate-values.yaml
+    set:
+      openapiMcp:
+        enabled: true
+        app:
+          name: apis
+      auth-server:
+        app:
+          openapiMcpEnabled: true
+          openapiMcpInternalUrl: http://apis:9876
+      registry:
+        app:
+          openapiMcpEnabled: true
+          openapiMcpInternalUrl: http://apis:9876
+    asserts:
+      - notFailedTemplate: {}

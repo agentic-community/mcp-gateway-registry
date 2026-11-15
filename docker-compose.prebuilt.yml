@@ -49,6 +49,9 @@ services:
   # Pre-built images are published to Amazon ECR Public (public.ecr.aws/p3v1o3c6).
   # Override the namespace with ECR_REGISTRY if you mirror them elsewhere.
   registry:
+    networks:
+      - default
+      - openapi-mcp
     image: ${ECR_REGISTRY:-public.ecr.aws/p3v1o3c6}/registry:${REGISTRY_VERSION:-latest}
     environment:
       # Deployment Mode Configuration
@@ -483,6 +486,9 @@ services:
 
   # Auth service (separate and scalable) - using pre-built image
   auth-server:
+    networks:
+      - default
+      - openapi-mcp
     image: ${ECR_REGISTRY:-public.ecr.aws/p3v1o3c6}/auth-server:${AUTH_SERVER_VERSION:-latest}
     environment:
       - REGISTRY_URL=${REGISTRY_URL}
@@ -825,9 +831,10 @@ services:
     env_file:
       - path: ${MCP_EXTRA_ENV_DIR:-./extra_env}/openapi-mcp.env
         required: false
-    # Loopback only: the registry and nginx reach it on the compose network.
-    ports:
-      - "${HOST_BIND_IP:-127.0.0.1}:9876:9876"
+    # No published port: only the registry and the auth server may reach it.
+    # To debug: docker compose exec openapi-mcp curl -s http://127.0.0.1:9876/health
+    networks:
+      - openapi-mcp
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -1116,3 +1123,11 @@ volumes:
   mongodb-config:
   mongodb-keyfile:
   pingfederate-data:
+
+networks:
+  # openapi-mcp answers /s/<slug>/mcp without authentication of its own (the
+  # gateway's auth_request guards it) and spends the targets' shared
+  # credentials, so only the registry and the auth server share a network
+  # with it. It is not internal: the container has to reach third-party APIs.
+  # A REST API run as a compose service must join this network to be reached.
+  openapi-mcp: {}

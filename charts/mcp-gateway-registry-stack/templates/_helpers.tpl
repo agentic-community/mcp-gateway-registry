@@ -222,5 +222,18 @@ forward per-user-credential calls, or a pod with a looser guard.
     {{- fail (printf "registry %s is %q but openapiMcp has %q. The openapi-mcp SSRF guard must apply the registry's policy; set the same value on both." (index . 0) (toString (index . 1)) (toString (index . 2))) -}}
     {{- end -}}
   {{- end -}}
+  {{- /* Both pods read the sync secret through secretKeyRef, so they must name the same Secret. */ -}}
+  {{- $globalSecret := dig "openapiMcp" "existingSyncSecret" "" (.Values.global | default dict) -}}
+  {{- $containerSecret := $globalSecret | default (dig "syncSecret" "existingSecret" "" $openapiMcp) | default (dig "syncSecret" "name" "openapi-mcp-sync-secret" $openapiMcp) -}}  {{- /* pragma: allowlist secret */ -}}
+  {{- $registrySecret := $globalSecret | default (dig "app" "openapiMcpSyncSecretName" "openapi-mcp-sync-secret" $registry) -}}  {{- /* pragma: allowlist secret */ -}}
+  {{- if ne (toString $containerSecret) (toString $registrySecret) -}}
+  {{- fail (printf "openapi-mcp reads the sync secret from Secret %q but the registry reads %q. Name an existing Secret once with global.openapiMcp.existingSyncSecret, which both read, instead of openapiMcp.syncSecret.existingSecret or syncSecret.name." (toString $containerSecret) (toString $registrySecret)) -}}
+  {{- end -}}
+  {{- /* The registry and auth server reach the container by its Service name and port. */ -}}
+  {{- $serviceHost := printf "%s:%v" (dig "app" "name" "openapi-mcp" $openapiMcp) (dig "service" "port" 9876 $openapiMcp) -}}
+  {{- $urlHost := (urlParse (toString $registryUrl)).host -}}
+  {{- if ne $urlHost $serviceHost -}}
+  {{- fail (printf "registry.app.openapiMcpInternalUrl (%q) does not reach the openapi-mcp Service at %s. Set registry.app.openapiMcpInternalUrl and auth-server.app.openapiMcpInternalUrl to http://%s, or keep openapiMcp.app.name and openapiMcp.service.port at their defaults." (toString $registryUrl) $serviceHost $serviceHost) -}}
+  {{- end -}}
 {{- end -}}
 {{- end -}}
