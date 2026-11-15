@@ -46,6 +46,7 @@ from ..core.schemas import (
     OAuthBackendConfigRequest,
     OAuthDiscoveryConfigRequest,
 )
+from ..exceptions import UrlValidationError
 from ..schemas.registry_card import LifecycleStatus
 from ..schemas.server_update_models import (
     SERVER_REGISTRANT_ONLY_FIELDS,
@@ -5016,6 +5017,11 @@ async def register_service_api(
             },
         )
 
+    except UrlValidationError:
+        # A URL the guard or the OpenAPI MCP ownership rule refused: the app's
+        # handler answers 400 with the reason. The catch-all below would turn
+        # it into a bare 500 that hides why the registration was refused.
+        raise
     except Exception as e:
         logger.error(f"Service registration failed type={type(e).__name__}")
         raise HTTPException(status_code=500, detail="Service registration failed")
