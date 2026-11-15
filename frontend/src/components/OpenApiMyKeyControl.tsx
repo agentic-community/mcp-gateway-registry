@@ -164,6 +164,8 @@ const OpenApiMyKeyControl: React.FC<OpenApiMyKeyControlProps> = ({
   const [formOpen, setFormOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The key is write-only and cannot be shown again, so removing it asks first.
+  const [confirmingRemove, setConfirmingRemove] = useState(false);
   const configured = !!status?.configured;
 
   const handleSave = async (secret: string, ttlValue: number, ttlUnit: OpenApiKeyTtlUnit) => {
@@ -182,6 +184,7 @@ const OpenApiMyKeyControl: React.FC<OpenApiMyKeyControlProps> = ({
   };
 
   const handleRemove = async () => {
+    setConfirmingRemove(false);
     setSaving(true);
     setError(null);
     try {
@@ -208,11 +211,24 @@ const OpenApiMyKeyControl: React.FC<OpenApiMyKeyControlProps> = ({
             {configured ? 'Replace key' : 'Add key'}
           </button>
         )}
-        {configured && !formOpen && (
-          <button type="button" onClick={handleRemove} disabled={saving}
+        {configured && !formOpen && !confirmingRemove && (
+          <button type="button" onClick={() => setConfirmingRemove(true)} disabled={saving}
             className="px-2 py-1 text-xs font-medium rounded text-danger-700 dark:text-danger-300 hover:bg-danger-50 dark:hover:bg-danger-900/20">
             Remove key
           </button>
+        )}
+        {configured && !formOpen && confirmingRemove && (
+          <span className="flex items-center gap-2 text-xs text-fg-muted" role="group" aria-label={`Confirm removing your key for ${targetName}`}>
+            Remove your key? You would have to paste it again.
+            <button type="button" onClick={handleRemove} disabled={saving}
+              className="px-2 py-1 font-medium rounded text-danger-700 dark:text-danger-300 hover:bg-danger-50 dark:hover:bg-danger-900/20">
+              Yes, remove
+            </button>
+            <button type="button" onClick={() => setConfirmingRemove(false)} disabled={saving}
+              className="px-2 py-1 font-medium rounded border border-line hover:bg-surface-hover">
+              Keep it
+            </button>
+          </span>
         )}
       </div>
       {formOpen && (

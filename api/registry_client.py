@@ -5740,6 +5740,57 @@ class RegistryClient:
         """Remove a target and its tools."""
         self._make_request(method="DELETE", endpoint=f"/api/openapi-servers/{slug}/targets/{name}")
 
+    def set_openapi_key(
+        self,
+        slug: str,
+        name: str,
+        secret: str,
+        ttl_value: int,
+        ttl_unit: str,
+        sub: str | None = None,
+        auth_method: str | None = None,
+    ) -> dict[str, Any]:
+        """Store the caller's own key for a per-user target (an admin may pass sub and auth_method)."""
+        body: dict[str, Any] = {"secret": secret, "ttl_value": ttl_value, "ttl_unit": ttl_unit}
+        if sub:
+            body["sub"] = sub
+        if auth_method:
+            body["auth_method"] = auth_method
+        return self._make_request(
+            method="PUT",
+            endpoint=f"/api/openapi-servers/{slug}/targets/{name}/my-credential",
+            data=body,
+        ).json()
+
+    def get_openapi_key_status(
+        self,
+        slug: str,
+        name: str,
+    ) -> dict[str, Any]:
+        """Whether the caller has a key for a per-user target, and when it expires. Never the key."""
+        return self._make_request(
+            method="GET", endpoint=f"/api/openapi-servers/{slug}/targets/{name}/my-credential"
+        ).json()
+
+    def list_openapi_keys(
+        self,
+        slug: str,
+    ) -> dict[str, Any]:
+        """The caller's key status for every per-user target of a server."""
+        return self._make_request(
+            method="GET", endpoint=f"/api/openapi-servers/{slug}/my-credentials"
+        ).json()
+
+    def delete_openapi_key(
+        self,
+        slug: str,
+        name: str,
+    ) -> None:
+        """Remove the caller's key for a per-user target."""
+        self._make_request(
+            method="DELETE", endpoint=f"/api/openapi-servers/{slug}/targets/{name}/my-credential"
+        )
+
     def get_virtual_server_rating(self, path: str) -> dict[str, Any]:
         """
         Get rating information for a virtual MCP server.

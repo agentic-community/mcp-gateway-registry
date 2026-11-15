@@ -95,6 +95,15 @@ curl -X PUT "$REGISTRY_URL/api/openapi-servers/nasa/targets/nasa/my-credential" 
   -d '{"secret": "YOUR_NASA_KEY", "ttl_value": 30, "ttl_unit": "days"}'
 ```
 
+With the CLI, the key comes from an environment variable or stdin, never the command line:
+
+```bash
+export NASA_KEY=YOUR_NASA_KEY
+uv run python api/registry_management.py openapi-key-set --slug nasa --name nasa --key-env NASA_KEY
+uv run python api/registry_management.py openapi-key-status --slug nasa
+uv run python api/registry_management.py openapi-key-delete --slug nasa --name nasa
+```
+
 - A key is write-only. `GET .../my-credential` and `GET /api/openapi-servers/{slug}/my-credentials` return only whether a key is set and when it expires. `DELETE .../my-credential` removes it.
 - A key lasts at most 30 days, and the user adds a new one after that.
 - A key is bound to the target's base URL and to this server. If an admin points the target somewhere else, or deletes the server and creates it again under the same name, stored keys stop working, and users add them again.

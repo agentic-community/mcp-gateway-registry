@@ -48,6 +48,8 @@ HTTP_METHODS: tuple[str, ...] = (
 )
 READ_ONLY_METHODS: frozenset[str] = frozenset({"GET", "HEAD", "OPTIONS"})
 DESTRUCTIVE_METHODS: frozenset[str] = frozenset({"DELETE"})
+IDEMPOTENT_METHODS: frozenset[str] = frozenset({"PUT", "DELETE"})
+MAX_TOOL_TITLE_CHARS: int = 200
 MAX_DESCRIPTION_OVERRIDE_CHARS: int = 2000
 UNSAFE_TOOL_NAME_CHARS = re.compile(r"[^A-Za-z0-9_.\-]+")
 MAX_BASE_TOOL_NAME_CHARS: int = 56
@@ -103,15 +105,24 @@ def _route_filter(
 
 
 def _annotations_for(
-    method: str,
+    route: HTTPRoute,
 ) -> ToolAnnotations:
-    """MCP tool annotations derived from the HTTP method."""
-    upper = method.upper()
+    """MCP tool annotations from what the HTTP method guarantees.
+
+    Every tool calls an outside API, so all are open-world. PUT and DELETE are
+    idempotent by HTTP's definition. The title is the operation's summary.
+    """
+    upper = route.method.upper()
+    title = (route.summary or "").strip()[:MAX_TOOL_TITLE_CHARS] or None
     if upper in READ_ONLY_METHODS:
-        return ToolAnnotations(read_only_hint=True)
-    if upper in DESTRUCTIVE_METHODS:
-        return ToolAnnotations(read_only_hint=False, destructive_hint=True)
-    return ToolAnnotations(read_only_hint=False, destructive_hint=False)
+        return ToolAnnotations(title=title, read_only_hint=True, open_world_hint=True)
+    return ToolAnnotations(
+        title=title,
+        read_only_hint=False,
+        destructive_hint=upper in DESTRUCTIVE_METHODS,
+        idempotent_hint=upper in IDEMPOTENT_METHODS,
+        open_world_hint=True,
+    )
 
 
 def _closed_input_schema(
@@ -150,7 +161,7 @@ def _component_adjuster(
         override = options.description_overrides.get(component.name)
         if override:
             component.description = override[:MAX_DESCRIPTION_OVERRIDE_CHARS]
-        component.annotations = _annotations_for(route.method)
+        component.annotations = _annotations_for(route)
         component.parameters = _closed_input_schema(component.parameters)
 
     return _adjust

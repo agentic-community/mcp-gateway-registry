@@ -130,9 +130,21 @@ describe('OpenApiMyKeyControl', () => {
     const onChanged = _renderControl(_status({ configured: true }));
 
     fireEvent.click(screen.getByRole('button', { name: 'Remove key' }));
+    expect(mockedAxios.delete).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Yes, remove' }));
 
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
     expect(mockedAxios.delete).toHaveBeenCalledWith(KEY_URL, CSRF);
+  });
+
+  it('keeps the key when the removal is not confirmed', () => {
+    _renderControl(_status({ configured: true }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove key' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Keep it' }));
+
+    expect(mockedAxios.delete).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Remove key' })).toBeInTheDocument();
   });
 
   it('shows not_per_user as a sentence and does not echo the key', async () => {

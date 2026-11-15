@@ -4,6 +4,9 @@ name: Build OpenAPI MCP Image
 # every push to main, the same way build-mcpgw.yml publishes mcpgw: tagged with
 # the full commit SHA, plus latest on main. Release tags (1.38.0, 1.38, 1) come
 # from release-images.yml, which builds all four images for each release.
+# Pull requests build the image without pushing it, so a broken Dockerfile or a
+# registry module the image copies but cannot import fails before it reaches main.
+# The path list must name every registry file the Dockerfile copies.
 
 on:
   push:
@@ -15,6 +18,23 @@ on:
       - 'registry/utils/__init__.py'
       - 'registry/utils/url_guard.py'
       - 'registry/utils/branding_files.py'
+      - 'registry/utils/logging_setup.py'
+      - 'registry/common/__init__.py'
+      - 'registry/common/log_redaction.py'
+      - 'registry/common/secret_key.py'
+      - 'registry/auth/__init__.py'
+      - 'registry/auth/openapi_mcp_sync.py'
+      - '.github/workflows/build-openapi-mcp.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'servers/openapi-mcp/**'
+      - 'docker/Dockerfile.openapi-mcp'
+      - 'registry/exceptions.py'
+      - 'registry/utils/__init__.py'
+      - 'registry/utils/url_guard.py'
+      - 'registry/utils/branding_files.py'
+      - 'registry/utils/logging_setup.py'
       - 'registry/common/__init__.py'
       - 'registry/common/log_redaction.py'
       - 'registry/common/secret_key.py'
@@ -38,8 +58,38 @@ env:
   IMAGE_NAME: p3v1o3c6/openapi-mcp
 
 jobs:
+  build-pr:
+    if: github.event_name == 'pull_request'
+    name: Build (pull request, not pushed)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # amd64 only and no credentials: fork PRs get no secrets, and the
+      # Dockerfile's import check runs the same way on either platform.
+      - name: Build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: docker/Dockerfile.openapi-mcp
+          push: false
+          platforms: linux/amd64
+          build-args: |
+            BUILD_VERSION=${{ github.sha }}
+          cache-from: type=gha
+
   build-and-push:
-    if: github.repository == 'agentic-community/mcp-gateway-registry'
+    if: github.event_name != 'pull_request' && github.repository == 'agentic-community/mcp-gateway-registry'
     name: Build and Push
     runs-on: ubuntu-latest
     timeout-minutes: 45
