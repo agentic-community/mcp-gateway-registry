@@ -193,13 +193,19 @@ async def _build_hub(
         strict_input_validation=True,
     )
     entry = HubEntry(generation=state.generation, incarnation=state.incarnation)
-    for target in state.targets:
-        await _mount_target(hub, target, settings, entry)
-
-    # Starting each hub's session manager when the hub is built lets several
-    # hubs created at runtime share one ASGI server (prototype finding 3).
-    entry.app = hub.http_app(path=MCP_PATH, stateless_http=True)
-    await _start_lifespan(entry)
+    try:
+        for target in state.targets:
+            await _mount_target(hub, target, settings, entry)
+        # Starting each hub's session manager when the hub is built lets several
+        # hubs created at runtime share one ASGI server (prototype finding 3).
+        entry.app = hub.http_app(path=MCP_PATH, stateless_http=True)
+        await _start_lifespan(entry)
+    except Exception:
+        # Close the backend clients already opened, or every retried push of a
+        # server that fails to build would leak another set of them.
+        logger.exception(f"Building hub '{state.slug}' generation {state.generation} failed")
+        await _close_entry(entry)
+        raise
     elapsed = time.time() - start_time
     summary = {name: s.status for name, s in entry.status.items()}
     logger.info(

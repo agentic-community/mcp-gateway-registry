@@ -123,7 +123,10 @@ async def _put_server(
         return _error(400, "invalid_state", f"server state failed validation: {type(e).__name__}")
     if state.slug != slug:
         return _error(400, "invalid_state", "slug in the path and the body differ")
-    entry = await hubs.apply_server_state(state, settings)
+    try:
+        entry = await hubs.apply_server_state(state, settings)
+    except Exception as e:  # noqa: BLE001 - reported to the registry, which retries
+        return _error(500, "build_failed", f"the hub could not be built: {type(e).__name__}")
     body = ApplyResponse(
         slug=slug, generation=entry.generation, incarnation=entry.incarnation, targets=entry.status
     )

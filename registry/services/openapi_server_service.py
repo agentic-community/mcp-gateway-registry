@@ -202,7 +202,10 @@ async def push_server(
     """Push one server's full state to the container. Returns the container's reply."""
     specs = await _load_specs([server])
     try:
-        reply = await openapi_mcp_client.put_server(build_hub_state(server, specs))
+        # Parsing every target's spec (up to OPENAPI_MCP_SPEC_MAX_BYTES each) is
+        # CPU-bound, so keep it off the event loop.
+        state = await asyncio.to_thread(build_hub_state, server, specs)
+        reply = await openapi_mcp_client.put_server(state)
     except OpenApiServerError as e:
         _count_push(e.code, trigger)
         raise

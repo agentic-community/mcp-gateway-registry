@@ -112,3 +112,19 @@ def test_bad_or_empty_log_dir_uses_the_default(raw):
 def test_invalid_format_is_refused_at_startup():
     with pytest.raises(ValueError):
         ContainerSettings(app_log_file_format="xml")
+
+
+def test_request_urls_never_reach_the_logs(tmp_path):
+    """httpx2 logs full request URLs at INFO, and an api_key_query target's key is in the URL."""
+    logging_setup.setup_container_logging(_settings(tmp_path))
+
+    logging.getLogger("httpx2").info(
+        "HTTP Request: GET https://api.example.com/x?api_key=SECRET-123 200"
+    )
+    logging.getLogger("httpx").info(
+        "HTTP Request: GET https://api.example.com/y?api_key=SECRET-456 200"
+    )
+    lines = _log_and_read(tmp_path, "after")
+
+    assert not [line for line in lines if "SECRET-" in line]
+    assert logging.getLogger("httpx2").getEffectiveLevel() == logging.WARNING
