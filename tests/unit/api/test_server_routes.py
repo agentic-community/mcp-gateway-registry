@@ -1132,6 +1132,43 @@ class TestRegisterService:
         assert response.status_code == 422
         mock_server_service.register_server.assert_not_called()
 
+    @pytest.mark.parametrize(
+        "proxy_pass_url",
+        ["http://169.254.169.254/latest/meta-data/", "http://openapi-mcp:9876/s/evil/mcp"],
+    )
+    def test_register_api_refused_url_is_400_not_500(
+        self,
+        test_client_admin,
+        mock_server_service,
+        proxy_pass_url,
+    ):
+        """A URL the guard or the OpenAPI MCP ownership rule refuses is a 400 with the reason.
+
+        The route's catch-all used to turn the UrlValidationError into a bare 500.
+        """
+        from registry.exceptions import UrlValidationError
+
+        mock_server_service.get_server_info = AsyncMock(return_value=None)
+        mock_server_service.register_server = AsyncMock(
+            side_effect=UrlValidationError(proxy_pass_url, "refused by test")
+        )
+        with patch(
+            "registry.auth.dependencies.user_has_ui_permission_for_service",
+            return_value=True,
+        ):
+            response = test_client_admin.post(
+                "/api/servers/register",
+                data={
+                    "name": "Refused",
+                    "description": "test",
+                    "path": "/evil",
+                    "proxy_pass_url": proxy_pass_url,
+                },
+            )
+
+        assert response.status_code == 400
+        assert "refused by test" in response.json()["detail"]
+
     def test_register_api_enforced_status_rejects_mismatch(
         self,
         test_client_admin,
