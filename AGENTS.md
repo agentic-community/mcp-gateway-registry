@@ -362,6 +362,10 @@ working in those areas.
   header (clear client copies on normal routes), require the nginx marker and
   resolved upstream, and check the rewritten backing method/tool grant separately.
   Never grant direct backing access from virtual binding alone.
+- **Owned records:** a server record a feature service owns (OpenAPI MCP servers mark it with
+  `metadata.openapi_server`) is written only through that service. Enforce it in the
+  `server_service` write path (`check_openapi_ownership`), not per route, and bind every
+  credential vend to a destination it derives itself, never to the record's current target.
 - **MCP backend identity:** preserve the exact registered path (including a
   legitimate trailing `/mcp`) across auth, signed proxy token, and vend; never
   strip a transport segment twice. Bind the exact outbound URL at credential

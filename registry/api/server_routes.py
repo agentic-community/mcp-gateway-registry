@@ -64,6 +64,7 @@ from ..services.lifecycle_events import (
     fire_scan_complete_event,
     user_can_change_lifecycle_status,
 )
+from ..services.openapi_ownership import managed_openapi_slug
 from ..services.registration_gate_service import check_registration_gate
 from ..services.security_pending import tags_after_passing_scan
 from ..services.security_scanner import (
@@ -886,6 +887,28 @@ async def _perform_security_scan_on_registration(
             scan_error=f"{type(e).__name__}: {e}",
             registration_type="server",
         )
+
+
+def _refuse_openapi_managed(
+    server_info: dict | None,
+    action: str,
+) -> None:
+    """409 for a generic route that would change a server an OpenAPI MCP server owns (issue #2022).
+
+    The OpenAPI MCP server service keeps this record in step with its own; a
+    generic edit, replace or remove would leave the two out of step. Toggle,
+    refresh, rescan, rating and the per-tool block stay allowed.
+    """
+    slug = managed_openapi_slug(server_info)
+    if slug is None:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=(
+            f"{(server_info or {}).get('path')} belongs to OpenAPI MCP server '{slug}'; "
+            f"{action} it under /api/openapi-servers/{slug}"
+        ),
+    )
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -2417,6 +2440,7 @@ async def internal_register_service(
 
     # Check if server exists and handle overwrite logic
     existing_server = await server_service.get_server_info(path)
+    _refuse_openapi_managed(existing_server, "replace")
     if existing_server and not overwrite:
         logger.debug(f"INTERNAL REGISTER: Server exists and overwrite=False for path {path}")
         return JSONResponse(
@@ -2614,6 +2638,7 @@ async def internal_remove_service(
 
     # Check if server exists
     server_info = await server_service.get_server_info(service_path)
+    _refuse_openapi_managed(server_info, "remove")
     if not server_info:
         logger.debug(f"INTERNAL REMOVE: Service not found at path '{service_path}'")
         return JSONResponse(
@@ -2914,6 +2939,7 @@ async def edit_server_submit(
 
     # Check if the server exists and get service name
     server_info = await server_service.get_server_info(service_path)
+    _refuse_openapi_managed(server_info, "edit")
     if not server_info:
         raise HTTPException(status_code=404, detail="Service path not found")
 
@@ -4883,6 +4909,7 @@ async def register_service_api(
 
     # Check if server exists and handle overwrite/version logic
     existing_server = await server_service.get_server_info(path)
+    _refuse_openapi_managed(existing_server, "replace")
 
     # Ownership guard: overwriting (or auto-versioning) an existing server
     # replaces another user's registration and can redirect its traffic. Only
@@ -5035,6 +5062,7 @@ async def update_server_auth_credential(
 
     # Look up the server first so the permission check can use its display name.
     existing_server = await server_service.get_server_info(server_path, include_credentials=True)
+    _refuse_openapi_managed(existing_server, "change the credential of")
     if not existing_server:
         return JSONResponse(
             status_code=404,
@@ -5258,6 +5286,7 @@ async def put_server_oauth_config(
         server_path = "/" + server_path
 
     existing_server = await server_service.get_server_info(server_path, include_credentials=True)
+    _refuse_openapi_managed(existing_server, "change the OAuth configuration of")
     if not existing_server:
         return JSONResponse(status_code=404, content={"error": "Server not found"})
 
@@ -5493,6 +5522,7 @@ async def put_server_oauth_discovery(
     if not server_path.startswith("/"):
         server_path = "/" + server_path
     existing_server = await server_service.get_server_info(server_path, include_credentials=True)
+    _refuse_openapi_managed(existing_server, "change the OAuth configuration of")
     if not existing_server:
         return JSONResponse(status_code=404, content={"error": "Server not found"})
 
@@ -5689,6 +5719,7 @@ async def delete_server_oauth_discovery(
     if not server_path.startswith("/"):
         server_path = "/" + server_path
     existing_server = await server_service.get_server_info(server_path, include_credentials=True)
+    _refuse_openapi_managed(existing_server, "change the OAuth configuration of")
     if not existing_server:
         return JSONResponse(status_code=404, content={"error": "Server not found"})
     _check_server_permission(
@@ -5903,6 +5934,7 @@ async def remove_service_api(
 
     # Check if server exists
     server_info = await server_service.get_server_info(path)
+    _refuse_openapi_managed(server_info, "remove")
     if not server_info:
         logger.warning(f"Service not found at path '{path}'")
         return JSONResponse(
@@ -7057,6 +7089,7 @@ async def remove_server_version(
     # modify_service permission as PUT/PATCH /servers/{path}. nginx_proxied_auth
     # only authenticates; it does not authorize.
     existing_server = await server_service.get_server_info(decoded_path)
+    _refuse_openapi_managed(existing_server, "change the versions of")
     if not existing_server:
         raise HTTPException(status_code=404, detail="Service path not registered")
     _check_server_permission(
@@ -7123,6 +7156,7 @@ async def set_default_version(
     # the same modify_service permission as PUT/PATCH /servers/{path}.
     # nginx_proxied_auth only authenticates; it does not authorize.
     existing_server = await server_service.get_server_info(decoded_path)
+    _refuse_openapi_managed(existing_server, "change the versions of")
     if not existing_server:
         raise HTTPException(status_code=404, detail="Service path not registered")
     _check_server_permission(
@@ -7332,6 +7366,7 @@ async def update_server_endpoint(
     path = _normalize_server_path(path)
 
     existing = await server_service.get_server_info(path, include_credentials=True)
+    _refuse_openapi_managed(existing, "replace")
     if not existing:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -7516,6 +7551,7 @@ async def patch_server_endpoint(
     path = _normalize_server_path(path)
 
     existing = await server_service.get_server_info(path, include_credentials=True)
+    _refuse_openapi_managed(existing, "edit")
     if not existing:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

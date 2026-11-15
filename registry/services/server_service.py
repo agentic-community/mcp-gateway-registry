@@ -20,6 +20,7 @@ from ..utils.url_guard import (
     validate_server_path,
     validate_url,
 )
+from .openapi_ownership import check_openapi_ownership
 
 logger = logging.getLogger(__name__)
 
@@ -171,6 +172,9 @@ class ServerService:
         proxy_pass_url = server_info.get("proxy_pass_url")
         if proxy_pass_url:
             validate_proxy_pass_url(proxy_pass_url, server_path=path)
+        # Only the OpenAPI MCP server service may create a record that points at
+        # the openapi-mcp container (issue #2022).
+        check_openapi_ownership(server_info)
 
         # Alternate endpoints are bound to the registered target identity.
         _validate_endpoint_fields(
@@ -329,7 +333,10 @@ class ServerService:
         # Validate the merged target state whenever a target-bearing field is
         # edited. This prevents an existing built-in registration from lending
         # its privileged profile to a different mcp_endpoint/sse_endpoint.
-        target_fields = ("proxy_pass_url", "mcp_endpoint", "sse_endpoint")
+        # metadata is included because it carries the OpenAPI MCP ownership
+        # marker: dropping it while keeping the container target, or keeping it
+        # while repointing the target, must both be refused (issue #2022).
+        target_fields = ("proxy_pass_url", "mcp_endpoint", "sse_endpoint", "metadata")
         if any(field in server_info for field in target_fields):
             existing = await self._repo.get(path)
             merged = dict(existing or {})
@@ -337,6 +344,7 @@ class ServerService:
             registered_target = merged.get("proxy_pass_url")
             if registered_target:
                 validate_proxy_pass_url(registered_target, server_path=path)
+            check_openapi_ownership(merged)
             _validate_endpoint_fields(
                 merged,
                 server_path=path,
@@ -1104,6 +1112,9 @@ class ServerService:
         active_server = await self._repo.get(path)
         if not active_server:
             raise ValueError(f"Server not found: {path}")
+        # A version of an OpenAPI MCP server would point somewhere other than its
+        # hub, and a version of an ordinary server may not point at the container.
+        check_openapi_ownership({**active_server, "proxy_pass_url": proxy_pass_url})
 
         # Derive version_group from path (e.g., "/context7" -> "context7")
         version_group = path.strip("/").replace("/", "-")
