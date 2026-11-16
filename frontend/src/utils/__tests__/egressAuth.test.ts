@@ -110,7 +110,7 @@ describe('buildEgressConfigBody', () => {
     });
 
     it('never sends a client secret, even one left in the form state', () => {
-      const body = buildEgressConfigBody({ ...rovo, egress_client_secret: 'stale-secret' });
+      const body = buildEgressConfigBody({ ...rovo, egress_client_secret: 'stale-secret' }); // pragma: allowlist secret
       expect(body.client_secret).toBeUndefined();
     });
 
@@ -143,9 +143,9 @@ describe('buildEgressConfigBody', () => {
         ...rovo,
         egress_provider: 'atlassian',
         egress_client_id: ' cid ',
-        egress_client_secret: 's3cret',
+        egress_client_secret: 's3cret', // pragma: allowlist secret
       });
-      expect(body).toMatchObject({ client_id: 'cid', client_secret: 's3cret' });
+      expect(body).toMatchObject({ client_id: 'cid', client_secret: 's3cret' }); // pragma: allowlist secret
     });
   });
 });

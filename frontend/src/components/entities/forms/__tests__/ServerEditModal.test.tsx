@@ -385,7 +385,7 @@ describe('ServerEditModal', () => {
             ...oauthUser,
             egress_provider: 'atlassian',
             egress_client_id: 'classic-client',
-            egress_client_secret: 'classic-secret',
+            egress_client_secret: 'classic-secret', // pragma: allowlist secret
           }}
           egressEnabled
         />,
@@ -415,7 +415,7 @@ describe('ServerEditModal', () => {
             ...oauthUser,
             egress_provider: 'atlassian',
             egress_client_id: 'classic-client',
-            egress_client_secret: 'classic-secret',
+            egress_client_secret: 'classic-secret', // pragma: allowlist secret
           }}
           egressEnabled
         />,
@@ -435,7 +435,7 @@ describe('ServerEditModal', () => {
               ...oauthUser,
               egress_provider: 'atlassian-rovo',
               egress_client_id: 'typed-client',
-              egress_client_secret: 'stale-secret',
+              egress_client_secret: 'stale-secret', // pragma: allowlist secret
             }}
             egressEnabled
           />,
