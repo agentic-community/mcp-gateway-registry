@@ -120,9 +120,7 @@ class TestStoredToolAnnotations:
     def test_mixed_valid_and_invalid_keeps_valid(self):
         raw = {"readOnlyHint": True, "destructiveHint": "yes", "x": 1}
 
-        assert stored_tool_annotations({"name": "t", "annotations": raw}) == {
-            "readOnlyHint": True
-        }
+        assert stored_tool_annotations({"name": "t", "annotations": raw}) == {"readOnlyHint": True}
 
     def test_non_dict_tool(self):
         assert stored_tool_annotations("not a tool") is None
