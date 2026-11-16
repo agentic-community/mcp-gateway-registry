@@ -33,6 +33,8 @@ Metadata is opt-in on every model-facing tool. It is free-form text the registra
 
 The REST endpoints keep their default and return full metadata when `metadata_fields` is omitted, because the registry's edit forms read it from there. Only the mcpgw tools change the default.
 
+Requested keys are also subject to the metadata YARA scan: a key the scan flagged is removed even when `metadata_fields` names it, and a record without a current verdict returns no metadata to these tools. See [Registrant Metadata Scanning](metadata-security.md).
+
 Key syntax is the same everywhere, and the tools inherit the endpoints' validation. Each key is a single word of letters, digits, `_` or `-`, with `.` separating levels of nesting, up to 20 keys and 5 levels deep. A key no asset happens to carry is simply absent from the response, so guessing a name is harmless. A malformed key is not: it is rejected with a 422, which fails the whole call.
 
 ## Examples

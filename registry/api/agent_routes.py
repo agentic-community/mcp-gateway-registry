@@ -84,6 +84,11 @@ from ..utils.metadata import (
     parse_and_validate_metadata_fields,
     project_metadata,
 )
+from ..utils.metadata_security import (
+    model_facing_metadata,
+    operator_metadata_security,
+    sanitize_agent_card_for_model,
+)
 from ..utils.request_utils import get_client_ip
 from ..utils.url_guard import (
     PROXY_PROFILE,
@@ -1644,6 +1649,9 @@ async def list_agents(
                 metadata=project_metadata(
                     agent.metadata if agent.metadata else {}, _metadata_paths
                 ),
+                metadata_security=operator_metadata_security(
+                    agent.metadata, agent.metadata_scan, "agent"
+                ),
                 # Gateway-proxy opt-in: carry through so the card badge + edit
                 # modal reflect stored state (proxy_client_url is server-derived).
                 is_proxied=getattr(agent, "is_proxied", False),
@@ -2489,6 +2497,11 @@ async def get_agent(
     # Also strip the generic gateway-proxy backend origin (proxy_target_url).
     redact_proxy_backend_url(agent_dict, user_context)
 
+    # Operator-facing YARA verdict for the full metadata, before projection (#1811).
+    agent_dict["metadata_security"] = operator_metadata_security(
+        agent_dict.get("metadata"), agent_dict.get("metadata_scan"), "agent"
+    )
+
     # Apply metadata field projection
     _metadata_paths = parse_and_validate_metadata_fields(metadata_fields)
     agent_dict["metadata"] = project_metadata(agent_dict.get("metadata") or {}, _metadata_paths)
@@ -3077,7 +3090,12 @@ async def discover_agents_by_skills(
             trust_level=agent.trust_level,
             visibility=getattr(agent, "visibility", "public"),
             supported_protocol=getattr(agent, "supported_protocol", None),
-            metadata=agent.metadata if agent.metadata else {},
+            # Model-facing discovery: flagged keys withheld, and everything
+            # withheld without a current verdict (#1811).
+            metadata=model_facing_metadata(
+                agent.metadata or {}, agent.metadata, agent.metadata_scan, "agent"
+            )
+            or {},
         )
 
         matched_agents.append(
@@ -3170,8 +3188,10 @@ async def discover_agents_semantic(
             if not _filter_agents_by_access([agent_card], user_context):
                 continue
 
-            # Return full agent card with relevance score
+            # Return full agent card with relevance score. Model-facing, so
+            # flagged metadata keys are withheld (#1811).
             agent_data = agent_card.model_dump()
+            sanitize_agent_card_for_model(agent_data, agent_card.metadata, agent_card.metadata_scan)
             if redact_backend:
                 redact_agent_backend_fields(agent_data)
             agent_data["relevance_score"] = result.get("relevance_score", 0.0)
