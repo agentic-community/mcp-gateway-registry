@@ -237,6 +237,25 @@ class TestInitiate:
         r = c.post("/api/egress-auth/initiate", json={"server_path": "/github-mcp"})
         assert r.status_code == 400
 
+    def test_initiate_unregistered_dcr_client_400(self, client, monkeypatch):
+        # A requires_dcr provider whose client_id has not been registered yet makes
+        # build_consent_url raise EgressClientNotRegistered -> clean 400 that says so,
+        # not a KeyError/500 or the generic missing-secret message.
+        svc = AsyncMock()
+
+        def _raise(**kw):
+            raise routes.EgressClientNotRegistered()
+
+        svc.build_consent_url = _raise
+        # Initiate serves only the browser session the request's cookie names.
+        browser_user = {**USER, "session_id": "sid-alice"}
+        c = _with_live_session(
+            client(browser_user, server=_server(), svc=svc), monkeypatch, browser_user
+        )
+        r = c.post("/api/egress-auth/initiate", json={"server_path": "/github-mcp"})
+        assert r.status_code == 400
+        assert "not registered" in r.json()["detail"]
+
 
 @pytest.mark.unit
 class TestConnectionsAndDisconnect:

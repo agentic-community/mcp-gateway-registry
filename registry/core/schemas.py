@@ -455,6 +455,21 @@ class EgressOAuthConfig(BaseModel):
         "When set, the egress OAuth callback rejects a sign-in reply whose iss names a "
         "different issuer. Empty keeps the callback as before.",
     )
+    # Dynamic Client Registration (requires_dcr providers only). Written when the
+    # gateway registers its own client, so a later save can tell whether the
+    # stored client_id still fits the provider, callback URL and scopes.
+    dcr_provider: str | None = Field(
+        default=None,
+        description="Provider the stored client_id was registered for by the gateway.",
+    )
+    dcr_redirect_uri: str | None = Field(
+        default=None,
+        description="redirect_uri sent in the registration request.",
+    )
+    dcr_scopes: list[str] | None = Field(
+        default=None,
+        description="Scope list sent in the registration request.",
+    )
     updated_at: str | None = None
 
 

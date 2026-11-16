@@ -2274,6 +2274,7 @@ def cmd_egress_configure(args: argparse.Namespace) -> int:
             custom_resource=args.custom_resource,
             expected_issuer=args.expected_issuer,
             list_tools_before_consent=args.list_tools_before_consent,
+            re_register=args.re_register,
         )
         print(json.dumps(response, indent=2, default=str))
         return 0
@@ -7182,6 +7183,13 @@ Examples:
         help="oauth_user and pat only: list the server's stored tools on a direct-route "
         "tools/list before a user connects, for clients that only call tools an admin "
         "enabled ahead of time. Omitting it turns it off",
+    )
+    egress_configure_parser.add_argument(
+        "--re-register",
+        action="store_true",
+        help="oauth_user with a dynamic-client-registration provider only: register a new "
+        "OAuth client even when the stored one still fits (for example after the provider "
+        "revoked it). Cannot be combined with a --client-id that differs from the stored one",
     )
 
     # Get egress config command

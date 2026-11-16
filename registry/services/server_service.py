@@ -303,7 +303,9 @@ class ServerService:
         Args:
             updated_fields: When given, only these fields (plus
                 ``updated_at``) are persisted; concurrent writes to other
-                fields survive. None writes every field.
+                fields survive. None writes every field. The search index is
+                then built from the stored document read back after the
+                write, not from ``server_info``.
             expected_updated_at: When given, the update only lands if the
                 stored ``updated_at`` still equals this value, enforced
                 atomically in the repository write.
@@ -403,7 +405,10 @@ class ServerService:
             # Update search index
             try:
                 is_enabled = await self._repo.get_state(path)
-                await self._search_repo.index_server(path, server_info, is_enabled)
+                indexed = server_info
+                if updated_fields is not None:
+                    indexed = await self._document_to_index(path, server_info)
+                await self._search_repo.index_server(path, indexed, is_enabled)
             except Exception as e:
                 logger.error(f"Failed to update search index after server update: {e}")
 
@@ -414,6 +419,35 @@ class ServerService:
                 nginx_reload_scheduler.mark_dirty()
 
         return result
+
+    async def _document_to_index(
+        self,
+        path: str,
+        caller_info: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Return what the search index should hold after a field-scoped write.
+
+        A field-scoped write persists only the named fields, but the caller's
+        dict is a snapshot read before it (and before any outbound calls it made
+        in between). Indexing that snapshot would put a stale ``tool_list``,
+        description or tags into the index while the database keeps the newer
+        values another writer stored meanwhile. So the stored document is read
+        back after the write and indexed instead, with credentials removed like
+        every other read projection: the index stores the whole dict under
+        ``metadata``.
+
+        A partial dict is never indexed, because ``index_server`` would blank the
+        description and tags. If the re-read finds nothing, the caller's dict is
+        indexed as before and the fallback is logged.
+        """
+        fresh = await self._repo.get(path)
+        if not isinstance(fresh, dict) or not fresh:
+            logger.warning(
+                f"Search index: re-read of '{path}' after a field-scoped update returned "
+                f"nothing; indexing the caller's snapshot instead"
+            )
+            return caller_info
+        return self._prepare_server_dict(fresh, include_credentials=False)
 
     async def toggle_service(self, path: str, enabled: bool) -> bool:
         """Toggle service enabled/disabled state."""

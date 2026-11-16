@@ -644,6 +644,190 @@ class TestUpdateServer:
         )
 
 
+class TestUpdateServerSearchIndex:
+    """What the search index receives after a save, by kind of write.
+
+    A field-scoped save persists only the named fields, so the dict the caller
+    read before it (and before any outbound calls in between) must not become
+    the indexed document: another writer may have stored a newer ``tool_list``.
+    """
+
+    @pytest.fixture
+    def stored_document(self) -> dict[str, Any]:
+        """The document as stored after a concurrent writer refreshed the tool list."""
+        return {
+            "path": "/test-server",
+            "server_name": "test-server",
+            "description": "A test server",
+            "tags": ["test", "data"],
+            "tool_list": [{"name": "fresh-tool", "description": "added by a health pass"}],
+            "num_tools": 1,
+            "updated_at": "2026-11-16T10:00:00",
+        }
+
+    @pytest.fixture
+    def stale_snapshot(self) -> dict[str, Any]:
+        """The caller's read from before the concurrent write."""
+        return {
+            "path": "/test-server",
+            "server_name": "test-server",
+            "description": "A test server",
+            "tags": ["test", "data", "added-by-caller"],
+            "tool_list": [{"name": "stale-tool", "description": "before the refresh"}],
+            "num_tools": 1,
+            "updated_at": "2026-11-16T09:00:00",
+        }
+
+    @pytest.mark.asyncio
+    async def test_field_scoped_update_indexes_the_stored_document(
+        self,
+        server_service: ServerService,
+        stale_snapshot: dict[str, Any],
+        stored_document: dict[str, Any],
+        mock_server_repository,
+        mock_search_repository,
+    ):
+        """The index gets the re-read document, so a refreshed tool list is not lost."""
+        # Arrange: the repository now holds the newer tool list and the saved tags.
+        stored_document["tags"] = stale_snapshot["tags"]
+        mock_server_repository.update.return_value = True
+        mock_server_repository.get.return_value = stored_document
+        mock_server_repository.get_state.return_value = True
+
+        # Act
+        result = await server_service.update_server(
+            "/test-server", stale_snapshot, updated_fields=["tags"]
+        )
+
+        # Assert
+        assert result is True
+        mock_search_repository.index_server.assert_called_once()
+        path, indexed, is_enabled = mock_search_repository.index_server.call_args.args
+        assert path == "/test-server"
+        assert is_enabled is True
+        assert indexed["tool_list"] == stored_document["tool_list"]
+        assert indexed["tags"] == stale_snapshot["tags"]
+        # The whole document, so index_server does not blank the description.
+        assert indexed["description"] == "A test server"
+        assert indexed["server_name"] == "test-server"
+
+    @pytest.mark.asyncio
+    async def test_re_read_happens_after_the_write(
+        self,
+        server_service: ServerService,
+        stale_snapshot: dict[str, Any],
+        stored_document: dict[str, Any],
+        mock_server_repository,
+        mock_search_repository,
+    ):
+        """The stored document is read once the write has landed, not before it."""
+        calls: list[str] = []
+
+        async def fake_update(*args, **kwargs):
+            calls.append("update")
+            return True
+
+        async def fake_get(path):
+            calls.append("get")
+            return stored_document
+
+        mock_server_repository.update.side_effect = fake_update
+        mock_server_repository.get.side_effect = fake_get
+
+        await server_service.update_server("/test-server", stale_snapshot, updated_fields=["tags"])
+
+        assert calls == ["update", "get"]
+
+    @pytest.mark.asyncio
+    async def test_field_scoped_update_does_not_index_credentials(
+        self,
+        server_service: ServerService,
+        stale_snapshot: dict[str, Any],
+        stored_document: dict[str, Any],
+        mock_server_repository,
+        mock_search_repository,
+    ):
+        """The index stores the dict under ``metadata``, so secrets are stripped first."""
+        stored_document["egress_oauth"] = {
+            "provider": "atlassian-rovo",
+            "client_id": "DCRID",
+            "client_secret_encrypted": "ciphertext",
+        }
+        mock_server_repository.update.return_value = True
+        mock_server_repository.get.return_value = stored_document
+
+        await server_service.update_server(
+            "/test-server", stale_snapshot, updated_fields=["egress_oauth"]
+        )
+
+        indexed = mock_search_repository.index_server.call_args.args[1]
+        assert indexed["egress_oauth"]["client_id"] == "DCRID"
+        assert "client_secret_encrypted" not in indexed["egress_oauth"]
+        # The repository's own document is left as it was.
+        assert stored_document["egress_oauth"]["client_secret_encrypted"] == "ciphertext"
+
+    @pytest.mark.asyncio
+    async def test_field_scoped_update_falls_back_when_the_re_read_finds_nothing(
+        self,
+        server_service: ServerService,
+        stale_snapshot: dict[str, Any],
+        mock_server_repository,
+        mock_search_repository,
+        caplog,
+    ):
+        """No stored document to read back: index the caller's dict and say so."""
+        mock_server_repository.update.return_value = True
+        mock_server_repository.get.return_value = None
+
+        with caplog.at_level(logging.WARNING, logger="registry.services.server_service"):
+            result = await server_service.update_server(
+                "/test-server", stale_snapshot, updated_fields=["tags"]
+            )
+
+        assert result is True
+        mock_search_repository.index_server.assert_called_once()
+        assert mock_search_repository.index_server.call_args.args[1] is stale_snapshot
+        assert "re-read of '/test-server'" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_full_update_indexes_the_callers_dict(
+        self,
+        server_service: ServerService,
+        stale_snapshot: dict[str, Any],
+        stored_document: dict[str, Any],
+        mock_server_repository,
+        mock_search_repository,
+    ):
+        """Without updated_fields the whole dict is written, so it is also what is indexed."""
+        mock_server_repository.update.return_value = True
+        mock_server_repository.get.return_value = stored_document
+
+        await server_service.update_server("/test-server", stale_snapshot)
+
+        mock_search_repository.index_server.assert_called_once()
+        assert mock_search_repository.index_server.call_args.args[1] is stale_snapshot
+        mock_server_repository.get.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_failed_field_scoped_write_does_not_index_or_re_read(
+        self,
+        server_service: ServerService,
+        stale_snapshot: dict[str, Any],
+        mock_server_repository,
+        mock_search_repository,
+    ):
+        """A write that did not land leaves the index alone."""
+        mock_server_repository.update.return_value = False
+
+        result = await server_service.update_server(
+            "/test-server", stale_snapshot, updated_fields=["tags"]
+        )
+
+        assert result is False
+        mock_search_repository.index_server.assert_not_called()
+        mock_server_repository.get.assert_not_awaited()
+
+
 # NOTE: test_update_enabled_server_regenerates_nginx removed
 # This is more of an integration test and involves complex nginx mocking.
 # Nginx configuration regeneration is tested separately in integration tests.

@@ -4073,6 +4073,7 @@ class RegistryClient:
         custom_resource: str | None = None,
         expected_issuer: str | None = None,
         list_tools_before_consent: bool = False,
+        re_register: bool = False,
     ) -> dict[str, Any]:
         """Configure per-user egress auth on a server (admin only).
 
@@ -4108,6 +4109,10 @@ class RegistryClient:
                 server's stored tools on a direct-route tools/list before the
                 user connects (issue #1986). The request replaces the whole
                 config, so leaving this False turns it off.
+            re_register: oauth_user with a dynamic-client-registration provider
+                only. Register a new OAuth client even when the stored one still
+                fits, for example after the provider revoked it. Cannot be
+                combined with a ``client_id`` that differs from the stored one.
 
         Returns:
             Non-secret egress config view dict.
@@ -4146,6 +4151,8 @@ class RegistryClient:
         if expected_issuer is not None:
             body["expected_issuer"] = expected_issuer
         body["list_tools_before_consent"] = list_tools_before_consent
+        if re_register:
+            body["re_register"] = True
 
         response = self._make_request(
             method="POST",

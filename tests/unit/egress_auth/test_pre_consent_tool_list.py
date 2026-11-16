@@ -240,7 +240,7 @@ class _StubServerService:
     async def get_server_info(self, path, include_credentials=False):
         return dict(self._server)
 
-    async def update_server(self, path, server):
+    async def update_server(self, path, server, *, updated_fields=None):
         self.updated_with = server
         return True
 
