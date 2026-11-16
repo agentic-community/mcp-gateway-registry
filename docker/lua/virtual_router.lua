@@ -976,6 +976,53 @@ local function _absorb_modern_tool_list(backend_loc, tools)
 end
 
 
+-- Remove the 2026-07-28 "io.modelcontextprotocol/*" keys from params._meta.
+-- A handshake-era backend negotiated an older version in initialize, and the
+-- router does not send it the MCP-Protocol-Version header (it clears the
+-- client's 2026-07-28 copy). Leaving the client's version marker in the body
+-- makes a strict backend reject the call with -32020 ("Mcp-Protocol-Version
+-- header is required"). Other _meta keys, such as progressToken, are kept.
+local function _strip_modern_meta(params)
+    if type(params) ~= "table" or type(params._meta) ~= "table" then
+        return
+    end
+    local kept = {}
+    local has_kept = false
+    for key, value in pairs(params._meta) do
+        if type(key) ~= "string" or key:sub(1, #MODERN_META_PREFIX) ~= MODERN_META_PREFIX then
+            kept[key] = value
+            has_kept = true
+        end
+    end
+    if has_kept then
+        params._meta = kept
+    else
+        params._meta = nil
+    end
+end
+
+
+-- Text that appears in any body carrying a 2026-07-28 _meta key. It omits the
+-- "/" of MODERN_META_PREFIX because cjson encodes "/" as "\/".
+local MODERN_META_TEXT = "io.modelcontextprotocol"
+
+
+-- Return the body to send a handshake-era backend: the same request without
+-- the 2026-07-28 _meta keys. The plain-text check skips the decode for the
+-- router's own requests (discovery lists), which never carry them.
+local function _legacy_backend_body(body)
+    if type(body) ~= "string" or not body:find(MODERN_META_TEXT, 1, true) then
+        return body
+    end
+    local ok, request = pcall(cjson.decode, body)
+    if not ok or type(request) ~= "table" or type(request.params) ~= "table" then
+        return body
+    end
+    _strip_modern_meta(request.params)
+    return cjson.encode(request)
+end
+
+
 -- A 400 is retried with fresh session state only when its body is about the
 -- session: MCP SDKs answer a missing or unknown session ID with 400 ("Bad
 -- Request: Missing session ID", "Server not initialized"). Any other 400 (a
@@ -1024,6 +1071,8 @@ local function _call_backend(backend_loc, body, client_session_id, server_id, ba
     if _backend_era(backend_loc, backend_version) == ERA_MODERN then
         return _call_modern_backend(backend_loc, body, param_headers)
     end
+    -- Clean the body before authorize(), so /validate checks the bytes sent.
+    body = _legacy_backend_body(body)
     -- Returns session_id, outcome, pre_consent, and whether an initialize ran
     -- (it authorized its own body, replacing the request's token).
     local function resolve()
@@ -1600,39 +1649,9 @@ local function _with_modern_result_fields(body, method)
 end
 
 
--- Remove the 2026-07-28 "io.modelcontextprotocol/*" keys from params._meta.
--- A handshake-era backend negotiated an older version in initialize, and the
--- router does not send it the MCP-Protocol-Version header (it clears the
--- client's 2026-07-28 copy). Leaving the client's version marker in the body
--- makes a strict backend reject the call with -32020 ("Mcp-Protocol-Version
--- header is required"). Other _meta keys, such as progressToken, are kept.
-local function _strip_modern_meta(params)
-    if type(params) ~= "table" or type(params._meta) ~= "table" then
-        return
-    end
-    local kept = {}
-    local has_kept = false
-    for key, value in pairs(params._meta) do
-        if type(key) ~= "string" or key:sub(1, #MODERN_META_PREFIX) ~= MODERN_META_PREFIX then
-            kept[key] = value
-            has_kept = true
-        end
-    end
-    if has_kept then
-        params._meta = kept
-    else
-        params._meta = nil
-    end
-end
-
-
 local function _proxy_to_backend(request_id, method_name, proxied_params,
                                   backend_location, client_session_id, server_id,
                                   backend_version, label, allow_pre_consent, param_headers)
-    -- The modern path rebuilds _meta itself; only a legacy backend needs it cleaned.
-    if _backend_era(backend_location, backend_version) == ERA_LEGACY then
-        _strip_modern_meta(proxied_params)
-    end
     local proxied_body = cjson.encode({
         jsonrpc = "2.0",
         id = request_id,
