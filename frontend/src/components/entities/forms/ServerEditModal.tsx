@@ -15,7 +15,7 @@ import {
   LABEL,
 } from '../../formFields';
 import Button from '../../Button';
-import { LIST_BEFORE_CONSENT_MODES } from '../../../utils/egressAuth';
+import { LIST_BEFORE_CONSENT_MODES, isDcrEgressProvider } from '../../../utils/egressAuth';
 
 /**
  * Shape of the server edit form state. Owned by the Dashboard (kept as state
@@ -63,6 +63,9 @@ export interface ServerEditForm {
   egress_target_audience: string;
   // oauth_user and pat: list stored tools before a user connects (issue #1986).
   egress_list_tools_before_consent: boolean;
+  // oauth_user with a dynamic-client-registration provider (atlassian-rovo): ask the
+  // gateway to register a new client even when the stored one still fits.
+  egress_re_register: boolean;
   // Discovery Identity (OAuth 2.1): the registry borrows a connected admin
   // account for its OWN headless health checks / tool discovery against an
   // OAuth 2.1 server. An INDEPENDENT flag, orthogonal to auth_scheme (a server
@@ -483,7 +486,8 @@ const ServerEditModal: React.FC<ServerEditModalProps> = ({
                     </p>
                   </div>
                 )}
-                {form.egress_auth_mode === 'oauth_user' && (
+                {form.egress_auth_mode === 'oauth_user' &&
+                  !isDcrEgressProvider(form.egress_provider) && (
                   <p className="text-xs text-gray-500 dark:text-gray-400">
                     Register this callback URL in your OAuth app:{' '}
                     <code className="text-purple-600 dark:text-purple-400">
@@ -496,15 +500,32 @@ const ServerEditModal: React.FC<ServerEditModalProps> = ({
                     <label className={LABEL}>Provider</label>
                     <select
                       value={form.egress_provider}
-                      onChange={(e) =>
-                        setForm((prev) => ({ ...prev, egress_provider: e.target.value }))
-                      }
+                      onChange={(e) => {
+                        const provider = e.target.value;
+                        setForm((prev) => {
+                          // A client the gateway registered belongs to its provider, and an
+                          // operator-supplied one must not leak into a registered one (the
+                          // backend would take it as an override). Start clean on a switch.
+                          const switchesClientKind =
+                            isDcrEgressProvider(prev.egress_provider) !== isDcrEgressProvider(provider);
+                          return {
+                            ...prev,
+                            egress_provider: provider,
+                            egress_client_id: switchesClientKind ? '' : prev.egress_client_id,
+                            egress_client_secret: switchesClientKind ? '' : prev.egress_client_secret,
+                            egress_re_register: false,
+                          };
+                        });
+                      }}
                       className={FIELD}
                     >
                       <option value="">Select…</option>
                       <option value="github">GitHub</option>
                       <option value="google">Google</option>
-                      <option value="atlassian">Atlassian</option>
+                      <option value="atlassian">Atlassian (classic 3LO app)</option>
+                      <option value="atlassian-rovo">
+                        Atlassian Rovo MCP (v2, dynamic client registration)
+                      </option>
                       <option value="microsoft">Microsoft</option>
                       <option value="slack">Slack</option>
                       <option value="custom">Custom OIDC</option>
@@ -513,22 +534,62 @@ const ServerEditModal: React.FC<ServerEditModalProps> = ({
                 )}
                 {form.egress_auth_mode === 'oauth_user' && form.egress_provider && (
                   <>
+                    {isDcrEgressProvider(form.egress_provider) && (
+                      <div className="rounded-lg border border-line bg-surface-muted p-3 text-xs text-fg-muted space-y-2">
+                        <p>
+                          No client ID or secret is needed. The gateway registers its own
+                          client with Atlassian when you save this configuration.
+                        </p>
+                        <p>
+                          An Atlassian organization admin must allow the gateway domain
+                          before users can connect. See the Atlassian Rovo MCP section of
+                          docs/egress-credential-vault.md.
+                        </p>
+                        <label className="flex items-center gap-2 cursor-pointer text-sm text-gray-900 dark:text-white">
+                          <input
+                            type="checkbox"
+                            checked={form.egress_re_register}
+                            onChange={(e) =>
+                              setForm((prev) => ({ ...prev, egress_re_register: e.target.checked }))
+                            }
+                            className="h-4 w-4 rounded border-gray-300"
+                          />
+                          Register a new client
+                        </label>
+                        <p>
+                          Replaces the stored client even if it still fits, for example after
+                          Atlassian revoked it. Every user then connects again.
+                        </p>
+                      </div>
+                    )}
                     <div>
-                      <label className={LABEL}>Client ID</label>
+                      <label className={LABEL}>
+                        {isDcrEgressProvider(form.egress_provider)
+                          ? 'Client ID (optional)'
+                          : 'Client ID'}
+                      </label>
                       <input
                         type="text"
                         value={form.egress_client_id}
                         onChange={(e) =>
                           setForm((prev) => ({ ...prev, egress_client_id: e.target.value }))
                         }
+                        disabled={isDcrEgressProvider(form.egress_provider) && form.egress_re_register}
+                        placeholder={
+                          isDcrEgressProvider(form.egress_provider)
+                            ? 'leave blank: the gateway registers one; a typed ID is an operator override, used as-is'
+                            : undefined
+                        }
                         className={FIELD}
                       />
                     </div>
-                    {/* A public client (custom provider, token auth 'none') has no
-                        secret by design — hide the field so nothing stale is sent. */}
+                    {/* A public client has no secret by design, so hide the field so nothing
+                        stale is sent: a custom provider with token auth 'none', and a
+                        provider whose client the gateway registers itself (PKCE only). */}
                     {!(
-                      form.egress_provider === 'custom' &&
-                      form.egress_custom_token_auth_style === 'none'
+                      (form.egress_provider === 'custom' &&
+                        form.egress_custom_token_auth_style === 'none') ||
+                      isDcrEgressProvider(form.egress_provider)
                     ) && (
                       <div>
                         <label className={LABEL}>Client Secret</label>
@@ -552,7 +613,11 @@ const ServerEditModal: React.FC<ServerEditModalProps> = ({
                         onChange={(e) =>
                           setForm((prev) => ({ ...prev, egress_scopes: e.target.value }))
                         }
-                        placeholder="repo, read:user"
+                        placeholder={
+                          isDcrEgressProvider(form.egress_provider)
+                            ? 'leave blank for the provider default scopes'
+                            : 'repo, read:user'
+                        }
                         className={FIELD}
                       />
                     </div>
@@ -628,8 +693,10 @@ const ServerEditModal: React.FC<ServerEditModalProps> = ({
                           />
                           <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                             Binds issued tokens to one protected resource. Required by some
-                            MCP servers (Atlassian Rovo, Datadog); sent on authorize, token
-                            exchange, and refresh.
+                            MCP servers (Datadog, for example); sent on authorize, token
+                            exchange, and refresh. Do not set it for Atlassian Rovo, whose
+                            authorization server rejects it: pick the Atlassian Rovo MCP
+                            provider instead.
                           </p>
                         </div>
                       </>

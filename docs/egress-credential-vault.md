@@ -799,7 +799,7 @@ Register the server with `https://mcp.atlassian.com/v2/mcp` as its `proxy_pass_u
 }
 ```
 
-The server-edit form does not list `atlassian-rovo` yet, so use the API or `registry_management.py egress-configure --mode oauth_user --provider atlassian-rovo`.
+In the registry UI, open the server's edit form, set the egress mode to Per-user OAuth (3LO) and pick **Atlassian Rovo MCP (v2, dynamic client registration)** as the provider. The form asks for no client ID or secret. Without the UI, use the API or `registry_management.py egress-configure --mode oauth_user --provider atlassian-rovo`. The form also has a **Register a new client** checkbox, which sends `re_register` (see below).
 
 On save, the gateway registers its own OAuth client:
 

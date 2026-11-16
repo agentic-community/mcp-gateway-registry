@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import ServerEditModal, { ServerEditForm } from '../ServerEditModal';
 
 const baseForm: ServerEditForm = {
@@ -44,6 +44,7 @@ const baseForm: ServerEditForm = {
   egress_expected_issuer: '',
   egress_target_audience: '',
   egress_list_tools_before_consent: false,
+  egress_re_register: false,
   oauth_discovery_enabled: false,
   oauth_discovery_provider: '',
   oauth_discovery_client_id: '',
@@ -342,6 +343,157 @@ describe('ServerEditModal', () => {
       />,
     );
     expect(screen.queryByText('Client Secret')).not.toBeInTheDocument();
+  });
+
+  describe('atlassian-rovo provider', () => {
+    const OPTION = /Atlassian Rovo MCP/;
+    const oauthUser = { ...baseForm, egress_auth_mode: 'oauth_user' as const };
+
+    function providerSelect(): HTMLSelectElement {
+      return screen.getByRole('option', { name: OPTION }).closest('select') as HTMLSelectElement;
+    }
+
+    // The form labels are plain <label> siblings of their input, so the input is found from its label.
+    function inputFor(label: string): HTMLInputElement {
+      return screen.getByText(label).parentElement?.querySelector('input') as HTMLInputElement;
+    }
+
+    it('offers atlassian-rovo next to the classic atlassian provider', () => {
+      render(<Harness initial={oauthUser} egressEnabled />);
+      const select = providerSelect();
+      expect(within(select).getByRole('option', { name: OPTION })).toHaveValue('atlassian-rovo');
+      expect(within(select).getByRole('option', { name: /Atlassian \(classic 3LO app\)/ })).toHaveValue(
+        'atlassian',
+      );
+    });
+
+    it('asks for no client secret and marks the client id optional', () => {
+      render(
+        <Harness initial={{ ...oauthUser, egress_provider: 'atlassian-rovo' }} egressEnabled />,
+      );
+      expect(screen.getByText('Client ID (optional)')).toBeInTheDocument();
+      expect(screen.queryByText('Client Secret')).not.toBeInTheDocument();
+      expect(screen.getByText(/No client ID or secret is needed/)).toBeInTheDocument();
+      expect(screen.getByText(/organization admin must allow the gateway domain/)).toBeInTheDocument();
+      expect(screen.queryByText(/Register this callback URL/)).not.toBeInTheDocument();
+    });
+
+    it('keeps the client id and secret fields for the classic atlassian provider', () => {
+      render(
+        <Harness
+          initial={{
+            ...oauthUser,
+            egress_provider: 'atlassian',
+            egress_client_id: 'classic-client',
+            egress_client_secret: 'classic-secret',
+          }}
+          egressEnabled
+        />,
+      );
+      expect(screen.getByText('Client ID')).toBeInTheDocument();
+      expect(screen.getByText('Client Secret')).toBeInTheDocument();
+      expect(inputFor('Client ID')).toHaveValue('classic-client');
+      expect(inputFor('Client Secret')).toHaveValue('classic-secret');
+      expect(screen.getByText(/Register this callback URL/)).toBeInTheDocument();
+      expect(screen.queryByLabelText('Register a new client')).not.toBeInTheDocument();
+    });
+
+    it('offers the register-a-new-client checkbox only for atlassian-rovo', () => {
+      render(
+        <Harness initial={{ ...oauthUser, egress_provider: 'atlassian-rovo' }} egressEnabled />,
+      );
+      const box = screen.getByLabelText('Register a new client');
+      expect(box).not.toBeChecked();
+      fireEvent.click(box);
+      expect(box).toBeChecked();
+    });
+
+    it('clears an operator client id and secret when switching to atlassian-rovo', () => {
+      render(
+        <Harness
+          initial={{
+            ...oauthUser,
+            egress_provider: 'atlassian',
+            egress_client_id: 'classic-client',
+            egress_client_secret: 'classic-secret',
+          }}
+          egressEnabled
+        />,
+      );
+      fireEvent.change(providerSelect(), { target: { value: 'atlassian-rovo' } });
+      expect(screen.getByText('Client ID (optional)')).toBeInTheDocument();
+      const clientId = screen.getByPlaceholderText(/the gateway registers one/);
+      expect(clientId).toHaveValue('');
+    });
+
+    it.each(['atlassian', 'github', 'custom'])(
+      'clears a typed client id and secret when switching from atlassian-rovo to %s',
+      (provider) => {
+        render(
+          <Harness
+            initial={{
+              ...oauthUser,
+              egress_provider: 'atlassian-rovo',
+              egress_client_id: 'typed-client',
+              egress_client_secret: 'stale-secret',
+            }}
+            egressEnabled
+          />,
+        );
+        // The rovo form hides the secret field, so the stale secret is only in form state here.
+        expect(screen.queryByText('Client Secret')).not.toBeInTheDocument();
+        fireEvent.change(providerSelect(), { target: { value: provider } });
+        expect(screen.getByText('Client Secret')).toBeInTheDocument();
+        expect(inputFor('Client ID')).toHaveValue('');
+        expect(inputFor('Client Secret')).toHaveValue('');
+      },
+    );
+
+    it('disables the client id input while register a new client is ticked', () => {
+      render(
+        <Harness
+          initial={{
+            ...oauthUser,
+            egress_provider: 'atlassian-rovo',
+            egress_client_id: 'stored-client',
+          }}
+          egressEnabled
+        />,
+      );
+      const clientId = inputFor('Client ID (optional)');
+      expect(clientId).toBeEnabled();
+      fireEvent.click(screen.getByLabelText('Register a new client'));
+      expect(clientId).toBeDisabled();
+      expect(clientId).toHaveValue('stored-client');
+    });
+
+    it('does not use the egress provider list for the discovery identity', () => {
+      render(
+        <Harness
+          initial={{ ...baseForm, oauth_discovery_enabled: true, egress_auth_mode: 'oauth_user' }}
+          egressEnabled
+        />,
+      );
+      // Two provider pickers: the egress one offers Rovo, the discovery one must not.
+      const rovoOptions = screen.getAllByRole('option', { name: OPTION });
+      expect(rovoOptions).toHaveLength(1);
+      const discoverySelect = screen
+        .getByRole('option', { name: 'Custom (OAuth 2.1)' })
+        .closest('select') as HTMLSelectElement;
+      expect(within(discoverySelect).queryByRole('option', { name: OPTION })).not.toBeInTheDocument();
+      expect(within(discoverySelect).getByRole('option', { name: 'Atlassian' })).toBeInTheDocument();
+    });
+  });
+
+  it('no longer says the resource indicator is needed for Atlassian Rovo', () => {
+    render(
+      <Harness
+        initial={{ ...baseForm, egress_auth_mode: 'oauth_user', egress_provider: 'custom' }}
+        egressEnabled
+      />,
+    );
+    expect(screen.queryByText(/\(Atlassian Rovo, Datadog\)/)).not.toBeInTheDocument();
+    expect(screen.getByText(/pick the Atlassian Rovo MCP provider instead/)).toBeInTheDocument();
   });
 
   it('shows neither provider nor target audience when egress mode is none', () => {
