@@ -32,6 +32,7 @@ from mcp.types import (
 from pydantic import ValidationError
 
 from ..common.log_redaction import redact_url
+from ..utils.tool_annotations import tool_metadata_fields
 from .backend_oauth import RESOLVED_BEARER_KEY as _BACKEND_OAUTH_TOKEN_KEY
 from .backend_oauth import with_bearer as _with_backend_oauth
 from .mcp_apps import (
@@ -862,7 +863,8 @@ def _extract_tool_details(
 
     Returns:
         One dict per tool with name, description, parsed_description, schema,
-        plus ui_resource_uri and ui_visibility for a tool with an MCP App page.
+        plus ui_resource_uri and ui_visibility for a tool with an MCP App page,
+        and title, annotations and outputSchema when the server sent them.
     """
     tool_details_list: list[dict[str, Any]] = []
 
@@ -937,6 +939,8 @@ def _extract_tool_details(
             }
             # MCP Apps: ui_resource_uri and ui_visibility, only for a tool with a page.
             tool_detail.update(tool_ui_fields(tool))
+            # title, annotations and outputSchema, only when the server sent them.
+            tool_detail.update(tool_metadata_fields(tool))
             tool_details_list.append(tool_detail)
 
     logger.info(f"Successfully retrieved tool details count={len(tool_details_list):d}")

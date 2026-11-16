@@ -27,6 +27,7 @@ from ..core.mcp_apps import (
     mcp_app_signature,
 )
 from ..exceptions import UrlValidationError
+from ..utils.tool_annotations import tool_metadata_signature
 from ..utils.url_guard import (
     BUILTIN_AIREGISTRY_TOOLS_PROFILE,
     PROXY_PROFILE,
@@ -1706,12 +1707,24 @@ class HealthMonitoringService:
                     ui_changed = mcp_app_signature(current_tool_list) != mcp_app_signature(
                         tool_list
                     )
+                    # Annotations, title and outputSchema can change, or appear for
+                    # the first time on a server stored before the registry kept
+                    # them, without the count changing.
+                    metadata_changed = tool_metadata_signature(
+                        current_tool_list
+                    ) != tool_metadata_signature(tool_list)
                     needs_update = (
                         current_tool_count != new_tool_count
                         or not current_tool_list
                         or current_mcp_version != new_mcp_version
                         or ui_changed
+                        or metadata_changed
                     )
+                    if metadata_changed:
+                        logger.info(
+                            f"Tool annotations, title or outputSchema changed for "
+                            f"{service_path}; rewriting tool list ({new_tool_count} tools)"
+                        )
 
                     if needs_update:
                         # current_server_info was read without credentials, so a

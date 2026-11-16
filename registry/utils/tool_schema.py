@@ -16,6 +16,8 @@ at the root. ``mcp_input_schema`` applies that rule. Virtual server mappings
 import logging
 from typing import Any
 
+from .tool_annotations import stored_tool_metadata
+
 logger = logging.getLogger(__name__)
 
 INPUT_SCHEMA_KEYS: tuple[str, ...] = ("inputSchema", "input_schema", "schema")
@@ -137,16 +139,18 @@ def stored_tool_to_mcp(
 ) -> dict[str, Any] | None:
     """Convert one stored ``tool_list`` entry to an MCP ``tools/list`` entry.
 
-    Only ``name``, ``description`` and ``inputSchema`` are copied, the same
-    fields a virtual server mapping publishes for a backend that has not been
-    connected yet.
+    ``name``, ``description`` and ``inputSchema`` are always copied. ``title``,
+    ``annotations`` and ``outputSchema`` are copied when the stored tool has a
+    valid value, the same fields a virtual server mapping publishes for a
+    backend that has not been connected yet.
 
     Args:
         tool: One entry of a server's stored ``tool_list``.
 
     Returns:
-        A dict with ``name``, ``description`` and ``inputSchema``, or None when
-        the entry is not a dict or has no usable name.
+        A dict with ``name``, ``description`` and ``inputSchema`` (plus any of
+        the optional fields), or None when the entry is not a dict or has no
+        usable name.
 
     Example:
         >>> stored_tool_to_mcp({"name": "t", "parsed_description": {"main": "Do it"}})
@@ -161,4 +165,5 @@ def stored_tool_to_mcp(
         "name": name,
         "description": _stored_description(tool),
         "inputSchema": mcp_input_schema(stored_input_schema(tool)),
+        **stored_tool_metadata(tool),
     }

@@ -42,6 +42,7 @@ from ..services.rating_service import (
 )
 from ..services.visibility import user_can_access_server_from_doc
 from ..utils.path_utils import make_version_id
+from ..utils.tool_annotations import stored_tool_annotations
 from ..utils.tool_schema import stored_input_schema
 
 # Configure logging
@@ -803,6 +804,7 @@ class VirtualServerService:
                     description=description,
                     input_schema=input_schema,
                     required_scopes=tool_scopes,
+                    annotations=stored_tool_annotations(tool_meta),
                 )
             )
 

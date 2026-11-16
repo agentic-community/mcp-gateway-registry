@@ -985,6 +985,44 @@ class TestToolResolution:
         assert [tool.name for tool in tools] == ["open_budget"]
 
     @pytest.mark.asyncio
+    async def test_resolve_tools_keeps_backend_annotations_under_alias(
+        self, service, mock_vs_repo, mock_server_repo
+    ):
+        """A renamed tool keeps its backend's annotations; invalid hints are dropped."""
+        mock_vs_repo.get.return_value = VirtualServerConfig(
+            path="/virtual/travel",
+            server_name="Travel",
+            tool_mappings=[
+                ToolMapping(
+                    tool_name="cancel_booking", alias="travel_cancel", backend_server_path="/t"
+                ),
+                ToolMapping(tool_name="search_hotels", backend_server_path="/t"),
+                ToolMapping(tool_name="ping", backend_server_path="/t"),
+            ],
+        )
+        mock_server_repo.get.return_value = {
+            "server_name": "Travel",
+            "tool_list": [
+                {
+                    "name": "cancel_booking",
+                    "annotations": {"readOnlyHint": False, "destructiveHint": True},
+                },
+                {"name": "search_hotels", "annotations": {"readOnlyHint": "yes"}},
+                {"name": "ping"},
+            ],
+        }
+
+        tools = await service.resolve_tools("/virtual/travel", user_context={"is_admin": True})
+
+        by_name = {tool.name: tool for tool in tools}
+        assert by_name["travel_cancel"].annotations == {
+            "readOnlyHint": False,
+            "destructiveHint": True,
+        }
+        assert by_name["search_hotels"].annotations is None
+        assert by_name["ping"].annotations is None
+
+    @pytest.mark.asyncio
     async def test_resolve_tools_with_description_override(
         self, service, mock_vs_repo, mock_server_repo
     ):
