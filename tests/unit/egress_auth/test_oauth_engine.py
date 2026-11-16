@@ -1099,6 +1099,90 @@ class TestScopeValidation:
         assert fetched == [f"{DCR_TEST_ISSUER}/.well-known/oauth-authorization-server"]
 
 
+_ROVO_ISSUER = "https://auth.atlassian.com/VCeDsk8ZHncYF1g234fKtc4lNipbBhu3"
+
+
+@pytest.mark.unit
+class TestAtlassianRovoDcr:
+    """The atlassian-rovo provider through the real discovery and registration code."""
+
+    def _metadata_replies(self):
+        return [
+            _FakeResp(
+                {
+                    "resource": "https://mcp.atlassian.com/v2/mcp",
+                    "authorization_servers": [_ROVO_ISSUER],
+                    "scopes_supported": PROVIDER_REGISTRY["atlassian-rovo"].default_scopes,
+                }
+            ),
+            _FakeResp(
+                {"issuer": _ROVO_ISSUER, "registration_endpoint": f"{_ROVO_ISSUER}/dcr/register"}
+            ),
+        ]
+
+    async def test_registers_a_public_client_at_the_discovered_endpoint(self, monkeypatch):
+        rec: dict = {}
+        replies = [*self._metadata_replies(), _FakeResp({"client_id": "DCRID"}, status_code=201)]
+        monkeypatch.setattr(
+            oauth_engine, "shared_guarded_async_client", _fake_guarded_sequence(replies, rec)
+        )
+        rovo = PROVIDER_REGISTRY["atlassian-rovo"]
+        cid, secret = await oauth_engine.register_dcr_client(
+            rovo, "https://gw/oauth2/egress/callback", rovo.default_scopes
+        )
+        assert (cid, secret) == ("DCRID", None)
+        assert rec["get_urls"][0] == (
+            "https://mcp.atlassian.com/.well-known/oauth-protected-resource/v2/mcp"
+        )
+        assert rec["post_url"] == f"{_ROVO_ISSUER}/dcr/register"
+        assert rec["post_json"]["token_endpoint_auth_method"] == "none"
+        assert rec["post_json"]["scope"] == " ".join(rovo.default_scopes)
+
+    async def test_prm_for_v1_authv2_is_rejected_for_v2(self, monkeypatch):
+        # Metadata naming another resource (here the earlier v1 authv2 endpoint)
+        # must not steer the v2 registration.
+        replies = self._metadata_replies()
+        replies[0] = _FakeResp(
+            {
+                "resource": "https://mcp.atlassian.com/v1/mcp/authv2",
+                "authorization_servers": [_ROVO_ISSUER],
+            }
+        )
+        monkeypatch.setattr(
+            oauth_engine, "shared_guarded_async_client", _fake_guarded_sequence(replies)
+        )
+        with pytest.raises(oauth_engine.OAuthEngineError, match="different resource"):
+            await oauth_engine._discover_registration_url(PROVIDER_REGISTRY["atlassian-rovo"])
+
+    def test_authorize_url_has_no_audience_or_resource(self):
+        url = oauth_engine.build_authorize_url(
+            PROVIDER_REGISTRY["atlassian-rovo"],
+            client_id="DCRID",
+            redirect_uri="https://gw/oauth2/egress/callback",
+            scopes=["read:jira:agent-interface", "read:account"],
+            state="S",
+            pkce_challenge="CHAL",
+        )
+        q = parse_qs(urlparse(url).query)
+        assert "audience" not in q
+        assert "resource" not in q
+        assert q["code_challenge_method"] == ["S256"]
+        assert q["prompt"] == ["consent"]
+        assert q["scope"] == ["read:jira:agent-interface read:account"]
+
+    def test_classic_atlassian_authorize_url_keeps_the_audience(self):
+        url = oauth_engine.build_authorize_url(
+            PROVIDER_REGISTRY["atlassian"],
+            client_id="CLASSIC",
+            redirect_uri="https://gw/oauth2/egress/callback",
+            scopes=["read:jira-work", "offline_access"],
+            state="S",
+        )
+        q = parse_qs(urlparse(url).query)
+        assert q["audience"] == ["api.atlassian.com"]
+        assert q["prompt"] == ["consent"]
+
+
 @pytest.mark.unit
 class TestPostTokenSsrfGuard:
     """The token endpoint receives the operator client_secret (and, on refresh,
