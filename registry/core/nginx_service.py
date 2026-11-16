@@ -1069,6 +1069,12 @@ class NginxConfigService:
         # endpoints on every scheduler tick). Invalidated by mark_dirty().
         self._cached_server_names: str | None = None
 
+        # Virtual-backend warnings already logged. The reload scheduler renders
+        # the config every few seconds, so an unroutable backend would repeat
+        # the same WARNING on every tick. Each message is logged at WARNING
+        # once and at DEBUG after that, until mark_dirty() clears this set.
+        self._logged_virtual_warnings: set[str] = set()
+
         # Minimum interval between nginx reload signals. Prevents cascading
         # SIGHUP when many flush_now() calls land in rapid succession (e.g.
         # bulk toggle during stress tests). nginx needs time for worker
@@ -2432,6 +2438,28 @@ class NginxConfigService:
         logger.info(f"Generated {len(blocks)} generic-proxy location blocks")
         return blocks
 
+    def _warn_virtual_once(
+        self,
+        message: str,
+    ) -> None:
+        """Log a virtual-backend problem at WARNING once, then at DEBUG.
+
+        Config rendering runs on every reload-scheduler tick, so the same
+        problem would otherwise be logged every few seconds.
+
+        Args:
+            message: The fully formatted log message.
+        """
+        if message in self._logged_virtual_warnings:
+            logger.debug(message)
+            return
+        self._logged_virtual_warnings.add(message)
+        logger.warning(message)
+
+    def reset_virtual_warnings(self) -> None:
+        """Forget logged virtual-backend warnings so the next render logs them again."""
+        self._logged_virtual_warnings.clear()
+
     async def _renderable_virtual_backend(
         self,
         backend_path: str,
@@ -2448,29 +2476,35 @@ class NginxConfigService:
             if backend_version:
                 validate_server_path(f"{backend_path}:{backend_version}")
         except UrlValidationError:
-            logger.warning("Skipping invalid virtual backend path %r", backend_path)
+            self._warn_virtual_once(f"Skipping invalid virtual backend path {backend_path!r}")
             return None
 
         requested = await server_repo.get(backend_path)
         if not requested:
-            logger.warning("Backend server not found for virtual server mapping: %s", backend_path)
+            self._warn_virtual_once(
+                f"Backend server not found for virtual server mapping: {backend_path}"
+            )
             return None
         base_path = requested.get("active_version_id") or backend_path
         try:
             validate_server_path(base_path)
         except UrlValidationError:
-            logger.warning("Skipping invalid active path for virtual backend %s", backend_path)
+            self._warn_virtual_once(
+                f"Skipping invalid active path for virtual backend {backend_path}"
+            )
             return None
         active = await server_repo.get(base_path) if base_path != backend_path else requested
         if not active:
-            logger.warning("Active server not found for virtual backend %s", backend_path)
+            self._warn_virtual_once(f"Active server not found for virtual backend {backend_path}")
             return None
         if not _virtual_backend_is_routable(active, base_path):
-            logger.warning("Skipping disabled or unhealthy virtual backend %s", backend_path)
+            self._warn_virtual_once(
+                f"Skipping disabled or unhealthy virtual backend {backend_path}"
+            )
             return None
         egress_mode = active.get("egress_auth_mode", "none")
         if egress_mode not in ("none", "pat", "oauth_user", "obo_exchange"):
-            logger.warning("Invalid egress auth mode for virtual backend %s", backend_path)
+            self._warn_virtual_once(f"Invalid egress auth mode for virtual backend {backend_path}")
             return None
 
         requested_version = backend_version or (
@@ -2481,19 +2515,21 @@ class NginxConfigService:
             and backend_version
             and backend_version != requested.get("version")
         ):
-            logger.warning("Conflicting virtual backend version for %s", backend_path)
+            self._warn_virtual_once(f"Conflicting virtual backend version for {backend_path}")
             return None
         selected, version_id = active, ""
         if requested_version:
             routes = await self._resolve_version_routes(base_path, active)
             route = next((r for r in routes if r.label == requested_version), None)
             if route is None or base_path != backend_path and route.version_id != backend_path:
-                logger.warning("Skipping unavailable virtual backend version %s", backend_path)
+                self._warn_virtual_once(
+                    f"Skipping unavailable virtual backend version {backend_path}"
+                )
                 return None
             selected, version_id = route.server, route.version_id
 
         if self._version_upstream(base_path, _VersionRoute("", version_id, selected), True) is None:
-            logger.warning("Skipping unsafe virtual backend endpoint for %s", backend_path)
+            self._warn_virtual_once(f"Skipping unsafe virtual backend endpoint for {backend_path}")
             return None
         return selected, egress_mode, version_id, base_path
 
@@ -2785,11 +2821,9 @@ class NginxConfigService:
                         tm.backend_server_path, server_repo, tm.backend_version
                     )
                     if renderable is None:
-                        logger.warning(
-                            "Omitting tool %r of %s: backend %s has no internal location",
-                            tm.tool_name,
-                            vs.path,
-                            tm.backend_server_path,
+                        self._warn_virtual_once(
+                            f"Omitting tool {tm.tool_name!r} of {vs.path}: "
+                            f"backend {tm.backend_server_path} has no internal location"
                         )
                         continue
                     server_info, egress_mode, version_id, base_path = renderable
@@ -3580,6 +3614,7 @@ class NginxReloadScheduler:
         """Signal that nginx config needs regeneration. Non-blocking."""
         self._dirty = True
         nginx_service._cached_server_names = None
+        nginx_service.reset_virtual_warnings()
 
     def seed_hash(self, config_text: str) -> None:
         """Set the initial config hash after startup generation.
