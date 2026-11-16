@@ -61,6 +61,9 @@ const DiscoveryIdentityFields: React.FC<Props> = ({ values, onChange, editing, f
           onChange={(e) => onChange({ oauth_discovery_provider: e.target.value })}
           className={FIELD}
         >
+          {/* Not the egress provider list: atlassian-rovo is deliberately absent. A
+              provider whose client the gateway registers itself (DCR) works only for
+              per-user egress, so the backend answers 400 to a discovery identity on it. */}
           <option value="">Select…</option>
           <option value="github">GitHub</option>
           <option value="google">Google</option>

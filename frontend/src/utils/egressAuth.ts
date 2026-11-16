@@ -62,6 +62,21 @@ export interface EgressConfigFormFields {
   egress_expected_issuer: string;
   egress_target_audience: string;
   egress_list_tools_before_consent: boolean;
+  // Only meaningful for a dynamic-client-registration provider (atlassian-rovo).
+  egress_re_register: boolean;
+}
+
+/**
+ * Egress providers whose OAuth client the gateway registers itself (RFC 7591) when
+ * the config is saved, so the admin supplies no client ID or secret. Keep in step
+ * with the `requires_dcr` rows in registry/egress_auth/providers.py. Only per-user
+ * egress can use one: the discovery identity form must not offer these.
+ */
+export const DCR_EGRESS_PROVIDERS: ReadonlyArray<string> = ['atlassian-rovo'];
+
+/** Whether the gateway registers the OAuth client for this egress provider. */
+export function isDcrEgressProvider(provider: string): boolean {
+  return DCR_EGRESS_PROVIDERS.includes(provider.trim());
 }
 
 /** Egress modes whose users have a pre-consent state that can list stored tools. */
@@ -85,6 +100,25 @@ export function buildEgressConfigBody(form: EgressConfigFormFields): Record<stri
       egress_auth_mode: 'obo_exchange',
       target_audience: form.egress_target_audience.trim(),
       scopes,
+    };
+  }
+  if (mode === 'oauth_user' && isDcrEgressProvider(form.egress_provider)) {
+    // The gateway registers the client on save. A blank client ID asks for that;
+    // the stored client ID the form echoes back is treated as blank by the backend.
+    // With re_register the client ID is dropped: the backend rejects re_register
+    // alongside a differing client_id, and it registers a new client either way.
+    // A DCR client is public (PKCE), so no secret is ever sent.
+    return {
+      egress_auth_mode: 'oauth_user',
+      egress_provider: form.egress_provider.trim(),
+      client_id: form.egress_re_register
+        ? undefined
+        : form.egress_client_id.trim() || undefined,
+      client_secret: undefined,
+      scopes,
+      expected_issuer: form.egress_expected_issuer || undefined,
+      list_tools_before_consent: form.egress_list_tools_before_consent,
+      re_register: form.egress_re_register || undefined,
     };
   }
   if (mode === 'oauth_user') {

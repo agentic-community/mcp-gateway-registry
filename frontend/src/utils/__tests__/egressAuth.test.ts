@@ -1,4 +1,8 @@
-import { buildEgressConfigBody, type EgressConfigFormFields } from '../egressAuth';
+import {
+  buildEgressConfigBody,
+  isDcrEgressProvider,
+  type EgressConfigFormFields,
+} from '../egressAuth';
 
 const form: EgressConfigFormFields = {
   egress_auth_mode: 'none',
@@ -13,6 +17,7 @@ const form: EgressConfigFormFields = {
   egress_expected_issuer: '',
   egress_target_audience: ' api://internal ',
   egress_list_tools_before_consent: true,
+  egress_re_register: false,
 };
 
 describe('buildEgressConfigBody', () => {
@@ -72,5 +77,75 @@ describe('buildEgressConfigBody', () => {
 
   it('builds the disabled body', () => {
     expect(buildEgressConfigBody(form)).toEqual({ egress_auth_mode: 'none' });
+  });
+
+  describe('dynamic client registration provider (atlassian-rovo)', () => {
+    const rovo: EgressConfigFormFields = {
+      ...form,
+      egress_auth_mode: 'oauth_user',
+      egress_provider: 'atlassian-rovo',
+      egress_client_id: '',
+      egress_client_secret: '',
+      egress_scopes: '',
+    };
+
+    it('recognizes the provider the gateway registers a client for', () => {
+      expect(isDcrEgressProvider('atlassian-rovo')).toBe(true);
+      expect(isDcrEgressProvider(' atlassian-rovo ')).toBe(true);
+      expect(isDcrEgressProvider('atlassian')).toBe(false);
+      expect(isDcrEgressProvider('custom')).toBe(false);
+    });
+
+    it('omits client_id and client_secret when blank, so the gateway registers a client', () => {
+      const body = buildEgressConfigBody(rovo);
+      expect(body.egress_provider).toBe('atlassian-rovo');
+      expect(body.client_id).toBeUndefined();
+      expect(body.client_secret).toBeUndefined();
+      expect(body.scopes).toEqual([]);
+    });
+
+    it('sends the stored client_id back, which the backend treats as no client_id', () => {
+      const body = buildEgressConfigBody({ ...rovo, egress_client_id: ' stored-id ' });
+      expect(body.client_id).toBe('stored-id');
+    });
+
+    it('never sends a client secret, even one left in the form state', () => {
+      const body = buildEgressConfigBody({ ...rovo, egress_client_secret: 'stale-secret' });
+      expect(body.client_secret).toBeUndefined();
+    });
+
+    it('sends re_register only when asked', () => {
+      expect(buildEgressConfigBody(rovo).re_register).toBeUndefined();
+      expect(buildEgressConfigBody({ ...rovo, egress_re_register: true }).re_register).toBe(true);
+    });
+
+    it('drops a typed or stored client_id when re_register is set', () => {
+      const body = buildEgressConfigBody({
+        ...rovo,
+        egress_client_id: ' typed-id ',
+        egress_re_register: true,
+      });
+      expect(body.client_id).toBeUndefined();
+      expect(body.re_register).toBe(true);
+    });
+
+    it('does not send re_register for a provider that does not register a client', () => {
+      const body = buildEgressConfigBody({
+        ...form,
+        egress_auth_mode: 'oauth_user',
+        egress_re_register: true,
+      });
+      expect(body).not.toHaveProperty('re_register');
+    });
+
+    it('still sends a blank client_id as an empty string for the classic atlassian provider', () => {
+      const body = buildEgressConfigBody({
+        ...rovo,
+        egress_provider: 'atlassian',
+        egress_client_id: ' cid ',
+        egress_client_secret: 's3cret',
+      });
+      expect(body).toMatchObject({ client_id: 'cid', client_secret: 's3cret' });
+    });
   });
 });

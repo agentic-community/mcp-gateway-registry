@@ -346,6 +346,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     egress_expected_issuer: '',  // RFC 9207 issuer of the provider (optional)
     egress_target_audience: '',
     egress_list_tools_before_consent: false,  // issue #1986, oauth_user and pat only
+    egress_re_register: false,  // one-shot: register a new client (atlassian-rovo)
     // Discovery Identity (OAuth 2.1) — an independent flag under Backend Auth.
     oauth_discovery_enabled: false,
     oauth_discovery_provider: '',
@@ -1373,6 +1374,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         egress_expected_issuer: serverDetails.egress_oauth?.expected_issuer || '',
         egress_target_audience: serverDetails.egress_oauth?.target_audience || '',
         egress_list_tools_before_consent: serverDetails.egress_list_tools_before_consent === true,
+        egress_re_register: false,
         oauth_discovery_enabled: serverDetails.oauth_discovery?.enabled === true,
         oauth_discovery_provider: serverDetails.oauth_discovery?.oauth?.provider || '',
         oauth_discovery_client_id: serverDetails.oauth_discovery?.oauth?.client_id || '',
@@ -1429,6 +1431,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         egress_expected_issuer: '',
         egress_target_audience: '',
         egress_list_tools_before_consent: false,
+        egress_re_register: false,
         oauth_discovery_enabled: false,
         oauth_discovery_provider: '',
         oauth_discovery_client_id: '',
