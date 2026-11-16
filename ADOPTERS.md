@@ -27,4 +27,5 @@ The list is in the order the entries arrived, oldest first.
 
 | Organization | Contact | Date | Description of Use |
 | ------------ | ------- | ---- | ------------------ |
-| [Expedia Group](https://www.expediagroup.com/) | [@rolland80](https://github.com/rolland80) | 2026-11-16 | Expedia Group's AI Platform Team runs the MCP Gateway & Registry as the company's central catalog of AI capabilities, with hundreds of MCP servers alongside agents, agent skills, plugins and n8n workflows. |
+| [Expedia Group](https://www.expediagroup.com/) | [@rolland80](https://github.com/rolland80) | 2026-11-16 | Expedia Group's AI Platform Team runs the MCP Gateway & Registry as the company's central catalog of AI capabilities, with hundreds of MCP servers alongside agents, agent skills, plugins and n8n workflows. 
+| [LSEG (London Stock Exchange Group)](https://www.lseg.com/en) | [@damiandevega](https://github.com/damiandevega) | 2026-11-16 | LSEG's AI Platform team runs the MCP Gateway & Registry as an internal enterprise gateway, giving AI assistants and agents secure, governed access to MCP servers, agent skills and internal tools through Microsoft Entra ID single sign-on. |
