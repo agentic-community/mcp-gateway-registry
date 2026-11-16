@@ -278,11 +278,30 @@ def server_needs_per_server_prm(egress_auth_mode: str | None) -> bool:
     servers, and the only one that incurs the per-connection-URL App ID URI
     registration cost.
 
+    Opt-in: with ``settings.per_server_prm_all_providers`` True, every
+    server is covered regardless of provider and egress mode (checked FIRST,
+    before the rules above), so spec-strict clients that require the
+    path-suffixed URL find a document on any provider. The 401
+    ``resource_metadata`` of EVERY server then points at its per-server
+    document, so clients that used to follow the gateway-wide document now
+    use the per-server one and send ``resource=<server URL>`` to the IdP. The
+    auth server is unchanged: on non-Entra providers it validates only its
+    configured audiences, so the setting works only when the IdP ignores
+    ``resource`` or still issues a configured gateway audience in ``aud``.
+    The gateway-wide document is unchanged and stays available. The enabled
+    requirement in :func:`server_serves_per_server_prm` applies to every
+    registered server while the setting is on, ``obo_exchange`` and Entra
+    servers included. With the setting off, the rules above apply unchanged.
+
     The per-server PRM document's ``scopes_supported`` is likewise provider-
     dependent: Entra advertises ``<resource>/user_impersonation``, every other
     provider advertises ``derive_supported_scopes()`` (see
     ``get_oauth_protected_resource_for_server``).
     """
+    # Opt-in first: serve a per-server PRM for every server on every provider.
+    # Below this point the historical gating stays exactly as before.
+    if settings.per_server_prm_all_providers:
+        return True
     if egress_auth_mode == "obo_exchange":
         return True
     if egress_auth_mode == "oauth_user":
@@ -301,6 +320,33 @@ def server_needs_per_server_prm(egress_auth_mode: str | None) -> bool:
     return False
 
 
+def server_serves_per_server_prm(info: dict | None) -> bool:
+    """Whether a registered server's per-server PRM route returns a document.
+
+    Combines :func:`server_needs_per_server_prm` with the enabled requirement
+    that applies under the ``PER_SERVER_PRM_ALL_PROVIDERS`` opt-in: a disabled
+    server has no nginx location and no 401 to discover the document from, so
+    the route 404s for it. With the opt-in off the historical gating applies
+    unchanged, disabled servers included.
+
+    The PRM route and ``GET /api/egress/obo-identifier-uris`` both call this, so
+    the endpoint lists exactly the servers whose PRM route answers.
+
+    Args:
+        info: The stored server document, or None when the path is unknown.
+
+    Returns:
+        True when the per-server PRM route serves a document for this server.
+    """
+    if info is None:
+        return False
+    if not server_needs_per_server_prm(info.get("egress_auth_mode")):
+        return False
+    if settings.per_server_prm_all_providers:
+        return bool(info.get("is_enabled", False))
+    return True
+
+
 async def virtual_server_needs_per_server_prm(
     backend_paths: Iterable[str],
 ) -> bool:
@@ -315,12 +361,16 @@ async def virtual_server_needs_per_server_prm(
     (AADSTS9010010), and whose OIDC-basics scopes it rejects (AADSTS70011). An
     MCP client can then never complete the login for a ``/virtual/<id>`` path.
 
-    On a lenient IdP the bare origin works, so a per-server PRM is forced only
-    when a backing server's own egress mode already requires one -- today
-    ``obo_exchange``, whose ingress token must be audienced per-resource on any
-    provider. That keeps Keycloak/Cognito virtual servers on the gateway-wide
-    PRM, which is the path that works there (same reasoning as the
-    ``oauth_user`` carve-out in :func:`server_needs_per_server_prm`).
+    On a lenient IdP the bare origin works, so by default a per-server PRM is
+    forced only when a backing server's own egress mode already requires one --
+    today ``obo_exchange``, whose ingress token must be audienced per-resource
+    on any provider. That keeps Keycloak/Cognito virtual servers on the
+    gateway-wide PRM, which is the path that works there (same reasoning as the
+    ``oauth_user`` carve-out in :func:`server_needs_per_server_prm`). With
+    ``settings.per_server_prm_all_providers`` on, :func:`server_needs_per_server_prm`
+    is True for every backing server, so a virtual server gets a per-server PRM
+    on every provider as soon as one of its backing servers is registered
+    (whether or not that backing server is enabled).
 
     Args:
         backend_paths: Registered paths of the virtual server's backing servers
@@ -424,13 +474,20 @@ async def get_oauth_protected_resource_for_server(
     **every server including plain ones** (issue #990). Everything else --
     including Keycloak/Cognito/Okta/Auth0 plain and 3LO servers, which work with
     the gateway-wide root PRM -- 404s here so the client falls back to the global
-    PRM (unchanged behavior).
+    PRM (unchanged behavior), unless ``PER_SERVER_PRM_ALL_PROVIDERS`` is on.
 
     A ``/virtual/<id>`` path resolves against the virtual-server collection
     instead, gated by :func:`virtual_server_needs_per_server_prm`. A virtual
     server is an MCP connection endpoint like any other, so without this an
     Entra client could not log in to one at all: it would fall back to the
     bare-origin root PRM that Entra refuses.
+
+    With the ``PER_SERVER_PRM_ALL_PROVIDERS`` setting on, every registered
+    server must be ENABLED to get a document, ``obo_exchange`` and Entra
+    servers included: a disabled server has no nginx location and no 401 to
+    discover from, so it 404s here like a disabled virtual server. With the
+    setting off, the historical gating applies and does not look at the
+    enabled flag.
 
     The advertised ``resource`` is the **per-server connection URL** (e.g.
     ``https://gw/github/mcp``). This is the ONLY value that satisfies all three
@@ -448,8 +505,10 @@ async def get_oauth_protected_resource_for_server(
     On Entra this applies to EVERY server (issue #990), not just the egress
     modes. The registry side is fully dynamic -- derived from the server entry,
     no per-server env config. Lenient IdPs (Keycloak/Cognito/Okta/Auth0) do not
-    hit these constraints; their plain servers keep using the gateway-wide PRM
-    and this per-server PRM is what makes Entra ingress login work.
+    hit these constraints; by default their plain servers keep using the
+    gateway-wide PRM and this per-server PRM is what makes Entra ingress login
+    work. With ``PER_SERVER_PRM_ALL_PROVIDERS`` on, every enabled server gets
+    one on every provider.
 
     ``scopes_supported`` is provider-dependent. On Entra it is the per-resource
     ``<resource>/user_impersonation`` scope (exposed on the gateway app). On every
@@ -485,9 +544,12 @@ async def get_oauth_protected_resource_for_server(
             append_mcp = True
         else:
             info = await server_service.get_server_info(normalized)
-            needs_prm = info is not None and server_needs_per_server_prm(
-                info.get("egress_auth_mode")
-            )
+            # server_serves_per_server_prm adds the enabled requirement under
+            # the all-providers opt-in (a disabled server has no nginx location
+            # and so no 401 to discover the document from), matching the
+            # virtual branch above. With the opt-in off the historical
+            # obo_exchange/Entra gating is unchanged, disabled servers included.
+            needs_prm = server_serves_per_server_prm(info)
             append_mcp = info is not None and info.get("append_mcp_path") is not False
     except Exception:
         logger.exception("Per-server PRM: lookup failed for %s", normalized)
