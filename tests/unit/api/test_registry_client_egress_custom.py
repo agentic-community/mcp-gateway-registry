@@ -175,6 +175,7 @@ class TestEgressConfigureCommandWiring:
             "custom_resource": None,
             "expected_issuer": None,
             "list_tools_before_consent": False,
+            "re_register": False,
         }
         base.update(overrides)
         return SimpleNamespace(**base)
@@ -239,6 +240,20 @@ class TestEgressConfigureCommandWiring:
         assert rc == 0
         assert mock_client.configure_egress_auth.call_args.kwargs["list_tools_before_consent"]
 
+    def test_command_forwards_re_register(self) -> None:
+        """--re-register reaches the client."""
+        import registry_management
+
+        mock_client = MagicMock()
+        mock_client.configure_egress_auth.return_value = {}
+        args = self._args(provider="atlassian", client_id=None, re_register=True)
+
+        with patch.object(registry_management, "_create_client", return_value=mock_client):
+            rc = registry_management.cmd_egress_configure(args)
+
+        assert rc == 0
+        assert mock_client.configure_egress_auth.call_args.kwargs["re_register"] is True
+
 
 class TestListToolsBeforeConsentClient:
     """The client always sends list_tools_before_consent (issue #1986)."""
@@ -262,3 +277,36 @@ class TestListToolsBeforeConsentClient:
             )
 
         assert _sent_body(mock_req)["list_tools_before_consent"] is value
+
+
+class TestReRegisterClient:
+    """re_register is sent only when asked for."""
+
+    def test_sent_when_true(
+        self,
+        client: RegistryClient,
+    ) -> None:
+        response = MagicMock()
+        response.json.return_value = {}
+
+        with patch.object(client, "_make_request", return_value=response) as mock_req:
+            client.configure_egress_auth(
+                server_path="/rovo",
+                mode="oauth_user",
+                provider="dcr-provider",
+                re_register=True,
+            )
+
+        assert _sent_body(mock_req)["re_register"] is True
+
+    def test_omitted_by_default(
+        self,
+        client: RegistryClient,
+    ) -> None:
+        response = MagicMock()
+        response.json.return_value = {}
+
+        with patch.object(client, "_make_request", return_value=response) as mock_req:
+            client.configure_egress_auth(server_path="/github", mode="oauth_user")
+
+        assert "re_register" not in _sent_body(mock_req)
