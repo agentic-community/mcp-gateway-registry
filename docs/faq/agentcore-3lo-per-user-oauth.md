@@ -150,11 +150,11 @@ curl -X POST "https://mcpgateway.example.com/api/servers/geo-mcp/egress-auth" \
 
 Field notes:
 
-- `egress_provider: custom` is the generic OIDC path. Built-in providers (`github`, `google`, `atlassian`, `microsoft`, `slack`) skip the two `custom_*` URLs.
+- `egress_provider: custom` is the generic OIDC path. Built-in providers (`github`, `google`, `atlassian`, `atlassian-rovo`, `microsoft`, `slack`) skip the two `custom_*` URLs.
 - `client_secret` is write-only: Fernet-encrypted with the gateway `SECRET_KEY`, never echoed back.
 - `custom_scope_separator` defaults to a single space. Leave it blank. (See the [scopes gotcha](#the-1-gotcha-scopes) below.)
 - `custom_token_auth_style` defaults to `post_body`; use `basic_header` only if your IdP requires the secret in an HTTP Basic header.
-- `custom_resource` (optional, RFC 8707) binds the token to one protected resource; needed by some providers (e.g. Atlassian Rovo MCP), not by Cognito.
+- `custom_resource` (optional, RFC 8707) binds the token to one protected resource. Set it only for a provider that asks for it; Cognito does not. Atlassian's Rovo MCP rejects it with `invalid_target` and uses the built-in `atlassian-rovo` provider instead.
 
 ## Step 5: Run the per-user consent flow from your coding assistant
 
@@ -237,7 +237,7 @@ The flow is identical across IdPs. The differences are narrow:
 | **Login page** | Hosted UI domain must be enabled | authorize endpoint is directly usable |
 | **Both flows on one client** | forbidden; use a separate 3LO client | often allowed, but a dedicated client is still cleaner |
 | **Allowed-clients on the gateway** | edit `allowedClients` on the AgentCore authorizer | ensure the authorizer's audience/client validation accepts the client |
-| **RFC 8707 `resource`** | not required | required by some (Atlassian Rovo MCP) |
+| **RFC 8707 `resource`** | not required | required by some resource servers; rejected by others (Atlassian Rovo MCP) |
 
 Everything else is the same for every provider and every coding assistant: the callback URL, `egress_provider: custom`, the two `custom_*` URLs, the `/oauth2/egress/connect?server=...` consent trigger, and the space-separated scopes rule.
 
