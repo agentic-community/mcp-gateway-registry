@@ -341,6 +341,11 @@ app:
   # Tool-level access control (issue #1026)
   mcpToolsListFilterEnabled: true # Registry-side awareness of the MCP tools/list filter (also read by auth-server)
   toolFilterAuditLogLevel: "INFO" # Audit log level for tool-prune events (DEBUG, INFO, WARNING)
+  # Health checks and tool list refresh (issue #2050)
+  healthCheckIntervalSeconds: 300 # Seconds between health checks of every server; also one tool refresh cycle
+  toolRefreshEnabled: false # Fetch tools again from servers that stay healthy, on a schedule. Each replica refreshes on its own
+  toolRefreshEveryCycles: 3 # Fetch each healthy server once every N health cycles (1-1000); 3 x 300 s = 15 min
+  toolFetchMaxConcurrency: 5 # Most background tool fetches one replica runs at once (1-100)
   # Custom entity types (admin-defined, schema-driven catalog types)
   customEntityTypesEnabled: false # Main switch for dynamic tabs + endpoints; off = no behavior change
   customTypeCacheTtlSeconds: 60 # TTL (s) for the in-process custom-type descriptor cache

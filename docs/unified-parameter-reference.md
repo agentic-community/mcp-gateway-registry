@@ -462,6 +462,19 @@ Controls the per-user tool allowlist filter applied at the registry REST endpoin
 
 ---
 
+## Group 13a1: Health Checks and Tool List Refresh (Issue #2050)
+
+How often the registry health-checks servers, and whether it fetches tools again from servers that stay healthy. The refresh period is at least `TOOL_REFRESH_EVERY_CYCLES` times `HEALTH_CHECK_INTERVAL_SECONDS`, because each cycle also includes the time the checks take. Each registry replica runs its own health loop, so with two replicas every upstream server sees two refreshes per period. All four values are non-sensitive. See [`docs/tool-list-refresh.md`](./tool-list-refresh.md).
+
+| Parameter | Docker (`.env`) | Terraform (`.tfvars`) | Helm (`values.yaml`) | Purpose |
+|-----------|-----------------|-----------------------|----------------------|---------|
+| Health check interval | `HEALTH_CHECK_INTERVAL_SECONDS` | `health_check_interval_seconds` | `registry.app.healthCheckIntervalSeconds` | Seconds between health checks of every enabled server, and the length of one tool refresh cycle. The code default is `300`, which Terraform, Helm and CDK use; the Docker Compose files default it to `30`. |
+| Tool refresh enabled | `TOOL_REFRESH_ENABLED` | `tool_refresh_enabled` | `registry.app.toolRefreshEnabled` | Fetch tools again from servers that stay healthy, on a schedule, so the stored tool list picks up description and input schema changes. Default `false`. Per replica: refresh load grows with the replica count. |
+| Tool refresh every N cycles | `TOOL_REFRESH_EVERY_CYCLES` | `tool_refresh_every_cycles` | `registry.app.toolRefreshEveryCycles` | Fetch each healthy server once every this many health cycles. Each server starts on a random cycle so fetches spread evenly. Range `1` to `1000`. Default `3` (15 minutes at a 300 s interval, 90 s at Compose's 30 s). |
+| Max concurrent tool fetches | `TOOL_FETCH_MAX_CONCURRENCY` | `tool_fetch_max_concurrency` | `registry.app.toolFetchMaxConcurrency` | Most background tool fetches one registry process runs at once, across first checks, recoveries, refreshes and the UI refresh. Range `1` to `100`. Default `5`; raise to `10` for about a thousand servers or a short health interval. |
+
+---
+
 ## Group 13b — Custom Entity Types
 
 Admin-defined, schema-driven catalog types (catalog-only; never proxied or executed). These are **registry-only** — the

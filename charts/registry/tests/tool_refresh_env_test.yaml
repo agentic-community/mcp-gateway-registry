@@ -1,0 +1,84 @@
+suite: health check and tool refresh settings (issue #2050)
+templates:
+  - deployment.yaml
+release:
+  name: test
+  namespace: default
+set:
+  global:
+    authProvider:
+      type: keycloak
+tests:
+  - it: renders the defaults, with refresh off
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: HEALTH_CHECK_INTERVAL_SECONDS
+            value: "300"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: TOOL_REFRESH_ENABLED
+            value: "false"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: TOOL_REFRESH_EVERY_CYCLES
+            value: "3"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: TOOL_FETCH_MAX_CONCURRENCY
+            value: "5"
+
+  - it: passes operator values through unchanged
+    set:
+      app:
+        healthCheckIntervalSeconds: 120
+        toolRefreshEnabled: true
+        toolRefreshEveryCycles: 6
+        toolFetchMaxConcurrency: 10
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: HEALTH_CHECK_INTERVAL_SECONDS
+            value: "120"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: TOOL_REFRESH_ENABLED
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: TOOL_REFRESH_EVERY_CYCLES
+            value: "6"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: TOOL_FETCH_MAX_CONCURRENCY
+            value: "10"
+
+  # A sprig `default` on these values would swallow 0 and pass the default on,
+  # hiding a value the registry would otherwise refuse at startup.
+  - it: passes an invalid 0 through so the registry rejects it
+    set:
+      app:
+        toolRefreshEveryCycles: 0
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: TOOL_REFRESH_EVERY_CYCLES
+            value: "0"
+
+  - it: rejects the names in extraEnv
+    set:
+      extraEnv:
+        - name: TOOL_REFRESH_ENABLED
+          value: "true"
+    asserts:
+      - failedTemplate:
+          errorPattern: "TOOL_REFRESH_ENABLED"

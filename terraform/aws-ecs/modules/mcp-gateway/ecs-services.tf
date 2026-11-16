@@ -1616,6 +1616,23 @@ module "ecs_service_registry" {
           name  = "MCP_TOOLS_LIST_FILTER_ENABLED"
           value = tostring(var.mcp_tools_list_filter_enabled)
         },
+        # Health checks and tool list refresh (issue #2050)
+        {
+          name  = "HEALTH_CHECK_INTERVAL_SECONDS"
+          value = tostring(var.health_check_interval_seconds)
+        },
+        {
+          name  = "TOOL_REFRESH_ENABLED"
+          value = tostring(var.tool_refresh_enabled)
+        },
+        {
+          name  = "TOOL_REFRESH_EVERY_CYCLES"
+          value = tostring(var.tool_refresh_every_cycles)
+        },
+        {
+          name  = "TOOL_FETCH_MAX_CONCURRENCY"
+          value = tostring(var.tool_fetch_max_concurrency)
+        },
         {
           name  = "TOOL_FILTER_AUDIT_LOG_LEVEL"
           value = var.tool_filter_audit_log_level

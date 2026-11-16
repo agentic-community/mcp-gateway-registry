@@ -195,6 +195,17 @@ spec:
               value: {{ .Values.app.mcpToolsListFilterEnabled | toString | quote }}
             - name: TOOL_FILTER_AUDIT_LOG_LEVEL
               value: {{ .Values.app.toolFilterAuditLogLevel | default "INFO" | quote }}
+            # Health checks and tool list refresh (issue #2050). No `default`
+            # here: values.yaml supplies them, and sprig's default would turn an
+            # operator's false or 0 into the default instead of passing it on.
+            - name: HEALTH_CHECK_INTERVAL_SECONDS
+              value: {{ .Values.app.healthCheckIntervalSeconds | toString | quote }}
+            - name: TOOL_REFRESH_ENABLED
+              value: {{ .Values.app.toolRefreshEnabled | toString | quote }}
+            - name: TOOL_REFRESH_EVERY_CYCLES
+              value: {{ .Values.app.toolRefreshEveryCycles | toString | quote }}
+            - name: TOOL_FETCH_MAX_CONCURRENCY
+              value: {{ .Values.app.toolFetchMaxConcurrency | toString | quote }}
             # DCR scope-allowlist alignment
             - name: MCP_ADVERTISED_SCOPES
               value: {{ .Values.app.mcpAdvertisedScopes | default "" | quote }}

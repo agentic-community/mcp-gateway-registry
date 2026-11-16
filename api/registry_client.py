@@ -165,6 +165,13 @@ class ServerDetail(BaseModel):
     num_mcp_app_tools: int = Field(
         default=0, description="Number of tools that open an MCP App page"
     )
+    tool_list_hash: str | None = Field(
+        None,
+        description="SHA-256 over the server's tool definitions; changes when any tool changes",
+    )
+    tool_list_changed_at: str | None = Field(
+        None, description="When tool discovery last saved a changed tool list (ISO 8601 UTC)"
+    )
     health_status: str = Field(..., description="Health status")
     last_health_check: datetime | None = Field(None, description="Last health check timestamp")
     status: str = Field(
@@ -191,6 +198,13 @@ class ServerDetailResponse(BaseModel):
     num_tools: int = Field(default=0, description="Number of tools")
     num_mcp_app_tools: int = Field(
         default=0, description="Number of tools that open an MCP App page"
+    )
+    tool_list_hash: str | None = Field(
+        None,
+        description="SHA-256 over the server's tool definitions; changes when any tool changes",
+    )
+    tool_list_changed_at: str | None = Field(
+        None, description="When tool discovery last saved a changed tool list (ISO 8601 UTC)"
     )
     tool_list: list[dict[str, Any]] = Field(default_factory=list, description="Tool definitions")
     is_enabled: bool = Field(default=False, description="Whether server is enabled")

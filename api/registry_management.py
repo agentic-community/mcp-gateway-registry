@@ -1831,6 +1831,8 @@ def cmd_server_get(args: argparse.Namespace) -> int:
             "tags": server.tags,
             "num_tools": server.num_tools,
             "num_mcp_app_tools": server.num_mcp_app_tools,
+            "tool_list_hash": server.tool_list_hash,
+            "tool_list_changed_at": server.tool_list_changed_at,
             "tool_list": server.tool_list,
             "is_enabled": server.is_enabled,
             "health_status": server.health_status,

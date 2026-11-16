@@ -867,6 +867,24 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 # Default: true
 # mcp_tools_list_filter_enabled = true
 
+# -----------------------------------------------------------------------------
+# Health checks and tool list refresh (issue #2050)
+# -----------------------------------------------------------------------------
+# How often the registry health-checks every server, in seconds. Default: 300
+# health_check_interval_seconds = 300
+
+# Fetch tools again from servers that stay healthy, on a schedule, so the
+# stored tool list picks up description and input schema changes. Each
+# registry task refreshes on its own. Default: false
+# tool_refresh_enabled = false
+
+# Fetch each healthy server once every this many health cycles. With the
+# 300 s interval, 3 cycles is 15 minutes. Default: 3
+# tool_refresh_every_cycles = 3
+
+# Most background tool fetches one registry task runs at once. Default: 5
+# tool_fetch_max_concurrency = 5
+
 # Upper bound on a tools/list upstream response body (in bytes) that the
 # auth-server proxy hop will buffer for filtering. Responses exceeding this
 # return HTTP 413. Default 2097152 (2 MiB); raise only for servers with

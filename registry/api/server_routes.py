@@ -92,6 +92,7 @@ from ..utils.metadata_limits import (
     parse_metadata_json,
     validate_metadata_limits,
 )
+from ..utils.tool_list_hash import tool_list_hash
 from ._etag_utils import parse_if_match, updated_ms, weak_etag_for_timestamp
 
 logger = logging.getLogger(__name__)
@@ -1199,6 +1200,10 @@ async def get_servers_json(
                     "mcp_server_version_updated_at": server_info.get(
                         "mcp_server_version_updated_at"
                     ),
+                    # Tool drift detection (issue #2050): changes whenever any
+                    # tool's definition changes, so a client can skip a re-read.
+                    "tool_list_hash": server_info.get("tool_list_hash"),
+                    "tool_list_changed_at": server_info.get("tool_list_changed_at"),
                     "sync_metadata": server_info.get("sync_metadata"),
                     # ARD discovery imports (issue #1296): link to the source's
                     # original descriptor (server.json) so a client can resolve +
@@ -3527,17 +3532,22 @@ async def get_service_tools(
                 detail="Failed to fetch tools from MCP server. Service may be unhealthy.",
             )
 
-        # Update the server registry with the fresh tools
+        # Update the server registry with the fresh tools. Compare by hash, the
+        # same way the health loop does (issue #2050), so a change to any tool's
+        # name, description, schema or annotations is saved.
         new_tool_count = len(tool_list)
-        current_tool_count = server_info.get("num_tools", 0)
+        new_hash = tool_list_hash(tool_list)
 
-        if current_tool_count != new_tool_count or server_info.get("tool_list") != tool_list:
+        if tool_list_hash(server_info.get("tool_list")) != new_hash:
             logger.info(f"Updating tool list for {service_path}. New count: {new_tool_count}")
 
             # Update server info with fresh tools
             updated_server_info = server_info.copy()
             updated_server_info["tool_list"] = tool_list
             updated_server_info["num_tools"] = new_tool_count
+            updated_server_info["tool_list_hash"] = new_hash
+            if server_info.get("tool_list"):
+                updated_server_info["tool_list_changed_at"] = datetime.now(UTC).isoformat()
 
             # Save updated server info
             success = await server_service.update_server(service_path, updated_server_info)

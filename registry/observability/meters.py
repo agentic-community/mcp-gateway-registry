@@ -170,6 +170,21 @@ tool_execution_total = _meter.create_counter(
     unit="1",
 )
 
+# Background tool fetches (issue #2050). Attributes: trigger (first_check,
+# recovered, empty, refresh, manual) and result (changed, unchanged, failed,
+# timeout, skipped_in_flight). No server path, to keep cardinality bounded.
+tool_fetch_total = _meter.create_counter(
+    name="mcpgw_registry_tool_fetch_total",
+    description="Background MCP tool list fetches, by trigger and result",
+    unit="1",
+)
+
+tool_fetch_duration_ms = _meter.create_histogram(
+    name="mcpgw_registry_tool_fetch_duration",
+    description="Time to fetch, compare and save one server's tool list",
+    unit="ms",
+)
+
 health_check_total = _meter.create_counter(
     name="health_check_total",
     description="Health check probe count",
