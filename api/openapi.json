@@ -3,7 +3,7 @@
   "info": {
     "title": "MCP Gateway Registry",
     "description": "A registry and management system for Model Context Protocol (MCP) servers",
-    "version": "1.37.0"
+    "version": "1.38.0"
   },
   "paths": {
     "/api/version": {
@@ -21496,6 +21496,19 @@
             ],
             "title": "Ui Resource Uri",
             "description": "MCP Apps: the ui:// page this tool opens in clients that support MCP Apps. Read it with resources/read on the same server. None when the tool has no page."
+          },
+          "annotations": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Annotations",
+            "description": "MCP tool annotations the server declared: readOnlyHint, destructiveHint, idempotentHint, openWorldHint and title. Advisory: the server sets them and the registry does not verify them. None when the server declared none."
           }
         },
         "type": "object",
@@ -26325,6 +26338,19 @@
             ],
             "title": "Ui Resource Uri",
             "description": "MCP Apps: the ui:// page this tool opens in clients that support MCP Apps. Read it with resources/read on server_path. None when the tool has no page."
+          },
+          "annotations": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Annotations",
+            "description": "MCP tool annotations the server declared: readOnlyHint, destructiveHint, idempotentHint, openWorldHint and title. Advisory: the server sets them and the registry does not verify them. None when the server declared none."
           }
         },
         "type": "object",
