@@ -1419,7 +1419,12 @@ async def update_skill(
         updates["auth_header_name"] = None
         updates["credential_updated_at"] = None
 
-    updated = await service.update_skill(normalized_path, updates)
+    try:
+        updated = await service.update_skill(normalized_path, updates, existing=existing)
+    except SkillUrlValidationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Could not update skill source"
+        ) from e
 
     if not updated:
         raise HTTPException(
