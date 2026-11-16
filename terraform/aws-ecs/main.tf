@@ -353,6 +353,12 @@ module "mcp_gateway" {
 
   # Tool-level access control (issue #1026)
   mcp_tools_list_filter_enabled = var.mcp_tools_list_filter_enabled
+
+  # Health checks and tool list refresh (issue #2050)
+  health_check_interval_seconds = var.health_check_interval_seconds
+  tool_refresh_enabled          = var.tool_refresh_enabled
+  tool_refresh_every_cycles     = var.tool_refresh_every_cycles
+  tool_fetch_max_concurrency    = var.tool_fetch_max_concurrency
   mcp_proxy_max_body_bytes      = var.mcp_proxy_max_body_bytes
   mcp_proxy_timeout             = var.mcp_proxy_timeout
   tool_filter_audit_log_level   = var.tool_filter_audit_log_level

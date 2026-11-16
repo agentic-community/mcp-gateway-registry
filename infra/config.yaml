@@ -119,6 +119,14 @@ registry:
     scanTimeout: 60
     addPendingTag: false
 
+  # Health checks and tool list refresh (issue #2050). Each registry task
+  # refreshes on its own; the period is toolRefreshEveryCycles x intervalSeconds.
+  healthChecks:
+    intervalSeconds: 300
+    toolRefreshEnabled: false
+    toolRefreshEveryCycles: 3
+    toolFetchMaxConcurrency: 5
+
   # Federation
   federation:
     registryId: ""

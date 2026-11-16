@@ -562,6 +562,36 @@ class Settings(BaseSettings):
     )
     health_check_timeout_seconds: int = 2  # Very fast timeout for user-driven actions
 
+    # Tool list refresh (issue #2050)
+    tool_refresh_enabled: bool = Field(
+        default=False,
+        description=(
+            "Fetch tools from servers that stay healthy, on a schedule, so the "
+            "stored tool list picks up description and schema changes. Off by "
+            "default because each refresh opens an MCP session to the upstream "
+            "server. Each registry replica refreshes on its own."
+        ),
+    )
+    tool_refresh_every_cycles: int = Field(
+        default=3,
+        ge=1,
+        le=1000,
+        description=(
+            "Fetch each healthy server once every this many health cycles. Each "
+            "server starts on a random cycle so fetches spread evenly. The period "
+            "is at least this value times health_check_interval_seconds."
+        ),
+    )
+    tool_fetch_max_concurrency: int = Field(
+        default=5,
+        ge=1,
+        le=100,
+        description=(
+            "Most background tool fetches one registry process runs at once. "
+            "Applies to first checks, recoveries, refreshes and the UI refresh."
+        ),
+    )
+
     # WebSocket performance settings
     max_websocket_connections: int = 100  # Reasonable limit for development/testing
     websocket_send_timeout_seconds: float = 2.0  # Allow slightly more time per connection

@@ -706,6 +706,21 @@ class ServerInfo(ProxyableMixin):
             "client renders). Set by tool discovery; 0 means the server ships no MCP App."
         ),
     )
+    tool_list_hash: str | None = Field(
+        default=None,
+        description=(
+            "SHA-256 over every tool's name, description, inputSchema, title, "
+            "annotations and outputSchema. Set when tool discovery saves the tool "
+            "list. Compare it to tell whether a server's tools changed."
+        ),
+    )
+    tool_list_changed_at: str | None = Field(
+        default=None,
+        description=(
+            "ISO 8601 UTC time tool discovery last saved a tool list that differed "
+            "from the stored one. None until the first change is seen."
+        ),
+    )
     license: str = "N/A"
     tool_list: list[dict[str, Any]] = Field(default_factory=list)
     is_enabled: bool = False

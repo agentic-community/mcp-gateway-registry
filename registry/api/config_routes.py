@@ -208,6 +208,9 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
         "fields": [
             ("health_check_interval_seconds", "Check Interval", False),
             ("health_check_timeout_seconds", "Check Timeout", False),
+            ("tool_refresh_enabled", "Tool Refresh Enabled", False),
+            ("tool_refresh_every_cycles", "Tool Refresh Every N Cycles", False),
+            ("tool_fetch_max_concurrency", "Max Concurrent Tool Fetches", False),
         ],
     },
     "websocket": {

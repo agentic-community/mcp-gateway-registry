@@ -1589,6 +1589,45 @@ variable "mcp_tools_list_filter_enabled" {
   default     = true
 }
 
+variable "health_check_interval_seconds" {
+  description = "How often the registry health-checks every enabled server, in seconds. Also the length of one tool refresh cycle. Default 300."
+  type        = number
+  default     = 300
+
+  validation {
+    condition     = var.health_check_interval_seconds >= 1
+    error_message = "health_check_interval_seconds must be at least 1."
+  }
+}
+
+variable "tool_refresh_enabled" {
+  description = "Fetch tools again from servers that stay healthy, on a schedule, so the stored tool list picks up description and input schema changes. Each registry task refreshes on its own, so upstream servers see one refresh per task per period. Default false."
+  type        = bool
+  default     = false
+}
+
+variable "tool_refresh_every_cycles" {
+  description = "Fetch each healthy server once every this many health cycles (1 to 1000). The period is at least this value times health_check_interval_seconds, because a cycle also includes the time the checks take. Default 3."
+  type        = number
+  default     = 3
+
+  validation {
+    condition     = var.tool_refresh_every_cycles >= 1 && var.tool_refresh_every_cycles <= 1000
+    error_message = "tool_refresh_every_cycles must be between 1 and 1000."
+  }
+}
+
+variable "tool_fetch_max_concurrency" {
+  description = "Most background tool fetches one registry task runs at once (1 to 100). Default 5."
+  type        = number
+  default     = 5
+
+  validation {
+    condition     = var.tool_fetch_max_concurrency >= 1 && var.tool_fetch_max_concurrency <= 100
+    error_message = "tool_fetch_max_concurrency must be between 1 and 100."
+  }
+}
+
 variable "mcp_proxy_max_body_bytes" {
   description = "Upper bound on a tools/list upstream response body (in bytes) that the auth-server proxy hop will buffer for filtering. Responses exceeding this return HTTP 413. Default 2097152 (2 MiB)."
   type        = number

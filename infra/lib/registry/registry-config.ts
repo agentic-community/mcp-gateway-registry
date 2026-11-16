@@ -125,6 +125,17 @@ export interface SecurityConfig {
   addPendingTag: boolean;
 }
 
+export interface HealthChecksConfig {
+  /** Seconds between health checks of every enabled server; also one tool refresh cycle */
+  intervalSeconds: number;
+  /** Fetch tools again from servers that stay healthy, on a schedule (issue #2050) */
+  toolRefreshEnabled: boolean;
+  /** Fetch each healthy server once every this many health cycles (1 to 1000) */
+  toolRefreshEveryCycles: number;
+  /** Most background tool fetches one registry task runs at once (1 to 100) */
+  toolFetchMaxConcurrency: number;
+}
+
 export interface FederationConfig {
   /** Unique identifier for this registry instance in federation */
   registryId: string;
@@ -400,6 +411,7 @@ export interface RegistryConfig {
   replicas: ReplicasConfig;
   embeddings: EmbeddingsConfig;
   security: SecurityConfig;
+  healthChecks: HealthChecksConfig;
   federation: FederationConfig;
   audit: AuditConfig;
   otel: OtelConfig;
@@ -505,6 +517,13 @@ export const DEFAULT_REGISTRY_CONFIG: RegistryConfig = {
     analyzers: 'yara',
     scanTimeout: 60,
     addPendingTag: false,
+  },
+
+  healthChecks: {
+    intervalSeconds: 300,
+    toolRefreshEnabled: false,
+    toolRefreshEveryCycles: 3,
+    toolFetchMaxConcurrency: 5,
   },
 
   federation: {

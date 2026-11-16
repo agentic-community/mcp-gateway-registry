@@ -44,9 +44,10 @@ The registry reads annotations every time it fetches a server's tools:
 - when the server is registered,
 - on the first health check after the registry starts,
 - when the server becomes healthy again after being unhealthy,
-- when someone opens the server's tool list and the registry fetches it live (`GET /api/servers/{path}/tools`).
+- when someone opens the server's tool list and the registry fetches it live (`GET /api/servers/{path}/tools`),
+- on a schedule, for servers that stay healthy, when `TOOL_REFRESH_ENABLED` is on (see [Tool list refresh](tool-list-refresh.md)).
 
-A fetch rewrites the stored tool list when any tool's `title`, `annotations` or `outputSchema` changed, even if the number of tools did not. Servers registered before the registry kept annotations pick them up on the first health check after an upgrade.
+A fetch rewrites the stored tool list when any tool's name, description, input schema, `title`, `annotations` or `outputSchema` changed, even if the number of tools did not. The registry compares one hash over the whole list. Servers registered before the registry kept annotations pick them up on the first health check after an upgrade.
 
 ## Where they appear
 
