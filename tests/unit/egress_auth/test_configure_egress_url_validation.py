@@ -1289,3 +1289,124 @@ class TestSharedProviderConfigBuilder:
         )
         assert eo["scopes"] == ["read:work", "read:account"]
         assert "client_secret_encrypted" not in eo
+
+
+_ROVO_V2_SCOPES = [
+    "read:me",
+    "read:account",
+    "offline_access",
+    "read:jira:agent-interface",
+    "write:jira:agent-interface",
+    "search:jira:agent-interface",
+]
+
+
+@pytest.mark.unit
+class TestAtlassianProviders:
+    """The classic ``atlassian`` row is unchanged; ``atlassian-rovo`` uses DCR."""
+
+    def test_rovo_registers_a_client_with_the_v2_default_scopes(self, make_client, monkeypatch):
+        _stub_prm(monkeypatch, doc={"scopes_supported": _ROVO_V2_SCOPES})
+        calls = _record_dcr(monkeypatch, client_id="ROVOID")
+        client = make_client({"path": "/rovo", "egress_oauth": None})
+        resp = client.post(
+            "/servers/rovo/egress-auth",
+            json={"egress_auth_mode": "oauth_user", "egress_provider": "atlassian-rovo"},
+        )
+        assert resp.status_code == 200, resp.text
+        eo = client._svc.updated_with["egress_oauth"]
+        assert eo["client_id"] == "ROVOID"
+        assert eo["client_secret_encrypted"] is None
+        assert eo["scopes"] == _ROVO_V2_SCOPES
+        assert eo["dcr_provider"] == "atlassian-rovo"
+        assert calls["scopes"] == _ROVO_V2_SCOPES
+        assert calls["is_none_style"] is True
+
+    def test_rovo_rejects_a_classic_scope(self, make_client, monkeypatch):
+        # v2 has no read:jira-work; the classic scope list must fail at save time.
+        _stub_prm(monkeypatch, doc={"scopes_supported": _ROVO_V2_SCOPES})
+        calls = _record_dcr(monkeypatch)
+        client = make_client({"path": "/rovo", "egress_oauth": None})
+        resp = client.post(
+            "/servers/rovo/egress-auth",
+            json={
+                "egress_auth_mode": "oauth_user",
+                "egress_provider": "atlassian-rovo",
+                "scopes": ["read:jira-work"],
+            },
+        )
+        assert resp.status_code == 400, resp.text
+        assert "read:jira-work" in resp.json()["detail"]
+        assert calls["count"] == 0
+
+    def test_switch_from_classic_atlassian_to_rovo_registers_a_new_client(
+        self, make_client, monkeypatch
+    ):
+        _stub_prm(monkeypatch, doc={"scopes_supported": _ROVO_V2_SCOPES})
+        calls = _record_dcr(monkeypatch, client_id="ROVOID")
+        client = make_client(
+            {
+                "path": "/rovo",
+                "egress_oauth": {
+                    "provider": "atlassian",
+                    "client_id": "CLASSIC-3LO",
+                    "client_secret_encrypted": "enc:classic",
+                },
+            }
+        )
+        resp = client.post(
+            "/servers/rovo/egress-auth",
+            json={"egress_auth_mode": "oauth_user", "egress_provider": "atlassian-rovo"},
+        )
+        assert resp.status_code == 200, resp.text
+        assert calls["count"] == 1
+        eo = client._svc.updated_with["egress_oauth"]
+        assert eo["client_id"] == "ROVOID"
+        assert eo["client_secret_encrypted"] is None
+
+    def test_classic_atlassian_resave_keeps_its_static_client(self, make_client, monkeypatch):
+        # An existing classic 3LO config still saves after the upgrade: no DCR, no
+        # metadata fetch, and the stored secret is kept.
+        _forbid_dcr(monkeypatch)
+
+        async def no_prm(cfg):
+            raise AssertionError("a classic provider has no protected-resource metadata")
+
+        monkeypatch.setattr(routes.oauth_engine, "fetch_protected_resource_metadata", no_prm)
+        client = make_client(
+            {
+                "path": "/jira",
+                "egress_oauth": {
+                    "provider": "atlassian",
+                    "client_id": "CLASSIC-3LO",
+                    "client_secret_encrypted": "enc:classic",
+                },
+            }
+        )
+        resp = client.post(
+            "/servers/jira/egress-auth",
+            json={
+                "egress_auth_mode": "oauth_user",
+                "egress_provider": "atlassian",
+                "client_id": "CLASSIC-3LO",
+                "scopes": ["read:jira-work", "read:jira-user", "offline_access"],
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        eo = client._svc.updated_with["egress_oauth"]
+        assert eo["client_id"] == "CLASSIC-3LO"
+        assert eo["client_secret_encrypted"] == "enc:classic"
+        assert eo["scopes"] == ["read:jira-work", "read:jira-user", "offline_access"]
+
+    def test_rovo_discovery_identity_is_refused(self):
+        # Backend-auth discovery cannot register a client, so the shared builder
+        # refuses a DCR provider when called without dcr_supported.
+        with pytest.raises(HTTPException) as exc_info:
+            routes.build_oauth_provider_config(
+                provider="atlassian-rovo", client_id="", client_secret=None, scopes=[]
+            )
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail == (
+            "provider 'atlassian-rovo' uses dynamic client registration, which is "
+            "supported only for per-user egress (oauth_user)"
+        )

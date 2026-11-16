@@ -504,6 +504,25 @@ class TestDiscoveryDesignationIsNotStolen:
         assert written["user_id"] == "oidc-sub-of-owner"
         assert written["designated_by"] == OWNER
 
+    def test_a_dynamic_client_registration_provider_is_refused(self, mock_server_service):
+        """A discovery identity cannot use atlassian-rovo.
+
+        That provider has no static client: the gateway registers one, and only
+        the per-user egress route does that. The PUT must say so with a 400 and
+        store nothing, rather than persist a config that can never authenticate.
+        """
+        ctx = _ctx(OWNER)
+        ctx["auth_method"] = "oauth2"
+        ctx["egress_user"] = "oidc-sub-of-the-designated-admin"
+        with _client(ctx, mock_server_service) as client:
+            resp = client.put(
+                self.URL,
+                json={"provider": "atlassian-rovo", "client_id": "", "scopes": []},
+            )
+        assert resp.status_code == 400, resp.text
+        assert "supported only for per-user egress" in resp.json()["detail"]
+        mock_server_service.update_server.assert_not_awaited()
+
     def test_the_designee_re_saving_refreshes_their_own_designation(
         self, mock_server_service, server_record
     ):
