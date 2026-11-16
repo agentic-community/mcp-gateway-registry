@@ -4120,8 +4120,10 @@ class TestScanFailureDoesNotDisableServer:
             block_on_scan_failure=block_on_failure,
         )
 
-    async def _run(self, scan_result, scan_config):
+    async def _run(self, scan_result, scan_config, server_entry=None):
         """Drive the post-registration scan helper with everything mocked."""
+        if server_entry is None:
+            server_entry = {"tags": [], "server_name": "test"}
         from registry.api.server_routes import _perform_security_scan_on_registration
 
         scanner = MagicMock()
@@ -4148,7 +4150,7 @@ class TestScanFailureDoesNotDisableServer:
             await _perform_security_scan_on_registration(
                 "/test-server",
                 "https://example.internal/mcp",
-                {"tags": [], "server_name": "test"},
+                server_entry,
             )
 
         return service, search_repo, scheduler
@@ -4169,6 +4171,25 @@ class TestScanFailureDoesNotDisableServer:
         service.update_server.assert_awaited_once()
         _, entry = service.update_server.await_args.args
         assert "security-pending" in entry["tags"]
+
+    @pytest.mark.asyncio
+    async def test_security_pending_write_touches_only_tags(self):
+        """The tag write must not carry the registration-time is_enabled back.
+
+        The entry passed to the scan is the dict register_server() handed to
+        create(), which set is_enabled=False on it. A server toggled on while
+        the scan ran must stay on, so the write is scoped to the tags field.
+        """
+        entry = {"tags": [], "server_name": "test", "is_enabled": False}
+
+        service, _, _ = await self._run(
+            _scan_result(scan_failed=True),
+            self._config(),
+            server_entry=entry,
+        )
+
+        service.update_server.assert_awaited_once()
+        assert service.update_server.await_args.kwargs["updated_fields"] == ["tags"]
 
     @pytest.mark.asyncio
     async def test_real_finding_still_disables_server(self):

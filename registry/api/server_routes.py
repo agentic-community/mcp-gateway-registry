@@ -769,7 +769,11 @@ async def _perform_security_scan_on_registration(
                 if "security-pending" not in current_tags:
                     current_tags.append("security-pending")
                     server_entry["tags"] = current_tags
-                    await server_service.update_server(path, server_entry)
+                    # Write only the tags. server_entry is a snapshot taken before
+                    # the scan (on registration, create() also set
+                    # is_enabled=False on it), so a full write would undo any
+                    # change made while the scan ran, such as enabling the server.
+                    await server_service.update_server(path, server_entry, updated_fields=["tags"])
                     logger.info(f"Added 'security-pending' tag to {path}")
 
             # Disable server if configured. A scan that could not complete is not
