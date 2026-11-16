@@ -2539,6 +2539,37 @@ def cmd_ard_ingestion_remove_source(args: argparse.Namespace) -> int:
         return 1
 
 
+def _format_tool_hints(
+    annotations: dict[str, Any] | None,
+) -> str:
+    """Describe the MCP annotation hints a server declared for a tool.
+
+    Only hints set to true are listed, plus "not read-only" for an explicit
+    readOnlyHint false. The server declares these and the registry does not
+    verify them.
+
+    Args:
+        annotations: The tool's annotations from a search result, or None.
+
+    Returns:
+        A comma-separated list such as "read-only, idempotent", or "".
+    """
+    if not annotations:
+        return ""
+    hints: list[str] = []
+    if annotations.get("readOnlyHint") is True:
+        hints.append("read-only")
+    elif annotations.get("readOnlyHint") is False:
+        hints.append("not read-only")
+    if annotations.get("destructiveHint") is True:
+        hints.append("destructive")
+    if annotations.get("idempotentHint") is True:
+        hints.append("idempotent")
+    if annotations.get("openWorldHint") is True:
+        hints.append("open-world")
+    return ", ".join(hints)
+
+
 def cmd_server_search(args: argparse.Namespace) -> int:
     """
     Perform semantic search across all entity types.
@@ -2603,6 +2634,9 @@ def cmd_server_search(args: argparse.Namespace) -> int:
                 print(f"    Relevance: {tool.relevance_score:.2%}")
                 if tool.similarity_score is not None:
                     print(f"    Similarity: {tool.similarity_score:.4f}")
+                hints = _format_tool_hints(tool.annotations)
+                if hints:
+                    print(f"    Hints (declared by the server): {hints}")
                 if tool.description:
                     desc = (
                         tool.description[:100] + "..."

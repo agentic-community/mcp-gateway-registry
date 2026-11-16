@@ -25,6 +25,8 @@ import VersionSelectorModal from './VersionSelectorModal';
 import ConfirmModal from './ConfirmModal';
 import StatusBadge from './StatusBadge';
 import Badge from './Badge';
+import ToolAnnotationBadges from './ToolAnnotationBadges';
+import { ToolAnnotations } from '../types/toolAnnotations';
 import { ANSBadge } from './ANSBadge';
 import ServerDetailsModal from './ServerDetailsModal';
 import { SafeLink } from './SafeLink';
@@ -206,6 +208,8 @@ interface Tool {
   // ("model", "app", or both). Absent for a tool without a page.
   ui_resource_uri?: string;
   ui_visibility?: string[];
+  // MCP tool annotations the server declared (advisory, not verified).
+  annotations?: ToolAnnotations;
 }
 
 
@@ -1094,6 +1098,7 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
                                 APP ONLY
                               </Badge>
                             )}
+                            <ToolAnnotationBadges annotations={tool.annotations} />
                           </h4>
                         {canToggle && !isArdDiscovery && (
                           <div className="flex items-center gap-2 shrink-0">

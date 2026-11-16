@@ -620,7 +620,9 @@ local function _append_mapping_tools_for_backend(enriched_tools, mapping, backen
 
     for _, tool in ipairs(mapping.tools) do
         if tool.backend_location == backend_location then
-            enriched_tools[#enriched_tools + 1] = {
+            -- The mapping file carries the backend tool's stored title,
+            -- annotations and outputSchema, so the fallback list keeps them.
+            enriched_tools[#enriched_tools + 1] = _copy_tool_fields(tool, {
                 name = tool.name,
                 original_name = tool.original_name or tool.name,
                 backend_server_path = tool.backend_server_path,
@@ -628,7 +630,7 @@ local function _append_mapping_tools_for_backend(enriched_tools, mapping, backen
                 description = tool.description or "",
                 inputSchema = _ensure_mcp_schema(tool.inputSchema),
                 required_scopes = tool.required_scopes,
-            }
+            })
         end
     end
 end

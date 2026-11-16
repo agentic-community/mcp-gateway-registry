@@ -430,3 +430,11 @@ class ResolvedTool(BaseModel):
         default_factory=list,
         description="Scopes required for this specific tool",
     )
+    annotations: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "MCP tool annotations the backend server declared (readOnlyHint, "
+            "destructiveHint, idempotentHint, openWorldHint, title). Advisory: the "
+            "server sets them and the registry does not verify them."
+        ),
+    )

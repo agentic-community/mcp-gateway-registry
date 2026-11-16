@@ -558,6 +558,47 @@ class TestGenerateVirtualBackendLocations:
         assert data["tools"][0]["inputSchema"] == schema
 
     @pytest.mark.asyncio
+    async def test_mapping_carries_backend_tool_annotations(self, mock_server_repository):
+        """The Lua fallback tools/list reads the mapping file, so the mapping must
+        carry the backend tool's title, annotations and outputSchema. Invalid
+        stored hints are dropped, and a tool without them gets no extra keys."""
+        vs = _make_vs_config(
+            tool_mappings=[
+                ToolMapping(tool_name="delete_note", backend_server_path="/notes"),
+                ToolMapping(tool_name="ping", backend_server_path="/notes"),
+            ]
+        )
+        mock_server_repository.get.side_effect = {
+            "/notes": {
+                "is_enabled": True,
+                "proxy_pass_url": "http://svc:8000/mcp",
+                "tool_list": [
+                    {
+                        "name": "delete_note",
+                        "description": "Delete",
+                        "title": "Delete note",
+                        "annotations": {"destructiveHint": True, "readOnlyHint": "no"},
+                        "outputSchema": {"type": "object"},
+                    },
+                    {"name": "ping", "description": "Ping"},
+                ],
+            },
+        }.get
+        from registry.core.nginx_service import NginxConfigService
+
+        with TemporaryDirectory() as tmpdir:
+            with patch("registry.core.nginx_service.VIRTUAL_MAPPINGS_DIR", Path(tmpdir)):
+                await NginxConfigService()._write_virtual_server_mappings([vs])
+            data = json.loads((Path(tmpdir) / "dev-essentials.json").read_text())
+
+        by_name = {tool["name"]: tool for tool in data["tools"]}
+        assert by_name["delete_note"]["annotations"] == {"destructiveHint": True}
+        assert by_name["delete_note"]["title"] == "Delete note"
+        assert by_name["delete_note"]["outputSchema"] == {"type": "object"}
+        for key in ("annotations", "title", "outputSchema"):
+            assert key not in by_name["ping"]
+
+    @pytest.mark.asyncio
     async def test_versioned_path_without_explicit_pin_uses_selected_doc(
         self, mock_server_repository
     ):

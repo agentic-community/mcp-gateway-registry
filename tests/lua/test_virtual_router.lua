@@ -180,6 +180,29 @@ do
 end
 
 -- ---------------------------------------------------------------------------
+print("test: _append_mapping_tools_for_backend keeps title, annotations and outputSchema")
+do
+    local mapping = { tools = {
+        { name = "delete_note", backend_location = "/b1", title = "Delete note",
+          annotations = { readOnlyHint = false, destructiveHint = true },
+          outputSchema = { type = "object" } },
+        { name = "ping", backend_location = "/b1" },
+    } }
+    local enriched = {}
+    M._append_mapping_tools_for_backend(enriched, mapping, "/b1")
+    local annotated, plain = enriched[1], enriched[2]
+    check(annotated and annotated.title == "Delete note", "fallback keeps the tool title")
+    check(annotated and annotated.annotations
+        and annotated.annotations.readOnlyHint == false
+        and annotated.annotations.destructiveHint == true,
+        "fallback keeps annotations, including an explicit false")
+    check(annotated and annotated.outputSchema and annotated.outputSchema.type == "object",
+        "fallback keeps outputSchema")
+    check(plain and plain.annotations == nil and plain.title == nil,
+        "a tool without the fields gets none")
+end
+
+-- ---------------------------------------------------------------------------
 print("test: _fetch_backend_list classifies every backend outcome the same way")
 do
     local function fetch(response, method, key)

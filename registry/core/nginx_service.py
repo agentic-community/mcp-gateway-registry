@@ -27,6 +27,7 @@ from registry.egress_auth.upstream_binding import registered_versions, selected_
 from registry.exceptions import UrlValidationError
 from registry.schemas.proxy_mixin import _assert_egress_allowed, build_proxy_client_path
 from registry.utils.path_utils import make_version_id
+from registry.utils.tool_annotations import stored_tool_metadata
 from registry.utils.tool_schema import (
     mcp_input_schema as _ensure_mcp_compliant_schema,
 )
@@ -2799,11 +2800,15 @@ class NginxConfigService:
                     tool_display_name = tm.alias if tm.alias else tm.tool_name
                     description = tm.description_override or ""
                     input_schema: dict[str, Any] = {}
+                    # title, annotations and outputSchema of the backend tool, so
+                    # the Lua fallback tools/list keeps them (MCP field names).
+                    tool_metadata: dict[str, Any] = {}
 
                     for st in server_info.get("tool_list", []):
                         if st.get("name") == tm.tool_name:
                             description = tm.description_override or st.get("description", "")
                             input_schema = stored_input_schema(st)
+                            tool_metadata = stored_tool_metadata(st)
                             break
 
                     input_schema = _ensure_mcp_compliant_schema(input_schema)
@@ -2823,6 +2828,7 @@ class NginxConfigService:
                             "backend_version": tm.backend_version,
                             "egress_auth_mode": egress_mode,
                             "required_scopes": required_scopes,
+                            **tool_metadata,
                         }
                     )
 

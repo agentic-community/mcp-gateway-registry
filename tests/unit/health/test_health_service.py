@@ -966,6 +966,98 @@ async def test_tool_discovery_skips_write_when_mcp_app_tools_unchanged(
     mock_server_service.update_server.assert_not_called()
 
 
+_ANNOTATED_TOOL: dict = {
+    "name": "delete_note",
+    "description": "Delete a note",
+    "annotations": {"readOnlyHint": False, "destructiveHint": True},
+}
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_tool_discovery_backfills_annotations_when_count_unchanged(
+    health_service, mock_server_info
+):
+    """A server stored before the registry kept annotations gains them.
+
+    The tool count and version match, so only the metadata signature tells
+    discovery that the stored list is out of date.
+    """
+    card = {
+        **mock_server_info,
+        "tool_list": [{"name": "delete_note", "description": "Delete a note"}],
+        "num_tools": 1,
+        "mcp_server_version": "1.0.0",
+    }
+    store = _StoredServerService(card)
+
+    with patch("registry.core.mcp_client.mcp_client_service") as mock_mcp:
+        mock_mcp.get_mcp_connection_result = AsyncMock(
+            return_value={"tools": [_ANNOTATED_TOOL], "server_info": {"version": "1.0.0"}}
+        )
+        with (
+            patch("registry.services.server_service.server_service", store),
+            patch("registry.services.scope_service.update_server_scopes", new=AsyncMock()),
+        ):
+            await health_service._update_tools_background("/notes", "http://notes:8000/mcp")
+
+    assert store.card["tool_list"][0]["annotations"] == {
+        "readOnlyHint": False,
+        "destructiveHint": True,
+    }
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_tool_discovery_picks_up_annotation_only_change(health_service, mock_server_info):
+    """Flipping one hint upstream rewrites the stored list."""
+    card = {
+        **mock_server_info,
+        "tool_list": [_ANNOTATED_TOOL],
+        "num_tools": 1,
+        "mcp_server_version": "1.0.0",
+    }
+    store = _StoredServerService(card)
+    flipped = {**_ANNOTATED_TOOL, "annotations": {"readOnlyHint": True}}
+
+    with patch("registry.core.mcp_client.mcp_client_service") as mock_mcp:
+        mock_mcp.get_mcp_connection_result = AsyncMock(
+            return_value={"tools": [flipped], "server_info": {"version": "1.0.0"}}
+        )
+        with (
+            patch("registry.services.server_service.server_service", store),
+            patch("registry.services.scope_service.update_server_scopes", new=AsyncMock()),
+        ):
+            await health_service._update_tools_background("/notes", "http://notes:8000/mcp")
+
+    assert store.card["tool_list"][0]["annotations"] == {"readOnlyHint": True}
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_tool_discovery_skips_write_when_annotations_unchanged(
+    health_service, mock_server_info
+):
+    """Discovery does not rewrite a card whose tools and annotations are unchanged."""
+    card = {
+        **mock_server_info,
+        "tool_list": [_ANNOTATED_TOOL],
+        "num_tools": 1,
+        "mcp_server_version": "1.0.0",
+    }
+
+    with patch("registry.core.mcp_client.mcp_client_service") as mock_mcp:
+        mock_mcp.get_mcp_connection_result = AsyncMock(
+            return_value={"tools": [dict(_ANNOTATED_TOOL)], "server_info": {"version": "1.0.0"}}
+        )
+        with patch("registry.services.server_service.server_service") as mock_server_service:
+            mock_server_service.get_server_info = AsyncMock(return_value=card)
+            mock_server_service.update_server = AsyncMock()
+            await health_service._update_tools_background("/notes", "http://notes:8000/mcp")
+
+    mock_server_service.update_server.assert_not_called()
+
+
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_health_service_get_all_health_status(health_service, mock_server_info):

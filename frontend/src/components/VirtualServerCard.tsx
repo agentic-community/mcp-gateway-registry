@@ -10,6 +10,7 @@ import {
   ChevronRightIcon,
 } from '@heroicons/react/24/outline';
 import { VirtualServerInfo, ResolvedTool } from '../types/virtualServer';
+import ToolAnnotationBadges from './ToolAnnotationBadges';
 import ServerConfigModal from './ServerConfigModal';
 import StarRatingWidget from './StarRatingWidget';
 import useEscapeKey from '../hooks/useEscapeKey';
@@ -394,6 +395,7 @@ const VirtualServerCard: React.FC<VirtualServerCardProps> = ({
                                           (original: {tool.original_name})
                                         </span>
                                       )}
+                                      <ToolAnnotationBadges annotations={tool.annotations} />
                                     </div>
                                     {tool.backend_version && (
                                       <span className="px-1.5 py-0.5 text-[10px] bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 rounded font-mono flex-shrink-0">

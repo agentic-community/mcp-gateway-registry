@@ -986,6 +986,13 @@ class MatchingToolResult(BaseModel):
     inputSchema: dict[str, Any] | None = Field(
         None, description="JSON Schema for tool input parameters"
     )
+    annotations: dict[str, Any] | None = Field(
+        None,
+        description=(
+            "MCP tool annotations the server declared (readOnlyHint, destructiveHint, "
+            "idempotentHint, openWorldHint, title). Advisory, not verified by the registry"
+        ),
+    )
 
 
 class SyncMetadata(BaseModel):
@@ -1062,6 +1069,13 @@ class ToolSearchResult(BaseModel):
         ),
     )
     match_context: str | None = Field(None, description="Why this tool matched")
+    annotations: dict[str, Any] | None = Field(
+        None,
+        description=(
+            "MCP tool annotations the server declared (readOnlyHint, destructiveHint, "
+            "idempotentHint, openWorldHint, title). Advisory, not verified by the registry"
+        ),
+    )
     # Endpoint URL for the parent MCP server
     endpoint_url: str | None = Field(
         None, description="URL for agents to connect to the parent MCP server"
