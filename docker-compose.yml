@@ -194,6 +194,10 @@ services:
       - MCP_HTTPS_REQUIRED=${MCP_HTTPS_REQUIRED:-true}
       - MCP_RESOURCE_DOCUMENTATION_URL=${MCP_RESOURCE_DOCUMENTATION_URL:-}
       - MCP_ADVERTISED_SCOPES=${MCP_ADVERTISED_SCOPES:-}
+      # Serve a per-server RFC 9728 PRM for every enabled server on every
+      # provider (default off). Registry-only; see docs/oauth-discovery-endpoints.md
+      # before enabling it on a non-Entra provider.
+      - PER_SERVER_PRM_ALL_PROVIDERS=${PER_SERVER_PRM_ALL_PROVIDERS:-false}
       # A2A reverse-proxy gateway (opt-in; default off). When true, each enabled
       # A2A agent gets nginx location blocks proxying its card + JSON-RPC through
       # the gateway for centralized auth/metrics.

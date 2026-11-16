@@ -2175,6 +2175,24 @@ variable "mcp_advertised_scopes" {
   default     = "profile email offline_access"
 }
 
+variable "per_server_prm_all_providers" {
+  description = <<-EOT
+    Registry setting. Serve a per-server RFC 9728 protected-resource metadata
+    document for every enabled server on every auth provider, and point the 401
+    `resource_metadata` of every server at it. Default false keeps the
+    historical gating (obo_exchange servers on any provider, every server on
+    Entra). Clients then send resource=<server URL> to the IdP. The auth-server
+    is not changed: on every non-Entra provider the gateway still validates only
+    its configured audiences, so enable this only when your IdP ignores
+    `resource` or still issues a configured gateway audience in `aud` (Keycloak
+    does by default). Check that your IdP keeps the configured audience before
+    enabling it; nothing is promised for Okta, Auth0, Cognito or PingFederate.
+    Passed through to the mcp_gateway module.
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "ide_oauth_client_id" {
   description = <<-EOT
     Pre-registered PUBLIC OAuth client_id that IDEs (Cursor, Claude Code, Codex)

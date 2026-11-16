@@ -1,0 +1,27 @@
+suite: global.perServerPrmAllProviders reaches the registry
+release:
+  name: test
+  namespace: default
+tests:
+  - it: global.perServerPrmAllProviders reaches the registry deployment
+    templates:
+      - charts/registry/templates/deployment.yaml
+    set:
+      global:
+        perServerPrmAllProviders: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PER_SERVER_PRM_ALL_PROVIDERS
+            value: "true"
+
+  - it: the stack default renders no PER_SERVER_PRM_ALL_PROVIDERS in the registry
+    templates:
+      - charts/registry/templates/deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PER_SERVER_PRM_ALL_PROVIDERS
+            value: "true"

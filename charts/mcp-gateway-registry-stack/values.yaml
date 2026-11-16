@@ -20,6 +20,19 @@ global:
   # stays for standalone installs. Cloud metadata/credential, link-local and
   # multicast addresses are never permitted.
   ssrfAllowedCidrs: ""
+  # Per-server RFC 9728 PRM for every enabled server on every auth provider
+  # (PER_SERVER_PRM_ALL_PROVIDERS), a registry-only setting. Default false keeps
+  # the historical gating (obo_exchange servers on any provider, every server on
+  # Entra). Turn it on when a spec-strict MCP client cannot find a per-server
+  # document on a non-Entra provider. It changes the 401 challenge of every
+  # server, and clients then send resource=<server URL> to the IdP. On every
+  # non-Entra provider the gateway still validates only its configured audiences,
+  # so enable it only when your IdP ignores `resource` or still issues a
+  # configured gateway audience in `aud` (Keycloak does by default); check this
+  # for Okta, Auth0, Cognito and PingFederate first. Read
+  # docs/oauth-discovery-endpoints.md first. Either this or the registry's
+  # app.perServerPrmAllProviders being true turns the setting on.
+  perServerPrmAllProviders: false
   # Domain configuration - update this to your actual domain
   domain: "DOMAIN"
   # Name the session cookie __Host-mcp_gateway_session (Secure, Path=/, no

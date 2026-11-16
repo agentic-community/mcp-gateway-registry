@@ -214,6 +214,10 @@ services:
       - IDE_OAUTH_CALLBACK_PORT=${IDE_OAUTH_CALLBACK_PORT:-0}
       # Scopes advertised in the PRM for IDE OAuth login.
       - MCP_ADVERTISED_SCOPES=${MCP_ADVERTISED_SCOPES:-}
+      # Serve a per-server RFC 9728 PRM for every enabled server on every
+      # provider (default off). Registry-only; see docs/oauth-discovery-endpoints.md
+      # before enabling it on a non-Entra provider.
+      - PER_SERVER_PRM_ALL_PROVIDERS=${PER_SERVER_PRM_ALL_PROVIDERS:-false}
       # Entra ID configuration
       - ENTRA_TENANT_ID=${ENTRA_TENANT_ID}
       - ENTRA_CLIENT_ID=${ENTRA_CLIENT_ID}

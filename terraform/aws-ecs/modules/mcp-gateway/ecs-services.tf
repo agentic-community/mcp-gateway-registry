@@ -2180,6 +2180,15 @@ module "ecs_service_registry" {
             value = var.ui_branding_archive_b64
           }
         ] : [],
+        # Serve a per-server RFC 9728 PRM for every enabled server on every auth
+        # provider (default off). Registry-only. Only emitted when true, so a
+        # default deployment keeps its task definition unchanged.
+        var.per_server_prm_all_providers ? [
+          {
+            name  = "PER_SERVER_PRM_ALL_PROVIDERS"
+            value = "true"
+          }
+        ] : [],
         # Issue #1819: extra embeddings request headers. Empty list when the
         # map is unset, so a default deployment gets no new variables.
         local.embeddings_extra_header_env,

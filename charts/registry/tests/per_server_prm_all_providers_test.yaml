@@ -1,0 +1,82 @@
+suite: PER_SERVER_PRM_ALL_PROVIDERS opt-in
+templates:
+  - deployment.yaml
+release:
+  name: test
+  namespace: default
+set:
+  global:
+    authProvider:
+      type: keycloak
+tests:
+  - it: leaves the variable out by default so the registry default (false) applies
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PER_SERVER_PRM_ALL_PROVIDERS
+            value: "true"
+
+  - it: renders true when app.perServerPrmAllProviders is set
+    set:
+      app:
+        perServerPrmAllProviders: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PER_SERVER_PRM_ALL_PROVIDERS
+            value: "true"
+
+  - it: renders true when global.perServerPrmAllProviders is set
+    set:
+      global:
+        perServerPrmAllProviders: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PER_SERVER_PRM_ALL_PROVIDERS
+            value: "true"
+
+  - it: keeps the variable out when app.perServerPrmAllProviders is the string "false"
+    set:
+      app:
+        perServerPrmAllProviders: "false"
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PER_SERVER_PRM_ALL_PROVIDERS
+            value: "true"
+
+  - it: keeps the variable out when global.perServerPrmAllProviders is the string "false"
+    set:
+      global:
+        perServerPrmAllProviders: "false"
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PER_SERVER_PRM_ALL_PROVIDERS
+            value: "true"
+
+  - it: renders true when app.perServerPrmAllProviders is the string "true"
+    set:
+      app:
+        perServerPrmAllProviders: "true"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PER_SERVER_PRM_ALL_PROVIDERS
+            value: "true"
+
+  - it: fails when extraEnv contains PER_SERVER_PRM_ALL_PROVIDERS
+    set:
+      extraEnv:
+        - name: PER_SERVER_PRM_ALL_PROVIDERS
+          value: "true"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"PER_SERVER_PRM_ALL_PROVIDERS\" is a reserved variable"

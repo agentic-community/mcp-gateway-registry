@@ -384,6 +384,18 @@ app:
   #
   # See docs/ai-coding-assistant-registry-integration.md for the rationale.
   mcpAdvertisedScopes: "openid profile email offline_access"
+  # Serve a per-server RFC 9728 PRM for every enabled server on every auth
+  # provider (PER_SERVER_PRM_ALL_PROVIDERS). Registry-only setting. Default
+  # false keeps the historical gating (obo_exchange servers on any provider,
+  # every server on Entra). With it on, the 401 challenge of every server points
+  # at its per-server document and clients send resource=<server URL> to the
+  # IdP. On every non-Entra provider the gateway still validates only its
+  # configured audiences, so enable it only when your IdP ignores `resource` or
+  # still issues a configured gateway audience in `aud` (Keycloak does by
+  # default); check this for Okta, Auth0, Cognito and PingFederate first. Under
+  # the stack chart global.perServerPrmAllProviders also turns it on. See
+  # docs/oauth-discovery-endpoints.md.
+  perServerPrmAllProviders: false
   # SSRF guard bypass for internal MCP-server upstreams. The health checker and
   # proxy validate each server's proxy_pass_url through the SSRF guard, which
   # blocks private/cluster IPs by default. Internal MCP servers live at private

@@ -1,6 +1,6 @@
 # OAuth Discovery Endpoints
 
-The gateway publishes two `.well-known` URLs so that spec-compliant MCP clients
+The gateway publishes two gateway-wide `.well-known` URLs, plus per-server variants of the first, so that spec-compliant MCP clients
 (Claude Code, Claude.ai Custom Connectors, Cursor, and other coding
 assistants) can auto-discover how to authenticate without operator-provided
 configuration. This page is the operator-facing reference for those endpoints.
@@ -19,6 +19,7 @@ several IETF specifications:
 | --- | --- | --- | --- |
 | `<gateway>/.well-known/oauth-protected-resource` | RFC 9728 | `no-store` | Tells clients which authorization server protects the gateway and which scopes the gateway recognizes. |
 | `<gateway>/.well-known/oauth-authorization-server` | RFC 8414 | `no-store` | Thin passthrough/normalization of the configured IdP's metadata. Smooths over provider-specific quirks (e.g. Cognito's split host). |
+| `<gateway>/.well-known/oauth-protected-resource/<server path>/mcp` | RFC 9728 | `no-store` | Per-server document whose `resource` is the server's connection URL. Served where the IdP needs it, or for every enabled server with `PER_SERVER_PRM_ALL_PROVIDERS`. See [Per-server metadata](#per-server-metadata-for-every-provider). |
 
 Both documents point clients at the authorization server and token endpoint, so
 they are served with `Cache-Control: no-store`. This keeps shared/intermediary/
@@ -98,6 +99,73 @@ Defaults to `<registry_url>/docs/oauth` (this page).
 
 ```bash
 MCP_RESOURCE_DOCUMENTATION_URL=https://docs.example.com/internal/mcp-oauth
+```
+
+## Per-server metadata for every provider
+
+Besides the gateway-wide document, a server can have its own protected-resource document at `<gateway>/.well-known/oauth-protected-resource/<server path>/mcp`.
+Its `resource` is the server's connection URL, for example `https://mcpgateway.example.com/github/mcp`.
+When the gateway serves the document, the 401 challenge of that server points at it.
+A client that implements RFC 9728 to the letter derives this path-suffixed URL from the connection URL it is using.
+When the URL returns 404, such a client treats discovery as failed and never offers sign-in.
+A lenient client falls back to the gateway-wide document and works either way.
+
+By default the gateway serves a per-server document only where the IdP needs one:
+
+| Server | Per-server document |
+| --- | --- |
+| `obo_exchange` server, any provider | Served |
+| Any server, Entra | Served |
+| `oauth_user` server, Entra | Served |
+| Any other server, Keycloak, Cognito, Okta or Auth0 | 404, clients use the gateway-wide document |
+
+### `PER_SERVER_PRM_ALL_PROVIDERS` (optional, defaults to `false`)
+
+This is a registry setting.
+Set it to `true` when a spec-strict client, such as the Antigravity CLI, cannot sign in to a server on a non-Entra provider because the per-server URL returns 404.
+
+```bash
+PER_SERVER_PRM_ALL_PROVIDERS=true
+```
+
+Docker Compose and Terraform pass it to the registry, and the stack Helm chart sets it from `global.perServerPrmAllProviders` (a standalone registry chart uses `app.perServerPrmAllProviders`).
+The auth server does not read it.
+Restart the registry after changing it, so it regenerates the nginx configuration.
+See the [parameter reference](unified-parameter-reference.md) for the name on each deployment surface.
+
+With the setting on:
+
+* Every enabled registered server serves a per-server document on every provider.
+  A disabled server has no nginx location, so it has no 401 to discover the document from, and its document returns 404.
+  This applies to every server, including `obo_exchange` servers and servers on Entra.
+* An enabled virtual server serves one when at least one of its backing servers is registered.
+* The 401 challenge changes for every server.
+  Its `resource_metadata` points at the per-server document instead of the gateway-wide one.
+  A client that used to follow the gateway-wide document now fetches the per-server one and sends `resource=<server URL>` to the IdP instead of `resource=<gateway origin>`.
+* `scopes_supported` in the per-server document is the same list as the gateway-wide document on every provider except Entra, which keeps `<resource>/user_impersonation`.
+  `MCP_ADVERTISED_SCOPES` applies to both.
+* The gateway-wide document is unchanged and stays available for clients that do not ask for a per-server one.
+* `GET /api/egress/obo-identifier-uris` lists the per-server URL of every enabled server and every enabled virtual server, the same set that serves a document.
+  Only Entra requires you to register those URLs as App ID URIs.
+  On Entra with the setting on, the list omits disabled servers.
+  If you sync Entra `identifierUris` from it, a disabled server's URI is dropped until you re-enable the server and sync the list again.
+
+The setting does not change token validation.
+On every non-Entra provider the gateway still validates only the audiences you configured.
+The setting therefore works only when the IdP ignores the `resource` parameter, or still issues a configured gateway audience in `aud` when a client sends `resource=<server URL>`.
+Keycloak does this by default.
+Before you enable the setting on Okta, Auth0, Cognito or PingFederate, check that the IdP keeps the configured audience in tokens issued for such a request, and test every client you rely on.
+
+Setting it back to `false` and restarting the registry restores the earlier behavior.
+
+To check one server:
+
+```bash
+# Per-server document: 200 with the setting on, 404 with it off on a lenient provider
+curl -s https://mcpgateway.example.com/.well-known/oauth-protected-resource/airegistry-tools/mcp | jq .
+
+# The 401 names that document in resource_metadata
+curl -si https://mcpgateway.example.com/airegistry-tools/mcp | grep -i www-authenticate
 ```
 
 ## Provider-specific notes

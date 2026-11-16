@@ -662,6 +662,23 @@ class Settings(BaseSettings):
             "to a client that may request them via DCR."
         ),
     )
+    per_server_prm_all_providers: bool = Field(
+        default=False,
+        description=(
+            "Registry setting. Serve the per-server RFC 9728 PRM "
+            "(`/.well-known/oauth-protected-resource/<server>/mcp`) for EVERY "
+            "enabled server, on every auth provider and egress mode, and point "
+            "that server's 401 `resource_metadata` at it. Clients then send "
+            "`resource=<server URL>` to the IdP. Default False keeps the "
+            "historical gating (obo_exchange on any provider; everything else "
+            "only on Entra). The auth server is not affected: on every non-Entra "
+            "provider it still validates only its configured audiences, so this "
+            "works only when the IdP ignores `resource` or still issues a "
+            "configured gateway audience in `aud` (Keycloak does by default). "
+            "Check that your IdP keeps the configured audience before enabling "
+            "it; nothing is promised for Okta, Auth0, Cognito or PingFederate."
+        ),
+    )
 
     # OpenTelemetry / OTLP settings (metrics-service)
     otel_otlp_endpoint: str | None = None  # OTLP HTTP endpoint (e.g. https://otlp.example.com)

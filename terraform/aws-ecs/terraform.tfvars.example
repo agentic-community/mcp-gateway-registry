@@ -1290,6 +1290,17 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 # major IdPs ship with by default.
 # mcp_advertised_scopes = "profile email offline_access"
 
+# Registry setting: serve a per-server RFC 9728 protected-resource metadata
+# document for every enabled server on every auth provider. Default false: only
+# obo_exchange servers (any provider) and, on Entra, every server get one. With
+# it on, the 401 challenge of EVERY server points at its per-server document, and
+# clients send resource=<server URL> to the IdP. On every non-Entra provider the
+# gateway still validates only its configured audiences, so enable it only when
+# your IdP ignores `resource` or still issues a configured gateway audience in
+# `aud` (Keycloak does by default). Check this for Okta, Auth0, Cognito and
+# PingFederate before enabling it. See docs/oauth-discovery-endpoints.md.
+# per_server_prm_all_providers = false
+
 # Pre-registered PUBLIC OAuth client_id that IDEs (Cursor, Claude Code, Codex)
 # use to start the gateway login flow. When set, a server's Connect config
 # advertises this client_id and omits the static gateway token, so the IDE

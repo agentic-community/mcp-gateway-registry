@@ -198,6 +198,14 @@ spec:
             # DCR scope-allowlist alignment
             - name: MCP_ADVERTISED_SCOPES
               value: {{ .Values.app.mcpAdvertisedScopes | default "" | quote }}
+            # Per-server PRM for every enabled server on every provider (opt-in).
+            # Rendered only when on, so the default pod spec is unchanged; the
+            # registry setting defaults to false. Compared as text so the string
+            # "false" (a quoted --set value) stays off.
+            {{- if or (eq (toString .Values.global.perServerPrmAllProviders) "true") (eq (toString .Values.app.perServerPrmAllProviders) "true") }}
+            - name: PER_SERVER_PRM_ALL_PROVIDERS
+              value: "true"
+            {{- end }}
             # SSRF guard bypass for internal MCP-server upstreams. The health
             # checker and proxy validate a server's proxy_pass_url through the
             # SSRF guard, which blocks private/cluster IPs by default. Internal
