@@ -1346,6 +1346,38 @@ class TestWriteVirtualServerMappings:
         for location in mapped:
             assert f"location = {location} {{" in locations
 
+    @pytest.mark.asyncio
+    async def test_omitted_tool_warns_once_until_reset(self, mock_server_repository, caplog):
+        """The scheduler re-renders every few seconds; an omitted tool must log one
+        WARNING, then DEBUG on repeats, and WARNING again after mark_dirty resets."""
+        import logging
+
+        from registry.core.nginx_service import NginxConfigService
+
+        mock_server_repository.get.side_effect = lambda path: None
+        vs = _make_vs_config(
+            tool_mappings=[ToolMapping(tool_name="gone", backend_server_path="/deleted")]
+        )
+        service = NginxConfigService()
+
+        def _omit_warnings() -> int:
+            return sum(
+                1
+                for record in caplog.records
+                if record.levelno == logging.WARNING and "Omitting tool" in record.message
+            )
+
+        caplog.set_level(logging.DEBUG, logger="registry.core.nginx_service")
+        with TemporaryDirectory() as tmpdir:
+            with patch("registry.core.nginx_service.VIRTUAL_MAPPINGS_DIR", Path(tmpdir)):
+                await service._write_virtual_server_mappings([vs])
+                await service._write_virtual_server_mappings([vs])
+                assert _omit_warnings() == 1
+
+                service.reset_virtual_warnings()
+                await service._write_virtual_server_mappings([vs])
+                assert _omit_warnings() == 2
+
 
 class TestEncodePathForLocation:
     """Tests for _encode_path_for_location."""

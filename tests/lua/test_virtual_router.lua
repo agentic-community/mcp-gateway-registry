@@ -1576,7 +1576,7 @@ do
         end
         lists = lists + 1
         if ngx.req._headers["Mcp-Session-Id"] ~= "now-stateful" then
-            return { status = 400, body = "" }
+            return { status = 400, body = "Bad Request: Missing session ID" }
         end
         return { status = 200, body = cjson.encode({ result = { tools = { { name = "t" } } } }) }
     end
@@ -2283,6 +2283,100 @@ do
             "unknown tool code is " .. case.code .. " when modern=" .. tostring(case.modern))
     end
     ngx.ctx.vr_modern_client = nil
+end
+
+-- ---------------------------------------------------------------------------
+print("test: only a session-related 400 counts as a session rejection")
+do
+    check(M._is_session_rejection({ status = 404, body = "" }), "404 is a session rejection")
+    check(M._is_session_rejection({ status = 410, body = "" }), "410 is a session rejection")
+    check(M._is_session_rejection({ status = 400, body = "Bad Request: Missing session ID" }),
+        "a 400 naming the session ID is a session rejection")
+    check(M._is_session_rejection({ status = 400,
+        body = '{"jsonrpc":"2.0","error":{"code":-32000,"message":"Bad Request: Server not initialized"}}' }),
+        "a 400 saying the server is not initialized is a session rejection")
+    check(not M._is_session_rejection({ status = 400,
+        body = '{"jsonrpc":"2.0","error":{"code":-32020,"message":"Mcp-Protocol-Version header is required"}}' }),
+        "a -32020 header-mismatch 400 is not a session rejection")
+    check(not M._is_session_rejection({ status = 400, body = "" }), "an empty 400 is not a session rejection")
+    check(not M._is_session_rejection({ status = 500, body = "session" }), "a 500 is never a session rejection")
+end
+
+-- ---------------------------------------------------------------------------
+print("test: a non-session 400 from a legacy backend is returned without re-initializing")
+do
+    local inits, calls = 0, 0
+    capture_handler = function(loc, opts)
+        if loc == "/_vs_auth_strict400" then
+            return { status = 200, header = { ["X-Internal-Token"] = "signed" } }
+        end
+        if loc:find("/_internal/sessions/backend/", 1, true) == 1 then
+            if opts.method == ngx.HTTP_GET then return { status = 404 } end
+            return { status = 200 }
+        end
+        if loc == "/_vs_backend_strict400" then
+            if cjson.decode(opts.body).method == "initialize" then
+                inits = inits + 1
+                return { status = 200, header = { ["Mcp-Session-Id"] = "sid" },
+                    body = '{"jsonrpc":"2.0","result":{"capabilities":{}}}' }
+            end
+            calls = calls + 1
+            return { status = 400, body = '{"jsonrpc":"2.0","id":1,"error":{"code":-32020,'
+                .. '"message":"Mcp-Protocol-Version header is required"}}' }
+        end
+    end
+    local body = cjson.encode({ jsonrpc = "2.0", id = 1, method = "tools/call", params = { name = "t" } })
+    local res, outcome = M._call_backend("/_vs_backend_strict400", body, "vs-strict", "srv", nil, false)
+    check(res and res.status == 400 and outcome == "ok", "the backend's 400 is returned to the caller")
+    check(inits == 1 and calls == 1, "no second initialize and no second call for a validation 400")
+    capture_handler = nil
+end
+
+-- ---------------------------------------------------------------------------
+print("test: a 2026-07-28 client's _meta version keys never reach a legacy backend")
+do
+    local sent = nil
+    capture_handler = function(loc, opts)
+        if loc == "/_vs_auth_legacy_meta" then
+            return { status = 200, header = { ["X-Internal-Token"] = "signed" } }
+        end
+        if loc:find("/_internal/sessions/backend/", 1, true) == 1 then
+            if opts.method == ngx.HTTP_GET then return { status = 404 } end
+            return { status = 200 }
+        end
+        if loc == "/_vs_backend_legacy_meta" then
+            local request = cjson.decode(opts.body)
+            if request.method == "initialize" then
+                return { status = 200, header = { ["Mcp-Session-Id"] = "sid" },
+                    body = '{"jsonrpc":"2.0","result":{"capabilities":{}}}' }
+            end
+            sent = { request = request, pv = ngx.req._headers["MCP-Protocol-Version"] }
+            return { status = 200, body = '{"jsonrpc":"2.0","id":1,"result":{"content":[]}}' }
+        end
+    end
+    ngx.ctx.vr_modern_client = true
+    M._proxy_to_backend(1, "tools/call", {
+        name = "get_me",
+        arguments = {},
+        _meta = {
+            ["io.modelcontextprotocol/protocolVersion"] = "2026-07-28",
+            ["io.modelcontextprotocol/clientInfo"] = { name = "cowork", version = "1" },
+            progressToken = "p-1",
+        },
+    }, "/_vs_backend_legacy_meta", "vs-legacy-meta", "srv")
+    local meta = sent and sent.request.params._meta
+    check(sent ~= nil and sent.request.params.name == "get_me", "the call reaches the legacy backend")
+    check(meta and meta["io.modelcontextprotocol/protocolVersion"] == nil
+        and meta["io.modelcontextprotocol/clientInfo"] == nil,
+        "the 2026-07-28 _meta keys are removed")
+    check(meta and meta.progressToken == "p-1", "other _meta keys such as progressToken are kept")
+    check(sent and sent.pv == nil, "no 2026-07-28 MCP-Protocol-Version header is sent")
+
+    local only_modern = { _meta = { ["io.modelcontextprotocol/protocolVersion"] = "2026-07-28" } }
+    M._strip_modern_meta(only_modern)
+    check(only_modern._meta == nil, "a _meta left empty is removed entirely")
+    ngx.ctx.vr_modern_client = nil
+    capture_handler = nil
 end
 
 -- ---------------------------------------------------------------------------
