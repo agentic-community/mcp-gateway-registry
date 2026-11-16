@@ -1381,11 +1381,16 @@ class NginxConfigService:
                             # of the leading '#' and emit a live directive.
                             # Registration validation now rejects such values;
                             # this protects legacy data persisted beforehand.
+                            # The block leaves out the health status text: an
+                            # unhealthy server's status changes between checks
+                            # (for example timeout, then connection error), and
+                            # each change would alter the config and reload nginx
+                            # with no routing change. The UI and API show the status.
                             safe_commented_path = self._sanitize_for_nginx_set(path)
                             safe_commented_url = self._sanitize_for_nginx_set(proxy_pass_url)
                             commented_block = f"""
 #    location {{{{ROOT_PATH}}}}{safe_commented_path}/ {{
-#        # Service currently unhealthy (status: {health_status})
+#        # Service currently unhealthy
 #        # Proxy to MCP server
 #        proxy_pass {safe_commented_url};
 #        proxy_http_version 1.1;

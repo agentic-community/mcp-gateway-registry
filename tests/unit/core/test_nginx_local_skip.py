@@ -91,3 +91,53 @@ async def test_local_server_excluded_from_location_blocks(
     assert "location /local/" not in rendered
     # And no commented "service currently unhealthy" stub for the local server
     assert "/local/" not in rendered or "deployment" not in rendered
+
+
+async def _render_with_status(
+    nginx_service,
+    mock_health_service,
+    mock_atomic_write,
+    status: str,
+) -> str:
+    """Render the config for one remote server with the given health status."""
+    template_content = "server { {{LOCATION_BLOCKS}} }"
+    servers = {
+        "/flaky": {
+            "server_name": "flaky",
+            "proxy_pass_url": "http://flaky-upstream/mcp",
+            "supported_transports": ["streamable-http"],
+            "deployment": "remote",
+        },
+    }
+    mock_health_service.server_health_status = {"/flaky": status}
+    mock_atomic_write.reset_mock()
+    with patch("builtins.open", mock_open(read_data=template_content)):
+        with patch("registry.health.service.health_service", mock_health_service):
+            with patch.object(nginx_service, "get_additional_server_names", return_value=""):
+                with patch.object(nginx_service, "reload_nginx", return_value=True):
+                    with patch("os.environ.get", return_value="http://keycloak:8080"):
+                        await nginx_service.generate_config_async(servers)
+    return "\n".join(call.args[1] for call in mock_atomic_write.call_args_list)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_unhealthy_status_text_does_not_change_config(
+    nginx_service, mock_health_service, mock_atomic_write
+):
+    """A different failure reason for an already-unhealthy server must render the
+    same config, so the reload scheduler does not reload nginx for it."""
+    timeout = await _render_with_status(
+        nginx_service, mock_health_service, mock_atomic_write, "unhealthy: ReadTimeout"
+    )
+    session = await _render_with_status(
+        nginx_service,
+        mock_health_service,
+        mock_atomic_write,
+        "unhealthy: session initialization failed and ping without auth failed",
+    )
+
+    assert "/flaky/ {" in timeout
+    assert "# Service currently unhealthy\n" in timeout
+    assert "ReadTimeout" not in timeout
+    assert timeout == session
