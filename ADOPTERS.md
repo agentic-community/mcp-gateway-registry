@@ -27,3 +27,4 @@ The list is in the order the entries arrived, oldest first.
 
 | Organization | Contact | Date | Description of Use |
 | ------------ | ------- | ---- | ------------------ |
+| [Expedia Group](https://www.expediagroup.com/) | @rolland80 | 2026-11-16 | Expedia Group's AI Platform Team runs the MCP Gateway & Registry as the company's central catalog of AI capabilities, with hundreds of MCP servers alongside agents, agent skills, plugins and n8n workflows. |
