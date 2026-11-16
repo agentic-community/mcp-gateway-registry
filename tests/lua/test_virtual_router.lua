@@ -2336,8 +2336,13 @@ end
 print("test: a 2026-07-28 client's _meta version keys never reach a legacy backend")
 do
     local sent = nil
+    local authorized_body = nil
     capture_handler = function(loc, opts)
         if loc == "/_vs_auth_legacy_meta" then
+            local x_body = ngx.req._headers["X-Body"]
+            if cjson.decode(x_body).method == "tools/call" then
+                authorized_body = x_body
+            end
             return { status = 200, header = { ["X-Internal-Token"] = "signed" } }
         end
         if loc:find("/_internal/sessions/backend/", 1, true) == 1 then
@@ -2350,7 +2355,7 @@ do
                 return { status = 200, header = { ["Mcp-Session-Id"] = "sid" },
                     body = '{"jsonrpc":"2.0","result":{"capabilities":{}}}' }
             end
-            sent = { request = request, pv = ngx.req._headers["MCP-Protocol-Version"] }
+            sent = { request = request, raw = opts.body, pv = ngx.req._headers["MCP-Protocol-Version"] }
             return { status = 200, body = '{"jsonrpc":"2.0","id":1,"result":{"content":[]}}' }
         end
     end
@@ -2371,11 +2376,50 @@ do
         "the 2026-07-28 _meta keys are removed")
     check(meta and meta.progressToken == "p-1", "other _meta keys such as progressToken are kept")
     check(sent and sent.pv == nil, "no 2026-07-28 MCP-Protocol-Version header is sent")
+    check(sent and authorized_body == sent.raw, "/validate authorized the exact body the backend received")
 
     local only_modern = { _meta = { ["io.modelcontextprotocol/protocolVersion"] = "2026-07-28" } }
     M._strip_modern_meta(only_modern)
     check(only_modern._meta == nil, "a _meta left empty is removed entirely")
     ngx.ctx.vr_modern_client = nil
+    capture_handler = nil
+end
+
+-- ---------------------------------------------------------------------------
+print("test: a call sends one era probe while the backend's era is uncached")
+do
+    -- Marked modern so the harness does not answer the probe's grant check;
+    -- the handler refuses it, so the era stays legacy and uncached.
+    modern_backends["/_vs_backend_probe_once"] = true
+    local probes, calls = 0, 0
+    capture_handler = function(loc, opts)
+        if loc == "/_vs_auth_probe_once" then
+            if cjson.decode(ngx.req._headers["X-Body"]).method == "server/discover" then
+                probes = probes + 1
+                return { status = 503 }
+            end
+            return { status = 200, header = { ["X-Internal-Token"] = "signed" } }
+        end
+        if loc:find("/_internal/sessions/backend/", 1, true) == 1 then
+            if opts.method == ngx.HTTP_GET then return { status = 404 } end
+            return { status = 200 }
+        end
+        if loc == "/_vs_backend_probe_once" then
+            if cjson.decode(opts.body).method == "initialize" then
+                return { status = 200, header = { ["Mcp-Session-Id"] = "sid" },
+                    body = '{"jsonrpc":"2.0","result":{"capabilities":{}}}' }
+            end
+            calls = calls + 1
+            return { status = 200, body = '{"jsonrpc":"2.0","id":1,"result":{"content":[]}}' }
+        end
+    end
+    ngx.ctx.vr_modern_client = true
+    M._proxy_to_backend(1, "tools/call", { name = "t", _meta = {
+        ["io.modelcontextprotocol/protocolVersion"] = "2026-07-28" } },
+        "/_vs_backend_probe_once", "vs-probe-once", "srv")
+    check(calls == 1 and probes == 1, "one tools/call sends exactly one server/discover probe")
+    ngx.ctx.vr_modern_client = nil
+    modern_backends["/_vs_backend_probe_once"] = nil
     capture_handler = nil
 end
 
