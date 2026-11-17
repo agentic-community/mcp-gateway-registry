@@ -705,6 +705,39 @@ async def _clear_server_security_pending(
     return True
 
 
+async def _add_server_security_pending(
+    path: str,
+) -> list[str] | None:
+    """Add the security-pending tag to a server after a failed scan.
+
+    Builds the write from a fresh read of the stored server, not from the
+    snapshot the scan was started with. update_server() decides whether to
+    re-pin the proxy target and clear upstream headers from the keys in the
+    dict it is given, so a stale snapshot would persist values derived from an
+    address that was changed while the scan ran. Only the tags field is written.
+
+    Args:
+        path: The server path.
+
+    Returns:
+        The stored tags after the write, or None when the server is gone or
+        already carries the tag.
+    """
+    server_info = await server_service.get_server_info(path)
+    if not server_info:
+        logger.warning(f"Server {path} not found when adding 'security-pending'")
+        return None
+    tags = list(server_info.get("tags") or [])
+    if "security-pending" in tags:
+        return None
+    tags.append("security-pending")
+    updated = server_info.copy()
+    updated["tags"] = tags
+    await server_service.update_server(path, updated, updated_fields=["tags"])
+    logger.info(f"Added 'security-pending' tag to {path}")
+    return tags
+
+
 async def _perform_security_scan_on_registration(
     path: str,
     proxy_pass_url: str,
@@ -765,16 +798,13 @@ async def _perform_security_scan_on_registration(
 
             # Add security-pending tag if configured
             if scan_config.add_security_pending_tag:
-                current_tags = server_entry.get("tags", [])
-                if "security-pending" not in current_tags:
-                    current_tags.append("security-pending")
-                    server_entry["tags"] = current_tags
-                    # Write only the tags. server_entry is a snapshot taken before
-                    # the scan (on registration, create() also set
-                    # is_enabled=False on it), so a full write would undo any
-                    # change made while the scan ran, such as enabling the server.
-                    await server_service.update_server(path, server_entry, updated_fields=["tags"])
-                    logger.info(f"Added 'security-pending' tag to {path}")
+                # server_entry is a snapshot taken before the scan, so the write
+                # starts from the stored server instead (see the helper). The
+                # snapshot still gets the tag, because the webhook and the
+                # disable path below read it.
+                stored_tags = await _add_server_security_pending(path)
+                if stored_tags is not None:
+                    server_entry["tags"] = stored_tags
 
             # Disable server if configured. A scan that could not complete is not
             # an unsafe verdict: scan_server() reports is_safe=False with zero
