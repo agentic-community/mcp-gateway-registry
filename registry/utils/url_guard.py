@@ -1099,6 +1099,28 @@ def is_builtin_airegistry_tools_target(
         return False
 
 
+def is_builtin_airegistry_tools_outbound_url(
+    url: str | None,
+) -> bool:
+    """Return whether a URL is one of the exact built-in airegistry-tools endpoints.
+
+    The auth server relays the caller's ingress bearer only to the bundled
+    registry-tools server (issue #1266). Checking the signed server name alone
+    would also relay it to wherever an admin repointed that registration, so
+    the relay checks the destination with this function too.
+
+    Args:
+        url: The signed upstream URL the request is about to be sent to.
+
+    Returns:
+        True only for the built-in base URL or its canonical /mcp endpoint.
+    """
+    try:
+        return normalize_url_identity(url) in _BUILTIN_AIREGISTRY_TOOLS_OUTBOUND_IDENTITIES
+    except UrlValidationError:
+        return False
+
+
 @lru_cache(maxsize=1)
 def _skill_allowlist() -> _Allowlist:
     """Return the skill-fetch bypass allowlist (github_extra_hosts only).
