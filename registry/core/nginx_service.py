@@ -32,7 +32,11 @@ from registry.utils.tool_schema import (
     mcp_input_schema as _ensure_mcp_compliant_schema,
 )
 from registry.utils.tool_schema import stored_input_schema
-from registry.utils.url_guard import validate_proxy_pass_url, validate_server_path
+from registry.utils.url_guard import (
+    is_builtin_airegistry_tools_target,
+    validate_proxy_pass_url,
+    validate_server_path,
+)
 
 from .config import settings
 from .metrics import (
@@ -662,6 +666,34 @@ def _virtual_backend_is_routable(
         return False
     health_key = active.get("path") or base_path
     return HealthStatus.is_healthy(_server_health_status(health_key))
+
+
+def _virtual_backend_uses_mcp_proxy(
+    egress_mode: str,
+    base_path: str,
+    proxy_pass_url: str | None,
+) -> bool:
+    """Return True when a virtual backend hop must go through the auth-server MCP proxy.
+
+    An egress-brokered backend needs the proxy to vend and inject the user's
+    upstream credential. The bundled airegistry-tools server needs it for a
+    different reason: the proxy is the only hop that relays the caller's ingress
+    bearer to it (issue #1266), and mcpgw uses that bearer to call the registry
+    API as the user (issue #2060). The built-in match is exact on entity type,
+    path and registered target, so a lookalike path or a repointed target keeps
+    the direct, credential-stripping location.
+
+    Args:
+        egress_mode: The backend's egress_auth_mode.
+        base_path: The active server path the internal location serves.
+        proxy_pass_url: The selected server document's registered target.
+
+    Returns:
+        True for an egress-brokered backend or the exact built-in registry tools.
+    """
+    if egress_mode != "none":
+        return True
+    return is_builtin_airegistry_tools_target("mcp_server", base_path, proxy_pass_url)
 
 
 def _server_health_status(
@@ -2682,7 +2714,7 @@ class NginxConfigService:
     }}"""
                 location_blocks.append(auth_block)
 
-                if egress_mode != "none":
+                if _virtual_backend_uses_mcp_proxy(egress_mode, base_path, proxy_pass_url):
                     mcp_proxy_read_timeout = _resolve_mcp_proxy_read_timeout_seconds()
                     block = f"""
     location = {location_path} {{
