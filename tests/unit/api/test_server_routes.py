@@ -4105,6 +4105,10 @@ def _scan_result(*, scan_failed: bool, critical: int = 0, high: int = 0):
     )
 
 
+# Sentinel so _run() can tell "no stored_server given" from "stored_server=None".
+_SAME_AS_ENTRY = object()
+
+
 class TestScanFailureDoesNotDisableServer:
     """block_unsafe_servers must act on verdicts, not on scanner errors."""
 
@@ -4120,10 +4124,16 @@ class TestScanFailureDoesNotDisableServer:
             block_on_scan_failure=block_on_failure,
         )
 
-    async def _run(self, scan_result, scan_config, server_entry=None):
-        """Drive the post-registration scan helper with everything mocked."""
+    async def _run(self, scan_result, scan_config, server_entry=None, stored_server=_SAME_AS_ENTRY):
+        """Drive the post-registration scan helper with everything mocked.
+
+        stored_server is what get_server_info() returns. By default it is a copy
+        of server_entry; pass None to simulate a server deleted mid-scan.
+        """
         if server_entry is None:
             server_entry = {"tags": [], "server_name": "test"}
+        if stored_server is _SAME_AS_ENTRY:
+            stored_server = dict(server_entry, tags=list(server_entry.get("tags", [])))
         from registry.api.server_routes import _perform_security_scan_on_registration
 
         scanner = MagicMock()
@@ -4133,6 +4143,7 @@ class TestScanFailureDoesNotDisableServer:
         service = MagicMock(
             update_server=AsyncMock(return_value=True),
             toggle_service=AsyncMock(return_value=True),
+            get_server_info=AsyncMock(return_value=stored_server),
         )
         search_repo = MagicMock(index_server=AsyncMock())
         scheduler = MagicMock(mark_dirty=MagicMock())
@@ -4190,6 +4201,62 @@ class TestScanFailureDoesNotDisableServer:
 
         service.update_server.assert_awaited_once()
         assert service.update_server.await_args.kwargs["updated_fields"] == ["tags"]
+
+    @pytest.mark.asyncio
+    async def test_security_pending_write_uses_stored_server_not_snapshot(self):
+        """A change made while the scan ran must not be overwritten by the snapshot.
+
+        update_server() re-pins the proxy target and clears upstream headers
+        based on the keys in the dict it receives, so the write must start from
+        the stored server. Tags edited during the scan must also survive.
+        """
+        snapshot = {
+            "tags": ["old"],
+            "server_name": "test",
+            "proxy_pass_url": "https://old.example.internal/mcp",
+        }
+        stored = {
+            "tags": ["edited"],
+            "server_name": "test",
+            "proxy_pass_url": "https://new.example.internal/mcp",
+        }
+
+        service, _, _ = await self._run(
+            _scan_result(scan_failed=True),
+            self._config(),
+            server_entry=snapshot,
+            stored_server=stored,
+        )
+
+        _, written = service.update_server.await_args.args
+        assert written["proxy_pass_url"] == "https://new.example.internal/mcp"
+        assert written["tags"] == ["edited", "security-pending"]
+        assert service.update_server.await_args.kwargs["updated_fields"] == ["tags"]
+        assert snapshot["tags"] == ["edited", "security-pending"]
+
+    @pytest.mark.asyncio
+    async def test_security_pending_skips_write_when_already_tagged(self):
+        """A server that already carries the tag needs no write."""
+        entry = {"tags": ["security-pending"], "server_name": "test"}
+
+        service, _, _ = await self._run(
+            _scan_result(scan_failed=True),
+            self._config(),
+            server_entry=entry,
+        )
+
+        service.update_server.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_security_pending_skips_write_when_server_deleted(self):
+        """A server deleted while the scan ran must not be written back."""
+        service, _, _ = await self._run(
+            _scan_result(scan_failed=True),
+            self._config(),
+            stored_server=None,
+        )
+
+        service.update_server.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_real_finding_still_disables_server(self):
