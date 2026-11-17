@@ -24,6 +24,31 @@ import { Construct } from 'constructs';
 import { RegistryConfig } from '../registry-config';
 
 // ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/**
+ * CPU units reserved for a per-application ADOT collector sidecar.
+ *
+ * Exported because ECS rejects a task whose container-level CPU values sum
+ * above the task CPU, so any task definition that pins its application
+ * container's CPU has to leave this much room.
+ */
+export const ADOT_SIDECAR_CPU: number = 128;
+
+/** Memory (MiB) reserved for a per-application ADOT collector sidecar. */
+export const ADOT_SIDECAR_MEMORY_MIB: number = 256;
+
+/** Turn 'auth-server' into 'AuthServer' for use in a CDK construct id. */
+function _pascalCase(value: string): string {
+  return value
+    .split(/[^A-Za-z0-9]+/)
+    .filter((part) => part !== '')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join('');
+}
+
+// ---------------------------------------------------------------------------
 // Props
 // ---------------------------------------------------------------------------
 
@@ -56,16 +81,36 @@ export interface ObservabilityPipelineProps {
   readonly otlpExporterHeadersSecret?: secretsmanager.ISecret;
   /** Secrets Manager secret holding the Grafana admin password (issue #1325) */
   readonly grafanaAdminPasswordSecret?: secretsmanager.ISecret;
-  /** Additional IAM policy statements for Secrets Manager + KMS access */
-  readonly secretsAccessStatements: iam.PolicyStatement[];
+  // No bundle-wide secrets grant prop. This construct derives each execution
+  // role's grant from the individual secrets above, so a secret it is not
+  // handed is one its roles cannot read.
   /** Security group of the registry ECS service (for metrics ingress) */
   readonly registryServiceSg: ec2.ISecurityGroup;
   /** Security group of the auth-server ECS service (for metrics ingress) */
   readonly authServiceSg: ec2.ISecurityGroup;
   /** Security group attached to the ALB (for Grafana ingress) */
   readonly albSg: ec2.ISecurityGroup;
+  /**
+   * Application tasks that export metrics over OTLP to a co-located ADOT
+   * collector sidecar. Each gets a sidecar receiving on localhost:4317 and
+   * remote-writing to AMP, plus the AMP remote-write grant on its task role.
+   *
+   * Without this the only collector in the stack is the one scraping the
+   * metrics service, so the registry's, auth-server's and mcpgw's own metrics
+   * never reach AMP (issue #1122).
+   */
+  readonly otlpSidecarTargets?: OtlpSidecarTarget[];
   /** Deployment name prefix for resource naming */
   readonly namePrefix: string;
+}
+
+export interface OtlpSidecarTarget {
+  /** Short name used in log-group and construct ids, for example 'registry' */
+  readonly name: string;
+  /** Task definition the sidecar is added to */
+  readonly taskDefinition: ecs.TaskDefinition;
+  /** Name of the application container the sidecar waits on */
+  readonly appContainerName: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -190,6 +235,91 @@ export class ObservabilityPipeline extends Construct {
       ],
     });
 
+    // ================================================================
+    // Section 2b: per-application ADOT sidecars (OTLP receiver -> AMP)
+    // ================================================================
+    //
+    // The metrics-service collector above SCRAPES a Prometheus endpoint. The
+    // registry, auth-server and mcpgw instead PUSH over OTLP to
+    // localhost:4317, so they need a collector with an otlp receiver in the
+    // same task. Same exporter and sigv4 auth, different receiver.
+
+    const otlpToAmpConfig = JSON.stringify({
+      receivers: {
+        otlp: {
+          protocols: {
+            grpc: { endpoint: '0.0.0.0:4317' },
+            http: { endpoint: '0.0.0.0:4318' },
+          },
+        },
+      },
+      exporters: {
+        prometheusremotewrite: {
+          endpoint: ampRemoteWriteEndpoint,
+          auth: { authenticator: 'sigv4auth' },
+        },
+      },
+      extensions: {
+        sigv4auth: { region },
+        health_check: { endpoint: '0.0.0.0:13133' },
+      },
+      service: {
+        extensions: ['sigv4auth', 'health_check'],
+        pipelines: {
+          metrics: {
+            receivers: ['otlp'],
+            exporters: ['prometheusremotewrite'],
+          },
+        },
+      },
+    });
+
+    for (const target of props.otlpSidecarTargets ?? []) {
+      const id = _pascalCase(target.name);
+
+      const sidecarLogGroup = new logs.LogGroup(this, `${id}AdotLogGroup`, {
+        logGroupName: `/ecs/${namePrefix}-${target.name}-adot`,
+        retention: logs.RetentionDays.ONE_MONTH,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+      });
+
+      const sidecar = target.taskDefinition.addContainer(`${id}AdotCollector`, {
+        containerName: 'adot-collector',
+        image: ecs.ContainerImage.fromRegistry(config.otel.adotCollectorImage),
+        essential: false,
+        cpu: ADOT_SIDECAR_CPU,
+        memoryLimitMiB: ADOT_SIDECAR_MEMORY_MIB,
+        command: ['--config=env:AOT_CONFIG_CONTENT'],
+        environment: {
+          AOT_CONFIG_CONTENT: otlpToAmpConfig,
+          AWS_REGION: region,
+        },
+        logging: ecs.LogDrivers.awsLogs({
+          logGroup: sidecarLogGroup,
+          streamPrefix: 'ecs',
+        }),
+        readonlyRootFilesystem: false,
+      });
+
+      // START, not HEALTHY: the app pushes metrics from startup, and a
+      // HEALTHY gate on the app container would hold the collector back until
+      // the app's own health check passed, losing the startup window. The
+      // sidecar is non-essential, so it never blocks the task either way.
+      const appContainer = target.taskDefinition.findContainer(target.appContainerName);
+      if (!appContainer) {
+        throw new Error(
+          `otlpSidecarTargets: task definition for '${target.name}' has no container named ` +
+          `'${target.appContainerName}', so the ADOT sidecar has nothing to depend on.`,
+        );
+      }
+      sidecar.addContainerDependencies({
+        container: appContainer,
+        condition: ecs.ContainerDependencyCondition.START,
+      });
+
+      target.taskDefinition.taskRole.addManagedPolicy(ampRemoteWritePolicy);
+    }
+
     // --- Log groups ---
 
     const metricsLogGroup = new logs.LogGroup(this, 'MetricsLogGroup', {
@@ -206,12 +336,47 @@ export class ObservabilityPipeline extends Construct {
 
     // --- IAM roles ---
 
+    // Read access to exactly the secrets a role's own containers receive.
+    //
+    // The broad bundle-wide statements this construct is handed would let the
+    // metrics service and Grafana read every application secret, including
+    // the PingFederate admin password and the egress credential-encryption
+    // key that neither container is ever given.
+    const execSecretStatements = (
+      secrets: Array<secretsmanager.ISecret | undefined>,
+    ): iam.PolicyStatement[] => {
+      const arns = secrets
+        .filter((s): s is secretsmanager.ISecret => s !== undefined)
+        .map((s) => s.secretArn);
+      return [
+        ...(arns.length > 0
+          ? [new iam.PolicyStatement({
+              sid: 'SecretsManagerAccess',
+              effect: iam.Effect.ALLOW,
+              actions: ['secretsmanager:GetSecretValue'],
+              resources: arns,
+            })]
+          : []),
+        new iam.PolicyStatement({
+          sid: 'KmsDecrypt',
+          effect: iam.Effect.ALLOW,
+          actions: ['kms:Decrypt', 'kms:DescribeKey'],
+          resources: [props.appSecretsKmsKey.keyArn],
+        }),
+      ];
+    };
+
     const metricsExecRole = _createTaskExecRole(
       this,
       'MetricsExecRole',
       `${namePrefix}-metrics-service-task-exec-${region}`,
       metricsLogGroup,
-      props.secretsAccessStatements,
+      execSecretStatements([
+        props.metricsApiKeySecret,
+        props.metricsKeyPepperSecret,
+        props.metricsAdminApiKeySecret,
+        props.otlpExporterHeadersSecret,
+      ]),
     );
 
     const metricsTaskRole = _createTaskRole(
@@ -344,9 +509,7 @@ export class ObservabilityPipeline extends Construct {
 
     const adotContainer = metricsTaskDef.addContainer('adot-collector', {
       containerName: 'adot-collector',
-      image: ecs.ContainerImage.fromRegistry(
-        'public.ecr.aws/aws-observability/aws-otel-collector:latest',
-      ),
+      image: ecs.ContainerImage.fromRegistry(config.otel.adotCollectorImage),
       essential: false,
       cpu: 256,
       memoryLimitMiB: 512,
@@ -430,7 +593,8 @@ export class ObservabilityPipeline extends Construct {
       grafanaLogGroup,
       // Issue #1325: the execution role must read the Grafana admin password
       // secret (and KMS-decrypt it) for the container `secrets` valueFrom.
-      props.secretsAccessStatements,
+      // That one secret, and nothing else in the bundle.
+      execSecretStatements([props.grafanaAdminPasswordSecret]),
     );
 
     const grafanaTaskRole = _createTaskRole(
