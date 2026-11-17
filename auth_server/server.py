@@ -52,6 +52,10 @@ from internal_request_token import (
     verify_mcp_proxy_token,
 )
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
+from jsonrpc_body import (
+    AmbiguousJsonRpcBodyError,
+    parse_jsonrpc_body,
+)
 from jwt.api_jwk import PyJWK
 from mcp_apps_domain import RESOURCES_READ_METHOD as MCP_APPS_RESOURCES_READ_METHOD
 from mcp_apps_domain import claude_ui_domain as mcp_apps_claude_ui_domain
@@ -4507,6 +4511,12 @@ async def validate_request(request: Request):
         # to the unprivileged "initialize" method (that would authorize a body
         # whose real method we could not read) -- fail closed below instead.
         body_parse_failed = False
+        # True when the body was refused because a case-insensitive backend
+        # decoder could read it differently than this check does (ambiguous or
+        # duplicate keys). Kept separate from body_parse_failed so the refusal
+        # returns a clean 403 the client can read, not a 400 that nginx
+        # auth_request collapses to an opaque 500 (issue tracked separately).
+        body_ambiguous = False
         try:
             if body:
                 payload_text = body  # .decode('utf-8')
@@ -4515,7 +4525,9 @@ async def validate_request(request: Request):
                 # credentials, API keys, or PII. Log only the size and, once
                 # parsed, the non-sensitive method name + request id.
                 logger.debug("Request payload received (%d chars)", len(payload_text))
-                request_payload = json.loads(payload_text)
+                # Strict parse: a body a case-insensitive backend decoder would
+                # read differently from Python is refused, not authorized.
+                request_payload = parse_jsonrpc_body(payload_text)
                 if logger.isEnabledFor(logging.DEBUG) and isinstance(request_payload, dict):
                     logger.debug(
                         "JSON-RPC request: method=%s id=%s",
@@ -4527,6 +4539,9 @@ async def validate_request(request: Request):
         except UnicodeDecodeError as e:
             logger.warning(f"Could not decode body as UTF-8: {e}")
             body_parse_failed = True
+        except AmbiguousJsonRpcBodyError as e:
+            logger.warning(f"Refusing JSON-RPC payload with ambiguous keys: {e}")
+            body_ambiguous = True
         except json.JSONDecodeError as e:
             logger.warning(f"Could not parse JSON RPC payload: {e}")
             body_parse_failed = True
@@ -5226,6 +5241,25 @@ async def validate_request(request: Request):
                         "Request body too large to authorize; scope validation "
                         "requires an in-memory body"
                     ),
+                    headers={"Connection": "close"},
+                )
+
+            # Fail closed on an ambiguous body (a case-insensitive backend could
+            # read it as a different call than this check does). Deny with 403 so
+            # the client gets a clean denial: nginx auth_request forwards 403 but
+            # collapses 400 to an opaque 500. The payload is unparseable here, so
+            # no JSON-RPC error body is attached and nginx returns its plain 403.
+            if body_ambiguous:
+                logger.warning(
+                    "Access denied for user %s to %s - request body is ambiguous "
+                    "(keys a case-insensitive backend could read differently); "
+                    "failing closed",
+                    hash_username(validation_result.get("username", "")),
+                    server_name,
+                )
+                raise HTTPException(
+                    status_code=403,
+                    detail="Request body could not be authorized",
                     headers={"Connection": "close"},
                 )
 
@@ -9758,6 +9792,10 @@ async def _authorize_forwarded_mcp_body(
         unauthenticated-for-this-server caller is still denied.
       * ``tools/call`` requires the specific tool named in ``params.name`` to
         be allowed; a missing/blank tool name is rejected.
+      * A body with a repeated key, or with an envelope or ``params`` key that
+        a case-insensitive decoder would read as a different member, is
+        rejected (``parse_jsonrpc_body``): the backend could run a call other
+        than the one authorized here.
 
     Args:
         registered_server: The path verified in the signed proxy token;
@@ -9780,11 +9818,11 @@ async def _authorize_forwarded_mcp_body(
 
     if request_body:
         try:
-            payload = json.loads(request_body.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            payload = parse_jsonrpc_body(request_body)
+        except (UnicodeDecodeError, json.JSONDecodeError, AmbiguousJsonRpcBodyError) as exc:
             logger.warning(
                 "mcp_proxy: rejecting forwarded body for server=%s that is not "
-                "parseable JSON-RPC (cannot authorize): %s",
+                "unambiguous JSON-RPC (cannot authorize): %s",
                 registered_server,
                 exc,
             )
@@ -9919,10 +9957,13 @@ async def mcp_proxy(
     incoming_payload: object = None
     try:
         if request_body:
-            incoming_payload = json.loads(request_body.decode("utf-8"))
+            incoming_payload = parse_jsonrpc_body(request_body)
             if isinstance(incoming_payload, dict):
                 incoming_method = incoming_payload.get("method")
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except (UnicodeDecodeError, json.JSONDecodeError, AmbiguousJsonRpcBodyError):
+        # The forwarded-body check below refuses an ambiguous body; leave the
+        # payload unset so the consent-retry rewrite never re-serializes it.
+        incoming_payload = None
         incoming_method = None
     except Exception as exc:
         logger.debug(f"mcp_proxy: could not parse incoming body as JSON-RPC: {exc}")
