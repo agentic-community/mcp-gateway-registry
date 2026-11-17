@@ -160,7 +160,11 @@ from registry.exceptions import UrlValidationError
 from registry.repositories.factory import get_scope_repository, get_server_repository
 from registry.utils.logging_setup import setup_logging as _setup_logging
 from registry.utils.request_utils import get_client_ip
-from registry.utils.url_guard import PROXY_PROFILE, guarded_async_client
+from registry.utils.url_guard import (
+    PROXY_PROFILE,
+    guarded_async_client,
+    is_builtin_airegistry_tools_outbound_url,
+)
 
 # Let setup_logging resolve the file path from settings.log_dir /
 # {service_name}.log. Honors APP_LOG_DIR overrides and the new
@@ -8377,6 +8381,37 @@ async def _read_bounded(
 # servers that need an upstream credential use the egress vault.
 _INTERNAL_INGRESS_RELAY_SERVERS: frozenset[str] = frozenset({"airegistry-tools"})
 
+
+def _relays_ingress_auth(
+    registered_server: str,
+    upstream_url: str | None,
+) -> bool:
+    """Return whether this MCP proxy hop may relay the caller's ingress bearer.
+
+    Both the signed server name and the signed upstream URL must be the
+    built-in registry-tools server. The name alone is not enough: an admin can
+    repoint the /airegistry-tools/ registration, and the caller's token must
+    not follow it to another host.
+
+    Args:
+        registered_server: The verified ``server`` claim (case-preserving).
+        upstream_url: The verified ``upstream_url`` claim, before any route
+            suffix is appended.
+
+    Returns:
+        True only for the exact built-in name and destination.
+    """
+    if registered_server.lower() not in _INTERNAL_INGRESS_RELAY_SERVERS:
+        return False
+    if is_builtin_airegistry_tools_outbound_url(upstream_url):
+        return True
+    logger.warning(
+        "mcp_proxy: server=%s is not at the built-in destination; not relaying the caller's token",
+        registered_server,
+    )
+    return False
+
+
 # Proxy-context headers describe the client -> Gateway hop (scheme, host, port,
 # path prefix as seen by nginx/an ingress LB) and must not be copied onto the
 # separate Gateway -> upstream MCP server hop; an upstream that trusts them can
@@ -9994,7 +10029,9 @@ async def mcp_proxy(
     # ``registered_server`` stays the case-preserving claim: it is the identity
     # /validate authorized, and scope matching is case-sensitive. Only the relay
     # allowlist lookup is case-folded.
-    relay_ingress_auth = registered_server.lower() in _INTERNAL_INGRESS_RELAY_SERVERS
+    # The destination check uses the signed claim, not ``upstream_url``, which
+    # may already carry a route suffix appended above.
+    relay_ingress_auth = _relays_ingress_auth(registered_server, claims["upstream_url"])
     forward_headers = _forward_headers(
         dict(request.headers),
         relay_authorization=relay_ingress_auth,

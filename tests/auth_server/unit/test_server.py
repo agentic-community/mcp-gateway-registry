@@ -7019,20 +7019,24 @@ class TestForwardHeadersInternalTokenStrip:
 
 
 class TestInternalRelayDecision:
-    """The mcp_proxy relay decision keys on the verified `server` claim (first
-    path segment), matches the hardcoded internal set exactly, and normalizes
-    case. Mirrors the inline logic in mcp_proxy (issue #1266).
+    """The mcp_proxy relay decision (issue #1266, hardened in #2060) needs the
+    verified `server` claim to be exactly the internal server (case-folded) AND
+    the verified upstream URL to be the built-in destination.
     """
 
-    def _decides_relay(self, server_claim):
-        from auth_server.server import _INTERNAL_INGRESS_RELAY_SERVERS
+    BUILTIN_URL = "http://mcpgw-server:8003/"
 
-        # Mirror mcp_proxy: registered_server = (claims.get("server") or "").lower()
-        registered_server = (server_claim or "").lower()
-        return registered_server in _INTERNAL_INGRESS_RELAY_SERVERS
+    def _decides_relay(self, server_claim, upstream_url=BUILTIN_URL):
+        from auth_server.server import _relays_ingress_auth
+
+        return _relays_ingress_auth(server_claim or "", upstream_url)
 
     def test_exact_internal_server_relays(self):
         assert self._decides_relay("airegistry-tools") is True
+
+    def test_virtual_route_mcp_endpoint_relays(self):
+        """The virtual backend hop signs the /mcp endpoint, not the base URL."""
+        assert self._decides_relay("airegistry-tools", "http://mcpgw-server:8003/mcp") is True
 
     def test_case_insensitive_match(self):
         assert self._decides_relay("AiRegistry-Tools") is True
@@ -7056,6 +7060,70 @@ class TestInternalRelayDecision:
         """A federated copy (e.g. server claim 'ai-registry' from /ai-registry/...)
         is a different first path segment and must NOT relay."""
         assert self._decides_relay("ai-registry") is False
+
+    @pytest.mark.parametrize(
+        ("upstream_url", "virtual_backend", "relayed"),
+        [
+            ("http://mcpgw-server:8003/", False, True),
+            ("http://mcpgw-server:8003/mcp", True, True),
+            ("https://elsewhere.example.com/mcp", False, False),
+        ],
+    )
+    def test_mcp_proxy_handler_applies_destination_check(
+        self,
+        upstream_url,
+        virtual_backend,
+        relayed,
+    ):
+        """Drive the real /mcp-proxy/ route: the bearer reaches the upstream only
+        when the signed destination is the built-in one (issue #2060)."""
+        import auth_server.server as server_module
+
+        upstream_resp = _build_mock_upstream_response(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            body=b'{"jsonrpc":"2.0","id":1,"result":{}}',
+        )
+        headers = _mcp_proxy_token_headers(
+            server_name="airegistry-tools",
+            upstream_url=upstream_url,
+            virtual_backend=virtual_backend,
+        )
+        headers["X-Authorization"] = "Bearer caller-token"
+
+        with (
+            _patch_httpx_async_client(upstream_resp) as client_cls,
+            _patch_scope_repo_allow_all(),
+            patch.object(server_module, "_read_mcp_filter_enabled", return_value=False),
+            patch.object(server_module.settings, "egress_auth_enabled", False),
+        ):
+            response = TestClient(server_module.app).post(
+                "/mcp-proxy/airegistry-tools/",
+                json={"jsonrpc": "2.0", "id": 1, "method": "initialize"},
+                headers=headers,
+            )
+            sent = client_cls.return_value.stream.call_args.kwargs["headers"]
+
+        assert response.status_code == 200
+        sent_names = {name.lower() for name in sent}
+        assert ("x-authorization" in sent_names) is relayed
+        assert "x-internal-token" not in sent_names
+
+    @pytest.mark.parametrize(
+        "upstream_url",
+        [
+            "https://elsewhere.example.com/mcp",
+            "http://mcpgw-server:9000/",
+            "http://mcpgw-server:8003/other",
+            "http://mcpgw-server:8003/mcp?tenant=other",
+            "http://user@mcpgw-server:8003/",
+            "",
+            None,
+        ],
+    )
+    def test_repointed_destination_does_not_relay(self, upstream_url):
+        """The right name at the wrong destination never gets the caller's token."""
+        assert self._decides_relay("airegistry-tools", upstream_url) is False
 
 
 # =============================================================================
