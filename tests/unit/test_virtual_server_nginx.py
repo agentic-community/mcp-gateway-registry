@@ -923,6 +923,103 @@ class TestGenerateVirtualBackendLocations:
         assert "location = /_vs_backend_airegistry-tools" in result
 
     @pytest.mark.asyncio
+    async def test_builtin_backend_routes_through_mcp_proxy(self, mock_server_repository):
+        """Issue #2060: the built-in keeps the caller's bearer via the MCP proxy relay."""
+        from registry.core.nginx_service import NginxConfigService
+
+        mock_server_repository.get.return_value = {
+            "is_enabled": True,
+            "proxy_pass_url": "http://mcpgw-server:8003/",
+            "egress_auth_mode": "none",
+        }
+        vs = _make_vs_config(
+            tool_mappings=[
+                ToolMapping(tool_name="search_registry", backend_server_path="/airegistry-tools")
+            ]
+        )
+        result = await NginxConfigService()._generate_virtual_backend_locations([vs])
+        block = _location_block(result, "/_vs_backend_airegistry-tools")
+
+        assert "/mcp-proxy/airegistry-tools/;" in block
+        assert "proxy_set_header X-Internal-Token $http_x_internal_token;" in block
+        assert 'proxy_set_header X-Registered-Route-Mode "virtual";' in block
+        assert "proxy_pass http://mcpgw-server:8003" not in block
+        assert 'proxy_set_header Authorization "";' not in block
+        assert 'proxy_set_header X-Authorization "";' not in block
+
+    @pytest.mark.asyncio
+    async def test_repointed_builtin_path_stays_direct(self, mock_server_repository):
+        """/airegistry-tools pointed at another target never gets the ingress relay hop."""
+        from registry.core.nginx_service import NginxConfigService
+
+        mock_server_repository.get.return_value = {
+            "is_enabled": True,
+            "proxy_pass_url": "https://elsewhere.example.com/mcp",
+            "egress_auth_mode": "none",
+        }
+        vs = _make_vs_config(
+            tool_mappings=[ToolMapping(tool_name="search", backend_server_path="/airegistry-tools")]
+        )
+        result = await NginxConfigService()._generate_virtual_backend_locations([vs])
+        block = _location_block(result, "/_vs_backend_airegistry-tools")
+
+        assert "proxy_pass https://elsewhere.example.com/mcp;" in block
+        assert "/mcp-proxy/" not in block
+        for name in ("Authorization", "X-Authorization", "Cookie", "X-Internal-Token"):
+            assert f'proxy_set_header {name} "";' in block
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("backend_path", "proxy_pass_url"),
+        [
+            ("/airegistry-tools-copy", "http://mcpgw-server:8003/"),
+            ("/airegistry-tools", "http://mcpgw-server:9000/"),
+        ],
+    )
+    async def test_lookalike_builtin_target_is_not_rendered(
+        self,
+        mock_server_repository,
+        backend_path,
+        proxy_pass_url,
+    ):
+        """The reserved mcpgw host outside the exact built-in identity gets no location."""
+        from registry.core.nginx_service import NginxConfigService
+
+        mock_server_repository.get.return_value = {
+            "is_enabled": True,
+            "proxy_pass_url": proxy_pass_url,
+            "egress_auth_mode": "none",
+        }
+        vs = _make_vs_config(
+            tool_mappings=[ToolMapping(tool_name="search", backend_server_path=backend_path)]
+        )
+        result = await NginxConfigService()._generate_virtual_backend_locations([vs])
+
+        assert "location = /_vs_backend" not in result
+        assert "/mcp-proxy/" not in result
+
+    @pytest.mark.asyncio
+    async def test_builtin_backend_mapping_keeps_egress_mode_none(
+        self,
+        mock_server_repository,
+        tmp_path,
+    ):
+        """The Lua mapping still treats the built-in as a non-egress backend."""
+        mock_server_repository.get.return_value = {
+            "is_enabled": True,
+            "proxy_pass_url": "http://mcpgw-server:8003/",
+            "egress_auth_mode": "none",
+        }
+        vs = _make_vs_config(
+            tool_mappings=[
+                ToolMapping(tool_name="search_registry", backend_server_path="/airegistry-tools")
+            ]
+        )
+        mapping = await _write_mappings_and_read(vs, str(tmp_path))
+
+        assert mapping["tools"][0]["egress_auth_mode"] == "none"
+
+    @pytest.mark.asyncio
     async def test_backend_auth_uses_bounded_validation_timeouts(self, mock_server_repository):
         """A stalled auth-server cannot hold each virtual subrequest for 60 seconds."""
         from registry.core.nginx_service import NginxConfigService

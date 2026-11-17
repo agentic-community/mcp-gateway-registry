@@ -212,7 +212,7 @@ For `tools/call: github_search` on `/virtual/dev-tools/mcp`:
 1. Nginx validates the gateway credential and the caller's virtual-server grant.
 2. Lua resolves `github_search` to `/github` and rewrites the tool name to `search`. It enforces the virtual server's required scopes and alias override.
 3. Lua calls the internal `/_vs_auth_github` location with the **rewritten** JSON-RPC body. Auth-server checks the backing server's scope and original tool name, returning a short-lived token signed for `/github` and its registered upstream.
-4. Lua reuses or initializes that backend's stateful or stateless session and calls `/_vs_backend_github` with the signed token. For a PAT or OAuth-backed registration, this location sends the request through `/mcp-proxy/github/`, which vends the calling user's `/github` credential and injects it. For a plain registration, it proxies directly after stripping gateway credentials.
+4. Lua reuses or initializes that backend's stateful or stateless session and calls `/_vs_backend_github` with the signed token. For a PAT or OAuth-backed registration, this location sends the request through `/mcp-proxy/github/`, which vends the calling user's `/github` credential and injects it. The bundled `/airegistry-tools` registration also goes through `/mcp-proxy/airegistry-tools/`, because that hop is the only one that relays the caller's bearer to it, and its tools call the registry API as the caller. The match is exact on path and registered target (`http://mcpgw-server:8003/`). For any other plain registration, it proxies directly after stripping gateway credentials.
 5. The backend result returns through Lua to the client. If either the virtual or backing grant fails, there is no backend call or egress vend.
 
 ---
