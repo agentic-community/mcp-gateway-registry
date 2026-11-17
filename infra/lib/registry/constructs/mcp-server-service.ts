@@ -31,6 +31,12 @@ export interface McpEfsVolumeConfig {
 // Props
 // ---------------------------------------------------------------------------
 
+/** Task-level CPU units for every MCP server / agent task. */
+const TASK_CPU: number = 512;
+
+/** Task-level memory (MiB) for every MCP server / agent task. */
+const TASK_MEMORY_MIB: number = 1024;
+
 export interface McpServerServiceProps {
   /** Short service name (e.g. 'currenttime', 'mcpgw') */
   readonly serviceName: string;
@@ -68,6 +74,15 @@ export interface McpServerServiceProps {
   readonly additionalExecRoleStatements?: iam.PolicyStatement[];
   /** Additional task role policy statements */
   readonly additionalTaskRoleStatements?: iam.PolicyStatement[];
+  /**
+   * CPU units to leave free for a sidecar added later. This construct pins
+   * the application container's CPU, and ECS rejects a task whose
+   * container-level CPU values sum above the task CPU, so a sidecar needs its
+   * share subtracted here.
+   */
+  readonly reservedSidecarCpu?: number;
+  /** Memory (MiB) to leave free for a sidecar added later. */
+  readonly reservedSidecarMemoryMiB?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -80,6 +95,12 @@ export class McpServerService extends Construct {
 
   /** Security group for the ECS tasks (undefined if not created) */
   public readonly securityGroup?: ec2.SecurityGroup;
+
+  /**
+   * Task definition (undefined if imageUri was empty). Exposed so the
+   * observability pipeline can attach a per-task ADOT collector sidecar.
+   */
+  public readonly taskDefinition?: ecs.FargateTaskDefinition;
 
   constructor(scope: Construct, id: string, props: McpServerServiceProps) {
     super(scope, id);
@@ -209,11 +230,12 @@ export class McpServerService extends Construct {
 
     const taskDef = new ecs.FargateTaskDefinition(this, 'TaskDef', {
       family: `${props.namePrefix}-${props.serviceName}`,
-      cpu: 512,
-      memoryLimitMiB: 1024,
+      cpu: TASK_CPU,
+      memoryLimitMiB: TASK_MEMORY_MIB,
       executionRole: taskExecRole,
       taskRole,
     });
+    this.taskDefinition = taskDef;
 
     // Add EFS volumes
     if (props.efsVolumes) {
@@ -242,8 +264,8 @@ export class McpServerService extends Construct {
       containerName: props.serviceName,
       image: ecs.ContainerImage.fromRegistry(props.imageUri),
       essential: true,
-      cpu: 512,
-      memoryLimitMiB: 1024,
+      cpu: TASK_CPU - (props.reservedSidecarCpu ?? 0),
+      memoryLimitMiB: TASK_MEMORY_MIB - (props.reservedSidecarMemoryMiB ?? 0),
       environment: props.environment,
       logging: ecs.LogDrivers.awsLogs({
         logGroup,

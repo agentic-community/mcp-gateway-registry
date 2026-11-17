@@ -36,6 +36,11 @@ registry:
   vpcCidr: "10.0.0.0/16"
   ingressCidrBlocks:
     - "0.0.0.0/0"
+  # CIDRs of the trusted proxy hop in front of the bundled nginx, for nginx's
+  # set_real_ip_from. Empty resolves to vpcCidr, which is right for a plain
+  # ALB. Set it explicitly to list CloudFront's origin-facing ranges too, or
+  # to narrow the range.
+  trustedRealIpCidrs: ""
 
   # DNS (set enableRoute53Dns to true and configure baseDomain for custom domains)
   enableRoute53Dns: false
@@ -147,6 +152,8 @@ registry:
     otlpEndpoint: ""
     otlpExportIntervalMs: 30000
     exporterOtlpMetricsTemporalityPreference: cumulative
+    # Pin this to a released tag for any deployment you need to roll back.
+    adotCollectorImage: "public.ecr.aws/aws-observability/aws-otel-collector:latest"
 
   # Identity providers (disabled by default)
   entra:
@@ -156,6 +163,95 @@ registry:
   auth0:
     enabled: false
     groupsClaim: "https://mcp-gateway/groups"
+  # Client secrets below are referenced by ARN, never by value. A literal is
+  # written into the synthesized template, so it would sit in plaintext in
+  # cdk.out and in the deployed CloudFormation stack. Create each secret out of
+  # band and paste its COMPLETE ARN (the one ending in a six-character suffix):
+  #
+  #   aws secretsmanager create-secret --name mcp/cognito-client-secret \
+  #     --secret-string "$VALUE" --query ARN --output text
+  #
+  # If you encrypt one with a customer-managed KMS key, also grant the ECS task
+  # execution role kms:Decrypt on that key. CDK cannot discover it from the
+  # secret ARN, so a CMK-encrypted secret otherwise fails at task start.
+
+  # Amazon Cognito. Enabling it requires userPoolId, clientId and
+  # clientSecretArn; synth fails on an incomplete set.
+  cognito:
+    enabled: false
+    # userPoolId: "us-east-1_AbC123"
+    # clientId: ""
+    # clientSecretArn: "arn:aws:secretsmanager:us-east-1:123456789012:secret:mcp/cognito-AbCdEf"
+    # Hosted-UI domain PREFIX, not a hostname: the auth-server appends
+    # ".auth.<region>.amazoncognito.com". Pass "my-pool", not
+    # "my-pool.auth.us-east-1.amazoncognito.com". Leave empty to derive it
+    # from userPoolId.
+    # domain: "my-pool"
+    # M2M app client ids the auth-server accepts, comma or whitespace
+    # separated. Empty denies every client-credentials token.
+    m2mClientIds: ""
+  # PingFederate. Enabling it requires baseUrl, clientId, clientSecretArn and
+  # adminPasswordArn. The registry raises without the admin password, so login
+  # would work while user administration quietly failed.
+  pingfederate:
+    enabled: false
+    # baseUrl: "https://pingfederate.internal"
+    # externalUrl: "https://sso.example.com"
+    # clientId: ""
+    # clientSecretArn: "arn:aws:secretsmanager:us-east-1:123456789012:secret:mcp/pf-AbCdEf"
+    # Optional. Unset means the provider reuses the web client secret.
+    # m2mClientSecretArn: ""
+    groupsClaim: "groups"
+    # EXTRA audiences accepted on an M2M token, comma or whitespace separated.
+    # Optional: the client ids and applicationIdUri are always accepted, so an
+    # empty list is already fail-closed.
+    m2mAllowedAudiences: ""
+    # Admin API, used by the registry only to create OAuth clients and PCV
+    # users. The password must not be the vendor default 2FederateM0re; the
+    # registry rejects it.
+    adminUrl: "https://pingfederate:9999"
+    adminUser: "administrator"
+    # adminPasswordArn: "arn:aws:secretsmanager:us-east-1:123456789012:secret:mcp/pf-admin-AbCdEf"
+
+  # Egress auth: per-user credential vault, OAuth consent and OBO exchange.
+  # Enabling it requires a Mongo-family storageBackend. Set
+  # credentialEncryptionKeyArn too, or vaulted credentials are stored in
+  # plaintext (the application's legacy behavior).
+  egress:
+    enabled: false
+    # Only secrets-manager is supported here. The application also accepts
+    # openbao, which this stack does not provision.
+    secretStoreBackend: secrets-manager
+    secretsManagerPathPrefix: "mcp/egress"
+    # Secret holding the AES-256-GCM input keying material, at least 32 bytes.
+    # Rotating it needs a coordinated re-encryption of the whole vault.
+    # credentialEncryptionKeyArn: ""
+    # Customer-managed KMS KEY ARN for the vault. Empty uses the AWS-managed
+    # key. Must be arn:aws:kms:<region>:<account>:key/<id>: IAM accepts only a
+    # key ARN where this value is used, so an alias ARN, an alias name or a
+    # bare key id grants nothing and every vault write fails. Resolve an alias
+    # with: aws kms describe-key --key-id alias/<name> --query KeyMetadata.Arn
+    secretsManagerKmsKeyArn: ""
+    registryInternalUrl: "http://registry:8091"
+    oauthCallbackBaseUrl: ""
+    oauthTrustedIdpHosts: ""
+    # WHITESPACE-separated audiences an obo_exchange server may target.
+    # Optional: empty is not "allow anything", it falls back to a shape rule
+    # that admits only an internal MCP server's own IdP audience (an "api://"
+    # App ID URI or a bare client id) and rejects every https:// host URL.
+    # Set it to narrow that to an explicit, audited set.
+    oboAllowedAudiences: ""
+    tokenRefreshSkewSeconds: 300
+    stateTtlSeconds: 600
+    oboCacheEnabled: false
+    oboCacheMaxTtlSeconds: 300
+    oboCacheExpirySkewSeconds: 30
+    httpPoolMaxConnections: 100
+    httpPoolMaxKeepalive: 20
+    httpPoolKeepaliveExpirySeconds: 30
+    httpPoolConnectRetries: 1
+    forwardProxyEnabled: false
+    forwardProxyCaBundle: ""
 
   # GitHub private repo auth
   github:

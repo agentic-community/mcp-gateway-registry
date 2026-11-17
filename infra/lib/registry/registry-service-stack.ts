@@ -22,7 +22,11 @@ import { RegistryDataStack } from './registry-data-stack';
 import { RegistryAuthStack } from './registry-auth-stack';
 import { RegistryEcsService } from './constructs/registry-ecs-service';
 import { McpServerService } from './constructs/mcp-server-service';
-import { ObservabilityPipeline } from './constructs/observability-pipeline';
+import {
+  ADOT_SIDECAR_CPU,
+  ADOT_SIDECAR_MEMORY_MIB,
+  ObservabilityPipeline,
+} from './constructs/observability-pipeline';
 import { RegistryAlb } from './constructs/registry-alb';
 import { RegistryEfs } from './constructs/registry-efs';
 import { RegistrySecrets } from './constructs/registry-secrets';
@@ -31,6 +35,38 @@ import { CloudFrontOriginDistribution } from './constructs/cloudfront-distributi
 import { WafRules } from './constructs/waf-rules';
 import * as route53 from 'aws-cdk-lib/aws-route53';
 import * as route53targets from 'aws-cdk-lib/aws-route53-targets';
+
+/**
+ * Port the auth-server application binds inside its task.
+ *
+ * Deliberately not 8888. Service Connect injects a proxy into every task in
+ * the namespace and binds each client alias on loopback, so an app listening
+ * on 8888 inside the auth-server's own task would collide with the proxy's
+ * `auth-server:8888` alias. Callers still use 8888: the alias forwards to this
+ * port. Parity with terraform/aws-ecs (AUTH_LISTEN_PORT=18888).
+ */
+const AUTH_SERVER_CONTAINER_PORT: number = 18888;
+
+/** Service Connect alias port callers use to reach the auth-server. */
+const AUTH_SERVER_ALIAS_PORT: number = 8888;
+
+/**
+ * Registry nginx port serving the internal egress-token vend. Never fronted by
+ * the ALB; reachable task-to-task as `registry:8091` and gated by a security
+ * group rule that admits only the auth-server.
+ */
+const REGISTRY_EGRESS_INTERNAL_PORT: number = 8091;
+
+/**
+ * Secret-path segment owning the auth-server's OBO exchange cache.
+ *
+ * The secret store encodes an auth_method name as unpadded base64url of its
+ * NFC form, and the cache reserves the name "obo-cache", so entries live under
+ * `<prefix>/b2JvLWNhY2hl/`. Hard-coded rather than computed so the grant and
+ * the comment cannot drift apart; parity with
+ * terraform/aws-ecs/modules/mcp-gateway/iam.tf.
+ */
+const OBO_CACHE_NAMESPACE_SEGMENT: string = 'b2JvLWNhY2hl';
 
 export interface RegistryServiceStackProps extends cdk.StackProps {
   readonly config: RegistryConfig;
@@ -150,18 +186,64 @@ export class RegistryServiceStack extends cdk.Stack {
     this.appSecretsKmsKey = secretsBundle.kmsKey;
     const secretsAccessStatements = secretsBundle.accessStatements;
 
-    // Auth provider determination
-    const authProvider = config.auth0.enabled ? 'auth0'
+    // Auth provider determination. Order matters when more than one provider
+    // is enabled, and it is PingFederate first, matching
+    // terraform/aws-ecs/modules/mcp-gateway/ecs-services.tf so the same
+    // config picks the same provider on either stack.
+    const authProvider = config.pingfederate.enabled ? 'pingfederate'
+      : config.auth0.enabled ? 'auth0'
       : config.okta.enabled ? 'okta'
       : config.entra.enabled ? 'entra'
+      : config.cognito.enabled ? 'cognito'
       : authStack.keycloakDomain !== '' ? 'keycloak'
       : 'default';
+
+    // OTEL settings shared by every instrumented app container. The endpoint
+    // is localhost because each task carries its own ADOT collector sidecar;
+    // the sidecar, not the app, holds the AMP endpoint and signs the write.
+    // Traces are off (`none`) in parity with Terraform: only metrics flow.
+    const otelEnv = (serviceName: string): Record<string, string> =>
+      config.enableObservability
+        ? {
+            OTEL_SERVICE_NAME: serviceName,
+            OTEL_METRIC_EXPORT_INTERVAL_MS: '15000',
+            OTEL_EXPORTER_OTLP_ENDPOINT: 'http://localhost:4317',
+            OTEL_EXPORTER_OTLP_PROTOCOL: 'grpc',
+            OTEL_TRACES_EXPORTER: 'none',
+          }
+        : {};
+
+    // Egress settings both services read. The registry owns the vault and the
+    // consent flow; the auth-server performs the OBO exchange and calls the
+    // registry's internal vend. Keep the pool and OBO-cache numbers identical
+    // across both, since they describe the same conversation.
+    const egressSharedEnv: Record<string, string> = {
+      EGRESS_AUTH_ENABLED: String(config.egress.enabled),
+      SECRET_STORE_BACKEND: config.egress.secretStoreBackend,
+      SECRETS_MANAGER_PATH_PREFIX: config.egress.secretsManagerPathPrefix,
+      // Without this the application creates vault secrets under the
+      // AWS-managed key even when an operator configured a CMK, so the
+      // configured key would be granted in IAM and then never used.
+      SECRETS_MANAGER_KMS_KEY_ID: config.egress.secretsManagerKmsKeyArn,
+      EGRESS_OAUTH_TRUSTED_IDP_HOSTS: config.egress.oauthTrustedIdpHosts,
+      EGRESS_HTTP_POOL_MAX_CONNECTIONS: String(config.egress.httpPoolMaxConnections),
+      EGRESS_HTTP_POOL_MAX_KEEPALIVE: String(config.egress.httpPoolMaxKeepalive),
+      EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS: String(config.egress.httpPoolKeepaliveExpirySeconds),
+      EGRESS_HTTP_POOL_CONNECT_RETRIES: String(config.egress.httpPoolConnectRetries),
+      EGRESS_FORWARD_PROXY_ENABLED: String(config.egress.forwardProxyEnabled),
+      EGRESS_FORWARD_PROXY_CA_BUNDLE: config.egress.forwardProxyCaBundle,
+      EGRESS_OBO_CACHE_ENABLED: String(config.egress.oboCacheEnabled),
+      EGRESS_OBO_CACHE_MAX_TTL_SECONDS: String(config.egress.oboCacheMaxTtlSeconds),
+      EGRESS_OBO_CACHE_EXPIRY_SKEW_SECONDS: String(config.egress.oboCacheExpirySkewSeconds),
+    };
 
     // Container env shared by registry + auth-server (both need DocumentDB,
     // OAuth provider config, federation config, etc.)
     const sharedEnv: Record<string, string> = {
       REGISTRY_URL: this.registryUrl,
-      AUTH_SERVER_URL: 'http://auth-server:8888',
+      // The Service Connect alias, not the container port: the proxy forwards
+      // this to AUTH_SERVER_CONTAINER_PORT inside the auth-server's task.
+      AUTH_SERVER_URL: `http://auth-server:${AUTH_SERVER_ALIAS_PORT}`,
       AUTH_SERVER_EXTERNAL_URL: this.registryUrl,
       AWS_REGION: config.awsRegion,
       AUTH_PROVIDER: authProvider,
@@ -170,10 +252,23 @@ export class RegistryServiceStack extends cdk.Stack {
       // yaml value as literal `${VAR}` which breaks provider registration
       // (Login page then shows "No login methods are currently configured").
       KEYCLOAK_ENABLED: authStack.keycloakDomain !== '' ? 'true' : 'false',
-      COGNITO_ENABLED: 'false',
       GITHUB_ENABLED: 'false',
       GOOGLE_ENABLED: 'false',
-      PINGFEDERATE_ENABLED: 'false',
+      // Amazon Cognito. The pool, client and issuer come from stack config
+      // only: a request header must never select how a credential is
+      // validated, which is why there is no header-derived fallback here.
+      COGNITO_ENABLED: String(config.cognito.enabled),
+      COGNITO_USER_POOL_ID: config.cognito.userPoolId,
+      COGNITO_CLIENT_ID: config.cognito.clientId,
+      COGNITO_DOMAIN: config.cognito.domain,
+      PINGFEDERATE_ENABLED: String(config.pingfederate.enabled),
+      PINGFEDERATE_BASE_URL: config.pingfederate.baseUrl,
+      PINGFEDERATE_EXTERNAL_URL: config.pingfederate.externalUrl,
+      PINGFEDERATE_CLIENT_ID: config.pingfederate.clientId,
+      PINGFEDERATE_M2M_CLIENT_ID: config.pingfederate.m2mClientId,
+      PINGFEDERATE_APPLICATION_ID_URI: config.pingfederate.applicationIdUri,
+      PINGFEDERATE_GROUPS_CLAIM: config.pingfederate.groupsClaim,
+      PINGFEDERATE_M2M_ALLOWED_AUDIENCES: config.pingfederate.m2mAllowedAudiences,
       KEYCLOAK_URL: authStack.keycloakUrl,
       KEYCLOAK_REALM: 'mcp-gateway',
       KEYCLOAK_CLIENT_ID: 'mcp-gateway-web',
@@ -239,7 +334,32 @@ export class RegistryServiceStack extends cdk.Stack {
 
     const registryEnv: Record<string, string> = {
       ...sharedEnv,
+      ...egressSharedEnv,
+      ...otelEnv('mcp-gateway-registry'),
       HOME: '/tmp',
+      // nginx sits behind the ALB on every ECS deployment, so tell its realip
+      // module to trust that hop. Without this, audit records and the per-IP
+      // rate-limit zones key on the ALB's private address: every client
+      // collapses into one bucket and the audited IP is never the real one.
+      // Empty config value resolves to this stack's VPC CIDR, matching the
+      // Terraform default.
+      TRUSTED_REAL_IP_CIDRS: config.trustedRealIpCidrs || config.vpcCidr,
+      // Registry-only egress settings: it owns the consent flow and the vault.
+      EGRESS_OAUTH_CALLBACK_BASE_URL: config.egress.oauthCallbackBaseUrl,
+      EGRESS_TOKEN_REFRESH_SKEW_SECONDS: String(config.egress.tokenRefreshSkewSeconds),
+      EGRESS_STATE_TTL_SECONDS: String(config.egress.stateTtlSeconds),
+      // Audiences an OBO-exchanged token may carry. Enforced against this
+      // allowlist so an upstream cannot replay a delegated token back at the
+      // gateway.
+      EGRESS_OBO_ALLOWED_AUDIENCES: config.egress.oboAllowedAudiences,
+      // PingFederate admin API, registry only: it creates OAuth clients and
+      // PCV users there. The auth-server never calls this API.
+      ...(config.pingfederate.enabled
+        ? {
+            PF_ADMIN_URL: config.pingfederate.adminUrl,
+            PF_ADMIN_USER: config.pingfederate.adminUser,
+          }
+        : {}),
       GATEWAY_ADDITIONAL_SERVER_NAMES: registryDomain,
       EC2_PUBLIC_DNS: registryDomain || alb.alb.loadBalancerDnsName,
       KEYCLOAK_ADMIN: 'admin',
@@ -309,8 +429,30 @@ export class RegistryServiceStack extends cdk.Stack {
 
     const authEnv: Record<string, string> = {
       ...sharedEnv,
+      ...egressSharedEnv,
+      ...otelEnv('mcp-auth-server'),
       KEYCLOAK_EXTERNAL_URL: authStack.keycloakUrl,
       KEYCLOAK_M2M_CLIENT_ID: 'mcp-gateway-m2m',
+      // Allowlist of Cognito M2M app client ids whose client-credentials
+      // tokens the auth-server accepts. Auth-server only; the registry has no
+      // use for it.
+      COGNITO_M2M_CLIENT_IDS: config.cognito.m2mClientIds,
+      // The auth-server reaches the registry's egress-token vend on the
+      // dedicated internal listener (registry:8091), which the ALB never
+      // fronts and only the auth-server security group can reach.
+      EGRESS_REGISTRY_INTERNAL_URL: config.egress.registryInternalUrl,
+      // The Service Connect Envoy proxy binds 127.0.0.1:8888 inside the task,
+      // so the application listens on a different port and nginx/Service
+      // Connect routes 8888 to it.
+      AUTH_LISTEN_PORT: String(AUTH_SERVER_CONTAINER_PORT),
+      // Prometheus pull endpoint for the auth-server, in parity with the
+      // Terraform auth-server env. The ADOT sidecar does the AMP write.
+      ...(config.enableObservability
+        ? {
+            OTEL_EXPORTER_PROMETHEUS_HOST: '0.0.0.0',
+            OTEL_EXPORTER_PROMETHEUS_PORT: '9464',
+          }
+        : {}),
       // Prevent AWS SDKs from falling back to EC2 IMDS. ECS task-role
       // credentials remain available through the container credential URI.
       // Kept in parity with terraform/aws-ecs auth-server env.
@@ -329,11 +471,21 @@ export class RegistryServiceStack extends cdk.Stack {
       ['OKTA_API_TOKEN', secretsBundle.oktaApiToken],
       ['AUTH0_CLIENT_SECRET', secretsBundle.auth0ClientSecret],
       ['AUTH0_M2M_CLIENT_SECRET', secretsBundle.auth0M2mClientSecret],
+      ['COGNITO_CLIENT_SECRET', secretsBundle.cognitoClientSecret],
+      ['PINGFEDERATE_CLIENT_SECRET', secretsBundle.pingfederateClientSecret],
+      ['PINGFEDERATE_M2M_CLIENT_SECRET', secretsBundle.pingfederateM2mClientSecret],
       ['METRICS_API_KEY', secretsBundle.metricsApiKey],
     ];
 
     const sharedSecrets: Record<string, ecs.Secret> = {
       SECRET_KEY: ecs.Secret.fromSecretsManager(secretsBundle.secretKey),
+      // The registry and the auth-server MUST read the same value: the
+      // auth-server mints an internal token only when the marker nginx sent
+      // matches its own. A mismatch, or a missing value, 401s every registry
+      // API and UI request, and both services refuse to start without it
+      // (registry/core/config.py). Injecting it here, in sharedSecrets, is
+      // what guarantees one secret reaches both containers.
+      AUTH_SERVER_NGINX_MARKER_SECRET: ecs.Secret.fromSecretsManager(secretsBundle.nginxMarkerSecret),
       KEYCLOAK_CLIENT_SECRET: ecs.Secret.fromSecretsManager(secretsBundle.keycloakClientSecret, 'client_secret'),
       KEYCLOAK_M2M_CLIENT_SECRET: ecs.Secret.fromSecretsManager(secretsBundle.keycloakM2mClientSecret, 'client_secret'),
       ...(docdbSecret ? {
@@ -347,12 +499,40 @@ export class RegistryServiceStack extends cdk.Stack {
       ),
     };
 
+    // The egress credential encryption key is the registry's: it owns the
+    // vault. The auth-server needs it only to encrypt cached OBO tokens, so
+    // it gets a copy only when that cache is on, and its execution role is
+    // denied the secret otherwise. Same condition as
+    // terraform/aws-ecs/modules/mcp-gateway/ecs-services.tf.
+    const egressKey = secretsBundle.egressCredentialEncryptionKey;
+    const authNeedsEgressKey = egressKey !== undefined && config.egress.oboCacheEnabled;
+
     const registrySecrets: Record<string, ecs.Secret> = {
       ...sharedSecrets,
       KEYCLOAK_ADMIN_PASSWORD: ecs.Secret.fromSecretsManager(secretsBundle.keycloakAdminPassword),
       EMBEDDINGS_API_KEY: ecs.Secret.fromSecretsManager(secretsBundle.embeddingsApiKey),
+      ...(egressKey
+        ? { EGRESS_CREDENTIAL_ENCRYPTION_KEY: ecs.Secret.fromSecretsManager(egressKey) }
+        : {}),
+      // Registry only: it drives the PingFederate admin API.
+      ...(secretsBundle.pingfederateAdminPassword
+        ? { PF_ADMIN_PASS: ecs.Secret.fromSecretsManager(secretsBundle.pingfederateAdminPassword) }
+        : {}),
     };
-    const authSecrets = sharedSecrets;
+
+    const authSecrets: Record<string, ecs.Secret> = {
+      ...sharedSecrets,
+      ...(authNeedsEgressKey
+        ? { EGRESS_CREDENTIAL_ENCRYPTION_KEY: ecs.Secret.fromSecretsManager(egressKey!) }
+        : {}),
+    };
+
+    // The auth-server's execution role is denied the two secrets its
+    // containers never receive, so a grant cannot outlive an injection.
+    const authExecStatements = secretsBundle.accessStatementsExcept([
+      secretsBundle.pingfederateAdminPassword,
+      ...(authNeedsEgressKey ? [] : [egressKey]),
+    ]);
 
     // Optional Bedrock AgentCore policy for federation.
     //
@@ -431,6 +611,121 @@ export class RegistryServiceStack extends cdk.Stack {
         })]
       : [];
 
+    // Per-user egress credential vault. The registry does runtime CRUD on one
+    // secret per user under the configured path prefix, so unlike the other
+    // secrets in this stack these cannot be enumerated at synth time and the
+    // grant has to be a prefix.
+    //
+    // The prefix is validated in registry-config.ts against a character set
+    // that excludes `*`, so an operator cannot widen this grant past the
+    // vault through config. Secrets Manager appends a random 6-character
+    // suffix to every ARN, which is what the trailing wildcard covers.
+    if (config.egress.enabled && config.egress.secretStoreBackend === 'secrets-manager') {
+      const vaultStatements: iam.PolicyStatement[] = [
+        new iam.PolicyStatement({
+          sid: 'EgressCredentialVaultCrud',
+          effect: iam.Effect.ALLOW,
+          actions: [
+            'secretsmanager:CreateSecret',
+            'secretsmanager:GetSecretValue',
+            'secretsmanager:PutSecretValue',
+            'secretsmanager:DeleteSecret',
+            'secretsmanager:DescribeSecret',
+            'secretsmanager:ListSecretVersionIds',
+          ],
+          resources: [
+            `arn:${this.partition}:secretsmanager:${this.region}:${this.account}:secret:${config.egress.secretsManagerPathPrefix}/*`,
+          ],
+        }),
+      ];
+      // Only for a customer-managed CMK. The AWS-managed Secrets Manager key
+      // needs no explicit grant. registry-config.ts requires a KMS KEY ARN
+      // here, not an alias ARN: IAM accepts only a key ARN in the Resource of
+      // a statement granting cryptographic operations.
+      if (config.egress.secretsManagerKmsKeyArn !== '') {
+        vaultStatements.push(
+          new iam.PolicyStatement({
+            sid: 'EgressVaultCmkAccess',
+            effect: iam.Effect.ALLOW,
+            actions: ['kms:Decrypt', 'kms:GenerateDataKey'],
+            resources: [config.egress.secretsManagerKmsKeyArn],
+          }),
+        );
+      }
+      registryTaskRolePolicies.push(
+        new iam.ManagedPolicy(this, 'EgressVaultAccessPolicy', { statements: vaultStatements }),
+      );
+    }
+
+    // The auth-server's OBO exchange cache lives in the same Secrets Manager
+    // vault, under the reserved "obo-cache" namespace. The namespace is
+    // base64url(NFC("obo-cache")) unpadded, which is the literal below, so
+    // this grant reaches the cache entries and nothing else: the auth-server
+    // cannot read a user's egress credentials with it.
+    //
+    // Without this grant the cache reads and writes return AccessDenied and
+    // the auth-server falls back to a stateless exchange without saying so.
+    const authTaskRolePolicies: iam.IManagedPolicy[] = [];
+    if (
+      config.egress.enabled
+      && config.egress.oboCacheEnabled
+      && config.egress.secretStoreBackend === 'secrets-manager'
+    ) {
+      authTaskRolePolicies.push(
+        new iam.ManagedPolicy(this, 'AuthServerOboCacheVaultPolicy', {
+          statements: [
+            new iam.PolicyStatement({
+              sid: 'OboCacheVaultCrud',
+              effect: iam.Effect.ALLOW,
+              actions: [
+                'secretsmanager:CreateSecret',
+                'secretsmanager:GetSecretValue',
+                'secretsmanager:PutSecretValue',
+                'secretsmanager:DeleteSecret',
+                'secretsmanager:DescribeSecret',
+                'secretsmanager:ListSecretVersionIds',
+              ],
+              resources: [
+                `arn:${this.partition}:secretsmanager:${this.region}:${this.account}:secret:${config.egress.secretsManagerPathPrefix}/${OBO_CACHE_NAMESPACE_SEGMENT}/*`,
+              ],
+            }),
+            ...(config.egress.secretsManagerKmsKeyArn !== ''
+              ? [new iam.PolicyStatement({
+                  sid: 'OboCacheVaultCmkAccess',
+                  effect: iam.Effect.ALLOW,
+                  actions: ['kms:Decrypt', 'kms:GenerateDataKey'],
+                  resources: [config.egress.secretsManagerKmsKeyArn],
+                })]
+              : []),
+          ],
+        }),
+      );
+    }
+
+    // Read-only Cognito access for the registry's IAM management UI (list
+    // groups and users). Scoped to the one configured user pool; the pool id
+    // is format-validated in registry-config.ts because it lands in this ARN.
+    if (config.cognito.enabled) {
+      registryTaskRolePolicies.push(
+        new iam.ManagedPolicy(this, 'CognitoIamReadPolicy', {
+          statements: [
+            new iam.PolicyStatement({
+              sid: 'CognitoIdpReadOnly',
+              effect: iam.Effect.ALLOW,
+              actions: [
+                'cognito-idp:ListGroups',
+                'cognito-idp:ListUsers',
+                'cognito-idp:AdminListGroupsForUser',
+              ],
+              resources: [
+                `arn:${this.partition}:cognito-idp:${this.region}:${this.account}:userpool/${config.cognito.userPoolId}`,
+              ],
+            }),
+          ],
+        }),
+      );
+    }
+
     // Registry ECS service — nginx (:8080) fronts everything external. Gradio
     // (:7860) is loopback-bound and reached through nginx path routes.
     const registryService = new RegistryEcsService(this, 'RegistrySvc', {
@@ -442,12 +737,24 @@ export class RegistryServiceStack extends cdk.Stack {
       additionalPorts: [
         { port: 8443, name: 'https' },
         { port: 7860, name: 'gradio-internal' },
+        { port: REGISTRY_EGRESS_INTERNAL_PORT, name: 'egress-internal' },
       ],
       vpc,
       subnets: privateSubnets,
       cluster: this.ecsCluster,
       serviceConnectNamespaceArn: cloudMapNamespace.namespaceArn,
       serviceConnect: { port: 8080, dnsName: 'registry', portName: 'http', discoveryName: 'registry' },
+      // Advertise the internal egress-token vend listener so the auth-server
+      // reaches it as registry:8091. Separate from the :8080 alias the ALB
+      // fronts, so this listener stays off the public path.
+      additionalServiceConnect: [
+        {
+          port: REGISTRY_EGRESS_INTERNAL_PORT,
+          dnsName: 'registry',
+          portName: 'egress-internal',
+          discoveryName: 'registry-egress-internal',
+        },
+      ],
       environment: registryEnv,
       secrets: registrySecrets,
       targetGroups: [
@@ -473,12 +780,17 @@ export class RegistryServiceStack extends cdk.Stack {
       image: config.images.authServer,
       cpu: 512,
       memory: 1024,
-      containerPort: 8888,
+      containerPort: AUTH_SERVER_CONTAINER_PORT,
       vpc,
       subnets: privateSubnets,
       cluster: this.ecsCluster,
       serviceConnectNamespaceArn: cloudMapNamespace.namespaceArn,
-      serviceConnect: { port: 8888, dnsName: 'auth-server', portName: 'auth-server', discoveryName: 'auth-server' },
+      serviceConnect: {
+        port: AUTH_SERVER_ALIAS_PORT,
+        dnsName: 'auth-server',
+        portName: 'auth-server',
+        discoveryName: 'auth-server',
+      },
       environment: authEnv,
       secrets: authSecrets,
       efsVolumes: [
@@ -498,14 +810,33 @@ export class RegistryServiceStack extends cdk.Stack {
       // No public ALB attachment — auth-server is only reachable via Service
       // Connect from the registry container (nginx proxies /oauth2/*).
       targetGroups: [],
-      additionalExecRoleStatements: secretsAccessStatements,
-      healthCheckCommand: 'curl -f http://localhost:8888/health || exit 1',
+      additionalTaskRolePolicies: authTaskRolePolicies,
+      additionalExecRoleStatements: authExecStatements,
+      healthCheckCommand: `curl -f http://localhost:${AUTH_SERVER_CONTAINER_PORT}/health || exit 1`,
       namePrefix,
       desiredCount: config.replicas.auth,
     });
     this.authEcsSg = authService.securityGroup;
 
-    authService.securityGroup.addIngressRule(registryService.securityGroup, ec2.Port.tcp(8888), 'Allow registry to access auth server');
+    // The container port, not the alias port: the Service Connect proxy's
+    // ingress listener terminates on the container port, so that is what
+    // arrives at the task's network interface.
+    authService.securityGroup.addIngressRule(
+      registryService.securityGroup,
+      ec2.Port.tcp(AUTH_SERVER_CONTAINER_PORT),
+      'Allow registry to access auth server',
+    );
+
+    // The auth-server calls the registry's internal egress-token vend on its
+    // own listener. Only this one source: the port is never ALB-fronted, and
+    // the vend mints credentials.
+    if (config.egress.enabled) {
+      registryService.securityGroup.addIngressRule(
+        authService.securityGroup,
+        ec2.Port.tcp(REGISTRY_EGRESS_INTERNAL_PORT),
+        'Allow auth-server to reach the registry internal egress-token vend',
+      );
+    }
 
     // Registry nginx hard-fails if auth-server Service Connect DNS is not yet
     // registered on first deploy. Force CFN to create auth-server first.
@@ -538,7 +869,12 @@ export class RegistryServiceStack extends cdk.Stack {
         PORT: '8003',
         HOST: '0.0.0.0',
         REGISTRY_BASE_URL: 'http://registry:8080',
+        // Without this, mcpgw sends no X-Forwarded-Host or X-Forwarded-Proto,
+        // so URLs the registry builds for mcpgw tool results point at the
+        // internal registry:8080 host instead of the public one.
+        REGISTRY_EXTERNAL_URL: this.registryUrl,
         REGISTRY_USERNAME: 'admin',
+        ...otelEnv('mcp-mcpgw'),
       },
       efsVolumes: [{
         volumeName: 'mcpgw-data',
@@ -547,19 +883,33 @@ export class RegistryServiceStack extends cdk.Stack {
         containerPath: '/app/data',
       }],
       ingressSecurityGroup: registryService.securityGroup,
-      additionalExecRoleStatements: secretsAccessStatements,
+      // No secrets grant: McpServerService injects no container secrets, so
+      // the whole bundle here would let mcpgw's execution role read the
+      // PingFederate admin password and the egress credential key it never
+      // receives. Terraform has the same over-grant; this does not.
+      // Leave room for the ADOT sidecar attached below: this construct pins
+      // the app container's CPU, and ECS rejects a task whose container CPU
+      // values sum above the task CPU.
+      ...(config.enableObservability
+        ? {
+            reservedSidecarCpu: ADOT_SIDECAR_CPU,
+            reservedSidecarMemoryMiB: ADOT_SIDECAR_MEMORY_MIB,
+          }
+        : {}),
       namePrefix,
       desiredCount: config.replicas.mcpgw,
     });
 
     if (mcpgwService.securityGroup) {
-      for (const port of [8080, 7860]) {
-        registryService.securityGroup.addIngressRule(
-          mcpgwService.securityGroup, ec2.Port.tcp(port), `Port ${port} from mcpgw`,
-        );
-      }
+      // :8080 (nginx) only. Terraform dropped the :7860 rule when the
+      // registry's internal auth was hardened: 7860 is the app process, which
+      // binds loopback and is meant to be reached only through nginx in the
+      // same task.
+      registryService.securityGroup.addIngressRule(
+        mcpgwService.securityGroup, ec2.Port.tcp(8080), 'Port 8080 from mcpgw',
+      );
       // Auth-server mcp-proxy forwards to mcpgw:8003 (parity with terraform
-      // auth_to_mcpgw rule at terraform/aws-ecs/modules/mcp-gateway/ecs-services.tf:1965)
+      // auth_to_mcpgw rule at terraform/aws-ecs/modules/mcp-gateway/ecs-services.tf:2460)
       mcpgwService.securityGroup.addIngressRule(
         authService.securityGroup, ec2.Port.tcp(8003), 'Allow auth-server mcp-proxy to reach mcpgw',
       );
@@ -647,10 +997,31 @@ export class RegistryServiceStack extends cdk.Stack {
       metricsAdminApiKeySecret: secretsBundle.metricsAdminApiKey,
       otlpExporterHeadersSecret: secretsBundle.otlpExporterHeaders,
       grafanaAdminPasswordSecret: secretsBundle.grafanaAdminPassword,
-      secretsAccessStatements,
       registryServiceSg: registryService.securityGroup,
       authServiceSg: authService.securityGroup,
       albSg: alb.albSg,
+      // Issue #1122: the metrics-service collector only scrapes the metrics
+      // service. These three push over OTLP, so each needs its own sidecar or
+      // its metrics never reach AMP.
+      otlpSidecarTargets: [
+        {
+          name: 'registry',
+          taskDefinition: registryService.taskDefinition,
+          appContainerName: 'registry',
+        },
+        {
+          name: 'auth-server',
+          taskDefinition: authService.taskDefinition,
+          appContainerName: 'auth-server',
+        },
+        ...(mcpgwService.taskDefinition
+          ? [{
+              name: 'mcpgw',
+              taskDefinition: mcpgwService.taskDefinition,
+              appContainerName: 'mcpgw-server',
+            }]
+          : []),
+      ],
       namePrefix,
     });
 
