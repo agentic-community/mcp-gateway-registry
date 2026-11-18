@@ -117,6 +117,10 @@ For custom curl commands with query parameters (e.g., `include_disabled`, `tag`)
 
 **UI:** Click the edit (pencil) icon on a skill card.
 
+If an update changes the SKILL.md URL, the registry fetches the new SKILL.md and its companion files before it saves, and rebuilds the content hashes it uses for drift detection. If the new SKILL.md cannot be fetched, the update fails with HTTP 400 and the skill keeps its previous source. An update that leaves the URL unchanged fetches nothing.
+
+To pin a skill to an exact revision, use a GitHub permalink with the full 40-character commit SHA, for example `https://github.com/org/repo/blob/<commit-sha>/skills/pdf-processing/SKILL.md`, or the matching `raw.githubusercontent.com/org/repo/<commit-sha>/...` URL. To move the skill to a newer revision, update the URL to the new commit SHA. A branch URL such as `.../blob/main/...` tracks the branch: pushing to it changes the content without changing the URL, so drift detection flags the change and disables the skill.
+
 **API:** For update endpoints, see the OpenAPI specification at [api/openapi.json](../api/openapi.json).
 
 ### Enable/Disable Skills
