@@ -68,6 +68,19 @@ uv run python api/registry_management.py \
   import-group --file cli/examples/tool-subset-per-server.json
 ```
 
+The CLI calls `POST /api/servers/groups/import`, and you can call that endpoint directly. It requires an admin bearer token and takes the group file as the JSON body:
+
+```bash
+export ACCESS_TOKEN=$(jq -r '.tokens.access_token' .token)
+
+curl -X POST "$REGISTRY_URL/api/servers/groups/import" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d @cli/examples/tool-subset-per-server.json
+```
+
+Importing a file whose `scope_name` already exists replaces that group's definition.
+
 To change the tool list later, edit the file and import it again, or edit the group under **Settings > IAM > Groups** in the UI. The auth server reloads scopes on every write, so the change takes effect without a restart.
 
 ## Limits
