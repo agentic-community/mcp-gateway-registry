@@ -157,6 +157,8 @@ def keycloak():
         "KC_FEATURES=cimd",
         "-e",
         "KC_FEATURES_DISABLED=device-flow,ciba",
+        "-e",
+        "KC_SPI_CLIENT_REGISTRATION__DEFAULT__ENABLED=false",
         IMAGE,
         "start-dev",
         env=env,
@@ -248,6 +250,8 @@ def _code_token(
     password: str,
     client_id: str,
     scope: str = "openid profile email",
+    *,
+    return_code: bool = False,
 ) -> dict:
     verifier = secrets.token_urlsafe(48)
     challenge = (
@@ -289,6 +293,8 @@ def _code_token(
                     assert "code" in query, {
                         key: value for key, value in query.items() if key != "code"
                     }
+                    if return_code:
+                        return {"code": query["code"][0], "verifier": verifier}
                     token = browser.post(
                         f"/realms/{REALM}/protocol/openid-connect/token",
                         data={
@@ -516,14 +522,14 @@ def test_operator_machine_retains_privileged_scopes(keycloak):
     assert "registry-admins" in response.json()["scope"].split()
 
 
-def test_existing_cimd_privileged_assignment_is_removed(keycloak):
+def test_untrusted_legacy_cimd_cache_is_removed_once(keycloak):
     client, password = keycloak
-    record = _client_record(client, password, "https://vscode.dev/legacy-client.json")
-    assigned = _admin(
-        client, password, "GET", f"/clients/{record['id']}/default-client-scopes"
-    ).json()
-    assert "registry-admins" not in {scope["name"] for scope in assigned}
-    assert "basic" in {scope["name"] for scope in assigned}
+    response = _admin(
+        client, password, "GET", "/clients?clientId=https%3A%2F%2Fvscode.dev%2Flegacy-client.json"
+    )
+    assert response.json() == []
+    realm = _admin(client, password, "GET", "").json()
+    assert realm["attributes"]["mcpgw.cimd.provenance.v1"] == "true"
 
 
 def test_native_cimd_privileged_assignment_blocks_login_and_refresh(keycloak):
@@ -679,3 +685,87 @@ def test_dcr_groups_authorize_gateway_and_refresh_removes_revoked_grants(keycloa
     finally:
         _admin(client, password, "DELETE", membership)
         _admin(client, password, "DELETE", f"/groups/{parent_id}")
+
+
+def test_native_registration_cannot_forge_cimd_provenance(keycloak):
+    client, password = keycloak
+    client_id = "https://vscode.dev/forged-client.json"
+    response = client.post(
+        f"/realms/{REALM}/clients-registrations/default",
+        json={
+            "clientId": client_id,
+            "protocol": "openid-connect",
+            "publicClient": True,
+            "standardFlowEnabled": True,
+            "redirectUris": [CALLBACK],
+            "attributes": {"cimd.cache.expiry.time.in.sec": "2147483647"},
+        },
+    )
+    assert response.status_code == 404
+    records = _admin(
+        client, password, "GET", "/clients?clientId=" + quote(client_id, safe="")
+    ).json()
+    assert records == []
+
+
+@pytest.mark.parametrize("mechanism", ["dcr", "cimd"])
+@pytest.mark.parametrize("pkce", ["missing", "plain"])
+def test_public_registration_rejects_missing_or_plain_pkce(keycloak, mechanism, pkce):
+    client, password = keycloak
+    if mechanism == "dcr":
+        registered = client.post(
+            f"/realms/{REALM}/clients-registrations/openid-connect",
+            json={
+                "redirect_uris": [CALLBACK],
+                "token_endpoint_auth_method": "none",
+                "grant_types": ["authorization_code", "refresh_token"],
+            },
+        )
+        assert registered.status_code == 201
+        client_id = registered.json()["client_id"]
+    else:
+        # Use the real vendor document; earlier lifecycle tests may leave it disabled.
+        records = _admin(
+            client, password, "GET", "/clients?clientId=" + quote(VENDOR_CLIENT, safe="")
+        ).json()
+        if records:
+            _admin(client, password, "PUT", f"/clients/{records[0]['id']}", {"enabled": True})
+        client_id = VENDOR_CLIENT
+    params = {
+        "client_id": client_id,
+        "redirect_uri": CALLBACK,
+        "response_type": "code",
+        "scope": "openid profile email",
+        "state": "pkce-test",
+    }
+    if pkce == "plain":
+        params.update(code_challenge="x" * 43, code_challenge_method="plain")
+    response = client.get(f"/realms/{REALM}/protocol/openid-connect/auth", params=params)
+    assert response.status_code == 400 or "error=" in response.headers.get("location", "")
+
+
+@pytest.mark.parametrize("supplied_verifier", [None, "incorrect-verifier-" * 4])
+def test_public_code_exchange_requires_bound_verifier(keycloak, supplied_verifier):
+    client, password = keycloak
+    registered = client.post(
+        f"/realms/{REALM}/clients-registrations/openid-connect",
+        json={
+            "redirect_uris": [CALLBACK],
+            "token_endpoint_auth_method": "none",
+            "grant_types": ["authorization_code", "refresh_token"],
+        },
+    )
+    assert registered.status_code == 201
+    client_id = registered.json()["client_id"]
+    authorization = _code_token(client, password, client_id, return_code=True)
+    data = {
+        "grant_type": "authorization_code",
+        "client_id": client_id,
+        "redirect_uri": CALLBACK,
+        "code": authorization["code"],
+    }
+    if supplied_verifier is not None:
+        data["code_verifier"] = supplied_verifier
+    response = client.post(f"/realms/{REALM}/protocol/openid-connect/token", data=data)
+    assert response.status_code == 400
+    assert "access_token" not in response.json()

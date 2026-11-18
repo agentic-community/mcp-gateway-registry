@@ -38,6 +38,8 @@ keycloak:
 registrationTrustedClientIds: []
 
 # DCR is opt-in and requires Keycloak 26.8.2.
+# The native registration/default provider must be disabled at server startup.
+# Public OIDC code flows require S256, including cached CIMD clients.
 # Both registration subtypes use an explicit scope allowlist, reject client
 # mappers and default roles, and enforce the realm's device-grant restriction.
 # With DCR off, setup disables anonymous registration and unlisted clients.
@@ -65,7 +67,7 @@ dcr:
 # Native Keycloak shares callback and JWKS hosts; protect outbound fetches separately.
 # Disabling CIMD or removing vendor trust disables persisted CIMD clients
 # independently of DCR and requires dcr.sweepAcknowledged after inventory review.
-# Approved active CIMD clients still need dcr.keepClients when DCR is off.
+# First CIMD enable after cutover removes untrusted cache records with that acknowledgement.
 cimd:
   enabled: false
   trustedDomains:

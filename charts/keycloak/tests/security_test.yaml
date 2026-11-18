@@ -6,6 +6,35 @@ set:
   hostname: https://id.example.com
   postgres.bootstrap.mode: fresh-install
 tests:
+  - it: disables native registration without disabling OIDC registration
+    templates:
+      - templates/keycloak.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KC_SPI_CLIENT_REGISTRATION__DEFAULT__ENABLED
+            value: "false"
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KC_SPI_CLIENT_REGISTRATION__OPENID_CONNECT__ENABLED
+            value: "false"
+
+  - it: rejects attempts to reenable native registration through extraEnv
+    templates:
+      - templates/validate-values.yaml
+    set:
+      extraEnv:
+        - name: KC_SPI_CLIENT_REGISTRATION__DEFAULT__ENABLED
+          value: "true"
+    asserts:
+      - failedTemplate:
+          errorPattern: keycloak.extraEnv cannot override chart-managed KC_SPI_CLIENT_REGISTRATION__DEFAULT__ENABLED
+
   - it: hardens every Keycloak container and runs it under RuntimeDefault seccomp
     templates:
       - templates/keycloak.yaml

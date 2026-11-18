@@ -603,6 +603,8 @@ export class KeycloakService extends Construct {
         // Both public and custom images apply these settings at startup.
         KC_FEATURES: 'token-exchange,cimd',
         KC_FEATURES_DISABLED: 'device-flow,ciba',
+        // Native registration accepts arbitrary attributes; retain only OIDC DCR.
+        KC_SPI_CLIENT_REGISTRATION__DEFAULT__ENABLED: 'false',
         KC_PROXY_HEADERS: 'xforwarded',
         KC_HOSTNAME: this.keycloakUrl,
         KC_HOSTNAME_ADMIN: this.keycloakUrl,

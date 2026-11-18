@@ -72,6 +72,11 @@ locals {
       value = "token-exchange,cimd"
     },
     {
+      # Native registration accepts arbitrary attributes; retain only OIDC DCR.
+      name  = "KC_SPI_CLIENT_REGISTRATION__DEFAULT__ENABLED"
+      value = "false"
+    },
+    {
       name  = "KC_FEATURES_DISABLED"
       value = "device-flow,ciba"
     }

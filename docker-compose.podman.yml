@@ -947,6 +947,8 @@ services:
       # Features
       KC_FEATURES: token-exchange,admin-api,hostname:v2,cimd
       KC_FEATURES_DISABLED: device-flow,ciba
+      # Native registration accepts arbitrary attributes; retain only OIDC DCR.
+      KC_SPI_CLIENT_REGISTRATION__DEFAULT__ENABLED: 'false'
 
       # Logging
       KC_LOG_LEVEL: INFO

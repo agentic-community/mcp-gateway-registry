@@ -211,13 +211,76 @@ data:
             | if length > 0 then . else error("CIMD_TRUSTED_DOMAINS lists only loopback hosts; add vendor domains") end' <<< "$domains"
     }
 
+    # The native format accepts arbitrary attributes, including CIMD's cache receipt.
+    # Disable that provider at server startup; standard OIDC registration stays enabled.
+    _require_oidc_registration_only() {
+        local info
+        info=$(_admin_get "$1" /admin/serverinfo) || return 1
+        if ! jq -e '.providers["client-registration"].providers | type == "object" and
+            has("openid-connect") and (has("default") | not)' <<< "$info" >/dev/null; then
+            echo "Disable native DCR with KC_SPI_CLIENT_REGISTRATION__DEFAULT__ENABLED=false and restart Keycloak before enabling DCR/CIMD. Keep the openid-connect provider enabled." >&2
+            return 1
+        fi
+    }
+
+    # Cached entries from the unrestricted native provider cannot prove provenance.
+    # Recreate them through verified metadata once; never re-enable disabled records.
+    _reset_untrusted_cimd_cache() {
+        local token=$1 realm clients entries entry id status attributes
+        _require_oidc_registration_only "$token" || return 1
+        realm=$(_admin_get "$token" "/admin/realms/$REALM") || return 1
+        [ "$(jq -r '.attributes["mcpgw.cimd.provenance.v1"] // "false"' <<< "$realm")" != true ] || return 0
+        clients=$(_list_all_clients "$token") || return 1
+        entries=$(jq -c '.[] | select((.attributes // {}) | has("cimd.cache.expiry.time.in.sec")) | {id, clientId, enabled}' <<< "$clients") || return 1
+        if [ -n "$entries" ]; then
+            echo "CIMD cache reset inventory (old registrations will be removed):"
+            jq -sr '.[] | [.id, (.clientId | gsub("[^A-Za-z0-9._:/@-]"; "?"))] | @tsv' <<< "$entries"
+            if [ "${DCR_SWEEP_ACKNOWLEDGED:-false}" != true ]; then
+                echo "Review the one-time CIMD cache removal and set DCR_SWEEP_ACKNOWLEDGED=true. Old cache attributes could have been supplied by native DCR." >&2
+                return 1
+            fi
+            # Stop new metadata creation while removing the untrusted cache records.
+            _registration_policy_write "$token" policies cimd-vendors-policy null || return 1
+            while IFS= read -r entry; do
+                id=$(jq -er '.id | @uri' <<< "$entry") || return 1
+                if [ "$(jq -r '.enabled' <<< "$entry")" = false ]; then
+                    echo "Disabled CIMD client $id requires administrator review before cache reset; remove it explicitly or retain CIMD disabled." >&2
+                    return 1
+                fi
+                status=$(realm_curl -sS -o /dev/null -w '%{http_code}' -X DELETE \
+                    "$KEYCLOAK_URL/admin/realms/$REALM/clients/$id" -H "Authorization: Bearer $token") || return 1
+                [ "$status" = 204 ] || return 1
+                status=$(realm_curl -sS -o /dev/null -w '%{http_code}' \
+                    "$KEYCLOAK_URL/admin/realms/$REALM/clients/$id" -H "Authorization: Bearer $token") || return 1
+                [ "$status" = 404 ] || return 1
+            done <<< "$entries"
+        fi
+        attributes=$(jq -c '{attributes: ((.attributes // {}) + {"mcpgw.cimd.provenance.v1": "true"})}' <<< "$realm") || return 1
+        status=$(realm_curl -sS -o /dev/null -w '%{http_code}' -X PUT \
+            "$KEYCLOAK_URL/admin/realms/$REALM" -H "Authorization: Bearer $token" \
+            -H 'Content-Type: application/json' -d "$attributes") || return 1
+        [ "$status" = 204 ] || return 1
+        realm=$(_admin_get "$token" "/admin/realms/$REALM") || return 1
+        jq -e '.attributes["mcpgw.cimd.provenance.v1"] == "true"' <<< "$realm" >/dev/null
+    }
+
+    _configure_public_pkce_policy() {
+        local token=$1 profile policy
+        profile='{"name":"mcp-public-pkce","executors":[{"executor":"pkce-enforcer","configuration":{"auto-configure":true}}]}'
+        policy='{"name":"mcp-public-pkce-policy","enabled":true,"mode":"STRICT","conditions":[{"condition":"client-access-type","configuration":{"type":["public"]}},{"condition":"client-type","configuration":{"protocol":"openid-connect"}}],"profiles":["mcp-public-pkce"]}'
+        _registration_policy_write "$token" profiles mcp-public-pkce "$profile" || return 1
+        _registration_policy_write "$token" policies mcp-public-pkce-policy "$policy"
+    }
+
     _registration_security_available() {
         local info
         info=$(_admin_get "$1" /admin/serverinfo) || return 1
         jq -r '(.componentTypes["org.keycloak.services.clientpolicy.condition.ClientPolicyConditionProvider"] // [] | map(.id)) as $conditions
-            | ($conditions | index("client-scopes") != null and index("client-roles") != null)
-            and any(.componentTypes["org.keycloak.services.clientpolicy.executor.ClientPolicyExecutorProvider"][]?;
-                .id == "reject-request") and any(.componentTypes["org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy"][]?;
+            | ($conditions | index("client-scopes") != null and index("client-roles") != null
+                and index("client-access-type") != null and index("client-type") != null)
+            and ((.componentTypes["org.keycloak.services.clientpolicy.executor.ClientPolicyExecutorProvider"] // [] | map(.id)) as $executors
+                | ($executors | index("reject-request") != null and index("pkce-enforcer") != null))
+            and any(.componentTypes["org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy"][]?;
                 .id == "default-roles")' <<< "$info"
     }
 
@@ -230,10 +293,11 @@ data:
             _preflight_cimd_support "$KEYCLOAK_URL" "$token" || return 1
         fi
         if [ "${ENABLE_DCR_CONFIG:-false}" = true ] || [ "${ENABLE_CIMD_CONFIG:-false}" = true ]; then
+            _require_oidc_registration_only "$token" || return 1
             _require_supported_keycloak "$KEYCLOAK_URL" "$token" || return 1
             available=$(_registration_security_available "$token") || return 1
             if [ "$available" != true ]; then
-                echo "DCR/CIMD requires native client-scopes, client-roles, reject-request and default-roles policy providers." >&2
+                echo "DCR/CIMD requires native scope, role, public-client, protocol, PKCE and default-roles policy providers." >&2
                 return 1
             fi
             # A missing realm is normal on first install. Inspect again after creation.
@@ -351,6 +415,7 @@ data:
         forbidden=$(jq -ce --argjson allowed "$allowed" 'if type != "array" then error("invalid realm scopes") else
             [.[] | .name | select(. as $name | $allowed | index($name) | not)] | unique end' <<< "$scopes") || return 1
         configure_dcr_default_roles "$token" || return 1
+        _configure_public_pkce_policy "$token" || return 1
         _reconcile_registration_trust_roles "$token" || return 1
         profile='{"name":"mcp-registration-scope-guard","executors":[{"executor":"reject-request","configuration":{}}]}'
         # STRICT is essential: on registration/pre-auth events client-scopes abstains.
@@ -458,6 +523,7 @@ data:
         _preflight_cimd_support "$KEYCLOAK_URL" "$token" || return 1
         domains=$(_cimd_domains) || return 1
         hosts=$(_cimd_client_id_domains) || return 1
+        _reset_untrusted_cimd_cache "$token" || return 1
         configure_registration_security_policy "$token" || return 1
         reconcile_cimd_clients "$token" || return 1
         reconcile_registered_client_scopes "$token" || return 1
@@ -489,6 +555,7 @@ data:
         # Close anonymous registration during the cutover, including already-open realms.
         disable_anonymous_dcr "$token" || return 1
         if [ "${ENABLE_CIMD_CONFIG:-false}" = true ]; then
+            _reset_untrusted_cimd_cache "$token" || return 1
             reconcile_cimd_clients "$token" || return 1
         else
             _remove_cimd_client_policy "$token" || return 1

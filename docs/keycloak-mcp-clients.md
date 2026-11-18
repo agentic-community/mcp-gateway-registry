@@ -25,6 +25,17 @@ make changes with confidence at level 400.
 
 Realm setup uses the official Keycloak 26.8.2 image without custom providers or a local image build. Deploy the matching auth-server and registry group readers first. Back up the realm and review existing client and group names.
 
+The shipped deployments set `KC_SPI_CLIENT_REGISTRATION__DEFAULT__ENABLED=false`. This disables Keycloak's native
+`/clients-registrations/default` format, which accepts arbitrary client attributes. Standard OIDC DCR at
+`/clients-registrations/openid-connect` remains available. External Keycloak deployments must set the same option and
+restart before enabling DCR or CIMD; setup checks the running provider inventory. Use the authenticated Admin API for
+operator provisioning instead of the native registration endpoint.
+
+Public OIDC clients must use S256 PKCE for authorization-code grants. The `mcp-public-pkce` profile applies at client
+creation/update and at authorization/token requests, including cached CIMD clients. It rejects a missing challenge or
+the `plain` method. The policy remains installed when registration is disabled so retained public clients cannot
+downgrade their code flows. Confidential M2M client-credentials grants are unchanged.
+
 Dynamic Client Registration (DCR) and Client ID Metadata Documents (CIMD) are separate opt-ins. Set `ENABLE_DCR_CONFIG=true` for registration-based MCP clients, or `ENABLE_CIMD_CONFIG=true` for trusted clients whose `client_id` is an HTTPS metadata URL. The commands below use existing administrator credentials from the environment and a private `KEYCLOAK_ADMIN_URL`:
 
 ```bash
@@ -80,9 +91,9 @@ own CIMD policy/profile and preserves unrelated policies. Re-enabling CIMD does 
 an administrator must review and re-enable each client. Already issued access tokens can remain valid at the gateway
 until expiry.
 
-CIMD creates a persisted client whose ID is the metadata URL. With DCR off, list each approved CIMD client URL in
-`DCR_KEEP_CLIENTS` or `dcr.keepClients` before repeat setup. The sweep does not exempt arbitrary HTTPS client IDs.
-Without that keep entry, repeat setup requires acknowledgement and disables the client even if CIMD remains enabled.
+CIMD clients use their metadata URL as a stable client ID and have their own cleanup inventory. DCR-off cleanup does not
+require a CIMD keep-list entry after the provenance cutover. Disabling CIMD or removing its trusted host still revokes
+the client regardless of `DCR_KEEP_CLIENTS`.
 
 With DCR off, setup inventories enabled clients before changing policies. Review the proposed disables, add exact IDs to
 `DCR_KEEP_CLIENTS` (Helm: `dcr.keepClients`), then set `DCR_SWEEP_ACKNOWLEDGED=true` (Helm:

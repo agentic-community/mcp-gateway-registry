@@ -21,9 +21,10 @@ if path.endswith("/protocol/openid-connect/token"):
     body = {"access_token": "fixture-token", "expires_in": 60}
 elif path == "/admin/serverinfo":
     body = {"systemInfo": {"version": "26.8.2"}, "features": [{"name": "CIMD", "enabled": True}],
+            "providers": {"client-registration": {"providers": {"openid-connect": {}}}},
             "componentTypes": {
-                "org.keycloak.services.clientpolicy.condition.ClientPolicyConditionProvider": [{"id": "client-scopes"}, {"id": "client-roles"}, {"id": "client-id-uri"}],
-                "org.keycloak.services.clientpolicy.executor.ClientPolicyExecutorProvider": [{"id": "reject-request"}, {"id": "client-id-metadata-document"}],
+                "org.keycloak.services.clientpolicy.condition.ClientPolicyConditionProvider": [{"id": name} for name in ("client-scopes", "client-roles", "client-id-uri", "client-access-type", "client-type")],
+                "org.keycloak.services.clientpolicy.executor.ClientPolicyExecutorProvider": [{"id": name} for name in ("reject-request", "client-id-metadata-document", "pkce-enforcer")],
                 "org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy": [{"id": "default-roles"}]}}
     if scenario == "native-policy-missing":
         body["componentTypes"]["org.keycloak.services.clientpolicy.executor.ClientPolicyExecutorProvider"] = []
@@ -33,7 +34,7 @@ elif path == "/admin/serverinfo":
     if scenario == "default-roles-missing":
         body["componentTypes"]["org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy"] = []
 elif path == base:
-    body = {"id": "realm-id"}
+    body = {"id": "realm-id", "attributes": {"mcpgw.cimd.provenance.v1": "true"}}
 elif path.startswith(base + "/client-policies/"):
     key = path.rsplit("/", 1)[1]
     if method == "PUT":
@@ -175,10 +176,12 @@ def test_cimd_off_revokes_even_when_dcr_on_or_kept(tmp_path, monkeypatch, path, 
     assert {p["name"] for p in state["policies"]} == {
         "unrelated-policy",
         "mcp-registration-scope-guard-policy",
+        "mcp-public-pkce-policy",
     }
     assert {p["name"] for p in state["profiles"]} == {
         "unrelated-profile",
         "mcp-registration-scope-guard",
+        "mcp-public-pkce",
     }
 
 

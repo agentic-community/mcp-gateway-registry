@@ -274,6 +274,17 @@ run "keycloak_preserves_cloudfront_custom_domain_edge" {
     )
     error_message = "Keycloak must retain its custom-domain CloudFront edge and deny unmatched paths."
   }
+  assert {
+    condition = (
+      length([for entry in local.keycloak_container_env : entry.name
+        if entry.name == "KC_SPI_CLIENT_REGISTRATION__DEFAULT__ENABLED" && entry.value == "false"
+      ]) == 1 &&
+      length([for entry in local.keycloak_container_env : entry.name
+        if entry.name == "KC_SPI_CLIENT_REGISTRATION__OPENID_CONNECT__ENABLED" && entry.value == "false"
+      ]) == 0
+    )
+    error_message = "Keycloak environment must disable native registration and retain OIDC registration."
+  }
 }
 
 run "keycloak_direct_dns_redirects_http_and_restricts_admin" {

@@ -1006,6 +1006,13 @@ surface.
   validation but leaves the client usable through ordinary login and refresh. Cleanup must run independently of other
   registration switches and keep-lists, preserve unrelated clients, and never revive a disabled client without
   administrator review.
+- A client-controlled attribute cannot prove registration provenance. Native Keycloak DCR can write
+  `cimd.cache.expiry.time.in.sec` and choose a vendor-shaped client ID, causing CIMD to skip metadata fetching and
+  cleanup to trust the forged record. Disable the unrestricted native registration provider, retain OIDC DCR, and remove
+  untrusted pre-cutover cache records before recording an administrator-owned migration receipt.
+- Enforce S256 on the authorization server for public code flows, rather than relying on clients to send it. A
+  metadata-fetch policy runs at pre-authorization and does not by itself enforce PKCE on the authorization and token
+  events. Test missing/plain challenges and missing verifiers, plus normal registration and refresh.
 - Separate loopback callback permission from server-side fetching. CIMD validates `jwks_uri` against the same host list
   as callbacks, and Keycloak also fetches sector identifiers, request objects and logout URLs later. Apply the public
   HTTPS transport at connection time to every fetched URL, with redirects disabled; a check of the initial metadata

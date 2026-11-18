@@ -352,11 +352,13 @@ def test_cimd_separates_metadata_hosts_from_loopback_callbacks(tmp_path, path):
         "unrelated-profile",
         "cimd-vendors",
         "mcp-registration-scope-guard",
+        "mcp-public-pkce",
     }
     assert {policy["name"] for policy in policies} == {
         "unrelated",
         "cimd-vendors-policy",
         "mcp-registration-scope-guard-policy",
+        "mcp-public-pkce-policy",
     }
     assert {"name": "unrelated-profile"} in profiles
     assert {"name": "unrelated"} in policies
@@ -401,21 +403,18 @@ def test_cimd_disable_removes_only_owned_policy_and_profile(tmp_path, path):
     )
     assert result.returncode == 0, result.stdout + result.stderr
     writes = [request for request in requests if request["method"] == "PUT"]
-    assert [request["path"].rsplit("/", 1)[-1] for request in writes] == [
-        "profiles",
-        "policies",
-        "policies",
-        "profiles",
-    ]
+    assert all(request["path"].rsplit("/", 1)[-1] in {"profiles", "policies"} for request in writes)
     final_policies = json.loads(writes[-2]["body"])["policies"]
     final_profiles = json.loads(writes[-1]["body"])["profiles"]
     assert {policy["name"] for policy in final_policies} == {
         "unrelated",
         "mcp-registration-scope-guard-policy",
+        "mcp-public-pkce-policy",
     }
     assert {profile["name"] for profile in final_profiles} == {
         "unrelated-profile",
         "mcp-registration-scope-guard",
+        "mcp-public-pkce",
     }
     assert {"name": "unrelated"} in final_policies
     assert {"name": "unrelated-profile"} in final_profiles

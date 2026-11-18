@@ -180,6 +180,9 @@ spec:
             - name: KC_FEATURES_DISABLED
               value: {{ .Values.disabledFeatures | quote }}
             {{- end }}
+            # Native registration accepts arbitrary attributes; retain only OIDC DCR.
+            - name: KC_SPI_CLIENT_REGISTRATION__DEFAULT__ENABLED
+              value: "false"
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

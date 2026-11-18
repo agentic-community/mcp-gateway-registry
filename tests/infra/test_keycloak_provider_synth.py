@@ -215,6 +215,11 @@ def test_active_keycloak_keeps_public_routes_and_container_credentials(synth_app
     result, templates = synth_app((), cloudfront, dns)
     assert result.returncode == 0, result.stderr
     auth = templates["Registry-Auth"]
+    keycloak_env = {
+        entry["Name"]: entry["Value"] for entry in _containers(auth)["keycloak"]["Environment"]
+    }
+    assert keycloak_env["KC_SPI_CLIENT_REGISTRATION__DEFAULT__ENABLED"] == "false"
+    assert keycloak_env.get("KC_SPI_CLIENT_REGISTRATION__OPENID_CONNECT__ENABLED") != "false"
     assert len(_resources(auth, "AWS::ElasticLoadBalancingV2::LoadBalancer")) == 1
     assert len(_resources(auth, "AWS::ElasticLoadBalancingV2::TargetGroup")) == 1
     assert len(_resources(auth, "AWS::ECS::Service")) == 1

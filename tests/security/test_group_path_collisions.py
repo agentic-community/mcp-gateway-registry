@@ -104,13 +104,14 @@ if path == "/admin/serverinfo":
     policy_type = "org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy"
     body = {"systemInfo": {"version": "26.2.4" if scenario in ("roles-missing", "exchange-refused", "exchange-removed", "cimd-old") else "26.8.2"},
             "componentTypes": {policy_type: [] if scenario == "roles-missing" else [{"id": "default-roles"}]}}
+    body["providers"] = {"client-registration": {"providers": {"openid-connect": {}}}}
     if scenario.startswith("exchange-"):
         body["componentTypes"]["org.keycloak.services.clientpolicy.condition.ClientPolicyConditionProvider"] = [{"id": "grant-type"}]
         body["features"] = [{"name": "TOKEN_EXCHANGE_STANDARD_V2", "enabled": True}]
     if scenario.startswith("cimd-"):
         body["features"] = [] if scenario == "cimd-feature-missing" else [{"name": "CIMD", "enabled": True}]
-        body["componentTypes"]["org.keycloak.services.clientpolicy.condition.ClientPolicyConditionProvider"] = [] if scenario == "cimd-condition-missing" else [{"id": "client-id-uri"}, {"id": "client-scopes"}, {"id": "client-roles"}]
-        body["componentTypes"]["org.keycloak.services.clientpolicy.executor.ClientPolicyExecutorProvider"] = [] if scenario == "cimd-executor-missing" else [{"id": "client-id-metadata-document"}, {"id": "reject-request"}]
+        body["componentTypes"]["org.keycloak.services.clientpolicy.condition.ClientPolicyConditionProvider"] = [] if scenario == "cimd-condition-missing" else [{"id": name} for name in ("client-id-uri", "client-scopes", "client-roles", "client-access-type", "client-type")]
+        body["componentTypes"]["org.keycloak.services.clientpolicy.executor.ClientPolicyExecutorProvider"] = [] if scenario == "cimd-executor-missing" else [{"id": name} for name in ("client-id-metadata-document", "reject-request", "pkce-enforcer")]
 elif path.endswith("/client-policies/policies"):
     body = {"policies": [{"name": "mcp-restrict-token-exchange"}, {"name": "unrelated"}]}
     if scenario.startswith("cimd-"):
@@ -143,7 +144,7 @@ elif path.endswith("/components"):
                 state.write_text(json.dumps(policies))
     body = policies
 elif path == "/admin/realms/mcp-gateway":
-    body = {"id": "realm-id"}
+    body = {"id": "realm-id", "attributes": {"mcpgw.cimd.provenance.v1": "true"}}
 elif path == "/admin/realms/team-realm":
     state = Path(os.environ["API_LOG"]).with_suffix(".realm.json")
     if method == "GET":
