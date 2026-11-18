@@ -68,7 +68,7 @@ keycloak:
 ```
 
 The bundled chart uses official Keycloak 26.8.2 and PostgreSQL 17.12 images.
-Existing databases require the [maintenance cutover procedure](mcp-gateway-registry-stack/README.md#keycloak-database-cutover).
+Existing databases require the [backup, restore, and transition-to-existing runbook](mcp-gateway-registry-stack/README.md#keycloak-database-cutover), including the snapshot pod manifest and same-PVC upgrade procedure.
 For an external Keycloak, set `keycloak.create=false` and configure its public URL
 with `global.authProvider.keycloak.externalUrl`. Supply its internal URL and credentials
 through the existing-Secret settings described in the stack README.

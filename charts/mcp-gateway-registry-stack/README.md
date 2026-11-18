@@ -860,131 +860,438 @@ Job completing.
 
 ## Keycloak database cutover
 
-The official Keycloak/PostgreSQL chart requires an explicit maintenance cutover from Bitnami. Helm and GitOps render the
-same restore path. The chart issues no source or snapshot deletion commands; Helm and GitOps can still prune old
-resources unless you retain them as described below.
+This procedure backs up the current Keycloak database, restores it with `keycloak.postgres.bootstrap.mode=restore`, then switches the verified deployment to `existing`. It applies to a Bitnami source or an older official-image deployment. It does not back up MongoDB, OpenBao, or other gateway data stores.
 
-| `keycloak.postgres.bootstrap.mode` | Use                                                                                                                                                   |
-|------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `fresh-install`                    | Create an intentionally empty database. Keep this setting through ordinary upgrades of that installation.                                             |
-| `restore`                          | Restore `restore.dump` from an operator-owned PVC after stopping every source writer. Requires `existingClaim`, `sha256`, and `sourceQuiesced: true`. |
-| `existing`                         | Adopt a previously verified official PostgreSQL volume. Requires `existingVerified: true`; the runtime rejects an empty or incomplete database.       |
+**This is a maintenance operation with a login outage.** Helm runs the restore and initialization hooks; the commands below stop the source writers and prepare the snapshot. Keep the source data and credentials until the upgraded deployment passes verification and your rollback retention period expires.
 
-The chart pins Keycloak 26.8.2 and PostgreSQL 17.12. A separate post-install, post-upgrade or
-post-rollback Job initializes the admin realm at hook weight 5. Realm configuration follows at
-weight 10. Initialization failures stop the Helm operation without restarting the server.
-Correct the administrator Secret to match the realm before retrying.
+| Mode | When to use it |
+|------|----------------|
+| `fresh-install` | An intentionally empty installation. Do not use it for this upgrade. |
+| `restore` | The target must restore the verified archive prepared below. |
+| `existing` | The target already contains a verified official-image database with a non-superuser Keycloak role. Use it after completing the restore. |
 
-For multiple Keycloak replicas, set `keycloak.cache=ispn`; the chart uses JDBC discovery over the shared database. The chart refuses multiple replicas with the single-process `local` cache.
+The chart uses Keycloak 26.8.2 and PostgreSQL 17.12. PostgreSQL restores through a local socket and commits a receipt before accepting network connections. Keycloak then starts and applies its supported schema updates. The administrator-initialization hook runs at weight 5; realm configuration follows at weight 10. A Helm rollback does not undo database schema changes or restore data.
 
-### Freeze and snapshot the source
+### 1. Identify the source and save the release configuration
 
-Schedule a login outage. Save the deployed values and preserve the existing Keycloak/PostgreSQL credentials in your
-secret manager. Stop GitOps reconciliation and autoscaling for the old Keycloak workload before scaling it to zero. Stop
-any other process that can write to the source database. Keep those writers stopped until the new deployment passes
-verification.
-
-Inspect the deployed workload names rather than assuming the release prefix:
-
-```bash
-kubectl -n "$NS" get statefulsets,deployments,pods,pvc
-kubectl -n "$NS" scale "$OLD_KEYCLOAK_WORKLOAD" --replicas=0
-```
-
-Verify that every old Keycloak pod has terminated and that `pg_stat_activity` shows no remaining application sessions on
-the source database. Restrict its network access to the snapshot process. If you cannot establish this state, stop the
-cutover before taking the definitive dump.
-
-Retain the old database PVC and its PV for rollback. For ArgoCD, prevent pruning/deletion of the source resources or
-move them outside the application's ownership before syncing the new chart. Set the PV reclaim policy to `Retain`. A
-Helm rollback alone cannot recover an old database that the cluster has deleted.
-
-Create a dedicated PVC for the snapshot. In a temporary PostgreSQL 17.12 client pod, mount that PVC at `/snapshot` and
-the source password through a Kubernetes Secret as `PGPASSWORD` or `PGPASSFILE`. Set `PGHOST`, `PGPORT`, `PGUSER`, and
-`PGDATABASE` to the deployed source values. Permit this pod through the source's NetworkPolicy. Do not put the password
-on the command line.
-
-Run these commands inside that pod as UID/GID `999:999`:
+Run from the repository root in Bash. Install `helm`, `kubectl`, `jq`, and `envsubst` locally. Use the same shell throughout so the variables remain available. All names below are examples; verify them against your namespace before proceeding.
 
 ```bash
 set -euo pipefail
+set +x
 umask 077
-pg_dump --format=custom --no-owner --no-acl --file=/snapshot/restore.dump.partial
-pg_restore --list /snapshot/restore.dump.partial
-mv /snapshot/restore.dump.partial /snapshot/restore.dump
-chmod 0400 /snapshot/restore.dump
-sha256sum /snapshot/restore.dump
+
+export CONTEXT=YOUR_KUBERNETES_CONTEXT
+export NS=YOUR_NAMESPACE
+export RELEASE=YOUR_HELM_RELEASE
+export CHART="$PWD/charts/mcp-gateway-registry-stack"
+export RUN_ID="$(date -u +%Y%m%d%H%M%S)"
+export BACKUP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/keycloak-cutover.XXXXXXXX")"
+chmod 0700 "$BACKUP_DIR"
+k() { kubectl --context "$CONTEXT" -n "$NS" "$@"; }
+h() { helm --kube-context "$CONTEXT" -n "$NS" "$@"; }
+
+h status "$RELEASE"
+k get deployments,statefulsets,pods,services,pvc,hpa
+h get values "$RELEASE" -o yaml > "$BACKUP_DIR/release-values.yaml"
+h get manifest "$RELEASE" > "$BACKUP_DIR/release-manifest.yaml"
+h get hooks "$RELEASE" > "$BACKUP_DIR/release-hooks.yaml"
+h history "$RELEASE" -o json > "$BACKUP_DIR/release-history.json"
+k get deployments,statefulsets,services,pvc,hpa -o yaml > "$BACKUP_DIR/workloads-storage.yaml"
 ```
 
-Record the source's realm, user and client counts separately for post-restore comparison. A successful archive listing
-checks its format, not whether you selected the right source database. Delete the temporary client pod after the dump so
-an RWO PVC can attach to the new PostgreSQL pod. Keep the PVC and its archive unchanged.
+The backup directory contains sensitive configuration. Copy it to your approved encrypted backup store before ending the maintenance session; do not commit it or serve it over HTTP. Save the application image digests from the running pods as well, because a mutable `latest` tag cannot reproduce the old deployment.
 
-For an archive from an existing official-chart installation, add `--exclude-schema=_mcp_bootstrap` to `pg_dump` so the
-new bootstrap can create its own completion receipt.
+Set the source identifiers from the workload and Secret references you inspected. On older Bitnami installs the database might be `bn_keycloak`; on older official-image installs it is often `keycloak`. The source database user must be able to dump every table and inspect `pg_stat_activity`.
 
-### Restore the new database
+```bash
+export OLD_KEYCLOAK_WORKLOAD=deployment/YOUR_OLD_KEYCLOAK_DEPLOYMENT
+export OLD_KEYCLOAK_SELECTOR='YOUR_KEYCLOAK_POD_LABEL_SELECTOR'
+export OLD_PG_WORKLOAD=statefulset/YOUR_OLD_POSTGRES_STATEFULSET
+export OLD_PG_POD=YOUR_OLD_POSTGRES_POD
+export SOURCE_DATA_PVC=YOUR_SOURCE_DATABASE_PVC
+export PGHOST=YOUR_SOURCE_POSTGRES_SERVICE
+export PGPORT=5432
+export PGDATABASE=YOUR_SOURCE_DATABASE
+export PGUSER=YOUR_SOURCE_BACKUP_USER
+export SOURCE_PASSWORD_SECRET=YOUR_SOURCE_PASSWORD_SECRET
+export SOURCE_PASSWORD_KEY=YOUR_SOURCE_PASSWORD_KEY
+export PGSSLMODE=require
+export SNAPSHOT_CLASS=YOUR_STORAGE_CLASS
+export SNAPSHOT_SIZE=2Gi
+export SNAPSHOT_PVC="keycloak-snapshot-$RUN_ID"
+export BACKUP_POD="keycloak-backup-$RUN_ID"
+export TARGET_PG_STS="${RELEASE}-keycloak-postgres"
+export TARGET_PG_POD="${TARGET_PG_STS}-0"
+export TARGET_DATA_PVC="data-${TARGET_PG_STS}-0"
+export ADMIN_SECRET="${RELEASE}-keycloak"
+export TARGET_PASSWORD_SECRET="${RELEASE}-keycloak-postgresql"
+export OLD_REVISION="$(h history "$RELEASE" -o json | jq -r 'map(select(.status == "deployed")) | last | .revision')"
+export OLD_KEYCLOAK_REPLICAS="$(k get "$OLD_KEYCLOAK_WORKLOAD" -o jsonpath='{.spec.replicas}')"
+export SOURCE_PV="$(k get pvc "$SOURCE_DATA_PVC" -o jsonpath='{.spec.volumeName}')"
+```
 
-Remove obsolete Bitnami values before rendering. The chart rejects `externalDatabase`, `extraEnvVars`, `replicaCount`,
-`lifecycleHooks`, and the former automatic migration fields rather than ignoring them. Use `extraEnv` only for names
-outside the chart-managed reserved list; use the named chart values for database, hostname and security settings.
+Use a PostgreSQL client compatible with the source version. These commands use 17.12 and must not run against a newer PostgreSQL major version. Keep `PGSSLMODE=require` for a TLS-enabled source; use `verify-full` with your mounted CA for certificate verification. If the source has no TLS, explicitly set `PGSSLMODE=disable` only for its trusted private cluster connection. Confirm that the chosen storage class supports the backup pod's UID/GID 999 and can provision enough space for the archive. A zonal RWO snapshot PVC can constrain where the new PostgreSQL pod runs; ensure its target data volume can attach in the same zone.
 
-Merge these values into the deployment configuration:
+Preserve credentials without decoding them into terminal output:
 
-```yaml
+```bash
+k get secret "$ADMIN_SECRET" "$TARGET_PASSWORD_SECRET" \
+  shared-secret keycloak-client-secret mongo-credentials registry-login-credentials \
+  -o yaml > "$BACKUP_DIR/credentials.yaml"
+k get "$OLD_PG_WORKLOAD" -o json > "$BACKUP_DIR/source-postgres.json"
+k get "$OLD_KEYCLOAK_WORKLOAD" -o json > "$BACKUP_DIR/source-keycloak.json"
+k get pods -o json | jq '[.items[] | {name: .metadata.name, images: [.status.containerStatuses[]? | {name, image, imageID}]}]' \
+  > "$BACKUP_DIR/image-identities.json"
+```
+
+If a listed Secret has a different name, replace it with the reference used by the running workload. Do not generate replacement credentials during this operation. The target PostgreSQL Secret needs `password` for the dedicated Keycloak role and `postgres-password` for its separate bootstrap administrator. Restore preserves the realm's existing administrator password; `KC_BOOTSTRAP_ADMIN_PASSWORD` does not reset it.
+
+### 2. Stop writers and create the snapshot pod
+
+Pause GitOps reconciliation and disable or suspend any HPA that can restart the old Keycloak workload. Stop other applications or maintenance Jobs that write to this database. Keep the old PostgreSQL server running until the dump finishes.
+
+Protect the source volume before any Helm operation. If the source StatefulSet has a PVC deletion policy, change it to retain claims on deletion and scale-down:
+
+```bash
+k patch pv "$SOURCE_PV" --type=merge \
+  -p '{"spec":{"persistentVolumeReclaimPolicy":"Retain"}}'
+k patch "$OLD_PG_WORKLOAD" --type=merge \
+  -p '{"spec":{"persistentVolumeClaimRetentionPolicy":{"whenDeleted":"Retain","whenScaled":"Retain"}}}'
+k scale "$OLD_KEYCLOAK_WORKLOAD" --replicas=0
+k wait --for=delete pod -l "$OLD_KEYCLOAK_SELECTOR" --timeout=5m
+```
+
+The PV is cluster-scoped: this command changes only the PV bound to the verified source PVC. Also prevent GitOps from pruning the source or snapshot PVC. Inspect existing NetworkPolicies and permit the backup pod below to reach only the source PostgreSQL service on its database port. NetworkPolicy allow rules are additive; adding one narrow policy does not cancel a broader existing policy.
+
+Create a snapshot PVC and a temporary client pod. The password comes from the existing Secret through an environment reference, never a command argument.
+
+```bash
+cat > "$BACKUP_DIR/backup-pod.template.yaml" <<'YAML'
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ${SNAPSHOT_PVC}
+  namespace: ${NS}
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: ${SNAPSHOT_CLASS}
+  resources:
+    requests:
+      storage: ${SNAPSHOT_SIZE}
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ${BACKUP_POD}
+  namespace: ${NS}
+  labels:
+    app.kubernetes.io/name: keycloak-cutover-backup
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 999
+    runAsGroup: 999
+    fsGroup: 999
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: postgres-client
+      image: postgres:17.12
+      command: ["sleep", "86400"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]
+      env:
+        - name: PGHOST
+          value: "${PGHOST}"
+        - name: PGPORT
+          value: "${PGPORT}"
+        - name: PGDATABASE
+          value: "${PGDATABASE}"
+        - name: PGUSER
+          value: "${PGUSER}"
+        - name: PGSSLMODE
+          value: "${PGSSLMODE}"
+        - name: PGPASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: ${SOURCE_PASSWORD_SECRET}
+              key: ${SOURCE_PASSWORD_KEY}
+      volumeMounts:
+        - name: snapshot
+          mountPath: /snapshot
+        - name: tmp
+          mountPath: /tmp
+  volumes:
+    - name: snapshot
+      persistentVolumeClaim:
+        claimName: ${SNAPSHOT_PVC}
+    - name: tmp
+      emptyDir: {}
+YAML
+envsubst < "$BACKUP_DIR/backup-pod.template.yaml" > "$BACKUP_DIR/backup-pod.yaml"
+k apply -f "$BACKUP_DIR/backup-pod.yaml"
+k wait --for=condition=Ready "pod/$BACKUP_POD" --timeout=5m
+export SNAPSHOT_PV="$(k get pvc "$SNAPSHOT_PVC" -o jsonpath='{.spec.volumeName}')"
+k patch pv "$SNAPSHOT_PV" --type=merge \
+  -p '{"spec":{"persistentVolumeReclaimPolicy":"Retain"}}'
+```
+
+Check connections before the dump. The first query must show no other client backends, including idle connections. If it lists any, identify and stop their owners rather than terminating arbitrary database sessions.
+
+```bash
+k exec "$BACKUP_POD" -- psql -X -v ON_ERROR_STOP=1 -c \
+  "SELECT pid, usename, application_name, client_addr, state FROM pg_stat_activity WHERE datname = current_database() AND backend_type = 'client backend' AND pid <> pg_backend_pid();"
+k exec "$BACKUP_POD" -- sh -ec '
+  test "$(psql -X -At -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND backend_type = '\''client backend'\'' AND pid <> pg_backend_pid()")" = 0
+'
+```
+
+Capture counts and create the definitive dump while the writers remain stopped. Excluding `_mcp_bootstrap` also makes this command suitable for a source that already uses the new chart: the target creates its own receipt.
+
+```bash
+cat > "$BACKUP_DIR/counts.sql" <<'SQL'
+SELECT 'realm', count(*) FROM public.realm
+UNION ALL SELECT 'user_entity', count(*) FROM public.user_entity
+UNION ALL SELECT 'client', count(*) FROM public.client
+ORDER BY 1;
+SQL
+k exec -i "$BACKUP_POD" -- psql -X -At -v ON_ERROR_STOP=1 \
+  < "$BACKUP_DIR/counts.sql" > "$BACKUP_DIR/source-counts.txt"
+k exec "$BACKUP_POD" -- sh -ec '
+  umask 077
+  test ! -e /snapshot/restore.dump
+  test ! -e /snapshot/restore.dump.partial
+  pg_dump --format=custom --no-owner --no-acl --exclude-schema=_mcp_bootstrap \
+    --file=/snapshot/restore.dump.partial
+  pg_restore --list /snapshot/restore.dump.partial >/snapshot/archive-list.txt
+  mv /snapshot/restore.dump.partial /snapshot/restore.dump
+  chmod 0400 /snapshot/restore.dump
+  sha256sum /snapshot/restore.dump
+' > "$BACKUP_DIR/snapshot.sha256"
+export SNAPSHOT_SHA="$(cut -d ' ' -f 1 "$BACKUP_DIR/snapshot.sha256")"
+test "${#SNAPSHOT_SHA}" -eq 64
+k exec "$BACKUP_POD" -- cat /snapshot/restore.dump > "$BACKUP_DIR/restore.dump"
+LOCAL_SHA="$(shasum -a 256 "$BACKUP_DIR/restore.dump" | cut -d ' ' -f 1)"
+test "$LOCAL_SHA" = "$SNAPSHOT_SHA"
+k delete pod "$BACKUP_POD" --wait=true --timeout=5m
+```
+
+A successful archive listing proves format, not source identity. Check the recorded counts and source names, and copy the local archive to your encrypted backup store. Keep the snapshot PVC and archive unchanged. Deleting the client pod releases its RWO attachment for the target PostgreSQL pod.
+
+### 3. Prepare and validate the Helm restore values
+
+Create `upgrade-values.yaml` in the private backup directory from your deployment's reviewed desired values. Use `release-values.yaml` as an input, not as an unquestioned replacement for current chart defaults. Remove obsolete Bitnami keys such as `extraEnvVars`, `replicaCount`, `externalDatabase`, `lifecycleHooks`, and automatic migration options. Preserve domains, provider settings, Secret references, and unrelated services' image versions and configuration. For the target, set `keycloak.image.repository=quay.io/keycloak/keycloak`, `keycloak.image.tag="26.8.2"`, `keycloak.postgres.image.repository=postgres`, and `keycloak.postgres.image.tag="17.12"`, or use an explicitly verified compatible derived image. Keep these target image settings in `upgrade-values.yaml` for both restore and existing mode; do not carry forward a Bitnami repository or an unsupported old Keycloak tag. Keep `keycloak.create=true` and `global.authProvider.type=keycloak`.
+
+For a normal Helm upgrade, leave existing chart-managed Secret references managed by the chart so `lookup` preserves their values. Set `global.generateSecrets=false` to refuse accidental generation. Do not change a chart-managed Secret to `existingSecret` with the same name without reviewing Helm ownership: omitting it from the new manifest can make Helm delete it. Follow the existing-Secret adoption guidance above when migrating an older Job-created client Secret.
+
+In the reviewed values, keep the existing Keycloak administrator username and password. Set `keycloak.postgres.username=keycloak` and `keycloak.postgres.database=keycloak` for the restored target. The bootstrap creates that role without superuser privileges, even when the source used a superuser named `keycloak`. The source's database owner does not need to match the target owner because the archive excludes ownership and ACLs.
+
+Create the restore overlay and inspect a server-side dry run. The dry run includes Secret manifests, so save it privately.
+
+```bash
+export VALUES="$BACKUP_DIR/upgrade-values.yaml"
+test -f "$VALUES"
+cat > "$BACKUP_DIR/restore-values.yaml" <<YAML
+global:
+  generateSecrets: false
 keycloak:
   postgres:
+    username: keycloak
+    database: keycloak
     bootstrap:
       mode: restore
-      existingClaim: keycloak-cutover-snapshot
-      sha256: YOUR_RESTORE_DUMP_SHA256
+      existingClaim: "$SNAPSHOT_PVC"
+      sha256: "$SNAPSHOT_SHA"
       sourceQuiesced: true
+      existingVerified: false
+YAML
+helm dependency build "$CHART"
+h upgrade "$RELEASE" "$CHART" -f "$VALUES" -f "$BACKUP_DIR/restore-values.yaml" \
+  --dry-run=server > "$BACKUP_DIR/restore-dry-run.txt"
 ```
 
-Replace the SHA placeholder with the lowercase 64-character digest from `sha256sum`. The snapshot PVC must expose
-`restore.dump` at its root, readable by UID/GID 999. The PostgreSQL pod mounts it read-only at
-`/migration/restore.dump`.
+Choose a timeout long enough for your archive and Keycloak schema update. The PostgreSQL startup-probe allowance defaults to 24 hours; a shorter Helm timeout can report failure while the pod continues working. Inspect progress before retrying. Do not add `--atomic`: automatic manifest rollback after a database migration can start an old Keycloak image against a changed schema. Keep rollback under operator control.
 
-Render the chart and inspect the new resources before applying. GitOps deployments must also use the explicit
-existing-secret configuration described above; do not generate new database or OAuth secrets during migration. Apply
-only after confirming that the old source remains stopped and retained.
+The restore preserves realm data, then the `setup-keycloak` hook reconciles the configured clients, groups and users. Review those intended changes before upgrading. An older experimental realm with full-path group mappers also needs an application image that understands those claims; restoring the database does not convert its mapper format.
 
-The bootstrap wrapper verifies the archive digest, restores through a local-only PostgreSQL socket, and records
-completion before accepting network connections. An incomplete restore cannot become a healthy database merely because
-`PG_VERSION` exists. Keep the same restore mode, snapshot and digest when retrying an interrupted restore; changing
-those values does not bypass its pending marker.
+### 4. Prepare target storage without destroying the source
 
-### Verify before reopening access
+The chart uses StatefulSet `${RELEASE}-keycloak-postgres` and PVC `data-${RELEASE}-keycloak-postgres-0`. Inspect that exact claim:
 
-Compare realm, user and client counts with the source. Check browser login, then use an existing
-client to fetch a fresh token through the gateway. Verify group-based access and a denied
-operation before reopening access. Keep the old source stopped so the databases cannot diverge.
+```bash
+k get pvc "$TARGET_DATA_PVC" --ignore-not-found
+k scale "$OLD_PG_WORKLOAD" --replicas=0
+k wait --for=delete "pod/$OLD_PG_POD" --timeout=5m
+```
 
-If restore fails, retain both volumes and inspect the PostgreSQL logs. Correct the reported cause and retry with the
-same snapshot. If you must abandon the attempt, preserve the failed target for diagnosis and use a new empty target
-volume with the original verified snapshot. Never delete a completion or pending marker to force startup.
+If the target PVC does not exist, the new StatefulSet creates it. Keep the old source PVC and PV retained. If a target PVC already exists but is not `SOURCE_DATA_PVC`, stop here and identify its contents; do not assume it is empty or delete it.
 
-Before the new deployment accepts writes, rollback can restore the previous manifests and resume
-the retained source. After writes begin, rollback needs a plan to preserve those changes.
-Apply your backup retention and access policy to the snapshot.
+If `TARGET_DATA_PVC` equals `SOURCE_DATA_PVC`, as with an older official-image chart, the new restore cannot start while `/var/lib/postgresql/data/pgdata` already exists. Preserve that directory under a unique name on the same volume. This requires free space for the retained source, restored database, staging files and the temporary SQL restore file. Check `df` and `du` below; expand the PVC first through your storage provider if necessary. Do not reduce the source database merely to make it fit.
 
-### Retire the restore snapshot
+Run this block only for that verified same-PVC case. It assumes the old official PostgreSQL server used UID/GID 999 and `PGDATA=/var/lib/postgresql/data/pgdata`; confirm both in the saved StatefulSet. Other layouts need a storage-specific plan.
 
-Verify the restored data and confirm that no bootstrap operation remains pending. Change the
-mode to `existing`, set `existingVerified=true`, and remove all restore-only fields together:
+```bash
+test "$SOURCE_DATA_PVC" = "$TARGET_DATA_PVC"
+export MAINTENANCE_POD="keycloak-volume-$RUN_ID"
+export RETAINED_DIR="pgdata.pre-cutover-$RUN_ID"
+cat > "$BACKUP_DIR/maintenance-pod.template.yaml" <<'YAML'
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ${MAINTENANCE_POD}
+  namespace: ${NS}
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 999
+    runAsGroup: 999
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: postgres-client
+      image: postgres:17.12
+      command: ["sleep", "86400"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]
+      volumeMounts:
+        - name: data
+          mountPath: /data
+  volumes:
+    - name: data
+      persistentVolumeClaim:
+        claimName: ${TARGET_DATA_PVC}
+YAML
+envsubst < "$BACKUP_DIR/maintenance-pod.template.yaml" > "$BACKUP_DIR/maintenance-pod.yaml"
+k apply -f "$BACKUP_DIR/maintenance-pod.yaml"
+k wait --for=condition=Ready "pod/$MAINTENANCE_POD" --timeout=5m
+k exec "$MAINTENANCE_POD" -- df -h /data
+k exec "$MAINTENANCE_POD" -- du -sh /data/pgdata
+# Proceed only after confirming sufficient free capacity.
+k exec "$MAINTENANCE_POD" -- sh -ec '
+  test -s /data/pgdata/PG_VERSION
+  test ! -e /data/pgdata/postmaster.pid
+  test ! -e /data/.keycloak-bootstrap-pending
+  test ! -e /data/pgdata.bootstrap
+  test ! -e /data/pgdata.initializing
+  test ! -e "/data/$1"
+  mv /data/pgdata "/data/$1"
+  sync
+' sh "$RETAINED_DIR"
+printf '%s\n' "$RETAINED_DIR" > "$BACKUP_DIR/retained-directory.txt"
+k delete pod "$MAINTENANCE_POD" --wait=true --timeout=5m
+```
 
-```yaml
+Keep the old source workload stopped. For the same-StatefulSet case, recreate only its controller before the Helm upgrade so changes to immutable claim-template metadata cannot block the update. The pod must already be gone and its claim-retention policy must be `Retain` as set above. This command does not delete the PVC:
+
+```bash
+if [ "$OLD_PG_WORKLOAD" = "statefulset/$TARGET_PG_STS" ]; then
+  k delete "$OLD_PG_WORKLOAD" --cascade=orphan --wait=true
+fi
+```
+
+Do not use `helm upgrade --force` to replace storage resources. Never delete a pending or completion marker to make a failed migration look new.
+
+### 5. Apply the restore upgrade
+
+After completing the storage preparation and reviewing the server-side dry run, run the upgrade with the same values and snapshot:
+
+```bash
+h upgrade "$RELEASE" "$CHART" -f "$VALUES" -f "$BACKUP_DIR/restore-values.yaml" \
+  --wait --timeout 30m > "$BACKUP_DIR/restore-upgrade.log" 2>&1
+```
+
+### 6. Verify data and access before reopening the deployment
+
+Check the PostgreSQL pod, Keycloak rollout and both initialization Jobs. The counts below are taken after the hooks finish; Keycloak startup and realm setup may have added or reconciled records.
+
+```bash
+k rollout status "statefulset/$TARGET_PG_STS" --timeout=10m
+k rollout status "deployment/${RELEASE}-keycloak" --timeout=10m
+k wait --for=condition=complete "job/${RELEASE}-keycloak-admin-init" --timeout=10m
+k wait --for=condition=complete job/setup-keycloak --timeout=10m
+k logs "$TARGET_PG_POD" --tail=100
+k logs "job/${RELEASE}-keycloak-admin-init" --tail=50
+k logs job/setup-keycloak --tail=100
+k exec -i "$TARGET_PG_POD" -- psql -X -U postgres -d keycloak -At -v ON_ERROR_STOP=1 \
+  < "$BACKUP_DIR/counts.sql" > "$BACKUP_DIR/restored-counts.txt"
+diff -u "$BACKUP_DIR/source-counts.txt" "$BACKUP_DIR/restored-counts.txt"
+k exec "$TARGET_PG_POD" -- psql -X -U postgres -d keycloak -At -v ON_ERROR_STOP=1 -c \
+  "SELECT rolname, rolsuper, rolcreatedb, rolcreaterole, rolreplication FROM pg_roles WHERE rolname = 'keycloak'; SELECT intent FROM _mcp_bootstrap.receipt;"
+k exec "$TARGET_PG_POD" -- sh -ec '
+  test ! -e /var/lib/postgresql/data/.keycloak-bootstrap-pending
+  cat "$PGDATA/.keycloak-bootstrap-complete"
+'
+```
+
+All four role flags must be `f`. The database and filesystem receipts must contain `restore:` followed by `SNAPSHOT_SHA`. Investigate every count difference using the saved baseline and setup logs; expected additions are not proof that all original records survived. Check important realm, user and client identities, group memberships and existing client secrets.
+
+Sign out and log in through the public gateway with an existing administrator. Check `/api/auth/me` for the expected groups and `is_admin=true`, and verify that expected resources are visible. Use an existing workload's unchanged credential to obtain a fresh token and call an allowed operation. Confirm a restricted user still receives a denial for an ungranted operation. Compare the running deployment environment with the rendered values; changing a Secret alone does not restart its consumers.
+
+Keep the old source stopped. If any of these checks fail, do not reopen login or workload traffic and do not remove the backup.
+
+### 7. Transition from restore to existing
+
+After data and authentication checks pass, replace the restore overlay with this one. Supply the same reviewed base values and change all four restore-specific settings together. `existing` verifies the retained target; it does not restore the archive again or change its data.
+
+```bash
+cat > "$BACKUP_DIR/existing-values.yaml" <<'YAML'
+global:
+  generateSecrets: false
 keycloak:
   postgres:
+    username: keycloak
+    database: keycloak
     bootstrap:
       mode: existing
       existingVerified: true
       existingClaim: ""
       sha256: ""
       sourceQuiesced: false
+YAML
+h upgrade "$RELEASE" "$CHART" -f "$VALUES" -f "$BACKUP_DIR/existing-values.yaml" \
+  --dry-run=server > "$BACKUP_DIR/existing-dry-run.txt"
+h upgrade "$RELEASE" "$CHART" -f "$VALUES" -f "$BACKUP_DIR/existing-values.yaml" \
+  --wait --timeout 30m > "$BACKUP_DIR/existing-upgrade.log" 2>&1
+k rollout status "statefulset/$TARGET_PG_STS" --timeout=10m
+k get "statefulset/$TARGET_PG_STS" -o json | jq -e \
+  'all(.spec.template.spec.volumes[]; .name != "migration")'
+k exec "$TARGET_PG_POD" -- sh -ec '
+  test ! -e /var/lib/postgresql/data/.keycloak-bootstrap-pending
+  test "$(cat "$PGDATA/.keycloak-bootstrap-complete")" = "existing:"
+'
+k exec -i "$TARGET_PG_POD" -- psql -X -U postgres -d keycloak -At -v ON_ERROR_STOP=1 \
+  < "$BACKUP_DIR/counts.sql" > "$BACKUP_DIR/existing-counts.txt"
+diff -u "$BACKUP_DIR/restored-counts.txt" "$BACKUP_DIR/existing-counts.txt"
 ```
 
-Roll out this change. Verify database readiness and an authenticated gateway request before
-retiring the snapshot PVC. A deployment left in `restore` mode mounts that PVC on every pod
-start. Never remove it first or delete a pending marker to force a mode change.
+The filesystem receipt changes to `existing:`. The database's `_mcp_bootstrap.receipt` still records the original restore intent; that is expected. Confirm browser login and workload access again after the hooks finish. Merge `existing-values.yaml` into the deployment's maintained values so the next upgrade cannot accidentally return to the old restore intent. Keep `existingVerified=true` for normal upgrades of this verified target.
 
+Only after the StatefulSet no longer references the snapshot, access checks pass, and backup retention requirements are met may you retire the snapshot PVC. Removing it while `restore` mode is configured breaks later pod starts.
+
+```bash
+# Optional after retention approval; this does not delete the separately saved archive.
+k delete pvc "$SNAPSHOT_PVC"
+```
+
+The snapshot PV was marked `Retain`, so deleting its PVC leaves the backing volume for separate, deliberate disposal through your storage process. Keep the original source PVC or retained directory until its rollback retention period also expires. Do not include source-data deletion in the upgrade command sequence.
+
+### Failure and rollback
+
+If restore fails, collect the PostgreSQL and hook logs. Keep both source and target data, the snapshot, checksum and original mode. Fix the reported cause and rerun the same restore command; a completed transaction is not replayed. Do not switch to `fresh-install`, change snapshots, or remove receipt/pending files to bypass a failed restore.
+
+Before accepting new application writes, rollback can use the old image/configuration with the retained source database. First stop the new Keycloak workload and PostgreSQL pod and verify that both have terminated. For separate source and target PVCs, restore the old workload configuration and resume the retained source. For the same-PVC procedure, recreate the maintenance pod after PostgreSQL stops. Move every artifact of the failed target into one new diagnostic directory before moving `RETAINED_DIR` back to `pgdata`: this includes `pgdata` if promoted, `pgdata.bootstrap`, `pgdata.initializing`, `.keycloak-bootstrap-pending`, `.keycloak-bootstrap-pending.tmp`, and `.keycloak-bootstrap.sql` when present. A failed restore may never have created `pgdata`. Preserve these artifacts together instead of deleting them or leaving a pending intent beside the recovered source. The source directory includes its own original completion receipt, if it had one. Never mount the volume in two PostgreSQL servers at once.
+
+Inspect the old release's hooks before using `helm rollback`: rollback runs hooks and can change realm configuration. If rollback needs to suppress those hooks, use `--no-hooks` and reconcile only the required settings after the old database is running. If the PostgreSQL StatefulSet claim template changed, remove only the stopped controller with `--cascade=orphan` before recreating it from the retained configuration. Restore the original replica counts and credentials, then verify login and data again.
+
+After users or workloads write to the new deployment, switching back to the old snapshot loses those changes. Stop and prepare a reconciliation or forward-recovery plan instead. Helm release history is not a database backup.

@@ -372,6 +372,9 @@ Keycloak nginx routes use the resolved `AUTH_PROVIDER` setting, including config
 | Administrator ingress CIDRs | Private local admin listener | `keycloak_admin_cidr_blocks` | Private cluster administration | Terraform/CDK default to the general ingress CIDRs; CDK uses `registry.keycloakAdminCidrBlocks`. A narrower list restricts Keycloak admin/master paths and includes the gateway's NAT addresses. CloudFront cannot enforce a distinct client-IP list at the ALB, so that combination is rejected. |
 | A2A issuer URL | `KEYCLOAK_EXTERNAL_URL` in the sample agents | Passed to the sample agents | Not used by these sample deployments | The sample A2A middleware validates the public issuer while fetching signing keys through its internal `KEYCLOAK_URL`. Both inputs are required for verified JWT authentication. |
 
+For the command sequence, snapshot PVC/client manifests, same-PVC source preservation, verification, and removal of the restore mount, follow the [Keycloak backup, restore, and existing-mode runbook](../charts/mcp-gateway-registry-stack/README.md#keycloak-database-cutover).
+
+
 ### 12b — Amazon Cognito
 
 | Parameter | Docker (`.env`) | Terraform (`.tfvars`) | Helm (`values.yaml`) | Purpose |
