@@ -189,7 +189,7 @@ describe('egress auth enabled', () => {
       // Whitespace-separated: the application splits on whitespace, so a
       // comma-separated list would parse as one audience and match nothing.
       oboAllowedAudiences: 'api://upstream-one api://upstream-two',
-      secretsManagerPathPrefix: 'mcp/egress',
+      secretsManagerPathPrefix: 'mcp/egress',  // pragma: allowlist secret
     };
     template = buildStacks(config).template;
   });

@@ -221,8 +221,8 @@ registry:
     enabled: false
     # Only secrets-manager is supported here. The application also accepts
     # openbao, which this stack does not provision.
-    secretStoreBackend: secrets-manager
-    secretsManagerPathPrefix: "mcp/egress"
+    secretStoreBackend: secrets-manager  # pragma: allowlist secret
+    secretsManagerPathPrefix: "mcp/egress"  # pragma: allowlist secret
     # Secret holding the AES-256-GCM input keying material, at least 32 bytes.
     # Rotating it needs a coordinated re-encryption of the whole vault.
     # credentialEncryptionKeyArn: ""
