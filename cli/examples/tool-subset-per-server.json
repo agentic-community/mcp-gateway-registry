@@ -1,0 +1,27 @@
+{
+  "scope_name": "tool-subset-users",
+  "scope_type": "server_scope",
+  "description": "Example of tool-level access control. Members can call 2 of the 6 tools on realserverfaketools, a different 3 of the 8 tools on mcpgw, and every tool on currenttime. tools/list returns only the tools a member can call, and tools/call on any other tool returns HTTP 403.",
+  "group_mappings": ["tool-subset-users"],
+  "server_access": [
+    {
+      "server": "/realserverfaketools",
+      "methods": ["initialize", "notifications/initialized", "ping", "tools/list", "tools/call"],
+      "tools": ["quantum_flux_analyzer", "neural_pattern_synthesizer"]
+    },
+    {
+      "server": "/mcpgw",
+      "methods": ["initialize", "notifications/initialized", "ping", "tools/list", "tools/call"],
+      "tools": ["list_services", "search_registry", "healthcheck"]
+    },
+    {
+      "server": "/currenttime",
+      "methods": ["initialize", "notifications/initialized", "ping", "tools/list", "tools/call"],
+      "tools": ["*"]
+    }
+  ],
+  "ui_permissions": {
+    "list_service": ["/realserverfaketools", "/mcpgw", "/currenttime"]
+  },
+  "create_in_idp": true
+}
