@@ -59,6 +59,19 @@ export class RegistrySecrets extends Construct {
   public readonly metricsAdminApiKey?: secretsmanager.Secret;
   public readonly otlpExporterHeaders?: secretsmanager.Secret;
   public readonly grafanaAdminPassword?: secretsmanager.Secret;
+  /**
+   * Operator-supplied credentials injected into containers, keyed by the
+   * environment variable name. Only a configured (non-empty) value gets a
+   * secret, so an unset credential injects nothing, as it did when these
+   * were plain environment entries set to ''.
+   *
+   * These used to be plain `environment` values, which stored them in the ECS
+   * task definition (issue #2063). The value still passes through synthesis,
+   * like the other literal-valued secrets above.
+   */
+  public readonly sharedContainerCredentials: Record<string, secretsmanager.Secret>;
+  /** Same as {@link sharedContainerCredentials}, for the registry only. */
+  public readonly registryContainerCredentials: Record<string, secretsmanager.Secret>;
 
   /**
    * IAM statements granting GetSecretValue + KMS decrypt for every secret in
@@ -270,6 +283,21 @@ export class RegistrySecrets extends Construct {
       });
     }
 
+    // Operator-supplied container credentials. Same set and same split as
+    // terraform/aws-ecs/modules/mcp-gateway/secrets.tf (container_secret_values).
+    this.sharedContainerCredentials = _createCredentialSecrets(this, this.kmsKey, [
+      { envName: 'AUTH0_MANAGEMENT_API_TOKEN', id: 'Auth0ManagementApiToken', value: config.auth0.managementApiToken },
+      { envName: 'REGISTRY_API_TOKEN', id: 'RegistryApiToken', value: config.staticTokenAuth.registryApiToken },
+      { envName: 'FEDERATION_STATIC_TOKEN', id: 'FederationStaticToken', value: config.federation.staticToken },
+      { envName: 'FEDERATION_ENCRYPTION_KEY', id: 'FederationEncryptionKey', value: config.federation.encryptionKey },
+      { envName: 'ANS_API_KEY', id: 'AnsApiKey', value: config.ans.apiKey },
+      { envName: 'ANS_API_SECRET', id: 'AnsApiSecret', value: config.ans.apiSecret },
+    ]);
+    this.registryContainerCredentials = _createCredentialSecrets(this, this.kmsKey, [
+      { envName: 'GITHUB_PAT', id: 'GithubPat', value: config.github.pat },
+      { envName: 'GITHUB_APP_PRIVATE_KEY', id: 'GithubAppPrivateKey', value: config.github.appPrivateKey },
+    ]);
+
     // IAM statements
     const arns: string[] = [
       this.secretKey.secretArn,
@@ -289,6 +317,8 @@ export class RegistrySecrets extends Construct {
       this.metricsApiKey, this.metricsKeyPepper, this.metricsAdminApiKey,
       this.otlpExporterHeaders, this.grafanaAdminPassword,
     ]) if (s) arns.push(s.secretArn);
+    for (const s of Object.values(this.sharedContainerCredentials)) arns.push(s.secretArn);
+    for (const s of Object.values(this.registryContainerCredentials)) arns.push(s.secretArn);
 
     this.allSecretArns = arns;
     this.accessStatements = this.accessStatementsExcept();
@@ -337,6 +367,38 @@ interface CreateSecretOptions {
   fixedName?: string;
   stringValue?: string;
   generateString?: { passwordLength: number; excludePunctuation: boolean };
+}
+
+interface CredentialSecretSpec {
+  /** Environment variable the container reads the value from. */
+  envName: string;
+  /** Construct id of the secret. */
+  id: string;
+  /** Operator-supplied value. Empty means not configured. */
+  value: string;
+}
+
+/**
+ * Create one secret per configured credential, keyed by its env var name.
+ *
+ * An empty value is skipped: CloudFormation rejects an empty SecretString,
+ * and the application treats an unset variable the same as an empty one.
+ */
+function _createCredentialSecrets(
+  scope: Construct,
+  kmsKey: kms.IKey,
+  specs: CredentialSecretSpec[],
+): Record<string, secretsmanager.Secret> {
+  const secrets: Record<string, secretsmanager.Secret> = {};
+  for (const spec of specs) {
+    if (spec.value === '') continue;
+    secrets[spec.envName] = _createSecret(scope, spec.id, {
+      description: `${spec.envName} for MCP Gateway Registry containers`,
+      kmsKey,
+      stringValue: spec.value,
+    });
+  }
+  return secrets;
 }
 
 function _createSecret(scope: Construct, id: string, opts: CreateSecretOptions): secretsmanager.Secret {

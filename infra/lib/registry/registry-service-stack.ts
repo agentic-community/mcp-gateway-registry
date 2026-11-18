@@ -293,7 +293,6 @@ export class RegistryServiceStack extends cdk.Stack {
       AUTH0_AUDIENCE: config.auth0.audience,
       AUTH0_GROUPS_CLAIM: config.auth0.groupsClaim,
       AUTH0_M2M_CLIENT_ID: config.auth0.m2mClientId,
-      AUTH0_MANAGEMENT_API_TOKEN: config.auth0.managementApiToken,
       SESSION_COOKIE_SECURE: String(config.session.cookieSecure),
       SESSION_COOKIE_DOMAIN: config.session.cookieDomain,
       SESSION_COOKIE_HOST_PREFIX: String(config.session.cookieHostPrefix),
@@ -306,16 +305,11 @@ export class RegistryServiceStack extends cdk.Stack {
       OAUTH2_ALLOWED_REDIRECT_URIS: config.session.oauth2AllowedRedirectUris,
       OAUTH_STORE_TOKENS_IN_SESSION: String(config.session.oauthStoreTokensInSession),
       REGISTRY_STATIC_TOKEN_AUTH_ENABLED: String(config.staticTokenAuth.registryStaticTokenAuthEnabled),
-      REGISTRY_API_TOKEN: config.staticTokenAuth.registryApiToken,
       M2M_DIRECT_REGISTRATION_ENABLED: String(config.staticTokenAuth.m2mDirectRegistrationEnabled),
       REGISTRY_ID: config.federation.registryId,
       FEDERATION_STATIC_TOKEN_AUTH_ENABLED: String(config.federation.staticTokenAuthEnabled),
-      FEDERATION_STATIC_TOKEN: config.federation.staticToken,
-      FEDERATION_ENCRYPTION_KEY: config.federation.encryptionKey,
       ANS_INTEGRATION_ENABLED: String(config.ans.integrationEnabled),
       ANS_API_ENDPOINT: config.ans.apiEndpoint,
-      ANS_API_KEY: config.ans.apiKey,
-      ANS_API_SECRET: config.ans.apiSecret,
       ANS_API_TIMEOUT_SECONDS: String(config.ans.apiTimeoutSeconds),
       ANS_SYNC_INTERVAL_HOURS: String(config.ans.syncIntervalHours),
       ANS_VERIFICATION_CACHE_TTL_SECONDS: String(config.ans.verificationCacheTtlSeconds),
@@ -403,10 +397,8 @@ export class RegistryServiceStack extends cdk.Stack {
       // validation time, so this does not affect authorization.
       MCP_ADVERTISED_SCOPES: 'openid email profile offline_access',
       SERVICE_CONNECT_NAMESPACE: `${namePrefix}.local`,
-      GITHUB_PAT: config.github.pat,
       GITHUB_APP_ID: config.github.appId,
       GITHUB_APP_INSTALLATION_ID: config.github.appInstallationId,
-      GITHUB_APP_PRIVATE_KEY: config.github.appPrivateKey,
       GITHUB_EXTRA_HOSTS: config.github.extraHosts,
       GITHUB_API_BASE_URL: config.github.apiBaseUrl,
       // Prevent AWS SDKs from falling back to EC2 IMDS. ECS delivers task-role
@@ -498,6 +490,13 @@ export class RegistryServiceStack extends cdk.Stack {
           .filter(([, s]) => s)
           .map(([k, s]) => [k, ecs.Secret.fromSecretsManager(s!)]),
       ),
+      // Operator-supplied credentials. Injected as secrets, never as plain
+      // environment values, so the task definition carries only the ARN
+      // (issue #2063).
+      ...Object.fromEntries(
+        Object.entries(secretsBundle.sharedContainerCredentials)
+          .map(([k, s]) => [k, ecs.Secret.fromSecretsManager(s)]),
+      ),
     };
 
     // The egress credential encryption key is the registry's: it owns the
@@ -519,6 +518,11 @@ export class RegistryServiceStack extends cdk.Stack {
       ...(secretsBundle.pingfederateAdminPassword
         ? { PF_ADMIN_PASS: ecs.Secret.fromSecretsManager(secretsBundle.pingfederateAdminPassword) }
         : {}),
+      // Registry only: GitHub credentials for skill and server fetches.
+      ...Object.fromEntries(
+        Object.entries(secretsBundle.registryContainerCredentials)
+          .map(([k, s]) => [k, ecs.Secret.fromSecretsManager(s)]),
+      ),
     };
 
     const authSecrets: Record<string, ecs.Secret> = {
@@ -528,11 +532,12 @@ export class RegistryServiceStack extends cdk.Stack {
         : {}),
     };
 
-    // The auth-server's execution role is denied the two secrets its
-    // containers never receive, so a grant cannot outlive an injection.
+    // The auth-server's execution role is denied the secrets its containers
+    // never receive, so a grant cannot outlive an injection.
     const authExecStatements = secretsBundle.accessStatementsExcept([
       secretsBundle.pingfederateAdminPassword,
       ...(authNeedsEgressKey ? [] : [egressKey]),
+      ...Object.values(secretsBundle.registryContainerCredentials),
     ]);
 
     // Optional Bedrock AgentCore policy for federation.
