@@ -497,7 +497,7 @@ describe('ServerEditModal', () => {
             oauth_discovery_enabled: true,
             oauth_discovery_provider: 'custom',
             oauth_discovery_client_id: 'typed-client',
-            oauth_discovery_client_secret: 'typed-secret',
+            oauth_discovery_client_secret: 'typed-secret', // pragma: allowlist secret
           }}
           egressEnabled
         />,
