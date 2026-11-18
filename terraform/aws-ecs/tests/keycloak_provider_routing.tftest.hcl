@@ -86,9 +86,9 @@ variables {
   use_regional_domains      = false
   keycloak_domain           = "kc.example.com"
   root_domain               = "example.com"
-  keycloak_admin_password    = "EXAMPLE-admin-password-12345"
-  keycloak_database_password = "EXAMPLE-database-password-12345"
-  documentdb_admin_password  = "EXAMPLE-documentdb-password-12345"
+  keycloak_admin_password    = "EXAMPLE-admin-password-12345" # pragma: allowlist secret
+  keycloak_database_password = "EXAMPLE-database-password-12345" # pragma: allowlist secret
+  documentdb_admin_password  = "EXAMPLE-documentdb-password-12345" # pragma: allowlist secret
 }
 
 # Certificate validation records need known keys during a mocked plan.
@@ -322,5 +322,3 @@ run "active_keycloak_rejects_unenforceable_admin_cidrs" {
   }
   expect_failures = [terraform_data.keycloak_admin_cidr_settings]
 }
-
-

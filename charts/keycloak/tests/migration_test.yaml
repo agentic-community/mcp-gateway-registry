@@ -176,13 +176,13 @@ tests:
           errorPattern: extraVolumeMounts.*not supported
   - it: rejects ignored SPI configuration
     set:
-      spi.existingSecret: old-spi
+      spi.existingSecret: old-spi # pragma: allowlist secret - Secret name
     asserts:
       - failedTemplate:
           errorPattern: spi.*not supported
   - it: rejects legacy password key configuration
     set:
-      auth.passwordSecretKey: old-password
+      auth.passwordSecretKey: old-password # pragma: allowlist secret - Secret data key
     asserts:
       - failedTemplate:
           errorPattern: auth.passwordSecretKey is unsupported

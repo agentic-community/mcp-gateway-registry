@@ -519,4 +519,3 @@ tests:
       - equal:
           path: data.ADDITIONAL_REGISTRY_HOSTNAMES
           value: YWxpYXMuZXhhbXBsZS5jb20=
-

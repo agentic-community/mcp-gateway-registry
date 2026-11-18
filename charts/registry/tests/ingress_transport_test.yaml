@@ -3,8 +3,8 @@ release:
   name: test
   namespace: default
 set:
-  app.secretKey: 3c5ea48c0b0a4cfaacd6ead9c2c2217a13e9e43c2d6e2584d07487aa87f4a729
-  egressAuth.markerSecret: 5acee5078988455db3f07f6ec433c93e2baf5f6903c434cb13e04600c034afc3
+  app.secretKey: EXAMPLE-test-signing-key-not-for-production # pragma: allowlist secret
+  egressAuth.markerSecret: EXAMPLE-test-marker-secret-not-for-production # pragma: allowlist secret
   ingress.enabled: true
   global.domain: example.com
 tests:

@@ -105,7 +105,7 @@ tests:
           tag: "25.0"
           registry: legacy.example.com
         auth:
-          passwordSecretKey: legacy
+          passwordSecretKey: legacy # pragma: allowlist secret - Secret data key
         postgres:
           bootstrap:
             mode: ""

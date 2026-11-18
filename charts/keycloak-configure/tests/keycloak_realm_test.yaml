@@ -27,7 +27,7 @@ tests:
     templates:
       - job.yaml
     set:
-      keycloak.existingSecret: operator-realm-secret
+      keycloak.existingSecret: operator-realm-secret # pragma: allowlist secret - Secret name
     asserts:
       - failedTemplate:
           errorPattern: requires an explicit keycloak.realm
@@ -36,10 +36,10 @@ tests:
     templates:
       - job.yaml
     set:
-      keycloak.existingSecret: operator-realm-secret
+      keycloak.existingSecret: operator-realm-secret # pragma: allowlist secret - Secret name
       keycloak.realm: team
-      keycloak.adminExistingSecret: operator-admin
-      keycloak.adminExistingSecretPasswordKey: credential
+      keycloak.adminExistingSecret: operator-admin # pragma: allowlist secret - Secret name
+      keycloak.adminExistingSecretPasswordKey: credential # pragma: allowlist secret - Secret data key
     asserts:
       - contains:
           path: spec.template.spec.containers[0].env

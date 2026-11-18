@@ -53,7 +53,7 @@ mock_provider "time" {
 }
 
 variables {
-  keycloak_admin_password = "EXAMPLE-admin-password-12345"
+  keycloak_admin_password = "EXAMPLE-admin-password-12345" # pragma: allowlist secret
   alb_logs_bucket         = "example-provider-routing-alb-logs"
 }
 
