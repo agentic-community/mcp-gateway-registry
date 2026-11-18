@@ -367,7 +367,7 @@ that server's Connect dialog:
 | Client ID | `COGNITO_CLIENT_ID` | — | `auth-server.cognito.clientId` | — |
 | Client secret **(secret)** | `COGNITO_CLIENT_SECRET` | — | `auth-server.cognito.clientSecret` | — |
 | Enabled | `COGNITO_ENABLED` | — | — | — |
-| Custom domain | `COGNITO_DOMAIN` | — | `auth-server.cognito.domain` | Optional. |
+| Hosted-UI domain prefix | `COGNITO_DOMAIN` | `cognito_domain` | `auth-server.cognito.domain` | Optional. A prefix such as `mcp-gw`, not a hostname: the auth server appends `.auth.<region>.amazoncognito.com`, so a custom domain is not supported. Empty, unset or `auto` derives it from the user pool id (`us-east-1_KmP5A3La3` becomes `us-east-1kmp5a3la3`). That works only if the pool's domain uses that prefix, so set it explicitly otherwise. |
 | M2M client allowlist | `COGNITO_M2M_CLIENT_IDS` | `cognito_m2m_client_ids` | `auth-server.cognito.m2mClientIds` | Comma/space-separated allowlist of Cognito app-client ids whose machine (`client_credentials`) access tokens the gateway accepts (Cognito access tokens are not audience-bound, so the `client_id` claim is checked against this list). Default-empty = fail closed. Use `*` to accept ANY M2M client in the pool without listing each (machine/no-`username` tokens only; user logins stay restricted to the web + IDE clients) — for one M2M client per agent. Only use `*` when the pool is dedicated to the gateway. Required for Cognito agent/M2M callers, e.g. per-agent rate limiting. |
 | Region | `AWS_REGION` | `aws_region` | `auth-server.cognito.region` | — |
 
