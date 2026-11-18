@@ -290,10 +290,6 @@ module "ecs_service_auth" {
           value = var.auth0_m2m_client_groups
         },
         {
-          name  = "AUTH0_MANAGEMENT_API_TOKEN"
-          value = var.auth0_management_api_token
-        },
-        {
           name  = "AUTH0_ENABLED"
           value = tostring(var.auth0_enabled)
         },
@@ -375,14 +371,6 @@ module "ecs_service_auth" {
           name  = "REGISTRY_STATIC_TOKEN_AUTH_ENABLED"
           value = tostring(var.registry_static_token_auth_enabled)
         },
-        {
-          name  = "REGISTRY_API_TOKEN"
-          value = var.registry_api_token
-        },
-        {
-          name  = "REGISTRY_API_KEYS"
-          value = var.registry_api_keys
-        },
         # M2M direct client registration (issue #851)
         {
           name  = "M2M_DIRECT_REGISTRATION_ENABLED"
@@ -398,28 +386,12 @@ module "ecs_service_auth" {
           value = tostring(var.federation_static_token_auth_enabled)
         },
         {
-          name  = "FEDERATION_STATIC_TOKEN"
-          value = var.federation_static_token
-        },
-        {
-          name  = "FEDERATION_ENCRYPTION_KEY"
-          value = var.federation_encryption_key
-        },
-        {
           name  = "ANS_INTEGRATION_ENABLED"
           value = tostring(var.ans_integration_enabled)
         },
         {
           name  = "ANS_API_ENDPOINT"
           value = var.ans_api_endpoint
-        },
-        {
-          name  = "ANS_API_KEY"
-          value = var.ans_api_key
-        },
-        {
-          name  = "ANS_API_SECRET"
-          value = var.ans_api_secret
         },
         {
           name  = "ANS_API_TIMEOUT_SECONDS"
@@ -719,16 +691,6 @@ module "ecs_service_auth" {
           value = tostring(var.egress_obo_cache_expiry_skew_seconds)
         }
         ],
-        # PR #947: MongoDB connection string override (plain-text variant).
-        # Only emitted when var.mongodb_connection_string is non-empty and a
-        # Secrets Manager ARN was not provided. When empty, the registry
-        # falls back to the DOCUMENTDB_* env vars above.
-        var.mongodb_connection_string != "" && var.mongodb_connection_string_secret_arn == "" ? [
-          {
-            name  = "MONGODB_CONNECTION_STRING"
-            value = var.mongodb_connection_string
-          }
-        ] : [],
         # Extra environment variables from user (Issue #1000)
         var.auth_server_extra_env
       )
@@ -768,6 +730,16 @@ module "ecs_service_auth" {
             valueFrom = var.mongodb_connection_string_secret_arn
           }
         ] : [],
+        # Operator-supplied credentials, including the plain-text
+        # mongodb_connection_string, which secrets.tf stores in Secrets Manager
+        # rather than placing in the task definition. Empty values inject
+        # nothing.
+        [
+          for name in local.auth_server_container_secret_names : {
+            name      = name
+            valueFrom = aws_secretsmanager_secret.container_secret[name].arn
+          } if contains(local.container_secret_names, name)
+        ],
         var.entra_enabled ? [
           {
             name      = "ENTRA_CLIENT_SECRET"
@@ -1234,10 +1206,6 @@ module "ecs_service_registry" {
           name  = "AUTH0_M2M_CLIENT_GROUPS"
           value = var.auth0_m2m_client_groups
         },
-        {
-          name  = "AUTH0_MANAGEMENT_API_TOKEN"
-          value = var.auth0_management_api_token
-        },
         # PingFederate configuration
         {
           name  = "PINGFEDERATE_ENABLED"
@@ -1530,14 +1498,6 @@ module "ecs_service_registry" {
           name  = "FEDERATION_STATIC_TOKEN_AUTH_ENABLED"
           value = tostring(var.federation_static_token_auth_enabled)
         },
-        {
-          name  = "FEDERATION_STATIC_TOKEN"
-          value = var.federation_static_token
-        },
-        {
-          name  = "FEDERATION_ENCRYPTION_KEY"
-          value = var.federation_encryption_key
-        },
         # AWS Agent Registry federation configuration
         {
           name  = "AWS_REGISTRY_FEDERATION_ENABLED"
@@ -1550,14 +1510,6 @@ module "ecs_service_registry" {
         {
           name  = "ANS_API_ENDPOINT"
           value = var.ans_api_endpoint
-        },
-        {
-          name  = "ANS_API_KEY"
-          value = var.ans_api_key
-        },
-        {
-          name  = "ANS_API_SECRET"
-          value = var.ans_api_secret
         },
         {
           name  = "ANS_API_TIMEOUT_SECONDS"
@@ -1814,14 +1766,6 @@ module "ecs_service_registry" {
           value = tostring(var.registry_static_token_auth_enabled)
         },
         {
-          name  = "REGISTRY_API_TOKEN"
-          value = var.registry_api_token
-        },
-        {
-          name  = "REGISTRY_API_KEYS"
-          value = var.registry_api_keys
-        },
-        {
           name  = "MAX_TOKENS_PER_USER_PER_HOUR"
           value = tostring(var.max_tokens_per_user_per_hour)
         },
@@ -1848,18 +1792,10 @@ module "ecs_service_registry" {
           value = var.registration_webhook_auth_header
         },
         {
-          name  = "REGISTRATION_WEBHOOK_AUTH_TOKEN"
-          value = var.registration_webhook_auth_token
-        },
-        {
           name  = "REGISTRATION_WEBHOOK_TIMEOUT_SECONDS"
           value = tostring(var.registration_webhook_timeout_seconds)
         },
         # Lifecycle workflow webhooks (issue #1330)
-        {
-          name  = "REGISTRATION_WEBHOOK_SIGNING_SECRET"
-          value = var.registration_webhook_signing_secret
-        },
         {
           name  = "REGISTRATION_ENFORCED_STATUS"
           value = var.registration_enforced_status
@@ -1916,10 +1852,6 @@ module "ecs_service_registry" {
           value = var.registration_gate_auth_type
         },
         {
-          name  = "REGISTRATION_GATE_AUTH_CREDENTIAL"
-          value = var.registration_gate_auth_credential
-        },
-        {
           name  = "REGISTRATION_GATE_AUTH_HEADER_NAME"
           value = var.registration_gate_auth_header_name
         },
@@ -1938,10 +1870,6 @@ module "ecs_service_registry" {
         {
           name  = "REGISTRATION_GATE_OAUTH2_CLIENT_ID"
           value = var.registration_gate_oauth2_client_id
-        },
-        {
-          name  = "REGISTRATION_GATE_OAUTH2_CLIENT_SECRET"
-          value = var.registration_gate_oauth2_client_secret
         },
         {
           name  = "REGISTRATION_GATE_OAUTH2_SCOPE"
@@ -2022,20 +1950,12 @@ module "ecs_service_registry" {
         },
         # GitHub private repo auth (SKILL.md fetching)
         {
-          name  = "GITHUB_PAT"
-          value = var.github_pat
-        },
-        {
           name  = "GITHUB_APP_ID"
           value = var.github_app_id
         },
         {
           name  = "GITHUB_APP_INSTALLATION_ID"
           value = var.github_app_installation_id
-        },
-        {
-          name  = "GITHUB_APP_PRIVATE_KEY"
-          value = var.github_app_private_key
         },
         {
           name  = "GITHUB_EXTRA_HOSTS"
@@ -2160,16 +2080,6 @@ module "ecs_service_registry" {
           value = "true"
         },
         ],
-        # PR #947: MongoDB connection string override (plain-text variant).
-        # Only emitted when var.mongodb_connection_string is non-empty and a
-        # Secrets Manager ARN was not provided. When empty, the registry
-        # falls back to the DOCUMENTDB_* env vars above.
-        var.mongodb_connection_string != "" && var.mongodb_connection_string_secret_arn == "" ? [
-          {
-            name  = "MONGODB_CONNECTION_STRING"
-            value = var.mongodb_connection_string
-          }
-        ] : [],
         # Feature #1471: RUM snippet served as /rum.js (plain-text variant).
         # Only emitted when var.registry_rum_snippet_b64 is non-empty and a
         # Secrets Manager ARN was not provided. When empty, RUM is disabled.
@@ -2252,6 +2162,16 @@ module "ecs_service_registry" {
             valueFrom = var.mongodb_connection_string_secret_arn
           }
         ] : [],
+        # Operator-supplied credentials, including the plain-text
+        # mongodb_connection_string, which secrets.tf stores in Secrets Manager
+        # rather than placing in the task definition. Empty values inject
+        # nothing.
+        [
+          for name in local.registry_container_secret_names : {
+            name      = name
+            valueFrom = aws_secretsmanager_secret.container_secret[name].arn
+          } if contains(local.container_secret_names, name)
+        ],
         # Feature #1471: RUM snippet served as /rum.js (Secrets Manager variant).
         # Preferred when the snippet contains a vendor token (avoids plain text
         # in state). The operator supplies the ARN of their own secret.

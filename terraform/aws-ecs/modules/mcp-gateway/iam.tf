@@ -46,7 +46,9 @@ resource "aws_iam_policy" "ecs_secrets_access" {
             aws_secretsmanager_secret.grafana_admin_password[0].arn
           ] : [],
           var.enable_observability && var.otel_otlp_endpoint != "" ? [aws_secretsmanager_secret.otlp_exporter_headers[0].arn] : [],
-          var.egress_credential_encryption_key != "" ? [aws_secretsmanager_secret.egress_credential_encryption_key[0].arn] : []
+          var.egress_credential_encryption_key != "" ? [aws_secretsmanager_secret.egress_credential_encryption_key[0].arn] : [],
+          # Operator-supplied credentials injected through `secrets` (secrets.tf).
+          [for name in local.container_secret_names : aws_secretsmanager_secret.container_secret[name].arn]
         )
       },
       {

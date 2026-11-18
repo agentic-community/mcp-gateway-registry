@@ -626,3 +626,95 @@ resource "aws_secretsmanager_secret_version" "otlp_exporter_headers" {
   secret_id     = aws_secretsmanager_secret.otlp_exporter_headers[0].id
   secret_string = var.otel_exporter_otlp_headers
 }
+
+
+# Credentials the registry and auth-server read as environment variables.
+#
+# Each one reaches its container through the task's `secrets` block
+# (valueFrom), never as a plain `environment` entry. A plain entry is stored
+# in the task definition, where any principal with
+# ecs:DescribeTaskDefinition can read it. A secrets entry stores only the ARN,
+# and the value is fetched at task start by the execution role.
+#
+# A value that is empty creates no secret and injects nothing. Every reader
+# treats an unset variable the same as an empty one, so this matches the
+# previous behavior, where the variable was always set and often empty.
+#
+# Unlike the IdP secrets above, these do NOT ignore changes to the value:
+# they used to be plain environment entries, so changing the tfvars value
+# updated the running task, and that has to keep working.
+locals {
+  container_secret_values = {
+    AUTH0_MANAGEMENT_API_TOKEN             = var.auth0_management_api_token
+    REGISTRY_API_TOKEN                     = var.registry_api_token
+    REGISTRY_API_KEYS                      = var.registry_api_keys
+    FEDERATION_STATIC_TOKEN                = var.federation_static_token
+    FEDERATION_ENCRYPTION_KEY              = var.federation_encryption_key
+    ANS_API_KEY                            = var.ans_api_key
+    ANS_API_SECRET                         = var.ans_api_secret
+    REGISTRATION_WEBHOOK_AUTH_TOKEN        = var.registration_webhook_auth_token
+    REGISTRATION_WEBHOOK_SIGNING_SECRET    = var.registration_webhook_signing_secret
+    REGISTRATION_GATE_AUTH_CREDENTIAL      = var.registration_gate_auth_credential
+    REGISTRATION_GATE_OAUTH2_CLIENT_SECRET = var.registration_gate_oauth2_client_secret
+    GITHUB_PAT                             = var.github_pat
+    GITHUB_APP_PRIVATE_KEY                 = var.github_app_private_key
+    # The plain-text connection string. When an operator supplies
+    # mongodb_connection_string_secret_arn instead, that secret is injected
+    # directly (see ecs-services.tf) and nothing is created here.
+    MONGODB_CONNECTION_STRING = var.mongodb_connection_string_secret_arn == "" ? var.mongodb_connection_string : ""
+  }
+
+  # Names with a non-empty value. Whether a value is empty is not itself
+  # secret, and count/for_each cannot take a sensitive value, hence
+  # nonsensitive() on the comparison only.
+  container_secret_names = toset([
+    for name, value in local.container_secret_values : name if nonsensitive(value != "")
+  ])
+
+  # Which container receives which secret. Matches the environment entries
+  # these replace.
+  auth_server_container_secret_names = [
+    "AUTH0_MANAGEMENT_API_TOKEN",
+    "REGISTRY_API_TOKEN",
+    "REGISTRY_API_KEYS",
+    "FEDERATION_STATIC_TOKEN",
+    "FEDERATION_ENCRYPTION_KEY",
+    "ANS_API_KEY",
+    "ANS_API_SECRET",
+    "MONGODB_CONNECTION_STRING",
+  ]
+  registry_container_secret_names = [
+    "AUTH0_MANAGEMENT_API_TOKEN",
+    "REGISTRY_API_TOKEN",
+    "REGISTRY_API_KEYS",
+    "FEDERATION_STATIC_TOKEN",
+    "FEDERATION_ENCRYPTION_KEY",
+    "ANS_API_KEY",
+    "ANS_API_SECRET",
+    "REGISTRATION_WEBHOOK_AUTH_TOKEN",
+    "REGISTRATION_WEBHOOK_SIGNING_SECRET",
+    "REGISTRATION_GATE_AUTH_CREDENTIAL",
+    "REGISTRATION_GATE_OAUTH2_CLIENT_SECRET",
+    "GITHUB_PAT",
+    "GITHUB_APP_PRIVATE_KEY",
+    "MONGODB_CONNECTION_STRING",
+  ]
+}
+
+resource "aws_secretsmanager_secret" "container_secret" {
+  #checkov:skip=CKV2_AWS_57:Operator-supplied credential set through tfvars, not rotatable via Secrets Manager
+  for_each = local.container_secret_names
+
+  name_prefix             = "${local.name_prefix}-${lower(replace(each.key, "_", "-"))}-"
+  description             = "${each.key} for the registry and auth-server containers"
+  recovery_window_in_days = 0
+  kms_key_id              = aws_kms_key.secrets.id
+  tags                    = local.common_tags
+}
+
+resource "aws_secretsmanager_secret_version" "container_secret" {
+  for_each = local.container_secret_names
+
+  secret_id     = aws_secretsmanager_secret.container_secret[each.key].id
+  secret_string = local.container_secret_values[each.key]
+}
