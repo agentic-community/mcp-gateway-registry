@@ -315,6 +315,26 @@ describe('egress with the OBO cache enabled', () => {
     // The CMK is configured, so the cache needs decrypt on it too.
     expect(serialized).toContain('11111111-2222-3333-4444-555555555555');
   });
+
+  it('grants the cache exactly the four calls the secret store makes', () => {
+    // registry/secrets/secrets_manager/store.py calls get, put, create and
+    // delete, and nothing else. Terraform's OBO policy grants the same four.
+    const policies = template.findResources('AWS::IAM::ManagedPolicy');
+    const cachePolicy = Object.values(policies).find((p) =>
+      JSON.stringify(p).includes('OboCacheVaultCrud'),
+    );
+    const statements = cachePolicy?.Properties.PolicyDocument.Statement as Array<{
+      Sid: string;
+      Action: string[];
+    }>;
+    const crud = statements.find((s) => s.Sid === 'OboCacheVaultCrud');
+    expect([...(crud?.Action ?? [])].sort()).toEqual([
+      'secretsmanager:CreateSecret',
+      'secretsmanager:DeleteSecret',
+      'secretsmanager:GetSecretValue',
+      'secretsmanager:PutSecretValue',
+    ]);
+  });
 });
 
 describe('cognito and pingfederate', () => {
@@ -438,7 +458,7 @@ describe('no secret value reaches the synthesized template', () => {
       userPoolId: 'us-west-2_AbC123xyz',
       clientId: 'cid',
       clientSecretArn: secretArn('mcp/cognito-client-secret'),
-      domain: '',
+      domain: 'my-pool',
       m2mClientIds: '',
     };
     config.pingfederate = {

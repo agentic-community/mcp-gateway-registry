@@ -263,8 +263,10 @@ export interface CognitoConfig {
   /**
    * Cognito hosted-UI domain PREFIX, not a hostname. The auth-server appends
    * `.auth.<region>.amazoncognito.com`, so `my-pool` yields
-   * `my-pool.auth.us-west-2.amazoncognito.com`. Empty is supported and
-   * derives the domain from the user pool id.
+   * `my-pool.auth.us-west-2.amazoncognito.com`. Required when Cognito is
+   * enabled: the browser login URLs come from auth_server/oauth2_providers.yml,
+   * which interpolates `${COGNITO_DOMAIN}` as is, so an empty value yields
+   * `https://.auth.<region>.amazoncognito.com`.
    */
   domain: string;
   /**
@@ -387,8 +389,9 @@ export interface EgressConfig {
    *
    * Optional, and empty is not "allow anything": the application falls back
    * to a shape rule that admits only an internal MCP server's own IdP
-   * audience (an `api://` App ID URI or a bare client id) and rejects every
-   * `https://` host URL, so shared first-party resources cannot be targeted.
+   * audience (an `api://` App ID URI or a bare non-GUID client id) and rejects
+   * every `https://` host URL and every bare GUID, so shared first-party
+   * resources cannot be targeted. A bare-GUID target has to be listed here.
    * Set this to narrow that to an explicit, audited set.
    */
   oboAllowedAudiences: string;
@@ -1128,13 +1131,18 @@ function _requireSecretArn(value: string, settingName: string): void {
 function _validateCognito(config: RegistryConfig): void {
   if (!config.cognito.enabled) return;
 
-  // cognito.domain is deliberately NOT required: the auth-server derives the
-  // hosted-UI domain from the user pool id when it is empty
-  // (auth_server/providers/cognito.py).
+  // cognito.domain IS required. auth_server/providers/cognito.py derives a
+  // domain from the user pool id when it is empty, but the browser login
+  // URLs come from auth_server/oauth2_providers.yml, which interpolates
+  // `${COGNITO_DOMAIN}` as is: the derivation in auth_server/server.py only
+  // fires on `${COGNITO_DOMAIN:-auto}`. An empty value therefore yields
+  // `https://.auth.<region>.amazoncognito.com`, and Cognito never creates a
+  // hosted-UI domain named after the pool id anyway.
   const missing: string[] = [];
   if (!config.cognito.userPoolId) missing.push('cognito.userPoolId');
   if (!config.cognito.clientId) missing.push('cognito.clientId');
   if (!config.cognito.clientSecretArn) missing.push('cognito.clientSecretArn');
+  if (!config.cognito.domain) missing.push('cognito.domain');
   if (missing.length > 0) {
     throw new Error(
       `cognito.enabled=true needs ${missing.join(', ')}. The auth-server resolves the pool, ` +
@@ -1160,8 +1168,7 @@ function _validateCognito(config: RegistryConfig): void {
       `cognito.domain must be the hosted-UI domain PREFIX, not a hostname, got ` +
       `${JSON.stringify(config.cognito.domain)}. The auth-server appends ` +
       '".auth.<region>.amazoncognito.com", so pass "my-pool", not ' +
-      '"my-pool.auth.us-west-2.amazoncognito.com". Leave it empty to derive the domain ' +
-      'from the user pool id.',
+      '"my-pool.auth.us-west-2.amazoncognito.com".',
     );
   }
 }

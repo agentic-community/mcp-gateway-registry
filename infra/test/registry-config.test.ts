@@ -109,6 +109,7 @@ describe('values that reach an IAM policy Resource', () => {
     userPoolId: 'us-west-2_AbC123xyz',
     clientId: 'client',
     clientSecretArn: secretArn('mcp/cognito'),
+    domain: 'my-pool',
   };
   const validPing = {
     enabled: true,
@@ -265,6 +266,7 @@ describe('cognito validation', () => {
     userPoolId: 'us-west-2_AbC123xyz',
     clientId: 'client',
     clientSecretArn: secretArn('mcp/cognito'),
+    domain: 'my-pool',
   };
 
   it('rejects an incomplete config', () => {
@@ -293,10 +295,11 @@ describe('cognito validation', () => {
     ).toThrow(/complete Secrets Manager secret ARN/);
   });
 
-  it('accepts an empty domain, which the auth-server derives from the pool id', () => {
-    const config = loadWith({ cognito: { ...validCognito, domain: '' } });
-    expect(config.cognito.enabled).toBe(true);
-    expect(config.cognito.domain).toEqual('');
+  it('rejects an empty domain, which would break the browser login URLs', () => {
+    // auth_server/oauth2_providers.yml interpolates ${COGNITO_DOMAIN} as is,
+    // so an empty value yields https://.auth.<region>.amazoncognito.com.
+    expect(() => loadWith({ cognito: { ...validCognito, domain: '' } }))
+      .toThrow(/cognito\.domain/);
   });
 
   it('accepts a well-formed config', () => {

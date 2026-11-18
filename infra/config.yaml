@@ -184,8 +184,8 @@ registry:
     # clientSecretArn: "arn:aws:secretsmanager:us-east-1:123456789012:secret:mcp/cognito-AbCdEf"
     # Hosted-UI domain PREFIX, not a hostname: the auth-server appends
     # ".auth.<region>.amazoncognito.com". Pass "my-pool", not
-    # "my-pool.auth.us-east-1.amazoncognito.com". Leave empty to derive it
-    # from userPoolId.
+    # "my-pool.auth.us-east-1.amazoncognito.com". Required when Cognito is
+    # enabled: an empty value breaks the browser login URLs.
     # domain: "my-pool"
     # M2M app client ids the auth-server accepts, comma or whitespace
     # separated. Empty denies every client-credentials token.
@@ -238,7 +238,8 @@ registry:
     # WHITESPACE-separated audiences an obo_exchange server may target.
     # Optional: empty is not "allow anything", it falls back to a shape rule
     # that admits only an internal MCP server's own IdP audience (an "api://"
-    # App ID URI or a bare client id) and rejects every https:// host URL.
+    # App ID URI or a bare non-GUID client id) and rejects every https://
+    # host URL and every bare GUID. A bare-GUID target has to be listed here.
     # Set it to narrow that to an explicit, audited set.
     oboAllowedAudiences: ""
     tokenRefreshSkewSeconds: 300
