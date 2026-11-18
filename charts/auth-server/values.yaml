@@ -228,7 +228,7 @@ authProvider:
 # Keycloak integration (used when authProvider.type = "keycloak")
 keycloak:
   enabled: true
-  realm: mcp-gateway
+  realm: "" # Inherit global.authProvider.keycloak.realm; standalone default is mcp-gateway.
   m2mClientId: "" # Optional: M2M client ID for machine-to-machine authentication
   m2mClientSecret: "" # Optional: M2M client secret
 # Entra ID integration (used when authProvider.type = "entra")

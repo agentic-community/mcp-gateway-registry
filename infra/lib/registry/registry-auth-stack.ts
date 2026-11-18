@@ -34,6 +34,8 @@ export interface RegistryAuthStackProps extends cdk.StackProps {
   readonly privateSubnets: ec2.ISubnet[];
   /** Public subnets from the network stack */
   readonly publicSubnets: ec2.ISubnet[];
+  /** NAT gateway public IPs from the network stack (allowed on the Keycloak admin paths) */
+  readonly natPublicIps: string[];
   /** Keycloak database security group from the data stack */
   readonly keycloakDbSg: ec2.ISecurityGroup;
   /** KMS key used for RDS / SSM encryption from the data stack */
@@ -83,6 +85,7 @@ export class RegistryAuthStack extends cdk.Stack {
       vpc: props.vpc,
       privateSubnets: props.privateSubnets,
       publicSubnets: props.publicSubnets,
+      natPublicIps: props.natPublicIps,
       keycloakDbSg: props.keycloakDbSg,
       rdsKmsKey: props.rdsKmsKey,
       keycloakDbSecretArn: props.keycloakDbSecretArn,

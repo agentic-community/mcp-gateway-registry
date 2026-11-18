@@ -7,6 +7,7 @@
  */
 
 import * as fs from 'fs';
+import * as net from 'net';
 import * as yaml from 'js-yaml';
 
 // ---------------------------------------------------------------------------
@@ -62,7 +63,7 @@ export interface ImagesConfig {
   registry: string;
   /** Container image URI for auth server service */
   authServer: string;
-  /** Container image URI for Keycloak (used by Auth stack) */
+  /** Required Keycloak image URI; use a fixed tag or digest (default: 26.8.2). */
   keycloak: string;
   /** Container image URI for currenttime MCP server */
   currenttime: string;
@@ -559,6 +560,12 @@ export interface RegistryConfig {
   vpcCidr: string;
   /** List of CIDR blocks allowed to access the ALB */
   ingressCidrBlocks: string[];
+  /**
+   * Source CIDRs allowed to reach Keycloak admin and master-realm paths.
+   * Null uses ingressCidrBlocks. NAT gateway egress IPs are always added.
+   * CloudFront hides the client IP, so a different list fails synth in that mode.
+   */
+  keycloakAdminCidrBlocks: string[] | null;
   /** Enable Route53 DNS records and ACM certificates */
   enableRoute53Dns: boolean;
   /** Use region-based domains */
@@ -634,6 +641,7 @@ export const DEFAULT_REGISTRY_CONFIG: RegistryConfig = {
   trustedRealIpCidrs: '',
   vpcCidr: '10.0.0.0/16',
   ingressCidrBlocks: ['0.0.0.0/0'],
+  keycloakAdminCidrBlocks: null,
   enableRoute53Dns: true,
   useRegionalDomains: true,
   baseDomain: 'mycorp.click',
@@ -676,7 +684,7 @@ export const DEFAULT_REGISTRY_CONFIG: RegistryConfig = {
   images: {
     registry: '',
     authServer: 'mcpgateway/auth-server:latest',
-    keycloak: 'quay.io/keycloak/keycloak:26.2.4',
+    keycloak: 'quay.io/keycloak/keycloak:26.8.2',
     currenttime: '',
     mcpgw: '',
     realserverfaketools: '',
@@ -1323,6 +1331,44 @@ function _validateEgress(config: RegistryConfig): void {
   }
 }
 
+// Keycloak admin CIDR blocks (mirrors terraform keycloak_admin_cidr_blocks)
+// ---------------------------------------------------------------------------
+
+function _isCidr(value: string): boolean {
+  const parts = value.split('/');
+  if (parts.length !== 2 || !/^\d{1,3}$/.test(parts[1])) return false;
+  const family = net.isIP(parts[0]);
+  const prefix = Number(parts[1]);
+  return (family === 4 && prefix <= 32) || (family === 6 && prefix <= 128);
+}
+
+/** Effective admin CIDRs, using ingressCidrBlocks when unset. */
+export function resolveKeycloakAdminCidrBlocks(config: RegistryConfig): string[] {
+  const cidrs = config.keycloakAdminCidrBlocks ?? config.ingressCidrBlocks;
+  return Array.from(new Set(cidrs));
+}
+
+function _validateKeycloakAdminCidrBlocks(config: RegistryConfig): void {
+  const configured = config.keycloakAdminCidrBlocks;
+  if (configured !== null && configured !== undefined) {
+    if (!Array.isArray(configured) || !configured.every((c) => typeof c === 'string' && _isCidr(c))) {
+      throw new Error(
+        `keycloakAdminCidrBlocks must be a list of CIDR blocks such as 203.0.113.10/32, got ${JSON.stringify(configured)}.`,
+      );
+    }
+
+    const differsFromIngress =
+      JSON.stringify([...configured].sort()) !== JSON.stringify([...config.ingressCidrBlocks].sort());
+    if (config.cloudfront.enabled && differsFromIngress) {
+      throw new Error(
+        'keycloakAdminCidrBlocks cannot be enforced when cloudfront.enabled is true: ' +
+        'the Keycloak ALB sees CloudFront edge IPs, not the client IP. ' +
+        'Remove keycloakAdminCidrBlocks from config.yaml (or set it to ingressCidrBlocks).',
+      );
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Public: load and validate config
 // ---------------------------------------------------------------------------
@@ -1431,6 +1477,8 @@ export function loadRegistryConfig(configPath: string): RegistryConfig {
       'blocks admin/OIDC endpoints over unencrypted connections.',
     );
   }
+
+  _validateKeycloakAdminCidrBlocks(config);
 
   return config;
 }

@@ -1,0 +1,76 @@
+suite: Keycloak realm validation
+templates:
+  - secret.yaml
+  - job.yaml
+release:
+  name: test
+  namespace: default
+tests:
+  - it: refuses conflicting global and local realms
+    set:
+      global.authProvider.type: keycloak
+      global.authProvider.keycloak.realm: team-realm
+      keycloak.realm: other-realm
+    asserts:
+      - failedTemplate:
+          errorMessage: "keycloak.realm conflicts with global.authProvider.keycloak.realm; use the global realm or leave the local value empty"
+        template: secret.yaml
+  - it: refuses exposing the master realm
+    set:
+      global.authProvider.type: keycloak
+      global.authProvider.keycloak.realm: master
+    asserts:
+      - failedTemplate:
+          errorMessage: "Keycloak gateway realm must be 1-64 letters, digits, underscores or hyphens and must not be master"
+        template: secret.yaml
+  - it: refuses an existing config Secret without an explicit matching realm
+    templates:
+      - job.yaml
+    set:
+      keycloak.existingSecret: operator-realm-secret
+    asserts:
+      - failedTemplate:
+          errorPattern: requires an explicit keycloak.realm
+        template: job.yaml
+  - it: applies the explicit custom realm and BYO admin credential to the Job
+    templates:
+      - job.yaml
+    set:
+      keycloak.existingSecret: operator-realm-secret
+      keycloak.realm: team
+      keycloak.adminExistingSecret: operator-admin
+      keycloak.adminExistingSecretPasswordKey: credential
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: REALM
+            value: team
+        template: job.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KEYCLOAK_ADMIN_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: operator-admin
+                key: credential
+        template: job.yaml
+  - it: renders the same custom realm in generated configuration and Job
+    templates:
+      - secret.yaml
+      - job.yaml
+    set:
+      global.authProvider.keycloak.realm: team
+    asserts:
+      - equal:
+          path: data.REALM
+          decodeBase64: true
+          value: team
+        template: secret.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: REALM
+            value: team
+        template: job.yaml

@@ -2,6 +2,8 @@ suite: stack ingress topology — single ingress via registry nginx
 release:
   name: test
   namespace: default
+set:
+  keycloak.postgres.bootstrap.mode: fresh-install
 tests:
   # Registry ingress in path mode exposes /oauth2, /keycloak, /realms,
   # /resources — required because auth-server and Keycloak have no
@@ -36,6 +38,51 @@ tests:
       - lengthEqual:
           path: spec.rules[0].http.paths
           count: 5
+
+  - it: forwards the canonical Keycloak prefix on primary and alias hosts
+    templates:
+      - charts/registry/templates/ingress.yaml
+    set:
+      global.domain: example.com
+      global.ingress.routingMode: path
+      global.ingress.tls: true
+      global.ingress.additionalHostnames:
+        - alias.example.com
+      global.authProvider.keycloak.externalUrl: https://example.com/identity/auth
+    asserts:
+      - equal:
+          path: spec.rules[0].http.paths[5]
+          value:
+            path: /identity/auth
+            pathType: Prefix
+            backend:
+              service:
+                name: registry
+                port:
+                  name: http
+      - equal:
+          path: spec.rules[1].http.paths[5]
+          value:
+            path: /identity/auth
+            pathType: Prefix
+            backend:
+              service:
+                name: registry
+                port:
+                  name: http
+
+  - it: uses an HTTP listener without an HTTPS redirect when TLS is disabled
+    templates:
+      - charts/registry/templates/ingress.yaml
+    set:
+      global.ingress.tls: false
+      global.ingress.allowPlaintext: true
+    asserts:
+      - matchRegex:
+          path: metadata.annotations["alb.ingress.kubernetes.io/listen-ports"]
+          pattern: '^\[\{"HTTP":\s*80\}\]$'
+      - notExists:
+          path: metadata.annotations["alb.ingress.kubernetes.io/ssl-redirect"]
 
   - it: registry ingress in subdomain mode keeps the single wildcard
     templates:
@@ -358,16 +405,3 @@ tests:
           path: data.ADDITIONAL_REGISTRY_HOSTNAMES
           value: YWxpYXMuZXhhbXBsZS5jb20=
 
-  - it: adds additional hostnames to Keycloak redirect, web-origin, and logout allowlists
-    templates:
-      - charts/keycloak-configure/templates/configmap.yaml
-    asserts:
-      - matchRegex:
-          path: data["script.sh"]
-          pattern: '(?s).*extra_redirect_uris\+=\$\(printf.*'
-      - matchRegex:
-          path: data["script.sh"]
-          pattern: '(?s).*extra_web_origins\+=\$\(printf.*'
-      - matchRegex:
-          path: data["script.sh"]
-          pattern: '(?s).*extra_logout_uris\+=.*'

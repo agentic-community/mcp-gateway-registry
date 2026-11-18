@@ -1,0 +1,229 @@
+{{- if include "keycloak.enabled" . }}
+{{- $adminSecret := include "keycloak.adminSecretName" . }}
+{{- $pgSecret := include "keycloak.pgSecretName" . }}
+{{- $rel := .Values.httpRelativePath | default "/" }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "keycloak.headlessName" . }}
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "keycloak.commonLabels" . | nindent 4 }}
+    {{- include "keycloak.serverSelectorLabels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  selector:
+    {{- include "keycloak.serverSelectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.service.containerPort }}
+      targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "keycloak.fullname" . }}
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "keycloak.commonLabels" . | nindent 4 }}
+    {{- include "keycloak.serverSelectorLabels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "keycloak.serverSelectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.service.httpPort }}
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "keycloak.fullname" . }}
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "keycloak.commonLabels" . | nindent 4 }}
+    {{- include "keycloak.serverSelectorLabels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "keycloak.serverSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "keycloak.commonLabels" . | nindent 8 }}
+        {{- include "keycloak.serverSelectorLabels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: wait-for-postgres
+          image: "{{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}"
+          imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
+          securityContext:
+            {{- include "keycloak.containerSecurityContext" . | nindent 12 }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              until pg_isready -h {{ include "keycloak.postgresName" . }} -p 5432 -U {{ .Values.postgres.username }}; do
+                echo "waiting for postgres..."; sleep 3
+              done
+        # The root filesystem is read-only, so lib/quarkus is an emptyDir. The
+        # launcher reads the image's build output from it before rebuilding,
+        # so seed it with the image's copy first.
+        - name: copy-build-output
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- include "keycloak.containerSecurityContext" . | nindent 12 }}
+          # Plain copy: the volume root belongs to root (group fsGroup), so
+          # preserving the source directory's times or owner on it fails.
+          command: ["/bin/cp", "-R", "/opt/keycloak/lib/quarkus/.", "/seed/"]
+          volumeMounts:
+            - name: quarkus
+              mountPath: /seed
+      containers:
+        - name: keycloak
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["start", "--optimized=false"]
+          securityContext:
+            {{- include "keycloak.containerSecurityContext" . | nindent 12 }}
+          # Writable paths under the read-only root: the build output
+          # (lib/quarkus, seeded above and rebuilt by `start --optimized=false`),
+          # Keycloak's data dir, and /tmp.
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: data
+              mountPath: /opt/keycloak/data
+            - name: quarkus
+              mountPath: /opt/keycloak/lib/quarkus
+          env:
+            - name: KC_BOOTSTRAP_ADMIN_USERNAME
+              value: {{ include "keycloak.adminUsername" . | quote }}
+            - name: KC_BOOTSTRAP_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $adminSecret }}
+                  key: {{ include "keycloak.adminSecretKey" . }}
+            - name: KC_DB
+              value: postgres
+            - name: KC_DB_URL_HOST
+              value: {{ include "keycloak.postgresName" . }}
+            - name: KC_DB_URL_PORT
+              value: "5432"
+            - name: KC_DB_URL_DATABASE
+              value: {{ .Values.postgres.database | quote }}
+            - name: KC_DB_USERNAME
+              value: {{ .Values.postgres.username | quote }}
+            - name: KC_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $pgSecret }}
+                  key: {{ .Values.postgres.existingSecretPasswordKey }}
+            - name: KC_DB_SCHEMA
+              value: public
+            - name: KC_HTTP_ENABLED
+              value: "true"
+            - name: KC_HTTP_PORT
+              value: {{ .Values.service.containerPort | quote }}
+            - name: KC_HTTP_MANAGEMENT_PORT
+              value: {{ .Values.service.managementPort | quote }}
+            - name: KC_HTTP_MANAGEMENT_RELATIVE_PATH
+              value: "/"
+            - name: KC_PROXY_HEADERS
+              value: {{ .Values.proxyHeaders | quote }}
+            - name: KC_HOSTNAME
+              value: {{ include "keycloak.hostname" . | quote }}
+            - name: KC_HOSTNAME_STRICT
+              value: "true"
+            - name: KC_HOSTNAME_BACKCHANNEL_DYNAMIC
+              value: "true"
+            - name: KC_HEALTH_ENABLED
+              value: "true"
+            - name: KC_CACHE
+              value: {{ .Values.cache | quote }}
+            {{- if eq .Values.cache "ispn" }}
+            - name: KC_CACHE_STACK
+              value: jdbc-ping
+            {{- end }}
+            {{- if ne $rel "/" }}
+            - name: KC_HTTP_RELATIVE_PATH
+              value: {{ $rel | quote }}
+            {{- end }}
+            {{- if .Values.features }}
+            - name: KC_FEATURES
+              value: {{ .Values.features | quote }}
+            {{- end }}
+            {{- if .Values.disabledFeatures }}
+            - name: KC_FEATURES_DISABLED
+              value: {{ .Values.disabledFeatures | quote }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.containerPort }}
+            - name: management
+              containerPort: {{ .Values.service.managementPort }}
+            {{- if eq .Values.cache "ispn" }}
+            - name: cache
+              containerPort: 7800
+            - name: failure-detect
+              containerPort: 57800
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: management
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: management
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 10
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: data
+          emptyDir: {}
+        - name: quarkus
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

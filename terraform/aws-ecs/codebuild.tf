@@ -213,7 +213,7 @@ phases:
       - echo "Pre-pulling base images for layer caching..."
       - docker pull public.ecr.aws/docker/library/python:3.14-slim || true
       - docker tag public.ecr.aws/docker/library/python:3.14-slim python:3.14-slim
-      - docker pull quay.io/keycloak/keycloak:23.0 || true
+      - docker pull quay.io/keycloak/keycloak:26.8.2 || true
       - docker pull grafana/grafana:12.3.1 || true
       - echo "Pulling existing images for cache..."
       - for repo in mcp-gateway-registry mcp-gateway-auth-server keycloak mcp-gateway-currenttime mcp-gateway-mcpgw mcp-gateway-realserverfaketools mcp-gateway-flight-booking-agent mcp-gateway-travel-assistant-agent mcp-gateway-metrics-service mcp-gateway-grafana; do docker pull $ECR_REGISTRY/$repo:latest 2>/dev/null || true; done

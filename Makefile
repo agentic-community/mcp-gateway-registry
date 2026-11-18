@@ -1,4 +1,4 @@
-.PHONY: help test test-unit test-integration test-e2e test-fast test-coverage test-auth test-servers test-search test-health test-core install-dev lint format check-deps clean build-keycloak push-keycloak build-and-push-keycloak deploy-keycloak update-keycloak save-outputs view-logs view-logs-keycloak view-logs-registry view-logs-auth view-logs-follow list-images build push build-push generate-manifest validate-config publish-dockerhub publish-dockerhub-component publish-dockerhub-version publish-dockerhub-no-mirror publish-local compose-up-agents compose-down-agents compose-logs-agents build-agents push-agents uv-update-locks
+.PHONY: help test test-unit test-integration test-e2e test-fast test-coverage test-auth test-servers test-search test-health test-core install-dev lint format check-deps clean build-keycloak push-keycloak build-and-push-keycloak save-outputs view-logs view-logs-keycloak view-logs-registry view-logs-auth view-logs-follow list-images build push build-push generate-manifest validate-config publish-dockerhub publish-dockerhub-component publish-dockerhub-version publish-dockerhub-no-mirror publish-local compose-up-agents compose-down-agents compose-logs-agents build-agents push-agents uv-update-locks
 
 # Default target
 help:
@@ -31,8 +31,7 @@ help:
 	@echo "Keycloak Build & Deploy:"
 	@echo "  build-keycloak              Build Keycloak Docker image locally"
 	@echo "  build-and-push-keycloak     Build and push to ECR"
-	@echo "  deploy-keycloak             Update ECS service (after push)"
-	@echo "  update-keycloak             Build, push, and deploy in one command"
+	@echo "  Deploy versioned images through Terraform/CDK; see scripts/README.md"
 	@echo ""
 	@echo "Infrastructure Documentation:"
 	@echo "  save-outputs                Save Terraform outputs as JSON"
@@ -156,39 +155,17 @@ ci-test: clean check-deps test test-coverage
 # Variables
 AWS_REGION ?= us-west-2
 AWS_PROFILE ?= default
-IMAGE_TAG ?= latest
 
 build-keycloak:
 	@echo "🐋 Building Keycloak Docker image..."
 	@$(MAKE) build IMAGE=keycloak
-	@echo "✅ Image built: keycloak:$(IMAGE_TAG)"
+	@echo "Keycloak image built with tags from build-config.yaml"
 
 build-and-push-keycloak:
 	@echo "📦 Building and pushing Keycloak to ECR..."
 	@$(MAKE) build-push IMAGE=keycloak
 	@echo "✅ Keycloak image built and pushed successfully"
 
-deploy-keycloak:
-	@echo "🚀 Deploying Keycloak ECS service..."
-	aws ecs update-service \
-		--cluster keycloak \
-		--service keycloak \
-		--force-new-deployment \
-		--region $(AWS_REGION) \
-		--profile $(AWS_PROFILE) \
-		--output table
-	@echo "✅ ECS service update initiated"
-
-update-keycloak: build-and-push-keycloak deploy-keycloak
-	@echo ""
-	@echo "✅ Keycloak update complete!"
-	@echo ""
-	@echo "Service URLs:"
-	@echo "  Admin Console: https://kc.mycorp.click/admin"
-	@echo "  Service URL:   https://kc.mycorp.click"
-	@echo ""
-	@echo "Monitor deployment:"
-	@echo "  aws ecs describe-services --cluster keycloak --services keycloak --region $(AWS_REGION) --query 'services[0].[serviceName,status,runningCount,desiredCount]' --output table"
 
 save-outputs:
 	@echo "💾 Saving Terraform outputs as JSON..."

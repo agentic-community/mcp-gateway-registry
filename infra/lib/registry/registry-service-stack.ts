@@ -270,6 +270,7 @@ export class RegistryServiceStack extends cdk.Stack {
       PINGFEDERATE_GROUPS_CLAIM: config.pingfederate.groupsClaim,
       PINGFEDERATE_M2M_ALLOWED_AUDIENCES: config.pingfederate.m2mAllowedAudiences,
       KEYCLOAK_URL: authStack.keycloakUrl,
+      KEYCLOAK_EXTERNAL_URL: authStack.keycloakUrl,
       KEYCLOAK_REALM: 'mcp-gateway',
       KEYCLOAK_CLIENT_ID: 'mcp-gateway-web',
       ENTRA_ENABLED: String(config.entra.enabled),
@@ -432,7 +433,6 @@ export class RegistryServiceStack extends cdk.Stack {
       ...sharedEnv,
       ...egressSharedEnv,
       ...otelEnv('mcp-auth-server'),
-      KEYCLOAK_EXTERNAL_URL: authStack.keycloakUrl,
       KEYCLOAK_M2M_CLIENT_ID: 'mcp-gateway-m2m',
       // Allowlist of Cognito M2M app client ids whose client-credentials
       // tokens the auth-server accepts. Auth-server only; the registry has no
@@ -943,7 +943,13 @@ export class RegistryServiceStack extends cdk.Stack {
         serviceConnectNamespaceArn: cloudMapNamespace.namespaceArn,
         serviceConnectDnsName: agent.dnsName,
         serviceConnectPortName: agent.portName,
-        environment: { AWS_REGION: config.awsRegion, AWS_DEFAULT_REGION: config.awsRegion },
+        environment: {
+          AWS_REGION: config.awsRegion,
+          AWS_DEFAULT_REGION: config.awsRegion,
+          KEYCLOAK_URL: authStack.keycloakUrl,
+          KEYCLOAK_EXTERNAL_URL: authStack.keycloakUrl,
+          KEYCLOAK_REALM: 'mcp-gateway',
+        },
         ingressCidr: config.vpcCidr,
         healthCheckCommand: 'curl -f http://localhost:9000/ping || exit 1',
         namePrefix,

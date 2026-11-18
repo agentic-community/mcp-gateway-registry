@@ -1,0 +1,95 @@
+suite: explicit Keycloak initialization and snapshot retirement
+release:
+  name: test
+  namespace: default
+set:
+  hostname: https://id.example.com
+  postgres.bootstrap.mode: fresh-install
+tests:
+  - it: keeps admin credentials out of the pod restart lifecycle
+    templates:
+      - templates/keycloak.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].lifecycle
+  - it: performs initialization as an explicit hook with a retained result
+    templates:
+      - templates/admin-init.yaml
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-install,post-upgrade,post-rollback
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation
+      - equal:
+          path: spec.backoffLimit
+          value: 0
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: false
+  - it: drops the snapshot mount only after explicit verified existing transition
+    templates:
+      - templates/postgres.yaml
+    documentSelector:
+      path: kind
+      value: StatefulSet
+    set:
+      postgres.bootstrap.mode: existing
+      postgres.bootstrap.existingVerified: true
+    asserts:
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: migration
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: migration
+          any: true
+  - it: retains the read-only snapshot while restore intent remains selected
+    templates:
+      - templates/postgres.yaml
+    documentSelector:
+      path: kind
+      value: StatefulSet
+    set:
+      postgres.bootstrap.mode: restore
+      postgres.bootstrap.existingClaim: verified-snapshot
+      postgres.bootstrap.sourceQuiesced: true
+      postgres.bootstrap.sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: migration
+            persistentVolumeClaim:
+              claimName: verified-snapshot
+              readOnly: true
+  - it: keeps management probes at root when the public listener has a prefix
+    templates:
+      - templates/keycloak.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      httpRelativePath: /auth
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KC_HTTP_MANAGEMENT_RELATIVE_PATH
+            value: "/"
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /health/ready
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
+          value: /health/live

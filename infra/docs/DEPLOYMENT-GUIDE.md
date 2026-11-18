@@ -23,6 +23,12 @@ export CDK_GRAFANA_ADMIN_PASSWORD="<...>"   # required while enableObservability
 - Node.js 18+, npm, `jq`
 - Container images pushed to ECR (configured in [`config.yaml`](../config.yaml) under `images:`)
 
+Keycloak defaults to the official `quay.io/keycloak/keycloak:26.8.2` image and
+retains Aurora MySQL. Set `images.keycloak` to an explicit fixed tag or digest for
+a custom image. The ECS task supplies database and hostname settings at startup.
+It uses `KC_BOOTSTRAP_ADMIN_USERNAME` and `KC_BOOTSTRAP_ADMIN_PASSWORD` for initial
+administrator creation, and `KC_LOG_LEVEL` for logging.
+
 ## Service URLs
 
 After deploy, run `./scripts/deploy.sh --endpoints` (reads `cdk-outputs.json`).
@@ -33,6 +39,28 @@ Standard mapping:
 | Registry UI / API / Health | `<registry-alb>/`, `/api/v1`, `/health` |
 | Keycloak / Admin Console | `<keycloak-alb>/`, `/admin` |
 | Grafana, Gradio | `<registry-alb>/grafana/`, `/gradio/` |
+
+### Keycloak ALB path routing
+
+The Keycloak ALB forwards `/realms/mcp-gateway`, `/realms/mcp-gateway/*`,
+`/resources/*` and `/` for any source its security groups admit. In direct-ALB
+mode, admin and master-realm paths also require an approved source IP. Other
+paths return 404.
+
+`keycloakAdminCidrBlocks` in [`config.yaml`](../config.yaml) defaults to `null`,
+which uses `ingressCidrBlocks`. Set it to your operator networks to restrict
+`/admin`, `/admin/*`, `/realms/master` and `/realms/master/*`. Include the machine
+that runs setup and user-management scripts. CDK adds the VPC NAT gateway egress
+IPs for the registry's admin calls. The HTTPS security group admits the union of
+ordinary ingress and admin CIDRs.
+
+CloudFront hides the client IP from the ALB. In CloudFront mode, admin paths have
+no source-IP condition, and synth rejects an admin list that differs from
+`ingressCidrBlocks`. Each admin rule accepts up to three CIDRs. CDK rejects lists
+that would exceed the default 100-rule listener quota.
+
+Use the dedicated Keycloak URL for administration. Do not expose admin or
+master-realm routes through the registry gateway.
 
 ## Credentials
 
@@ -129,7 +157,7 @@ Realm not created — re-run `post-deploy.sh` (which calls `keycloak/setup/init-
 ### Keycloak ECS tasks restart in a loop
 Check `aws logs tail /ecs/keycloak --since 30m`. Usual suspects:
 - DB connectivity: SG ingress from Keycloak ECS to Aurora on 3306
-- HTTPS strict mode with HTTP ALB: ensure `KC_HOSTNAME_STRICT_HTTPS=false`, `KC_HTTP_ENABLED=true`
+- For an HTTP ALB upstream, keep `KC_HTTP_ENABLED=true` and the public Keycloak URL on HTTPS. CDK pins `KC_HOSTNAME` and sets `KC_HOSTNAME_BACKCHANNEL_DYNAMIC=false`, so tokens and discovery use the canonical URL. Registry, auth-server and A2A agents receive it as `KEYCLOAK_EXTERNAL_URL`.
 - Admin password contains forbidden chars
 
 ### DocumentDB / RDS password validation failure

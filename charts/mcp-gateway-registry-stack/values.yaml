@@ -112,7 +112,12 @@ global:
     type: keycloak
     keycloak:
       adminUsername: &keycloakAdmin "user"
-      realm: &keycloakRealm "mcp-gateway"
+      # Shared by the server, admin initialization and realm configuration Jobs.
+      adminExistingSecret: ""
+      adminExistingSecretPasswordKey: admin-password # pragma: allowlist secret
+      # Canonical public URL. Empty derives it from the gateway ingress.
+      externalUrl: ""
+      realm: "mcp-gateway"
       # Don't set password here - let Keycloak chart generate it
       # OIDC client secrets for the realm's mcp-gateway-web / mcp-gateway-m2m
       # clients. Left empty, the chart generates them on first install,
@@ -146,6 +151,8 @@ global:
     scheme: internet-facing
     className: alb
     tls: true
+    # Required when exposing an HTTP-only registry listener.
+    allowPlaintext: false
     # Routing mode: "subdomain" or "path"
     # - subdomain: mcpregistry.domain.com
     # - path:      domain.com/registry
@@ -157,10 +164,9 @@ global:
     # are bare lowercase DNS hostnames under the effective session-cookie domain
     # (default: .<global.domain>) so browser login can share its cookie.
     additionalHostnames: []
-    # Path prefixes used when routingMode: path. Keycloak's browser path
-    # (/keycloak) is not configurable here — it's pinned by the registry
-    # pod's nginx config and the stack templates that emit
-    # KEYCLOAK_EXTERNAL_URL.
+    # Registry path prefix for routingMode: path. Keycloak keeps /keycloak as
+    # an alias; configure its canonical prefix through
+    # global.authProvider.keycloak.externalUrl.
     paths:
       registry: /registry
 openbao:
@@ -274,105 +280,48 @@ mongodb:
   # prefer providing the URI via global.existingMongoCredentialsSecret.
   connectionString: &mongoConnectionString ""
 # Keycloak configuration
-# Set create: true to deploy Keycloak as part of this stack
-# Set create: false to use an external Keycloak instance
-# NOTE: When using Entra (global.authProvider.type: entra), set create: false
+# The bundled Keycloak and PostgreSQL deploy only for the active Keycloak provider.
+# Set create: false to use an external Keycloak instance.
 keycloak:
-  create: true # Deploy Keycloak in this stack (set to false for external Keycloak or Entra)
+  create: true
   image:
-    registry: docker.io
-    repository: bitnamilegacy/keycloak
-    tag: 26.3.3-debian-12-r0
-  global:
-    security:
-      allowInsecureImages: true
+    repository: quay.io/keycloak/keycloak
+    tag: "26.8.2"
   auth:
     adminUser: *keycloakAdmin
-    existingSecret: '{{ .Release.Name }}-keycloak'
-    # Keycloak admin password. Empty generates one on first install and
-    # preserves it across upgrades (see global.generateSecrets). Rendered into
-    # the Secret named by existingSecret above, which is what the bundled
-    # Bitnami chart reads. Keycloak bootstraps its admin user once, so setting
-    # this on an existing install does not change the password in the realm.
+    # The stack creates <release>-keycloak unless adminExistingSecret is set.
+    # Empty generates a password on first install and preserves it on upgrades.
+    # Changing this value does not change an existing Keycloak admin password.
     adminPassword: ""
+  # Keycloak serves from its root; nginx strips the public /keycloak alias.
+  # Keep httpRelativePath=/ for the bundled gateway. Proxy headers use
+  # KC_PROXY_HEADERS=xforwarded. The separate sslInit Job replaces postStart.
+  postgres:
+    database: keycloak
+    username: keycloak
+    # Choose explicitly, then retain the mode on normal upgrades. Restore
+    # requires an operator-prepared snapshot with every source writer stopped.
+    bootstrap:
+      mode: ""
+      existingClaim: ""
+      sha256: ""
+      sourceQuiesced: false
+      existingVerified: false
   postgresql:
     auth:
-      existingSecret: '{{ .Release.Name }}-keycloak-postgresql'
-      # Keycloak's PostgreSQL credentials. Empty generates them on first
-      # install and preserves them across upgrades (see
-      # global.generateSecrets). Set them at FIRST install only: PostgreSQL
-      # initializes its roles from these values once, and changing them later
-      # while the PVC is retained causes the bn_keycloak authentication
-      # failure.
+      # The stack preserves these credentials in <release>-keycloak-postgresql.
+      # Set them on first install only. Changing a Secret does not change the
+      # database passwords on a retained volume. For an operator-owned Secret,
+      # use keycloak.postgres.existingSecret and its password-key settings.
       password: ""
       postgresPassword: ""
-    image:
-      registry: docker.io
-      repository: bitnamilegacy/postgresql
-      tag: 17.6.0-debian-12-r0
-  # Keycloak always serves from its own root (httpRelativePath defaults
-  # to "/" in the Bitnami chart). The registry pod's nginx rewrites
-  # browser traffic under /keycloak before forwarding, so Keycloak
-  # itself doesn't need to know about any URL prefix. DO NOT set
-  # keycloak.httpRelativePath to /keycloak/ — it breaks the /realms
-  # and /resources proxy locations in the registry's nginx config.
-
-  # NOTE: Keycloak uses Bitnami's `extraEnvVars` convention. Our own
-  # subcharts (auth-server, registry, mcpgw) use `extraEnv` instead —
-  # see the `<subchart>.extraEnv` sections later in this file. Both
-  # accept the Kubernetes EnvVar schema (name + value/valueFrom); only
-  # the key name differs.
-  extraEnvVars:
-    - name: KC_PROXY
-      value: edge
-    - name: KC_PROXY_HEADERS
-      value: xforwarded
-  ingress:
-    enabled: false
-  nodeSelector: {}
-  # Lifecycle hook to configure realm SSL settings
-  lifecycleHooks:
-    postStart:
-      exec:
-        command:
-          - "/bin/bash"
-          - "-c"
-          - |
-            (
-              echo "PostStart: Waiting for Keycloak to be ready..."
-              # Determine the base path - check if KC_HTTP_RELATIVE_PATH is set
-              BASE_PATH="${KC_HTTP_RELATIVE_PATH:-}"
-              BASE_URL="http://localhost:8080${BASE_PATH}"
-              echo "Using base URL: $BASE_URL"
-              for i in {1..120}; do
-                if curl -sf ${BASE_URL}/realms/$KC_SPI_ADMIN_REALM > /dev/null 2>&1; then
-                  echo "Keycloak ready after $i attempts"
-                  break
-                fi
-                sleep 5
-              done
-              sleep 10
-              echo "Configuring $KC_SPI_ADMIN_REALM realm..."
-              /opt/bitnami/keycloak/bin/kcadm.sh config credentials \
-                --config /tmp/kcadm.config \
-                --server ${BASE_URL} \
-                --realm $KC_SPI_ADMIN_REALM \
-                --user $KC_BOOTSTRAP_ADMIN_USERNAME \
-                --password $(cat $KC_BOOTSTRAP_ADMIN_PASSWORD_FILE)
-              /opt/bitnami/keycloak/bin/kcadm.sh update \
-                --config /tmp/kcadm.config \
-                realms/$KC_SPI_ADMIN_REALM \
-                -s sslRequired=NONE
-              echo "✓ $KC_SPI_ADMIN_REALM realm configured!"
-            ) > /tmp/poststart-config.log 2>&1 &
 # Keycloak configuration job
-# Automatically enabled when global.authProvider.type = "keycloak"
-# Set to false to skip configuration (e.g., when using pre-configured Keycloak)
-# NOTE: When using Entra (global.authProvider.type: entra), set enabled: false
+# The setup Job runs only for the active Keycloak provider.
+# Set enabled: false to leave an externally configured realm untouched.
 keycloak-configure:
-  enabled: true # Set to false to skip Keycloak configuration or when using Entra
+  enabled: true
   keycloak:
-    realm: *keycloakRealm
+    realm: "" # Inherits global.authProvider.keycloak.realm; conflicts are rejected.
     adminUser: *keycloakAdmin
   # MCP Dynamic Client Registration (RFC 7591) realm setup. When true, the
   # post-install/post-upgrade Job applies four changes that together let
@@ -788,7 +737,7 @@ auth-server:
     otelExporterOtlpEndpoint: "" # OTLP endpoint URL (e.g., http://otel-collector:4317)
   keycloak:
     enabled: true
-    realm: *keycloakRealm
+    realm: "" # Inherits global.authProvider.keycloak.realm; conflicts are rejected.
     m2mClientId: "" # Optional: M2M client ID
     m2mClientSecret: "" # Optional: M2M client secret
     # externalUrl will be templated in the subchart using global.domain

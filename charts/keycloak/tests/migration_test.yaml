@@ -1,0 +1,208 @@
+suite: Explicit Keycloak database bootstrap intent
+release:
+  name: test
+  namespace: default
+templates:
+  - templates/validate-values.yaml
+set:
+  hostname: https://id.example.com
+  postgres.bootstrap.mode: fresh-install
+tests:
+  - it: refuses unspecified bootstrap intent even for an offline install
+    set:
+      postgres.bootstrap.mode: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: postgres.bootstrap.mode is required
+  - it: refuses an upgrade without verified snapshot metadata
+    release:
+      upgrade: true
+    set:
+      postgres.bootstrap.mode: restore
+    asserts:
+      - failedTemplate:
+          errorPattern: restore requires.*existingClaim
+  - it: refuses GitOps restore without source write quiescence
+    set:
+      postgres.bootstrap.mode: restore
+      postgres.bootstrap.existingClaim: preserved-snapshot
+      postgres.bootstrap.sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    asserts:
+      - failedTemplate:
+          errorPattern: sourceQuiesced=true
+  - it: refuses a malformed checksum instead of accepting an unchecked archive
+    set:
+      postgres.bootstrap.mode: restore
+      postgres.bootstrap.existingClaim: preserved-snapshot
+      postgres.bootstrap.sha256: not-a-sha256
+      postgres.bootstrap.sourceQuiesced: true
+    asserts:
+      - failedTemplate:
+          errorPattern: lowercase sha256
+  - it: refuses existing mode without explicit verification
+    set:
+      postgres.bootstrap.mode: existing
+    asserts:
+      - failedTemplate:
+          errorPattern: existingVerified=true
+  - it: refuses changing a restore into a fresh install while keeping its snapshot
+    set:
+      postgres.bootstrap.existingClaim: preserved-snapshot
+    asserts:
+      - failedTemplate:
+          errorPattern: snapshot settings are only valid
+  - it: rejects the old automatic migration flag rather than ignoring it
+    set:
+      postgres.migrateFromBitnami: true
+    asserts:
+      - failedTemplate:
+          errorPattern: migrateFromBitnami is no longer supported
+  - it: rejects an external PostgreSQL override instead of silently starting an empty database
+    set:
+      externalDatabase:
+        host: database.example.com
+    asserts:
+      - failedTemplate:
+          errorPattern: externalDatabase.*unsupported
+  - it: rejects Bitnami persistence overrides
+    set:
+      postgresql.primary.persistence.size: 64Gi
+    asserts:
+      - failedTemplate:
+          errorPattern: postgresql.primary.*legacy Bitnami
+  - it: rejects a Bitnami existing secret override
+    set:
+      postgresql.auth.existingSecret: legacy-password # pragma: allowlist secret
+    asserts:
+      - failedTemplate:
+          errorPattern: use keycloak.postgres.existingSecret
+  - it: rejects templated literal Secret names
+    set:
+      auth.existingSecret: '{{ .Release.Name }}-keycloak'
+    asserts:
+      - failedTemplate:
+          errorPattern: existingSecret names are literal
+  - it: rejects the previous Bitnami environment list
+    set:
+      extraEnvVars:
+        - name: KC_LOG_LEVEL
+          value: debug
+    asserts:
+      - failedTemplate:
+          errorPattern: extraEnvVars.*configure extraEnv
+  - it: refuses bypassing the database host using a duplicate env var
+    set:
+      extraEnv:
+        - name: KC_DB_URL_HOST
+          value: legacy-postgresql
+    asserts:
+      - failedTemplate:
+          errorPattern: cannot override chart-managed KC_DB_URL_HOST
+  - it: refuses overriding a chart-managed optional feature even when unset
+    set:
+      extraEnv:
+        - name: KC_FEATURES
+          value: hostname:v1
+    asserts:
+      - failedTemplate:
+          errorPattern: cannot override chart-managed KC_FEATURES
+  - it: refuses overriding the canonical hostname in extraEnv
+    set:
+      extraEnv:
+        - name: KC_HOSTNAME
+          value: https://other.example.com
+    asserts:
+      - failedTemplate:
+          errorPattern: cannot override chart-managed KC_HOSTNAME
+  - it: ignores dormant legacy values for an external Keycloak
+    set:
+      create: false
+      externalDatabase.host: external-db.example.com
+      postgres.bootstrap.mode: ""
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: rejects a superuser identity for Keycloak
+    set:
+      postgres.username: postgres
+    asserts:
+      - failedTemplate:
+          errorPattern: dedicated non-superuser role
+  - it: refuses local hostname changes that would disagree with stack clients
+    set:
+      global.domain: gateway.example.com
+    asserts:
+      - failedTemplate:
+          errorPattern: keycloak.hostname is standalone-only
+  - it: refuses an issuer hostname not served by bundled gateway ingress
+    set:
+      hostname: ""
+      global.domain: example.com
+      global.authProvider.keycloak.externalUrl: http://id.example.com/custom
+    asserts:
+      - failedTemplate:
+          errorPattern: not served by the bundled gateway ingress
+  - it: refuses an issuer protocol that disagrees with the gateway listener
+    set:
+      hostname: ""
+      global.domain: example.com
+      global.ingress.tls: false
+      global.authProvider.keycloak.externalUrl: https://mcpregistry.example.com/custom
+    asserts:
+      - failedTemplate:
+          errorPattern: not served by the bundled gateway ingress
+  - it: refuses a non-listening issuer port
+    set:
+      hostname: ""
+      global.domain: example.com
+      global.ingress.tls: true
+      global.authProvider.keycloak.externalUrl: https://mcpregistry.example.com:8443/custom
+    asserts:
+      - failedTemplate:
+          errorPattern: not served by the bundled gateway ingress
+  - it: rejects unsupported image registry overrides
+    set:
+      image.registry: legacy.example.com
+    asserts:
+      - failedTemplate:
+          errorPattern: image.registry is unsupported
+  - it: rejects ignored volume overrides
+    set:
+      extraVolumeMounts:
+        - name: old-plugins
+          mountPath: /opt/bitnami/keycloak/providers
+    asserts:
+      - failedTemplate:
+          errorPattern: extraVolumeMounts.*not supported
+  - it: rejects ignored SPI configuration
+    set:
+      spi.existingSecret: old-spi
+    asserts:
+      - failedTemplate:
+          errorPattern: spi.*not supported
+  - it: rejects legacy password key configuration
+    set:
+      auth.passwordSecretKey: old-password
+    asserts:
+      - failedTemplate:
+          errorPattern: auth.passwordSecretKey is unsupported
+  - it: refuses bundled versions before the supported initialization contract
+    set:
+      image.tag: "26.2.4"
+    asserts:
+      - failedTemplate:
+          errorPattern: requires version 26.8.2 or newer
+  - it: refuses multiple replicas with local cache
+    set:
+      replicas: 2
+    asserts:
+      - failedTemplate:
+          errorPattern: replicas greater than one requires cache=ispn
+  - it: accepts clustered cache and a compatible derived image
+    set:
+      replicas: 2
+      cache: ispn
+      image.repository: registry.example.com/bitnami-migration/keycloak-official
+    asserts:
+      - hasDocuments:
+          count: 0

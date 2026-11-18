@@ -19,6 +19,7 @@ services:
       - AGENT_NAME=travel-assistant
       - AGENTCORE_RUNTIME_URL=http://travel-assistant-agent:9000/
       - KEYCLOAK_URL=${KEYCLOAK_URL:-}
+      - KEYCLOAK_EXTERNAL_URL=${KEYCLOAK_EXTERNAL_URL:?Set the public Keycloak base URL}
       - KEYCLOAK_REALM=${KEYCLOAK_REALM:-}
       - MCP_REGISTRY_URL=${MCP_REGISTRY_URL:-http://registry}
       - REGISTRY_JWT_TOKEN=${REGISTRY_JWT_TOKEN:-}
@@ -53,6 +54,7 @@ services:
       - AGENT_NAME=flight-booking
       - AGENTCORE_RUNTIME_URL=http://flight-booking-agent:9000/
       - KEYCLOAK_URL=${KEYCLOAK_URL:-}
+      - KEYCLOAK_EXTERNAL_URL=${KEYCLOAK_EXTERNAL_URL:?Set the public Keycloak base URL}
       - KEYCLOAK_REALM=${KEYCLOAK_REALM:-}
       - MCP_REGISTRY_URL=${MCP_REGISTRY_URL:-http://registry}
       - REGISTRY_JWT_TOKEN=${REGISTRY_JWT_TOKEN:-}

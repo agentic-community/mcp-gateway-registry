@@ -9,7 +9,7 @@ locals {
     var.enable_cloudfront ? aws_cloudfront_distribution.keycloak[0].domain_name : local.keycloak_domain
   ) : local.keycloak_domain
 
-  # Full HTTPS URL for Keycloak (required for KC_HOSTNAME_URL and KC_HOSTNAME_ADMIN_URL)
+  # Canonical frontend URL for hostname v2, including the public HTTPS scheme.
   keycloak_hostname_url = "https://${local.keycloak_hostname}"
 
   keycloak_container_env = [
@@ -27,15 +27,17 @@ locals {
       value = "xforwarded"
     },
     {
-      # Issue #1122: Keycloak 25 introduced "Hostname v2" config. The KC23
-      # variables KC_HOSTNAME_URL, KC_HOSTNAME_ADMIN_URL, KC_HOSTNAME_STRICT,
-      # and KC_HOSTNAME_STRICT_HTTPS are all deprecated and IGNORED on KC25.
-      # Replaced with a single KC_HOSTNAME pointing at the full public URL.
-      # When KC_HOSTNAME is a full https:// URL, KC25 derives the canonical
-      # scheme from it and trusts X-Forwarded-Proto via KC_PROXY_HEADERS.
-      # See https://www.keycloak.org/server/hostname for hostname v2 docs.
+      # Pin generated links and token issuers independently of request headers.
       name  = "KC_HOSTNAME"
       value = local.keycloak_hostname_url
+    },
+    {
+      name  = "KC_HOSTNAME_STRICT"
+      value = "true"
+    },
+    {
+      name  = "KC_HOSTNAME_BACKCHANNEL_DYNAMIC"
+      value = "false"
     },
     {
       # Issue #1122: KC25 listens HTTPS-only (8443) by default; KC23 listened
@@ -56,15 +58,12 @@ locals {
       value = "true"
     },
     {
-      name  = "KEYCLOAK_LOGLEVEL"
+      name  = "KC_LOG_LEVEL"
       value = var.keycloak_log_level
     },
     {
-      # Public-image support: the official quay.io/keycloak image is NOT pre-built
-      # with our options (the custom image baked these via `kc.sh build`). Running a
-      # non-optimized `start` (see command below) makes Keycloak build from these at
-      # startup. KC_DB must be the Aurora vendor (mysql); KC_FEATURES matches the
-      # custom Dockerfile's token-exchange feature.
+      # Public and custom images apply these options during non-optimized start.
+      # KC_DB must match Aurora MySQL; token-exchange supports existing M2M flows.
       name  = "KC_DB"
       value = "mysql"
     },
@@ -76,11 +75,11 @@ locals {
 
   keycloak_container_secrets = [
     {
-      name      = "KEYCLOAK_ADMIN"
+      name      = "KC_BOOTSTRAP_ADMIN_USERNAME"
       valueFrom = aws_ssm_parameter.keycloak_admin.arn
     },
     {
-      name      = "KEYCLOAK_ADMIN_PASSWORD"
+      name      = "KC_BOOTSTRAP_ADMIN_PASSWORD"
       valueFrom = aws_ssm_parameter.keycloak_admin_password.arn
     },
     {
@@ -367,6 +366,8 @@ resource "aws_ecs_service" "keycloak" {
 
   depends_on = [
     aws_lb_listener.keycloak_https,
+    aws_lb_listener.keycloak_http,
+    aws_lb_listener_rule.keycloak_routing,
     aws_iam_role_policy.keycloak_task_exec_ssm_policy,
     aws_iam_role_policy.keycloak_task_exec_logs_policy
   ]

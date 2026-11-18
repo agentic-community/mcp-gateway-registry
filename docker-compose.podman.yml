@@ -911,7 +911,7 @@ services:
 
   # Keycloak Identity Provider
   keycloak:
-    image: quay.io/keycloak/keycloak:25.0
+    image: quay.io/keycloak/keycloak:${KEYCLOAK_VERSION:-26.8.2}
     # Realm setup is NOT done by --import-realm. The mcp-gateway realm, clients,
     # groups, and users are created programmatically by keycloak/setup/init-keycloak.sh,
     # which you run once after the stack is up (see docs/complete-setup-guide.md).
@@ -929,23 +929,23 @@ services:
       # Admin credentials. No default password: this bootstraps the Keycloak
       # master-realm admin, so an empty/guessable value would be a full
       # takeover of the IdP. Set KEYCLOAK_ADMIN_PASSWORD in .env.
-      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
-      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?Set KEYCLOAK_ADMIN_PASSWORD in .env}
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?Set KEYCLOAK_ADMIN_PASSWORD in .env}
 
       # HTTP configuration
       KC_HTTP_ENABLED: 'true'
       KC_HTTP_PORT: 8080
-      KC_HOSTNAME_STRICT: 'false'
-      KC_HOSTNAME_STRICT_HTTPS: 'false'
-      KC_PROXY: edge  # Running behind nginx
+      KC_HOSTNAME_STRICT: 'true'
+      KC_PROXY_HEADERS: xforwarded
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: 'false'
 
-      # Frontend URL for external JWT issuer
+      # Pin browser links, discovery metadata, and token issuers to the public URL.
       # Podman note: host port 8080 is used by the registry UI (8080->80),
       # so Keycloak is exposed on 18080->8080 by default in this Podman compose.
-      KC_FRONTEND_URL: ${KEYCLOAK_EXTERNAL_URL:-http://localhost:18080}
+      KC_HOSTNAME: ${KEYCLOAK_EXTERNAL_URL:-http://localhost:18080}
 
       # Features
-      KC_FEATURES: token-exchange,admin-api
+      KC_FEATURES: token-exchange,admin-api,hostname:v2
 
       # Logging
       KC_LOG_LEVEL: INFO

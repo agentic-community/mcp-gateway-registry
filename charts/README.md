@@ -59,21 +59,20 @@ Set the authentication provider in your values file:
 ```yaml
 global:
   authProvider:
-    type: keycloak  # or "entra"
-
-# For Keycloak in stack
+    type: keycloak
 keycloak:
   create: true
-
-# For external Keycloak
-keycloak:
-  create: false
-  externalUrl: https://your-keycloak.com
-
-# For Entra ID
-keycloak:
-  create: false
+  postgres:
+    bootstrap:
+      mode: fresh-install  # Only for an intentionally empty database
 ```
+
+The bundled chart uses official Keycloak 26.8.2 and PostgreSQL 17.12 images.
+Existing databases require the [maintenance cutover procedure](mcp-gateway-registry-stack/README.md#keycloak-database-cutover).
+For an external Keycloak, set `keycloak.create=false` and configure its public URL
+with `global.authProvider.keycloak.externalUrl`. Supply its internal URL and credentials
+through the existing-Secret settings described in the stack README.
+Other providers skip the bundled Keycloak and its configuration Job.
 
 ## Improved Values Structure
 
@@ -226,13 +225,13 @@ global:
       registry: /registry   # Customize as needed
 ```
 
-Only the registry service is exposed through a public ingress.
-auth-server, Keycloak, and mcpgw stay on their ClusterIP Services;
-the registry pod's in-cluster nginx reverse proxy fronts them at
-`/oauth2/*`, `/keycloak/*`, `/realms/*`, `/resources/*`, and
-`/airegistry-tools/*` (mcpgw's MCP tools). The `/keycloak` path is
-pinned by the nginx config — do NOT set `keycloak.httpRelativePath`;
-leave it at the Bitnami default (`/`).
+Only the registry service exposes a public ingress. Its nginx proxy forwards the configured
+realm and static assets to Keycloak and blocks the master realm and admin paths.
+The official server serves from `/`; nginx also accepts the `/keycloak` alias.
+Set a public prefix through `global.authProvider.keycloak.externalUrl` and keep
+`keycloak.httpRelativePath=/` for the bundled server. Externally managed servers must
+provide the actual backend path in `KEYCLOAK_URL` and the canonical browser URL in
+`KEYCLOAK_EXTERNAL_URL`.
 
 **How it works:**
 

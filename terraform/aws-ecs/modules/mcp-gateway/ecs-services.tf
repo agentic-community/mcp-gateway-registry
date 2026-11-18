@@ -1077,6 +1077,10 @@ module "ecs_service_registry" {
           value = var.keycloak_domain != "" ? "https://${var.keycloak_domain}" : ""
         },
         {
+          name  = "KEYCLOAK_EXTERNAL_URL"
+          value = var.keycloak_domain != "" ? "https://${var.keycloak_domain}" : ""
+        },
+        {
           name  = "KEYCLOAK_ENABLED"
           value = var.keycloak_domain != "" ? "true" : "false"
         },
@@ -3020,6 +3024,18 @@ module "ecs_service_flight_booking_agent" {
 
       environment = [
         {
+          name  = "KEYCLOAK_URL"
+          value = var.keycloak_domain != "" ? "https://${var.keycloak_domain}" : ""
+        },
+        {
+          name  = "KEYCLOAK_EXTERNAL_URL"
+          value = var.keycloak_domain != "" ? "https://${var.keycloak_domain}" : ""
+        },
+        {
+          name  = "KEYCLOAK_REALM"
+          value = "mcp-gateway"
+        },
+        {
           name  = "AWS_REGION"
           value = data.aws_region.current.id
         },
@@ -3142,6 +3158,18 @@ module "ecs_service_travel_assistant_agent" {
       ]
 
       environment = [
+        {
+          name  = "KEYCLOAK_URL"
+          value = var.keycloak_domain != "" ? "https://${var.keycloak_domain}" : ""
+        },
+        {
+          name  = "KEYCLOAK_EXTERNAL_URL"
+          value = var.keycloak_domain != "" ? "https://${var.keycloak_domain}" : ""
+        },
+        {
+          name  = "KEYCLOAK_REALM"
+          value = "mcp-gateway"
+        },
         {
           name  = "AWS_REGION"
           value = data.aws_region.current.id

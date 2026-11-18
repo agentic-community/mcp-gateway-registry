@@ -478,6 +478,8 @@ working in those areas.
   names from registry values must be injective encodings. A header only a NEW
   template sets/clears is forgeable behind an OLD one: honor it only with the
   marker under a new header name (`X-Validate-Binding-Secret`).
+- **Database image cutover:** require explicit bootstrap intent and a verified snapshot of a stopped source. Commit restore completion with the data; `PG_VERSION` is not a completion receipt. Preserve interrupted data and reject intent changes until reviewed.
+- **IdP initialization:** verify noninteractive authentication on the shipped image. Keep administrator reconciliation separate from pod readiness, and bind public issuer identity independently of internal signing-key transport.
 - **After fixing a finding, grep the pattern repo-wide**, because findings usually have
   siblings the report didn't list.
 

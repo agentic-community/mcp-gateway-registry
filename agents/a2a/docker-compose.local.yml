@@ -30,6 +30,7 @@ services:
       # requires this explicit acknowledgement (TEST/DEMO local sandbox only).
       - AGENT_AUTH_ALLOW_EXPOSED_PRESENCE_ONLY=${AGENT_AUTH_ALLOW_EXPOSED_PRESENCE_ONLY:-true}
       - KEYCLOAK_URL=${KEYCLOAK_URL:-http://keycloak:8080}
+      - KEYCLOAK_EXTERNAL_URL=${KEYCLOAK_EXTERNAL_URL:?Set the public Keycloak base URL}
       - KEYCLOAK_REALM=${KEYCLOAK_REALM:-mcp-gateway}
       - MCP_REGISTRY_URL=${MCP_REGISTRY_URL:-http://registry}
       - REGISTRY_JWT_TOKEN=${REGISTRY_JWT_TOKEN:-}
@@ -75,6 +76,7 @@ services:
       # requires this explicit acknowledgement (TEST/DEMO local sandbox only).
       - AGENT_AUTH_ALLOW_EXPOSED_PRESENCE_ONLY=${AGENT_AUTH_ALLOW_EXPOSED_PRESENCE_ONLY:-true}
       - KEYCLOAK_URL=${KEYCLOAK_URL:-http://keycloak:8080}
+      - KEYCLOAK_EXTERNAL_URL=${KEYCLOAK_EXTERNAL_URL:?Set the public Keycloak base URL}
       - KEYCLOAK_REALM=${KEYCLOAK_REALM:-mcp-gateway}
       - MCP_REGISTRY_URL=${MCP_REGISTRY_URL:-http://registry}
       - REGISTRY_JWT_TOKEN=${REGISTRY_JWT_TOKEN:-}

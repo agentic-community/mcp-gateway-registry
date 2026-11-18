@@ -28,8 +28,10 @@ global:
 # Keycloak configuration
 keycloak:
   adminUser: user
-  realm: mcp-gateway
-  existingSecret: ""  # If set, use this existing secret instead of creating one
+  realm: "" # Inherit the global realm; set explicitly when using existingSecret.
+  existingSecret: "" # Config Secret. Set realm to the Secret's REALM value.
+  adminExistingSecret: "" # Standalone admin password Secret; the stack uses the global value.
+  adminExistingSecretPasswordKey: admin-password # pragma: allowlist secret
 
 # Dynamic Client Registration (RFC 7591) realm setup.
 #

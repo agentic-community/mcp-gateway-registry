@@ -146,12 +146,15 @@ resource "aws_security_group_rule" "keycloak_lb_cloudfront_egress" {
 
 # Load Balancer Ingress from allowed CIDR blocks (HTTPS)
 resource "aws_security_group_rule" "keycloak_lb_ingress_https" {
-  description       = "Ingress from allowed CIDR blocks to load balancer (HTTPS)"
-  type              = "ingress"
-  from_port         = 443
-  to_port           = 443
-  protocol          = "tcp"
-  cidr_blocks       = var.ingress_cidr_blocks
+  description = "Ingress from allowed CIDR blocks to load balancer (HTTPS)"
+  type        = "ingress"
+  from_port   = 443
+  to_port     = 443
+  protocol    = "tcp"
+  cidr_blocks = distinct(concat(
+    var.ingress_cidr_blocks,
+    local.keycloak_admin_cidr_blocks,
+  ))
   security_group_id = aws_security_group.keycloak_lb.id
 }
 

@@ -57,18 +57,16 @@ The `values.yaml` file needs to be updated for your setup, specifically:
   random, secure key that is used in both locations
 - `routingMode`: choose between `subdomain` (default) or `path` based routing (see Routing Modes section below)
 
+Choose `keycloak.postgres.bootstrap.mode` before installing the bundled Keycloak.
+Use `fresh-install` only for a new database. Existing deployments must follow
+[Keycloak database cutover](#keycloak-database-cutover).
+
 ### Authentication Provider Selection
 
 This chart supports five authentication providers: Keycloak (default), Microsoft Entra ID, Okta, Auth0, and AWS Cognito.
 
-When using any provider other than Keycloak, disable the Keycloak components:
-
-```yaml
-keycloak:
-  create: false
-keycloak-configure:
-  enabled: false
-```
+When another provider is active, the chart skips bundled Keycloak resources and the
+realm configuration Job, even if their creation switches remain enabled.
 
 #### Option 1: Keycloak (Default)
 
@@ -81,6 +79,9 @@ global:
 
 keycloak:
   create: true  # Deploy Keycloak as part of this stack
+  postgres:
+    bootstrap:
+      mode: fresh-install  # Only for an intentionally empty database
 
 keycloak-configure:
   enabled: true  # Run Keycloak configuration job
@@ -92,15 +93,25 @@ keycloak-configure:
 global:
   authProvider:
     type: keycloak
+    keycloak:
+      externalUrl: https://your-keycloak.example.com
+      realm: mcp-gateway
 
 keycloak:
   create: false  # Don't deploy Keycloak
-  externalUrl: https://your-keycloak.example.com
-  realm: mcp-gateway
 
 keycloak-configure:
-  enabled: true  # Still configure the external Keycloak
+  enabled: false  # Keep a preconfigured external realm unchanged
 ```
+
+For external Keycloak, provide `KEYCLOAK_URL` with its reachable backend URL and
+`KEYCLOAK_EXTERNAL_URL` with its canonical browser URL through
+`global.existingOauthProviderSecret`. Set `global.authProvider.keycloak.adminExistingSecret`
+to its administrator password Secret. To run realm setup, enable `keycloak-configure`
+and set `keycloak-configure.keycloak.existingSecret` to a configuration Secret containing
+`KEYCLOAK_ADMIN`, `KEYCLOAK_ADMIN_URL`, `KEYCLOAK_URL`, `REALM`,
+`AUTH_SERVER_EXTERNAL_URL`, and `REGISTRY_URL`. Also set
+`keycloak-configure.keycloak.realm` to that Secret's `REALM` value.
 
 **Optional: Keycloak M2M authentication:**
 
@@ -241,13 +252,15 @@ global:
     additionalHostnames: []
 ```
 
-Only the registry service exposes a public ingress. auth-server,
-Keycloak, and mcpgw stay on their ClusterIP Services and are fronted by
-the registry pod's in-cluster nginx reverse proxy — mcpgw's MCP tools
-are reachable at `/airegistry-tools/*`, seeded into the registry at
-startup. The Keycloak path (`/keycloak`) is pinned by the nginx config
-— do NOT set `keycloak.httpRelativePath`; leave it at the Bitnami
-default (`/`).
+Only the registry service exposes a public ingress. Its nginx proxy serves the configured
+Keycloak realm and static resources, and blocks master-realm and admin routes.
+Keep `keycloak.httpRelativePath=/` for the bundled server. Set a canonical public URL
+or prefix with `global.authProvider.keycloak.externalUrl`; the server and gateway clients
+use the same URL. HTTP ingress requires `global.ingress.allowPlaintext=true`.
+
+Use a private route for the Keycloak admin console. A private reverse proxy must retain
+the canonical hostname and scheme while allowing `/admin` and `/realms/master` only
+to administrators. Do not reopen those paths on the public registry ingress.
 
 **DNS Requirements:** Configure a single A/CNAME record for your domain pointing to your ingress load balancer.
 
@@ -745,6 +758,8 @@ sealed-secrets — an existing Secret satisfies the gate with no explicit value:
 --set global.existingSharedSecret=my-shared-secret \
 --set global.existingKeycloakClientSecret=my-keycloak-client \
 --set global.existingMongoCredentialsSecret=my-mongo-creds \
+--set global.authProvider.keycloak.adminExistingSecret=my-keycloak-admin \
+--set keycloak.postgres.existingSecret=my-keycloak-postgres \
 --set mongodb-configure.mongodb.existingSecret=my-mongo-creds
 ```
 
@@ -753,13 +768,17 @@ Notes:
 - `mongodb.password` reaches the `mongodb-configure` subchart through a YAML
   anchor, which only applies to values **files**. With `--set` (and with
   ArgoCD's `parameters:`) use `mongodb-configure.mongodb.password`.
-- `keycloak.auth.adminPassword` and `keycloak.postgresql.auth.*` are Bitnami's
-  own value names. The bundled subchart reads the Secrets this chart renders
-  (`auth.existingSecret` / `postgresql.auth.existingSecret`), and those
-  templates honor these values.
-- Set the Keycloak PostgreSQL passwords at FIRST install. PostgreSQL
-  initializes its roles once; changing them later while the PVC is retained
-  causes the `bn_keycloak` authentication failure.
+- `keycloak.auth.adminPassword` and `keycloak.postgresql.auth.*` remain stack Secret
+  inputs. The official subchart reads the admin and database Secrets through
+  `global.authProvider.keycloak.adminExistingSecret` and `keycloak.postgres.existingSecret`.
+- The shared admin Secret defaults to key `admin-password`. Set
+  `global.authProvider.keycloak.adminExistingSecretPasswordKey` for a custom key.
+  The server, initialization Job, realm configuration Job and registry use that same key.
+- The PostgreSQL Secret requires `password` and `postgres-password`. Custom keys require
+  an existing Secret and `keycloak.postgres.existingSecretPasswordKey` plus
+  `keycloak.postgres.existingSecretAdminPasswordKey`.
+- Set database passwords on first install only. PostgreSQL initializes its roles once;
+  changing a Secret while retaining the volume breaks authentication.
 - Changing any of these values on a live install rewrites the Secret but does
   not restart pods. Follow up with
   `kubectl rollout restart deploy/registry deploy/auth-server`.
@@ -839,3 +858,134 @@ restores the previous revision's client secrets. The `setup-keycloak` Job
 therefore also runs on `post-rollback`, re-pointing the realm's clients at the
 restored values. Logins fail with `invalid_client` between the rollback and the
 Job completing.
+
+## Keycloak database cutover
+
+The official Keycloak/PostgreSQL chart requires an explicit maintenance cutover from Bitnami. Helm and GitOps render the
+same restore path. The chart issues no source or snapshot deletion commands; Helm and GitOps can still prune old
+resources unless you retain them as described below.
+
+| `keycloak.postgres.bootstrap.mode` | Use                                                                                                                                                   |
+|------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `fresh-install`                    | Create an intentionally empty database. Keep this setting through ordinary upgrades of that installation.                                             |
+| `restore`                          | Restore `restore.dump` from an operator-owned PVC after stopping every source writer. Requires `existingClaim`, `sha256`, and `sourceQuiesced: true`. |
+| `existing`                         | Adopt a previously verified official PostgreSQL volume. Requires `existingVerified: true`; the runtime rejects an empty or incomplete database.       |
+
+The chart pins Keycloak 26.8.2 and PostgreSQL 17.12. A separate post-install, post-upgrade or
+post-rollback Job initializes the admin realm at hook weight 5. Realm configuration follows at
+weight 10. Initialization failures stop the Helm operation without restarting the server.
+Correct the administrator Secret to match the realm before retrying.
+
+For multiple Keycloak replicas, set `keycloak.cache=ispn`; the chart uses JDBC discovery over the shared database. The chart refuses multiple replicas with the single-process `local` cache.
+
+### Freeze and snapshot the source
+
+Schedule a login outage. Save the deployed values and preserve the existing Keycloak/PostgreSQL credentials in your
+secret manager. Stop GitOps reconciliation and autoscaling for the old Keycloak workload before scaling it to zero. Stop
+any other process that can write to the source database. Keep those writers stopped until the new deployment passes
+verification.
+
+Inspect the deployed workload names rather than assuming the release prefix:
+
+```bash
+kubectl -n "$NS" get statefulsets,deployments,pods,pvc
+kubectl -n "$NS" scale "$OLD_KEYCLOAK_WORKLOAD" --replicas=0
+```
+
+Verify that every old Keycloak pod has terminated and that `pg_stat_activity` shows no remaining application sessions on
+the source database. Restrict its network access to the snapshot process. If you cannot establish this state, stop the
+cutover before taking the definitive dump.
+
+Retain the old database PVC and its PV for rollback. For ArgoCD, prevent pruning/deletion of the source resources or
+move them outside the application's ownership before syncing the new chart. Set the PV reclaim policy to `Retain`. A
+Helm rollback alone cannot recover an old database that the cluster has deleted.
+
+Create a dedicated PVC for the snapshot. In a temporary PostgreSQL 17.12 client pod, mount that PVC at `/snapshot` and
+the source password through a Kubernetes Secret as `PGPASSWORD` or `PGPASSFILE`. Set `PGHOST`, `PGPORT`, `PGUSER`, and
+`PGDATABASE` to the deployed source values. Permit this pod through the source's NetworkPolicy. Do not put the password
+on the command line.
+
+Run these commands inside that pod as UID/GID `999:999`:
+
+```bash
+set -euo pipefail
+umask 077
+pg_dump --format=custom --no-owner --no-acl --file=/snapshot/restore.dump.partial
+pg_restore --list /snapshot/restore.dump.partial
+mv /snapshot/restore.dump.partial /snapshot/restore.dump
+chmod 0400 /snapshot/restore.dump
+sha256sum /snapshot/restore.dump
+```
+
+Record the source's realm, user and client counts separately for post-restore comparison. A successful archive listing
+checks its format, not whether you selected the right source database. Delete the temporary client pod after the dump so
+an RWO PVC can attach to the new PostgreSQL pod. Keep the PVC and its archive unchanged.
+
+For an archive from an existing official-chart installation, add `--exclude-schema=_mcp_bootstrap` to `pg_dump` so the
+new bootstrap can create its own completion receipt.
+
+### Restore the new database
+
+Remove obsolete Bitnami values before rendering. The chart rejects `externalDatabase`, `extraEnvVars`, `replicaCount`,
+`lifecycleHooks`, and the former automatic migration fields rather than ignoring them. Use `extraEnv` only for names
+outside the chart-managed reserved list; use the named chart values for database, hostname and security settings.
+
+Merge these values into the deployment configuration:
+
+```yaml
+keycloak:
+  postgres:
+    bootstrap:
+      mode: restore
+      existingClaim: keycloak-cutover-snapshot
+      sha256: YOUR_RESTORE_DUMP_SHA256
+      sourceQuiesced: true
+```
+
+Replace the SHA placeholder with the lowercase 64-character digest from `sha256sum`. The snapshot PVC must expose
+`restore.dump` at its root, readable by UID/GID 999. The PostgreSQL pod mounts it read-only at
+`/migration/restore.dump`.
+
+Render the chart and inspect the new resources before applying. GitOps deployments must also use the explicit
+existing-secret configuration described above; do not generate new database or OAuth secrets during migration. Apply
+only after confirming that the old source remains stopped and retained.
+
+The bootstrap wrapper verifies the archive digest, restores through a local-only PostgreSQL socket, and records
+completion before accepting network connections. An incomplete restore cannot become a healthy database merely because
+`PG_VERSION` exists. Keep the same restore mode, snapshot and digest when retrying an interrupted restore; changing
+those values does not bypass its pending marker.
+
+### Verify before reopening access
+
+Compare realm, user and client counts with the source. Check browser login, then use an existing
+client to fetch a fresh token through the gateway. Verify group-based access and a denied
+operation before reopening access. Keep the old source stopped so the databases cannot diverge.
+
+If restore fails, retain both volumes and inspect the PostgreSQL logs. Correct the reported cause and retry with the
+same snapshot. If you must abandon the attempt, preserve the failed target for diagnosis and use a new empty target
+volume with the original verified snapshot. Never delete a completion or pending marker to force startup.
+
+Before the new deployment accepts writes, rollback can restore the previous manifests and resume
+the retained source. After writes begin, rollback needs a plan to preserve those changes.
+Apply your backup retention and access policy to the snapshot.
+
+### Retire the restore snapshot
+
+Verify the restored data and confirm that no bootstrap operation remains pending. Change the
+mode to `existing`, set `existingVerified=true`, and remove all restore-only fields together:
+
+```yaml
+keycloak:
+  postgres:
+    bootstrap:
+      mode: existing
+      existingVerified: true
+      existingClaim: ""
+      sha256: ""
+      sourceQuiesced: false
+```
+
+Roll out this change. Verify database readiness and an authenticated gateway request before
+retiring the snapshot PVC. A deployment left in `restore` mode mounts that PVC on every pod
+start. Never remove it first or delete a pending marker to force a mode change.
+

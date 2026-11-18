@@ -10,7 +10,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
-from urllib.parse import urlparse
+from urllib.parse import ParseResult, urlparse
 
 import httpx
 
@@ -402,8 +402,9 @@ def _render_keycloak_proxy_ssl(
     """Render the ``{{KEYCLOAK_PROXY_SSL}}`` directive block (fail closed).
 
     Thin wrapper over :func:`_render_idp_proxy_ssl` for the Keycloak
-    reverse-proxy locations (``/keycloak/``, ``/realms/``, ``/resources/``) that
-    carry Keycloak's JWKS, token, and OIDC discovery traffic. The shipped default
+    reverse-proxy locations (``/realms/<realm>/``, ``/keycloak/realms/<realm>/``,
+    ``/resources/``) that carry Keycloak's JWKS, token, and OIDC discovery
+    traffic. The shipped default
     upstream is in-cluster ``http://keycloak:8080`` (plaintext, no verification
     to perform), but when an operator points ``KEYCLOAK_URL`` at an https endpoint
     this enforces ``proxy_ssl_verify on`` with a trusted CA bundle and
@@ -425,6 +426,150 @@ def _render_keycloak_proxy_ssl(
         host=keycloak_host,
         ca_bundle=_resolve_keycloak_ca_bundle(),
     )
+
+
+# Keycloak realm names accepted into the nginx config. The realm becomes part of
+# a location path and a proxy_pass URI, so anything outside this set could
+# change the directive. Keycloak allows more characters; a realm outside this
+# set is refused rather than escaped.
+_KEYCLOAK_REALM_SAFE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+
+
+def _resolve_keycloak_realm_for_nginx(
+    realm: str | None,
+) -> str:
+    """Return the gateway realm name to render into the Keycloak locations.
+
+    nginx proxies only ``/realms/<realm>/`` (plus Keycloak's static
+    ``/resources/``); every other Keycloak path returns 404. ``master`` is
+    refused because it holds the Keycloak admin account and must never be the
+    gateway realm.
+
+    Args:
+        realm: The configured realm (the ``KEYCLOAK_REALM`` environment variable).
+
+    Returns:
+        The validated realm name.
+
+    Raises:
+        ValueError: If the realm is empty, not in the safe character set, or
+            ``master``. Config generation fails closed on this error.
+    """
+    value = realm.strip() if isinstance(realm, str) else ""
+    if not _KEYCLOAK_REALM_SAFE.match(value):
+        raise ValueError(
+            f"KEYCLOAK_REALM {value!r} is not a valid gateway realm for the nginx "
+            "config: use letters, digits, '-' or '_' (max 64 characters)"
+        )
+    if value.lower() == "master":
+        raise ValueError(
+            "KEYCLOAK_REALM must not be 'master': the master realm holds the "
+            "Keycloak admin account and is never proxied by the gateway"
+        )
+    return value
+
+
+def _parse_keycloak_proxy_url(value: str, setting: str) -> ParseResult:
+    """Validate a configured URL before interpolating it into nginx directives."""
+    if not value or re.search(r"[\s\\\"'${};]", value):
+        raise ValueError(f"{setting} must be an absolute HTTP(S) URL without nginx metacharacters")
+    parsed = urlparse(value)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or parsed.params
+        or not re.fullmatch(r"[A-Za-z0-9.\-:\[\]]+", parsed.netloc)
+    ):
+        raise ValueError(f"{setting} must be an absolute HTTP(S) URL without credentials or query")
+    # Accessing .port also rejects invalid/out-of-range ports, rather than
+    # silently connecting to a different endpoint.
+    if parsed.port == 0:
+        raise ValueError(f"{setting} port must be between 1 and 65535")
+    path = parsed.path.rstrip("/")
+    if path and (
+        not re.fullmatch(r"(?:/[A-Za-z0-9._~-]+)+", path)
+        or any(segment in {".", ".."} for segment in path.split("/"))
+    ):
+        raise ValueError(f"{setting} path must contain only literal URL path segments")
+    return parsed._replace(path=path)
+
+
+def _render_keycloak_proxy_config(
+    template: str,
+    upstream_url: str,
+    external_url: str,
+    realm: str,
+) -> str:
+    """Pin public origin and preserve root/alias routes for a Keycloak base path."""
+    upstream = _parse_keycloak_proxy_url(upstream_url, "KEYCLOAK_URL")
+    public = _parse_keycloak_proxy_url(external_url, "KEYCLOAK_EXTERNAL_URL")
+    realm = _resolve_keycloak_realm_for_nginx(realm)
+    upstream_host = upstream.hostname
+    if upstream_host is None:
+        raise ValueError("KEYCLOAK_URL must include a hostname")
+
+    if public.path and public.path != "/keycloak":
+        # A canonical prefix cannot take over an existing gateway namespace.
+        # Check both ancestors and children, including ROOT_PATH-expanded and
+        # generated locations. /keycloak is the dedicated supported alias.
+        claimed_paths = {"/keycloak/"}
+        for location in re.finditer(
+            r"^\s*location\s+(?:(?:=|\^~)\s+)?(\S+)\s+\{",
+            template,
+            re.MULTILINE,
+        ):
+            path = location.group(1).replace("{{KEYCLOAK_REALM}}", realm)
+            if path.startswith("/") and path != "/":
+                claimed_paths.add(path.rstrip("/") + "/")
+        public_path = public.path + "/"
+        if any(
+            public_path.startswith(path) or path.startswith(public_path) for path in claimed_paths
+        ):
+            raise ValueError(
+                "KEYCLOAK_EXTERNAL_URL path conflicts with an existing gateway route; "
+                "use the root, /keycloak, or an unused path prefix"
+            )
+
+    # Reuse the actual location bodies so prefix routes have exactly the same
+    # TLS verification, headers and buffers as their root equivalents.
+    prefixes = {"/keycloak", public.path} - {""}
+    extra_locations = []
+    for prefix in sorted(prefixes):
+        if prefix != "/keycloak":
+            extra_locations.append(f"location {prefix}/ {{ return 404; }}")
+        for route in ("/realms/{{KEYCLOAK_REALM}}/", "/resources/"):
+            if prefix == "/keycloak" and route.startswith("/realms/"):
+                continue  # This alias is already present in both templates.
+            block = re.search(
+                r"    location " + re.escape(route) + r" \{\n.*?\n    \}",
+                template,
+                re.DOTALL,
+            )
+            if block:
+                extra_locations.append(
+                    block.group(0)
+                    .strip()
+                    .replace(f"location {route}", f"location {prefix}{route}", 1)
+                )
+    template = template.replace("{{KEYCLOAK_PREFIX_LOCATIONS}}", "\n\n    ".join(extra_locations))
+    replacements = {
+        "KEYCLOAK_SCHEME": upstream.scheme,
+        "KEYCLOAK_HOST": f"[{upstream_host}]" if ":" in upstream_host else upstream_host,
+        "KEYCLOAK_PORT": str(upstream.port or (443 if upstream.scheme == "https" else 80)),
+        "KEYCLOAK_UPSTREAM_PATH": upstream.path,
+        "KEYCLOAK_REALM": realm,
+        "KEYCLOAK_PUBLIC_AUTHORITY": public.netloc,
+        "KEYCLOAK_PUBLIC_SCHEME": public.scheme,
+        "KEYCLOAK_PUBLIC_PORT": str(public.port or (443 if public.scheme == "https" else 80)),
+        "KEYCLOAK_PROXY_SSL": _render_keycloak_proxy_ssl(upstream.scheme, upstream_host),
+    }
+    for name, value in replacements.items():
+        template = template.replace("{{" + name + "}}", value)
+    return template
 
 
 def _resolve_mcp_proxy_read_timeout_seconds() -> int:
@@ -1477,49 +1622,6 @@ class NginxConfigService:
                     f"AUTH_PROVIDER is '{auth_provider}', removed PingFederate location blocks from nginx config"
                 )
 
-            # Parse Keycloak configuration from KEYCLOAK_URL environment variable.
-            # This always runs so the Keycloak template placeholders are filled even
-            # when another provider is active (the location blocks are stripped above).
-            keycloak_url = os.environ.get("KEYCLOAK_URL", "http://keycloak:8080")
-            # Parse scheme and host FIRST so that a downstream port-parse failure
-            # (urlparse raises ValueError on an out-of-range port) can never
-            # silently downgrade an intended https upstream to http. Downgrading
-            # to http would drop the fail-closed proxy_ssl_verify block, so we
-            # preserve the intended scheme and let nginx -t reject a genuinely
-            # malformed URL rather than trust an unverified https hop.
-            parsed_keycloak = urlparse(keycloak_url)
-            keycloak_scheme = parsed_keycloak.scheme or "http"
-            keycloak_host = parsed_keycloak.hostname or "keycloak"
-
-            # Validate that we can actually resolve the hostname
-            if not keycloak_host or keycloak_host == "keycloak":
-                # If we end up with just 'keycloak', use the full URL's netloc instead
-                keycloak_host = (
-                    parsed_keycloak.netloc.split(":")[0] if parsed_keycloak.netloc else "keycloak"
-                )
-                logger.warning(
-                    f"Keycloak hostname is 'keycloak', using netloc instead: {keycloak_host}"
-                )
-
-            # Resolve the port separately. Only ``.port`` can raise (bad port);
-            # on failure fall back to the scheme default WITHOUT touching the
-            # already-parsed scheme, so an https URL stays https (verify on).
-            try:
-                keycloak_port = str(parsed_keycloak.port or "")
-            except ValueError as e:
-                logger.warning(
-                    f"Invalid port in KEYCLOAK_URL '{keycloak_url}': {e}. "
-                    f"Using scheme default (scheme '{keycloak_scheme}' preserved)."
-                )
-                keycloak_port = ""
-            if not keycloak_port:
-                keycloak_port = "443" if keycloak_scheme == "https" else "8080"
-
-            logger.info(
-                f"Using Keycloak configuration from KEYCLOAK_URL '{keycloak_url}': "
-                f"{keycloak_scheme}://{keycloak_host}:{keycloak_port}"
-            )
-
             # Replace placeholders in template
             config_content = template_content.replace(
                 "{{LOCATION_BLOCKS}}", "\n".join(location_blocks)
@@ -1537,18 +1639,6 @@ class NginxConfigService:
             config_content = config_content.replace(
                 "{{NGINX_MARKER_SECRET}}",
                 self._sanitize_for_nginx_set(settings.auth_server_nginx_marker_secret),
-            )
-            config_content = config_content.replace("{{KEYCLOAK_SCHEME}}", keycloak_scheme)
-            config_content = config_content.replace("{{KEYCLOAK_HOST}}", keycloak_host)
-            config_content = config_content.replace("{{KEYCLOAK_PORT}}", keycloak_port)
-            # Render the per-location TLS trust block for the Keycloak upstream.
-            # Fail closed on https: proxy_ssl_verify stays ON so a MITM cannot
-            # substitute JWKS or intercept the token exchange to a BYO-https
-            # Keycloak. The in-cluster default (http://keycloak:8080) is plaintext,
-            # so this emits a comment only for that case and never verify-off.
-            config_content = config_content.replace(
-                "{{KEYCLOAK_PROXY_SSL}}",
-                _render_keycloak_proxy_ssl(keycloak_scheme, keycloak_host),
             )
 
             # Parse PingFederate configuration, falling back to defaults on any error
@@ -1698,6 +1788,13 @@ class NginxConfigService:
 
             root_path = os.environ.get("ROOT_PATH", "").rstrip("/")
             config_content = config_content.replace("{{ROOT_PATH}}", root_path)
+            if auth_provider == "keycloak":
+                config_content = _render_keycloak_proxy_config(
+                    config_content,
+                    os.environ.get("KEYCLOAK_URL", settings.keycloak_url),
+                    os.environ.get("KEYCLOAK_EXTERNAL_URL", settings.keycloak_external_url),
+                    os.environ.get("KEYCLOAK_REALM", "mcp-gateway"),
+                )
 
             # MCP 2025-06-18 / RFC 9728 §5.1: WWW-Authenticate on auth-failure 401s
             # must point at the gateway's PRM endpoint. The URL must match the

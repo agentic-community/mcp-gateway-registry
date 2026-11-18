@@ -1,0 +1,43 @@
+# Synthetic, non-production inputs for every standalone and stack render.
+# Fresh-install is an intentional test choice, never a deployment default.
+global:
+  domain: helm-ci.example.com
+  generateSecrets: false
+  secretKey: 2ac81784b93e46f5a3c9884d80e7b025c12f47d1fd658fe2b70b9644e68a53cd
+  ingress:
+    tls: true
+    routingMode: subdomain
+  federation:
+    staticToken: 0c5f78571d814c97b806f90bc37b4ae18949557bc6fa0d871f2af6ed869446c8
+    encryptionKey: uDOtoabBoVIAIE22RMQOs54YmFiGQDUMCtVrdsXVrxU=
+  authProvider:
+    type: keycloak
+    keycloak:
+      clientSecret: 660624c758844e86959c07bc42af6d3024c5c3c8a27772623d0a643a9358ab92
+      m2mClientSecret: ad627b0d810946f1a32ec74f7ee7c64e589ec173a8c00826597915504d6da3d2
+hostname: ""
+postgres:
+  bootstrap:
+    mode: fresh-install
+keycloak:
+  postgres:
+    bootstrap:
+      mode: fresh-install
+  auth:
+    adminPassword: 7ead48851fa44af4a0f145f029266691e724614c6b1a66967cafbfb1c0e0eb63
+  postgresql:
+    auth:
+      password: cb8d086625d741c6a20adf824ad0884c31d779ca6a2aa19ae3fe57005a3f5b23
+      postgresPassword: c14b4a8986ba44c8a13e1bc423652a0a0ea88dfd0784b274fc6bbbe9d6cbe8b0
+app:
+  secretKey: 2ac81784b93e46f5a3c9884d80e7b025c12f47d1fd658fe2b70b9644e68a53cd
+egressAuth:
+  markerSecret: d4bd11e3dcd14699bc8677c96835970c5f561e303bcb105696c94186205ef5c11
+registry:
+  egressAuth:
+    markerSecret: d4bd11e3dcd14699bc8677c96835970c5f561e303bcb105696c94186205ef5c11
+mongodb:
+  password: 9925f688f2fa42cfa7a25c6f58b1c31e496d5e8e929631dc3d9a5c7f641ee6e7
+mongodb-configure:
+  mongodb:
+    password: 9925f688f2fa42cfa7a25c6f58b1c31e496d5e8e929631dc3d9a5c7f641ee6e7

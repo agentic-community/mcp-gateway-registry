@@ -42,6 +42,12 @@ registry:
   # to narrow the range.
   trustedRealIpCidrs: ""
 
+  # Keycloak admin and master-realm paths accept these source CIDRs plus NAT
+  # gateway egress IPs. Unset uses ingressCidrBlocks. Include the setup machine.
+  # CloudFront hides the client IP; synth rejects a different list in that mode.
+  # keycloakAdminCidrBlocks:
+  #   - "203.0.113.10/32"
+
   # DNS (set enableRoute53Dns to true and configure baseDomain for custom domains)
   enableRoute53Dns: false
   useRegionalDomains: true
@@ -86,10 +92,11 @@ registry:
     rootDomain: ""
 
   # Container images (leave empty to use defaults or set to ECR URIs)
+  # Keycloak needs an explicit image URI with a fixed tag or digest.
   images:
     registry: "mcpgateway/registry:latest"
     authServer: "mcpgateway/auth-server:latest"
-    keycloak: "quay.io/keycloak/keycloak:26.2.4"
+    keycloak: "quay.io/keycloak/keycloak:26.8.2"
     currenttime: ""
     mcpgw: "public.ecr.aws/p3v1o3c6/mcpgw:1.26.0"
     realserverfaketools: ""

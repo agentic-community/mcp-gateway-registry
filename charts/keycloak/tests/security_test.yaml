@@ -1,0 +1,163 @@
+suite: Keycloak and postgres pod security
+release:
+  name: test
+  namespace: default
+set:
+  hostname: https://id.example.com
+  postgres.bootstrap.mode: fresh-install
+tests:
+  - it: hardens every Keycloak container and runs it under RuntimeDefault seccomp
+    templates:
+      - templates/keycloak.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.seccompProfile.type
+          value: RuntimeDefault
+      - equal:
+          path: spec.template.spec.containers[0].securityContext
+          value: &hardened
+            allowPrivilegeEscalation: false
+            privileged: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+      - equal:
+          path: spec.template.spec.initContainers[0].securityContext
+          value: *hardened
+
+  # The root filesystem is read-only; Keycloak's startup build, data dir and
+  # /tmp must be writable volumes or it cannot start.
+  - it: gives Keycloak writable volumes for the paths it writes
+    templates:
+      - templates/keycloak.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts
+          value:
+            - name: tmp
+              mountPath: /tmp
+            - name: data
+              mountPath: /opt/keycloak/data
+            - name: quarkus
+              mountPath: /opt/keycloak/lib/quarkus
+
+  - it: hardens the postgres container and gives it writable socket and tmp dirs
+    templates:
+      - templates/postgres.yaml
+    documentSelector:
+      path: kind
+      value: StatefulSet
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.seccompProfile.type
+          value: RuntimeDefault
+      - equal:
+          path: spec.template.spec.containers[0].securityContext
+          value: *hardened
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: run
+            mountPath: /var/run/postgresql
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: tmp
+            mountPath: /tmp
+
+
+  # Keycloak must not hold a superuser: the cluster is initialized as
+  # `postgres` from its own secret key, and Keycloak's role gets the other key.
+  - it: initializes postgres as `postgres` and keeps Keycloak's password separate
+    templates:
+      - templates/postgres.yaml
+    documentSelector:
+      path: kind
+      value: StatefulSet
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: POSTGRES_USER
+            value: postgres
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: POSTGRES_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: test-keycloak-postgresql
+                key: postgres-password
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KEYCLOAK_DB_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: test-keycloak-postgresql
+                key: password
+
+
+  - it: admits only this release's Keycloak pods to postgres
+    templates:
+      - templates/networkpolicy.yaml
+    asserts:
+      - equal:
+          path: spec.podSelector.matchLabels
+          value:
+            app.kubernetes.io/name: keycloak
+            app.kubernetes.io/instance: test
+            app.kubernetes.io/component: postgres
+      - equal:
+          path: spec.ingress
+          value:
+            - from:
+                - podSelector:
+                    matchLabels:
+                      app.kubernetes.io/name: keycloak
+                      app.kubernetes.io/instance: test
+                      app.kubernetes.io/component: server
+              ports:
+                - protocol: TCP
+                  port: 5432
+
+  - it: renders no NetworkPolicy when disabled
+    templates:
+      - templates/networkpolicy.yaml
+    set:
+      networkPolicy.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # A missing repository renders ":17.12", which the kubelet rejects
+  # (InvalidImageName); a bare major tag floats. Both postgres containers
+  # must render a full reference pinned to a 17.x minor release.
+  - it: renders a complete postgres image reference pinned to a minor release
+    templates:
+      - templates/postgres.yaml
+    documentSelector:
+      path: kind
+      value: StatefulSet
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: ^[a-z0-9./-]+:17\.[0-9]+$
+
+  - it: uses the same pinned postgres image to wait for the database
+    templates:
+      - templates/keycloak.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.initContainers[0].image
+          pattern: ^[a-z0-9./-]+:17\.[0-9]+$

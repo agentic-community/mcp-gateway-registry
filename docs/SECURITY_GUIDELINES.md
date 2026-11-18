@@ -1011,6 +1011,9 @@ surface.
 
 ## Deployment surface & insecure-by-default config
 
+- Database image migrations require explicit bootstrap intent and a verified snapshot of a stopped source. Database reachability and `PG_VERSION` do not establish restore completion. Commit the restore receipt with the restored data before admitting traffic, retain interrupted data, and refuse a changed intent until an operator resolves the interruption.
+- Verify initializer authentication without a terminal on the shipped image. A piped password does not prove that a CLI reads stdin. Run administrator reconciliation separately from server readiness so stale bootstrap credentials cannot restart healthy pods.
+- Pin the IdP's public URL across server hostname settings, nginx headers and issuer validation. Keep internal signing-key transport separate from public issuer identity, and exercise HTTP/HTTPS listeners and path-prefixed deployments together.
 - **Publish sensitive ports on loopback, not `0.0.0.0`.** In compose/dev stacks,
   bind datastores, vaults, IdP admin ports, and backend services to `127.0.0.1:`;
   only the intended front door (nginx 80/443) listens on all interfaces.

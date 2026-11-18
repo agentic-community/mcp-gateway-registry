@@ -39,7 +39,8 @@ jobs:
 
       - name: Add Helm repositories
         run: |
-          helm repo add bitnami https://charts.bitnami.com/bitnami || true
+          helm repo add mongodb https://mongodb.github.io/helm-charts
+          helm repo add openbao https://openbao.github.io/openbao-helm
           helm repo update
 
       - name: Build chart dependencies
@@ -47,7 +48,7 @@ jobs:
           for chart in charts/*/; do
             if [ -f "${chart}Chart.yaml" ]; then
               echo "Building dependencies for ${chart}..."
-              helm dependency build "$chart" || true
+              helm dependency build "$chart"
             fi
           done
 
@@ -58,14 +59,15 @@ jobs:
           for chart in charts/*/; do
             if [ -f "${chart}Chart.yaml" ]; then
               echo "Linting ${chart}..."
-              if helm lint "$chart" 2>&1; then
+              if helm lint "$chart" -f charts/ci-values.yaml; then
                 echo "- ${chart}: PASSED" >> $GITHUB_STEP_SUMMARY
               else
-                echo "- ${chart}: WARNING (lint issues found)" >> $GITHUB_STEP_SUMMARY
-                # Don't fail on lint warnings, only errors
+                echo "- ${chart}: FAILED" >> $GITHUB_STEP_SUMMARY
+                failed=1
               fi
             fi
           done
+          exit "$failed"
 
   template:
     name: "Helm Template Validation"
@@ -82,20 +84,28 @@ jobs:
         with:
           version: '3.20.2'
 
+      - name: Build chart dependencies
+        run: |
+          helm repo add mongodb https://mongodb.github.io/helm-charts
+          helm repo add openbao https://openbao.github.io/openbao-helm
+          helm dependency build charts/mcp-gateway-registry-stack
+
       - name: Template validation
         run: |
           echo "## Helm Template Results" >> $GITHUB_STEP_SUMMARY
+          failed=0
           for chart in charts/*/; do
             if [ -f "${chart}Chart.yaml" ]; then
               echo "Validating template for ${chart}..."
-              if helm template test "$chart" --debug > /dev/null 2>&1; then
+              if helm template test "$chart" -f charts/ci-values.yaml > /dev/null; then
                 echo "- ${chart}: PASSED" >> $GITHUB_STEP_SUMMARY
               else
                 echo "- ${chart}: FAILED" >> $GITHUB_STEP_SUMMARY
-                helm template test "$chart" --debug || true
+                failed=1
               fi
             fi
           done
+          exit "$failed"
 
   kubeconform:
     name: "Kubernetes Manifest Validation"
@@ -117,13 +127,20 @@ jobs:
           curl -sL https://github.com/yannh/kubeconform/releases/download/v0.6.4/kubeconform-linux-amd64.tar.gz | tar xz
           sudo mv kubeconform /usr/local/bin/
 
+      - name: Build chart dependencies
+        run: |
+          helm repo add mongodb https://mongodb.github.io/helm-charts
+          helm repo add openbao https://openbao.github.io/openbao-helm
+          helm dependency build charts/mcp-gateway-registry-stack
+
       - name: Validate Kubernetes manifests
         run: |
+          set -euo pipefail
           echo "## Kubeconform Results" >> $GITHUB_STEP_SUMMARY
           for chart in charts/*/; do
             if [ -f "${chart}Chart.yaml" ]; then
               echo "Validating ${chart}..."
-              helm template test "$chart" 2>/dev/null | kubeconform -strict -summary -ignore-missing-schemas || true
+              helm template test "$chart" -f charts/ci-values.yaml | kubeconform -strict -summary -ignore-missing-schemas
             fi
           done
 
@@ -144,14 +161,15 @@ jobs:
 
       - name: Add Helm repositories
         run: |
-          helm repo add bitnami https://charts.bitnami.com/bitnami || true
+          helm repo add mongodb https://mongodb.github.io/helm-charts
+          helm repo add openbao https://openbao.github.io/openbao-helm
           helm repo update
 
       - name: Build dependencies for umbrella chart
         run: |
           if [ -f "charts/mcp-gateway-registry-stack/Chart.yaml" ]; then
             echo "Building dependencies for umbrella chart..."
-            helm dependency build charts/mcp-gateway-registry-stack || true
+            helm dependency build charts/mcp-gateway-registry-stack
           fi
 
   unittest:
@@ -174,7 +192,8 @@ jobs:
 
       - name: Add Helm repositories
         run: |
-          helm repo add bitnami https://charts.bitnami.com/bitnami || true
+          helm repo add mongodb https://mongodb.github.io/helm-charts
+          helm repo add openbao https://openbao.github.io/openbao-helm
           helm repo update
 
       - name: Build dependencies for umbrella chart
@@ -221,7 +240,8 @@ jobs:
 
       - name: Add Helm repositories
         run: |
-          helm repo add bitnami https://charts.bitnami.com/bitnami || true
+          helm repo add mongodb https://mongodb.github.io/helm-charts
+          helm repo add openbao https://openbao.github.io/openbao-helm
           helm repo update
 
       - name: Build dependencies for umbrella chart
@@ -241,17 +261,20 @@ jobs:
           # (both direct env: entries and envFrom configmap/secret keys).
           render_values = ",".join([
               "global.authProvider.type=keycloak",
-              "global.secretKey=ci-test",
-              "keycloak.adminPassword=ci-test",
+              "keycloak.cache=ispn",
+              "keycloak.features=login:v2",
+              "keycloak.disabledFeatures=impersonation",
+              "keycloak.httpRelativePath=/auth",
               "registry.awsRegistry.federationEnabled=true",
-              "global.ingress.tls=false",
-              "global.ingress.routingMode=host",
+              "global.ingress.tls=true",
+              "global.ingress.routingMode=subdomain",
           ])
 
           out = subprocess.run(
               [
                   "helm", "template", "ci",
                   "charts/mcp-gateway-registry-stack",
+                  "-f", "charts/ci-values.yaml",
                   "--set", render_values,
               ],
               capture_output=True, text=True
@@ -281,6 +304,7 @@ jobs:
               "registry": "charts/registry/reserved-env-names.txt",
               "auth-server": "charts/auth-server/reserved-env-names.txt",
               "mcpgw-server": "charts/mcpgw/reserved-env-names.txt",
+              "ci-keycloak": "charts/keycloak/reserved-env-names.txt",
           }
 
           rendered_by_chart = {name: set() for name in deployment_to_reserved}
@@ -310,8 +334,9 @@ jobs:
           for deployment, reserved_path in deployment_to_reserved.items():
               rendered = rendered_by_chart[deployment]
               if not rendered:
-                  print(f"::warning::No env names rendered for deployment={deployment}; skipping")
-                  summary_lines.append(f"- `{deployment}`: no env names rendered (skipped)")
+                  print(f"::error::No env names rendered for deployment={deployment}")
+                  summary_lines.append(f"- `{deployment}`: missing deployment")
+                  failed = True
                   continue
 
               with open(reserved_path) as f:

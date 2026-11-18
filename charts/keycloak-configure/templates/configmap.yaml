@@ -1,3 +1,4 @@
+{{- if include "keycloak-configure.enabled" . }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -16,7 +17,7 @@ data:
 
     # These will be set properly after loading .env in main()
     KEYCLOAK_URL=""  # Will be overridden with KEYCLOAK_ADMIN_URL after .env is loaded
-    REALM="mcp-gateway"
+    REALM="${REALM:-mcp-gateway}"
     KEYCLOAK_ADMIN=$KEYCLOAK_ADMIN
     KEYCLOAK_ADMIN_PASSWORD=$KEYCLOAK_ADMIN_PASSWORD
 
@@ -132,7 +133,7 @@ data:
         # terminated at the ALB in front. The Compose and ECS provisioners
         # deliberately omit the field so an operator's value survives there.
         local realm_json='{
-            "realm": "mcp-gateway",
+            "realm": "'"${REALM}"'",
             "enabled": true,
             "registrationAllowed": false,
             "loginWithEmailAllowed": true,
@@ -369,7 +370,7 @@ data:
                 }
             }'
 
-            curl -s -X POST "${KEYCLOAK_URL}/admin/realms/mcp-gateway/groups" \
+            curl -s -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/groups" \
                 -H "Authorization: Bearer ${token}" \
                 -H "Content-Type: application/json" \
                 -d "$group_json" > /dev/null
@@ -1297,3 +1298,4 @@ data:
 
     # Run main function
     main
+{{- end }}

@@ -4,6 +4,8 @@ release:
   namespace: default
 templates:
   - templates/openbao-init.yaml
+set:
+  keycloak.postgres.bootstrap.mode: fresh-install
 tests:
   - it: emits nothing when egress is disabled (default)
     asserts:
