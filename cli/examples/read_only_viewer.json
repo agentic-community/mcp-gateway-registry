@@ -1,0 +1,15 @@
+{
+  "scope_name": "registry-read-only",
+  "scope_type": "server_scope",
+  "description": "Read-only viewer: sees every MCP server, virtual server, agent and skill in the registry UI and API. Holds no register, modify, toggle, delete, publish or health-check permission, and no gateway access to call tools.",
+  "group_mappings": ["registry-read-only"],
+  "server_access": [],
+  "ui_permissions": {
+    "list_service": ["all"],
+    "list_virtual_server": ["all"],
+    "list_agents": ["all"],
+    "get_agent": ["all"],
+    "list_skills": ["all"]
+  },
+  "create_in_idp": true
+}
