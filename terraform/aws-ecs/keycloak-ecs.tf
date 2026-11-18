@@ -5,12 +5,12 @@
 locals {
   # Determine Keycloak hostname based on deployment mode
   # CloudFront mode: use CloudFront domain, Custom DNS mode: use keycloak_domain
-  keycloak_hostname = var.enable_cloudfront && !var.enable_route53_dns ? (
-    var.enable_cloudfront ? aws_cloudfront_distribution.keycloak[0].domain_name : local.keycloak_domain
-  ) : local.keycloak_domain
+  keycloak_hostname = local.keycloak_selected ? (
+    var.enable_cloudfront && !var.enable_route53_dns ? aws_cloudfront_distribution.keycloak[0].domain_name : local.keycloak_domain
+  ) : ""
 
   # Canonical frontend URL for hostname v2, including the public HTTPS scheme.
-  keycloak_hostname_url = "https://${local.keycloak_hostname}"
+  keycloak_hostname_url = local.keycloak_selected ? "https://${local.keycloak_hostname}" : ""
 
   keycloak_container_env = [
     {
@@ -275,6 +275,8 @@ resource "aws_iam_role_policy" "keycloak_task_ssm_policy" {
 
 # ECS Task Definition
 resource "aws_ecs_task_definition" "keycloak" {
+  count = local.keycloak_selected ? 1 : 0
+
   family                   = "keycloak"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
@@ -346,9 +348,11 @@ resource "aws_ecs_task_definition" "keycloak" {
 
 # ECS Service
 resource "aws_ecs_service" "keycloak" {
+  count = local.keycloak_selected ? 1 : 0
+
   name            = "keycloak"
   cluster         = aws_ecs_cluster.keycloak.id
-  task_definition = aws_ecs_task_definition.keycloak.arn
+  task_definition = aws_ecs_task_definition.keycloak[0].arn
   desired_count   = 1
   launch_type     = "FARGATE"
 
@@ -359,7 +363,7 @@ resource "aws_ecs_service" "keycloak" {
   }
 
   load_balancer {
-    target_group_arn = aws_lb_target_group.keycloak.arn
+    target_group_arn = aws_lb_target_group.keycloak[0].arn
     container_name   = "keycloak"
     container_port   = 8080
   }
@@ -377,9 +381,11 @@ resource "aws_ecs_service" "keycloak" {
 
 # Auto Scaling Target
 resource "aws_appautoscaling_target" "keycloak" {
+  count = local.keycloak_selected ? 1 : 0
+
   max_capacity       = 4
   min_capacity       = 1
-  resource_id        = "service/${aws_ecs_cluster.keycloak.name}/${aws_ecs_service.keycloak.name}"
+  resource_id        = "service/${aws_ecs_cluster.keycloak.name}/${aws_ecs_service.keycloak[0].name}"
   scalable_dimension = "ecs:service:DesiredCount"
   service_namespace  = "ecs"
 
@@ -388,11 +394,13 @@ resource "aws_appautoscaling_target" "keycloak" {
 
 # Auto Scaling Policy - CPU
 resource "aws_appautoscaling_policy" "keycloak_cpu" {
+  count = local.keycloak_selected ? 1 : 0
+
   name               = "keycloak-cpu-autoscaling"
   policy_type        = "TargetTrackingScaling"
-  resource_id        = aws_appautoscaling_target.keycloak.resource_id
-  scalable_dimension = aws_appautoscaling_target.keycloak.scalable_dimension
-  service_namespace  = aws_appautoscaling_target.keycloak.service_namespace
+  resource_id        = aws_appautoscaling_target.keycloak[0].resource_id
+  scalable_dimension = aws_appautoscaling_target.keycloak[0].scalable_dimension
+  service_namespace  = aws_appautoscaling_target.keycloak[0].service_namespace
 
   target_tracking_scaling_policy_configuration {
     predefined_metric_specification {
@@ -404,11 +412,13 @@ resource "aws_appautoscaling_policy" "keycloak_cpu" {
 
 # Auto Scaling Policy - Memory
 resource "aws_appautoscaling_policy" "keycloak_memory" {
+  count = local.keycloak_selected ? 1 : 0
+
   name               = "keycloak-memory-autoscaling"
   policy_type        = "TargetTrackingScaling"
-  resource_id        = aws_appautoscaling_target.keycloak.resource_id
-  scalable_dimension = aws_appautoscaling_target.keycloak.scalable_dimension
-  service_namespace  = aws_appautoscaling_target.keycloak.service_namespace
+  resource_id        = aws_appautoscaling_target.keycloak[0].resource_id
+  scalable_dimension = aws_appautoscaling_target.keycloak[0].scalable_dimension
+  service_namespace  = aws_appautoscaling_target.keycloak[0].service_namespace
 
   target_tracking_scaling_policy_configuration {
     predefined_metric_specification {
@@ -433,4 +443,29 @@ resource "aws_ssm_parameter" "keycloak_admin_password" {
   key_id = aws_kms_key.rds.id
   value  = var.keycloak_admin_password
   tags   = local.common_tags
+}
+
+moved {
+  from = aws_ecs_task_definition.keycloak
+  to   = aws_ecs_task_definition.keycloak[0]
+}
+
+moved {
+  from = aws_ecs_service.keycloak
+  to   = aws_ecs_service.keycloak[0]
+}
+
+moved {
+  from = aws_appautoscaling_target.keycloak
+  to   = aws_appautoscaling_target.keycloak[0]
+}
+
+moved {
+  from = aws_appautoscaling_policy.keycloak_cpu
+  to   = aws_appautoscaling_policy.keycloak_cpu[0]
+}
+
+moved {
+  from = aws_appautoscaling_policy.keycloak_memory
+  to   = aws_appautoscaling_policy.keycloak_memory[0]
 }

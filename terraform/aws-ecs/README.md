@@ -309,6 +309,40 @@ If you are running this from an EC2 instance, you may also want to run `curl -s 
 
 #### Keycloak ALB path routing
 
+Terraform uses the same provider precedence as `AUTH_PROVIDER`: PingFederate,
+Auth0, Okta, Entra, Cognito, then Keycloak when a Keycloak domain is available.
+CloudFront-only mode supplies that domain from its distribution.
+When another provider wins, Terraform omits the Keycloak ALB, target group,
+listeners, routing rules, public security groups, CloudFront distribution,
+DNS records, certificates and WAF association. It also omits the Keycloak ECS
+task, service and autoscaling resources. Keycloak URL outputs become `null`.
+The gateway receives `KEYCLOAK_ENABLED=false` and empty Keycloak URLs.
+Terraform ignores `keycloak_admin_cidr_blocks` when Keycloak is inactive.
+
+`post-deployment-setup.sh` reads the `auth_provider` output. Other providers skip
+Keycloak DNS, ECS and endpoint checks, initialization and credential loading.
+Registry checks, scopes initialization and service restarts still run.
+`--skip-keycloak` skips only initialization when Keycloak is selected.
+Older output files require a Keycloak URL to identify a Keycloak deployment.
+
+Provider changes retain the Aurora database, RDS proxy, KMS keys, ECR repository,
+credential resources and internal security groups at their existing addresses.
+The empty Keycloak ECS cluster, IAM roles and log groups also remain.
+Keep supplying the existing database and admin passwords: Terraform still
+manages those resources, and the retained database still incurs charges.
+Delete retained resources only through a separate, reviewed data-retirement plan.
+
+The configuration includes `moved` blocks for resources that now use `[0]`.
+Active Keycloak deployments keep their resource identity on upgrade.
+Switching providers removes the unused edge and running Keycloak service.
+
+Run the mocked routing plans with Terraform 1.11 or newer:
+
+```bash
+terraform init -backend=false
+terraform test -filter=tests/keycloak_provider_routing.tftest.hcl -filter=tests/gateway_provider_routing.tftest.hcl
+```
+
 The Keycloak ALB forwards `/realms/mcp-gateway`, `/realms/mcp-gateway/*`,
 `/resources/*` and `/` for any source its security groups admit. Admin paths
 (`/admin`, `/admin/*`, `/realms/master`, `/realms/master/*`) also require an
@@ -985,7 +1019,7 @@ If `null_resource.dual_ingress_warning` already exists, its trigger change also 
 After the upgrade, `null_resource.dual_ingress_warning` prints the Mode 3 access notice only when Terraform creates it or the domain changes.
 
 Before applying, confirm that the plan contains no service security group or task definition replacements and no changes that would redeploy ECS services.
-In-place updates that change only `tags` and `tags_all` are expected, including on `aws_ecs_service.keycloak` and `aws_ecs_task_definition.keycloak`.
+In-place updates that change only `tags` and `tags_all` are expected, including on `aws_ecs_service.keycloak[0]` and `aws_ecs_task_definition.keycloak[0]` when Keycloak is active.
 
 After applying the upgrade, run `terraform plan -detailed-exitcode` with the same inputs and provider and module versions.
 Exit code `0` means no changes, `2` means changes remain, and `1` means an error occurred.
@@ -993,7 +1027,7 @@ Exit code `0` means no changes, `2` means changes remain, and `1` means an error
 The existing 30-second delay runs when Terraform creates or recreates the wait resource.
 Updating only the bucket policy while keeping the same bucket ID does not rerun the delay.
 
-For a fresh deployment, verify access logging for both the Gateway and Keycloak ALBs.
+For a fresh deployment, verify access logging for the Gateway ALB and, when Keycloak is active, its ALB.
 Check for `ELBAccessLogTestFile` and actual request logs.
 The Gateway ALB uses no extra prefix; the Keycloak ALB uses `keycloak-alb`.
 ALBs [publish access logs for each node every 5 minutes](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-access-logs.html).

@@ -8,8 +8,9 @@
 {{- $additionalHostnames := fromYamlArray (include "registry.additionalHostnames" .) }}
 {{- $globalPaths := .Values.global.ingress.paths | default dict }}
 {{- $pathPrefix := (get $globalPaths "registry") | default .Values.ingress.path | default "/registry" }}
+{{- $keycloakActive := eq (dig "authProvider" "type" "keycloak" .Values.global | default "keycloak") "keycloak" }}
 {{- $keycloakPrefix := "" }}
-{{- if eq (dig "authProvider" "type" "keycloak" .Values.global) "keycloak" }}
+{{- if $keycloakActive }}
   {{- $externalUrl := dig "authProvider" "keycloak" "externalUrl" "" .Values.global }}
   {{- if $externalUrl }}
     {{- $external := urlParse $externalUrl }}
@@ -27,12 +28,10 @@
 {{- $existingPaths := list $pathPrefix "/oauth2" "/keycloak" "/realms" "/resources" }}
 {{- $addKeycloakPrefix := and $keycloakPrefix (not (has $keycloakPrefix $existingPaths)) }}
 {{- /*
-In path routing mode the registry pod's in-cluster nginx reverse proxy
-fronts auth-server and Keycloak for browser traffic (see
-docker/nginx_rev_proxy_http_and_https.conf). The auth-server and
-Keycloak ingresses are disabled by default, so the ALB must forward
-their browser-facing paths to the registry Service — nginx handles the
-final hop to the auth-server / Keycloak ClusterIP Services.
+In path routing mode, /oauth2 reaches auth-server through the registry's nginx.
+Keycloak sibling paths render only when Keycloak is the selected provider,
+including external Keycloak deployments. The registry Service receives those
+requests and nginx forwards them to the configured upstream.
 
 Subdomain mode does not need these extra rules: `/` on the configured
 registry hostname already catches every browser-facing path and
@@ -84,6 +83,7 @@ spec:
                 name: {{ .Values.app.name }}
                 port:
                   name: http
+          {{- if $keycloakActive }}
           - path: /keycloak
             pathType: Prefix
             backend:
@@ -114,6 +114,7 @@ spec:
                 port:
                   name: http
           {{- end }}
+          {{- end }}
     {{- range $hostname := $additionalHostnames }}
     {{- if $hostname }}
     - host: {{ $hostname | quote }}
@@ -133,6 +134,7 @@ spec:
                 name: {{ $.Values.app.name }}
                 port:
                   name: http
+          {{- if $keycloakActive }}
           - path: /keycloak
             pathType: Prefix
             backend:
@@ -162,6 +164,7 @@ spec:
                 name: {{ $.Values.app.name }}
                 port:
                   name: http
+          {{- end }}
           {{- end }}
     {{- end }}
     {{- end }}

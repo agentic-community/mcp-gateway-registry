@@ -65,8 +65,7 @@ Use `fresh-install` only for a new database. Existing deployments must follow
 
 This chart supports five authentication providers: Keycloak (default), Microsoft Entra ID, Okta, Auth0, and AWS Cognito.
 
-When another provider is active, the chart skips bundled Keycloak resources and the
-realm configuration Job, even if their creation switches remain enabled.
+When another provider is active, the chart skips bundled Keycloak resources, the realm configuration Job, and Keycloak-specific ingress paths, even if their creation switches remain enabled. Path-mode ingress keeps the registry prefix and `/oauth2` on the primary and additional hostnames. Selecting Keycloak with `keycloak.create=false` retains its login routes for an external Keycloak server.
 
 #### Option 1: Keycloak (Default)
 

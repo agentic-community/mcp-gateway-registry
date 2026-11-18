@@ -1342,6 +1342,18 @@ function _isCidr(value: string): boolean {
   return (family === 4 && prefix <= 32) || (family === 6 && prefix <= 128);
 }
 
+/** Provider precedence shared by deployment, validation, and container config. */
+export function resolveAuthProvider(
+  config: RegistryConfig,
+): 'pingfederate' | 'auth0' | 'okta' | 'entra' | 'cognito' | 'keycloak' {
+  return config.pingfederate.enabled ? 'pingfederate'
+    : config.auth0.enabled ? 'auth0'
+    : config.okta.enabled ? 'okta'
+    : config.entra.enabled ? 'entra'
+    : config.cognito.enabled ? 'cognito'
+    : 'keycloak';
+}
+
 /** Effective admin CIDRs, using ingressCidrBlocks when unset. */
 export function resolveKeycloakAdminCidrBlocks(config: RegistryConfig): string[] {
   const cidrs = config.keycloakAdminCidrBlocks ?? config.ingressCidrBlocks;
@@ -1407,7 +1419,8 @@ export function loadRegistryConfig(configPath: string): RegistryConfig {
   // Inject secrets from environment variables (overrides YAML values)
   _injectSecrets(config);
 
-  // Validate required secrets at synth time to fail fast
+  // Retained SSM, application secrets, and databases still use these inputs
+  // when another provider disables the Keycloak runtime.
   if (config.enabled) {
     const requiredSecrets: Array<[string, string]> = [
       [config.keycloak.adminPassword, 'CDK_KEYCLOAK_ADMIN_PASSWORD'],
@@ -1469,7 +1482,7 @@ export function loadRegistryConfig(configPath: string): RegistryConfig {
   // Keycloak sslRequired=external blocks admin ops over plain HTTP, so a
   // public HTTPS front is required. Fail fast at synth if neither option is
   // enabled — otherwise KeycloakService throws late during construct build.
-  if (!config.enableRoute53Dns && !config.cloudfront.enabled) {
+  if (resolveAuthProvider(config) === 'keycloak' && !config.enableRoute53Dns && !config.cloudfront.enabled) {
     throw new Error(
       'Keycloak needs a public HTTPS front: set enableRoute53Dns=true (custom ' +
       'domain + ACM) or cloudfront.enabled=true (CloudFront default cert) in config.yaml. ' +
@@ -1478,7 +1491,9 @@ export function loadRegistryConfig(configPath: string): RegistryConfig {
     );
   }
 
-  _validateKeycloakAdminCidrBlocks(config);
+  if (resolveAuthProvider(config) === 'keycloak') {
+    _validateKeycloakAdminCidrBlocks(config);
+  }
 
   return config;
 }

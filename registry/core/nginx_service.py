@@ -1596,7 +1596,7 @@ class NginxConfigService:
             # Parse Keycloak configuration from KEYCLOAK_URL environment variable
             import os
 
-            auth_provider = os.environ.get("AUTH_PROVIDER", "keycloak").lower()
+            auth_provider = os.environ.get("AUTH_PROVIDER", settings.auth_provider).lower()
 
             # Strip Keycloak location blocks from nginx config when not using Keycloak
             if auth_provider != "keycloak":

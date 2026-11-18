@@ -73,6 +73,7 @@ def nginx_service():
         # Mock settings.nginx_updates_enabled to True for testing
         with patch("registry.core.nginx_service.settings") as mock_settings:
             mock_settings.nginx_updates_enabled = True
+            mock_settings.auth_provider = "keycloak"
             mock_settings.deployment_mode = MagicMock()
             mock_settings.deployment_mode.value = "with-gateway"
             mock_settings.nginx_config_path = "/etc/nginx/conf.d/nginx_rev_proxy.conf"
@@ -3203,15 +3204,16 @@ def test_keycloak_proxy_url_preserves_authority_and_base_path(url, host, port, p
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider", ["entra", "cognito", "okta", "auth0", "pingfederate"])
+@pytest.mark.parametrize("conf_path", [_HTTP_ONLY_CONF, _HTTP_AND_HTTPS_CONF])
 async def test_inactive_keycloak_configuration_cannot_block_other_idps(
-    provider, nginx_service, sample_servers, mock_health_service, mock_atomic_write
+    provider, conf_path, nginx_service, sample_servers, mock_health_service, mock_atomic_write
 ):
     rendered = await _render_real_conf(
         nginx_service,
         sample_servers,
         mock_health_service,
         mock_atomic_write,
-        _HTTP_ONLY_CONF,
+        conf_path,
         {
             "AUTH_PROVIDER": provider,
             "KEYCLOAK_URL": "not a URL",
@@ -3221,7 +3223,32 @@ async def test_inactive_keycloak_configuration_cannot_block_other_idps(
         },
     )
     assert "location /realms/" not in rendered
+    assert "location /keycloak/" not in rendered
+    assert "location /resources/" not in rendered
+    assert "/oauth2/login/keycloak" not in rendered
+    assert "/oauth2/callback/keycloak" not in rendered
     assert "location /oauth2/" in rendered
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["okta", "keycloak"])
+async def test_nginx_uses_resolved_provider_when_environment_is_unset(
+    provider, nginx_service, mock_health_service, mock_atomic_write
+):
+    nginx_module.settings.auth_provider = provider
+    rendered = await _render_real_conf(
+        nginx_service,
+        {},
+        mock_health_service,
+        mock_atomic_write,
+        _HTTP_ONLY_CONF,
+        {
+            "KEYCLOAK_URL": "http://external-keycloak:8080",
+            "KEYCLOAK_EXTERNAL_URL": "https://sso.example.com",
+            "NGINX_DISABLE_API_AUTH_REQUEST": "false",
+        },
+    )
+    assert ("location /keycloak/" in rendered) is (provider == "keycloak")
 
 
 @pytest.mark.asyncio

@@ -44,7 +44,7 @@ registry:
 
   # Keycloak admin and master-realm paths accept these source CIDRs plus NAT
   # gateway egress IPs. Unset uses ingressCidrBlocks. Include the setup machine.
-  # CloudFront hides the client IP; synth rejects a different list in that mode.
+  # With Keycloak selected, CloudFront mode rejects a different admin CIDR list.
   # keycloakAdminCidrBlocks:
   #   - "203.0.113.10/32"
 
@@ -289,10 +289,9 @@ registry:
     contactUrl: ""
 
   # CloudFront
-  # NOTE: at least one of `enableRoute53Dns` or `cloudfront.enabled` must be
-  # true. Keycloak's sslRequired=external policy blocks admin ops over plain
-  # HTTP, so a public HTTPS front is required (custom domain + ACM, or a
-  # CloudFront-issued `*.cloudfront.net` cert).
+  # When Keycloak is the selected provider, at least one of enableRoute53Dns
+  # or cloudfront.enabled must be true. Keycloak's sslRequired=external
+  # policy needs a public HTTPS front for admin operations.
   cloudfront:
     enabled: true
     prefixListName: ""

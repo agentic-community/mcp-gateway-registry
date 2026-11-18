@@ -16,7 +16,7 @@ import * as servicediscovery from 'aws-cdk-lib/aws-servicediscovery';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { Construct } from 'constructs';
 
-import { RegistryConfig } from './registry-config';
+import { RegistryConfig, resolveAuthProvider } from './registry-config';
 import { RegistryNetworkStack } from './registry-network-stack';
 import { RegistryDataStack } from './registry-data-stack';
 import { RegistryAuthStack } from './registry-auth-stack';
@@ -186,17 +186,9 @@ export class RegistryServiceStack extends cdk.Stack {
     this.appSecretsKmsKey = secretsBundle.kmsKey;
     const secretsAccessStatements = secretsBundle.accessStatements;
 
-    // Auth provider determination. Order matters when more than one provider
-    // is enabled, and it is PingFederate first, matching
-    // terraform/aws-ecs/modules/mcp-gateway/ecs-services.tf so the same
-    // config picks the same provider on either stack.
-    const authProvider = config.pingfederate.enabled ? 'pingfederate'
-      : config.auth0.enabled ? 'auth0'
-      : config.okta.enabled ? 'okta'
-      : config.entra.enabled ? 'entra'
-      : config.cognito.enabled ? 'cognito'
-      : authStack.keycloakDomain !== '' ? 'keycloak'
-      : 'default';
+    const authProvider = resolveAuthProvider(config);
+    const keycloakEnabled = authProvider === 'keycloak';
+    const keycloakUrl = authStack.keycloakUrl ?? '';
 
     // OTEL settings shared by every instrumented app container. The endpoint
     // is localhost because each task carries its own ADOT collector sidecar;
@@ -251,7 +243,7 @@ export class RegistryServiceStack extends cdk.Stack {
       // substitutes them into oauth2_providers.yml. Missing values leave the
       // yaml value as literal `${VAR}` which breaks provider registration
       // (Login page then shows "No login methods are currently configured").
-      KEYCLOAK_ENABLED: authStack.keycloakDomain !== '' ? 'true' : 'false',
+      KEYCLOAK_ENABLED: String(keycloakEnabled),
       GITHUB_ENABLED: 'false',
       GOOGLE_ENABLED: 'false',
       // Amazon Cognito. The pool, client and issuer come from stack config
@@ -269,8 +261,8 @@ export class RegistryServiceStack extends cdk.Stack {
       PINGFEDERATE_APPLICATION_ID_URI: config.pingfederate.applicationIdUri,
       PINGFEDERATE_GROUPS_CLAIM: config.pingfederate.groupsClaim,
       PINGFEDERATE_M2M_ALLOWED_AUDIENCES: config.pingfederate.m2mAllowedAudiences,
-      KEYCLOAK_URL: authStack.keycloakUrl,
-      KEYCLOAK_EXTERNAL_URL: authStack.keycloakUrl,
+      KEYCLOAK_URL: keycloakUrl,
+      KEYCLOAK_EXTERNAL_URL: keycloakUrl,
       KEYCLOAK_REALM: 'mcp-gateway',
       KEYCLOAK_CLIENT_ID: 'mcp-gateway-web',
       ENTRA_ENABLED: String(config.entra.enabled),
@@ -487,8 +479,10 @@ export class RegistryServiceStack extends cdk.Stack {
       // (registry/core/config.py). Injecting it here, in sharedSecrets, is
       // what guarantees one secret reaches both containers.
       AUTH_SERVER_NGINX_MARKER_SECRET: ecs.Secret.fromSecretsManager(secretsBundle.nginxMarkerSecret),
-      KEYCLOAK_CLIENT_SECRET: ecs.Secret.fromSecretsManager(secretsBundle.keycloakClientSecret, 'client_secret'),
-      KEYCLOAK_M2M_CLIENT_SECRET: ecs.Secret.fromSecretsManager(secretsBundle.keycloakM2mClientSecret, 'client_secret'),
+      ...(keycloakEnabled ? {
+        KEYCLOAK_CLIENT_SECRET: ecs.Secret.fromSecretsManager(secretsBundle.keycloakClientSecret, 'client_secret'),
+        KEYCLOAK_M2M_CLIENT_SECRET: ecs.Secret.fromSecretsManager(secretsBundle.keycloakM2mClientSecret, 'client_secret'),
+      } : {}),
       ...(docdbSecret ? {
         DOCUMENTDB_USERNAME: ecs.Secret.fromSecretsManager(docdbSecret, 'username'),
         DOCUMENTDB_PASSWORD: ecs.Secret.fromSecretsManager(docdbSecret, 'password'),
@@ -510,7 +504,9 @@ export class RegistryServiceStack extends cdk.Stack {
 
     const registrySecrets: Record<string, ecs.Secret> = {
       ...sharedSecrets,
-      KEYCLOAK_ADMIN_PASSWORD: ecs.Secret.fromSecretsManager(secretsBundle.keycloakAdminPassword),
+      ...(keycloakEnabled ? {
+        KEYCLOAK_ADMIN_PASSWORD: ecs.Secret.fromSecretsManager(secretsBundle.keycloakAdminPassword),
+      } : {}),
       EMBEDDINGS_API_KEY: ecs.Secret.fromSecretsManager(secretsBundle.embeddingsApiKey),
       ...(egressKey
         ? { EGRESS_CREDENTIAL_ENCRYPTION_KEY: ecs.Secret.fromSecretsManager(egressKey) }
@@ -946,8 +942,8 @@ export class RegistryServiceStack extends cdk.Stack {
         environment: {
           AWS_REGION: config.awsRegion,
           AWS_DEFAULT_REGION: config.awsRegion,
-          KEYCLOAK_URL: authStack.keycloakUrl,
-          KEYCLOAK_EXTERNAL_URL: authStack.keycloakUrl,
+          KEYCLOAK_URL: keycloakUrl,
+          KEYCLOAK_EXTERNAL_URL: keycloakUrl,
           KEYCLOAK_REALM: 'mcp-gateway',
         },
         ingressCidr: config.vpcCidr,
@@ -962,11 +958,15 @@ export class RegistryServiceStack extends cdk.Stack {
     const crossStackIngress: Array<[string, ec2.ISecurityGroup, ec2.ISecurityGroup, number, string]> = [
       ['DocDbFromRegistry', dataStack.documentDbSg, registryService.securityGroup, 27017, 'DocumentDB ingress from registry'],
       ['DocDbFromAuth', dataStack.documentDbSg, authService.securityGroup, 27017, 'DocumentDB ingress from auth-server'],
-      ['KeycloakAlbFromRegistry', authStack.keycloakAlbSg, registryService.securityGroup, 443, 'Keycloak ALB HTTPS from registry'],
-      ['KeycloakAlbFromAuthSvc', authStack.keycloakAlbSg, authService.securityGroup, 443, 'Keycloak ALB HTTPS from auth-server'],
-      ['KeycloakAlbHttpFromRegistry', authStack.keycloakAlbSg, registryService.securityGroup, 80, 'Keycloak ALB HTTP from registry'],
-      ['KeycloakAlbHttpFromAuthSvc', authStack.keycloakAlbSg, authService.securityGroup, 80, 'Keycloak ALB HTTP from auth-server'],
     ];
+    if (authStack.keycloakAlbSg) {
+      crossStackIngress.push(
+        ['KeycloakAlbFromRegistry', authStack.keycloakAlbSg, registryService.securityGroup, 443, 'Keycloak ALB HTTPS from registry'],
+        ['KeycloakAlbFromAuthSvc', authStack.keycloakAlbSg, authService.securityGroup, 443, 'Keycloak ALB HTTPS from auth-server'],
+        ['KeycloakAlbHttpFromRegistry', authStack.keycloakAlbSg, registryService.securityGroup, 80, 'Keycloak ALB HTTP from registry'],
+        ['KeycloakAlbHttpFromAuthSvc', authStack.keycloakAlbSg, authService.securityGroup, 80, 'Keycloak ALB HTTP from auth-server'],
+      );
+    }
     for (const [logicalId, target, source, port, description] of crossStackIngress) {
       new ec2.CfnSecurityGroupIngress(this, logicalId, {
         groupId: target.securityGroupId,
@@ -1041,11 +1041,14 @@ export class RegistryServiceStack extends cdk.Stack {
 
     // Outputs. Auth-server and Gradio are NOT exposed on the ALB — external
     // callers reach both via nginx path routes on the registry container.
-    // OAuth callbacks go to ${REGISTRY_URL}/oauth2/callback/keycloak; the
+    // OAuth callbacks go to ${REGISTRY_URL}/oauth2/callback/<provider>; the
     // Gradio UI is proxied at the registry root.
     new cdk.CfnOutput(this, 'RegistryUrl', { value: this.registryUrl, description: 'MCP Gateway Registry URL' });
     new cdk.CfnOutput(this, 'RegistryAlbDnsName', { value: this.registryAlbDns, description: 'Registry ALB DNS name' });
-    new cdk.CfnOutput(this, 'KeycloakUrl', { value: authStack.keycloakUrl, description: 'Keycloak identity provider URL' });
+    new cdk.CfnOutput(this, 'AuthProvider', { value: authProvider, description: 'Selected identity provider' });
+    if (authStack.keycloakUrl) {
+      new cdk.CfnOutput(this, 'KeycloakUrl', { value: authStack.keycloakUrl, description: 'Keycloak identity provider URL' });
+    }
     new cdk.CfnOutput(this, 'GradioUiUrl', {
       value: this.registryUrl,
       description: 'Gradio UI URL (proxied by registry nginx at the root path)',
@@ -1058,7 +1061,7 @@ export class RegistryServiceStack extends cdk.Stack {
         registry: this.registryUrl,
         registryApi: `${this.registryUrl}/api/v1`,
         registryHealth: `${this.registryUrl}/health`,
-        keycloak: authStack.keycloakUrl,
+        ...(keycloakEnabled ? { keycloak: keycloakUrl } : {}),
         authServer: `${this.registryUrl}/oauth2`,
         gradioUi: this.registryUrl,
       }),

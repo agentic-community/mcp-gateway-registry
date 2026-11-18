@@ -19,7 +19,7 @@ import * as ecr from 'aws-cdk-lib/aws-ecr';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import { Construct } from 'constructs';
-import { RegistryConfig } from './registry-config';
+import { RegistryConfig, resolveAuthProvider } from './registry-config';
 import { KeycloakService } from './constructs/keycloak-service';
 
 // ---------------------------------------------------------------------------
@@ -50,31 +50,40 @@ export interface RegistryAuthStackProps extends cdk.StackProps {
 
 export class RegistryAuthStack extends cdk.Stack {
   /** Full HTTPS URL for Keycloak (e.g. https://kc.us-west-2.mycorp.click) */
-  public readonly keycloakUrl: string;
+  public readonly keycloakUrl?: string;
 
   /** ALB DNS name for Keycloak */
-  public readonly keycloakAlbDns: string;
+  public readonly keycloakAlbDns?: string;
 
   /** ARN of the Keycloak ALB */
-  public readonly keycloakAlbArn: string;
+  public readonly keycloakAlbArn?: string;
 
   /** Security group attached to the Keycloak ALB */
-  public readonly keycloakAlbSg: ec2.SecurityGroup;
+  public readonly keycloakAlbSg?: ec2.SecurityGroup;
 
   /** Security group attached to Keycloak ECS tasks */
-  public readonly keycloakEcsSg: ec2.SecurityGroup;
+  public readonly keycloakEcsSg?: ec2.SecurityGroup;
 
   /** ECS cluster running Keycloak */
-  public readonly keycloakEcsCluster: ecs.Cluster;
+  public readonly keycloakEcsCluster?: ecs.Cluster;
 
   /** ECR repository for Keycloak container images */
-  public readonly keycloakEcrRepo: ecr.Repository;
+  public readonly keycloakEcrRepo?: ecr.Repository;
 
   /** Resolved Keycloak domain name */
-  public readonly keycloakDomain: string;
+  public readonly keycloakDomain?: string;
 
   constructor(scope: Construct, id: string, props: RegistryAuthStackProps) {
     super(scope, id, props);
+
+    // ------------------------------------------------------------------
+    // Common tags
+    // ------------------------------------------------------------------
+
+    cdk.Tags.of(this).add('Project', 'mcp-gateway-registry');
+    cdk.Tags.of(this).add('Component', 'auth');
+    cdk.Tags.of(this).add('Environment', 'production');
+    cdk.Tags.of(this).add('ManagedBy', 'cdk');
 
     // ------------------------------------------------------------------
     // Keycloak Service construct
@@ -91,6 +100,11 @@ export class RegistryAuthStack extends cdk.Stack {
       keycloakDbSecretArn: props.keycloakDbSecretArn,
     });
 
+    if (resolveAuthProvider(props.config) !== 'keycloak') return;
+    if (!keycloak.alb || !keycloak.keycloakUrl) {
+      throw new Error('Selected Keycloak provider requires its ALB and public URL.');
+    }
+
     // ------------------------------------------------------------------
     // Expose cross-stack outputs
     // ------------------------------------------------------------------
@@ -103,15 +117,6 @@ export class RegistryAuthStack extends cdk.Stack {
     this.keycloakEcsCluster = keycloak.ecsCluster;
     this.keycloakEcrRepo = keycloak.ecrRepo;
     this.keycloakDomain = keycloak.keycloakDomain;
-
-    // ------------------------------------------------------------------
-    // Common tags
-    // ------------------------------------------------------------------
-
-    cdk.Tags.of(this).add('Project', 'mcp-gateway-registry');
-    cdk.Tags.of(this).add('Component', 'auth');
-    cdk.Tags.of(this).add('Environment', 'production');
-    cdk.Tags.of(this).add('ManagedBy', 'cdk');
 
     // ------------------------------------------------------------------
     // Stack Outputs

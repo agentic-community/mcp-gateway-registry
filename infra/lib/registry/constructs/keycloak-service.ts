@@ -24,7 +24,7 @@ import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import { Construct } from 'constructs';
-import { RegistryConfig, resolveKeycloakAdminCidrBlocks } from '../registry-config';
+import { RegistryConfig, resolveAuthProvider, resolveKeycloakAdminCidrBlocks } from '../registry-config';
 import { putSecureSsmParam } from './_lib';
 import { CloudFrontOriginDistribution } from './cloudfront-distribution';
 import { WafRules } from './waf-rules';
@@ -163,25 +163,25 @@ export interface KeycloakServiceProps {
 
 export class KeycloakService extends Construct {
   /** ECR repository for Keycloak container images */
-  public readonly ecrRepo: ecr.Repository;
+  public readonly ecrRepo?: ecr.Repository;
 
   /** ECS cluster running Keycloak */
-  public readonly ecsCluster: ecs.Cluster;
+  public readonly ecsCluster?: ecs.Cluster;
 
   /** Security group attached to Keycloak ECS tasks */
-  public readonly ecsSg: ec2.SecurityGroup;
+  public readonly ecsSg?: ec2.SecurityGroup;
 
   /** Security group attached to the Keycloak ALB */
-  public readonly albSg: ec2.SecurityGroup;
+  public readonly albSg?: ec2.SecurityGroup;
 
   /** Application Load Balancer fronting Keycloak */
-  public readonly alb: elbv2.ApplicationLoadBalancer;
+  public readonly alb?: elbv2.ApplicationLoadBalancer;
 
   /** Resolved Keycloak domain name */
-  public readonly keycloakDomain: string;
+  public readonly keycloakDomain?: string;
 
   /** Full HTTPS URL for Keycloak */
-  public readonly keycloakUrl: string;
+  public readonly keycloakUrl?: string;
 
   constructor(scope: Construct, id: string, props: KeycloakServiceProps) {
     super(scope, id);
@@ -189,6 +189,19 @@ export class KeycloakService extends Construct {
     const {
       config, vpc, privateSubnets, publicSubnets, natPublicIps, keycloakDbSg, rdsKmsKey, keycloakDbSecretArn,
     } = props;
+
+    // ------------------------------------------------------------------
+    // SSM Parameters (SecureString - Keycloak admin credentials)
+    // SecureString uses an SDK custom resource because CFN lacks native support.
+    // The database SSM parameters are created by the data stack.
+    // ------------------------------------------------------------------
+
+    putSecureSsmParam(this, 'SsmKeycloakAdmin', '/keycloak/admin', config.keycloak.adminUser, rdsKmsKey);
+    putSecureSsmParam(this, 'SsmKeycloakAdminPassword', '/keycloak/admin_password', config.keycloak.adminPassword, rdsKmsKey);
+
+    // Keep bootstrap credentials at their existing resource paths when the
+    // provider changes. Aurora and its credentials remain in Registry-Data.
+    if (resolveAuthProvider(config) !== 'keycloak') return;
 
     // Import the DB secret by ARN to avoid cross-stack cyclic dependency
     const keycloakDbSecret = secretsmanager.Secret.fromSecretCompleteArn(this, 'ImportedDbSecret', keycloakDbSecretArn);
@@ -298,15 +311,6 @@ export class KeycloakService extends Construct {
       retention: logs.RetentionDays.ONE_WEEK,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
-
-    // ------------------------------------------------------------------
-    // SSM Parameters (SecureString - Keycloak admin credentials)
-    // Note: CfnParameter is used because CDK L2 does not support SecureString
-    // The database SSM parameters are created by the data stack.
-    // ------------------------------------------------------------------
-
-    putSecureSsmParam(this, 'SsmKeycloakAdmin', '/keycloak/admin', config.keycloak.adminUser, rdsKmsKey);
-    putSecureSsmParam(this, 'SsmKeycloakAdminPassword', '/keycloak/admin_password', config.keycloak.adminPassword, rdsKmsKey);
 
     // Build ARNs for Keycloak SSM parameters (admin creds + DB URL)
     // DB username/password now come from Secrets Manager (rotation-safe)

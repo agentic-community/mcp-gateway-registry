@@ -79,13 +79,6 @@ variable "keycloak_admin_cidr_blocks" {
   EOT
   type        = list(string)
   default     = null
-
-  validation {
-    condition = var.keycloak_admin_cidr_blocks == null ? true : alltrue([
-      for cidr in var.keycloak_admin_cidr_blocks : can(cidrhost(cidr, 0))
-    ])
-    error_message = "keycloak_admin_cidr_blocks entries must be CIDR blocks such as 203.0.113.10/32."
-  }
 }
 
 variable "auth_server_url" {

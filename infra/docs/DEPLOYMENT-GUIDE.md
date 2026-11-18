@@ -29,6 +29,19 @@ a custom image. The ECS task supplies database and hostname settings at startup.
 It uses `KC_BOOTSTRAP_ADMIN_USERNAME` and `KC_BOOTSTRAP_ADMIN_PASSWORD` for initial
 administrator creation, and `KC_LOG_LEVEL` for logging.
 
+CDK selects PingFederate, then Auth0, Okta, Entra, Cognito and Keycloak from the existing provider settings, matching Terraform's precedence.
+When another provider wins, CDK omits Keycloak ECS, ALB listeners and rules, CloudFront, DNS and certificates.
+Registry and auth-server receive `KEYCLOAK_ENABLED=false`, blank Keycloak URLs and no Keycloak secrets.
+Inactive Keycloak HTTPS and admin-CIDR settings do not block synth.
+
+Provider changes keep Aurora, its proxy and rotation, bootstrap SSM parameters,
+and application credentials at their existing resource addresses. Keep supplying
+the Keycloak admin and database passwords because those retained resources still
+use them. Post-deploy setup skips Keycloak for other providers; `validate.sh`
+checks infrastructure and skips Keycloak login and authenticated CRUD checks.
+
+For an existing Keycloak deployment, remove cross-stack consumers before their producers. Under the new provider configuration, deploy `Registry-Service` with `--exclusively`, then `Registry-Auth` with `--exclusively`, then all stacks. The first step releases the service stack's imports from Auth; the second releases Auth's NAT-IP imports from Network. Inspect the synthesized diff first. A single dependency-ordered deployment can fail because CloudFormation cannot delete an export that a deployed consumer still imports.
+
 ## Service URLs
 
 After deploy, run `./scripts/deploy.sh --endpoints` (reads `cdk-outputs.json`).

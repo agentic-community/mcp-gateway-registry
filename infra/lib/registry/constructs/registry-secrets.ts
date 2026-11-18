@@ -10,7 +10,7 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { Construct } from 'constructs';
-import { RegistryConfig } from '../registry-config';
+import { RegistryConfig, resolveAuthProvider } from '../registry-config';
 
 export interface RegistrySecretsProps {
   readonly config: RegistryConfig;
@@ -128,6 +128,8 @@ export class RegistrySecrets extends Construct {
       generateString: { passwordLength: 64, excludePunctuation: true },
     });
 
+    // Preserve stored credentials across provider changes, without granting
+    // inactive Keycloak secrets to application tasks.
     this.keycloakClientSecret = _createSecret(this, 'KeycloakClientSecret', {
       fixedName: 'mcp-gateway-keycloak-client-secret',
       description: 'Keycloak web client secret (updated by init-keycloak.sh)',
@@ -274,11 +276,15 @@ export class RegistrySecrets extends Construct {
     const arns: string[] = [
       this.secretKey.secretArn,
       this.nginxMarkerSecret.secretArn,
-      this.keycloakClientSecret.secretArn,
-      this.keycloakM2mClientSecret.secretArn,
-      this.keycloakAdminPassword.secretArn,
       this.embeddingsApiKey.secretArn,
     ];
+    if (resolveAuthProvider(config) === 'keycloak') {
+      arns.push(
+        this.keycloakClientSecret.secretArn,
+        this.keycloakM2mClientSecret.secretArn,
+        this.keycloakAdminPassword.secretArn,
+      );
+    }
     if (props.documentDbSecretArn) arns.push(props.documentDbSecretArn);
     for (const s of [
       this.entraClientSecret, this.oktaClientSecret, this.oktaM2mClientSecret,

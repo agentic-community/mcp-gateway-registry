@@ -71,6 +71,121 @@ tests:
                 port:
                   name: http
 
+  - it: omits inactive Keycloak paths on primary and alias hosts
+    templates: &registryIngress
+      - charts/registry/templates/ingress.yaml
+    set:
+      global.domain: example.com
+      global.ingress.routingMode: path
+      global.ingress.additionalHostnames:
+        - alias.example.com
+      global.authProvider.type: okta
+      global.authProvider.keycloak.externalUrl: https://example.com/unused-identity
+    asserts: &noKeycloakPaths
+      - equal:
+          path: spec.rules[0].http.paths
+          value:
+            - path: /registry
+              pathType: Prefix
+              backend:
+                service:
+                  name: registry
+                  port:
+                    name: http
+            - path: /oauth2
+              pathType: Prefix
+              backend:
+                service:
+                  name: registry
+                  port:
+                    name: http
+      - equal:
+          path: spec.rules[1].http.paths
+          value:
+            - path: /registry
+              pathType: Prefix
+              backend:
+                service:
+                  name: registry
+                  port:
+                    name: http
+            - path: /oauth2
+              pathType: Prefix
+              backend:
+                service:
+                  name: registry
+                  port:
+                    name: http
+
+  - it: omits inactive Keycloak paths with Entra
+    templates: *registryIngress
+    set:
+      global.domain: example.com
+      global.ingress.routingMode: path
+      global.ingress.additionalHostnames: [alias.example.com]
+      global.authProvider.type: entra
+    asserts: *noKeycloakPaths
+
+  - it: omits inactive Keycloak paths with Auth0
+    templates: *registryIngress
+    set:
+      global.domain: example.com
+      global.ingress.routingMode: path
+      global.ingress.additionalHostnames: [alias.example.com]
+      global.authProvider.type: auth0
+    asserts: *noKeycloakPaths
+
+  - it: omits inactive Keycloak paths with Cognito
+    templates: *registryIngress
+    set:
+      global.domain: example.com
+      global.ingress.routingMode: path
+      global.ingress.additionalHostnames: [alias.example.com]
+      global.authProvider.type: cognito
+    asserts: *noKeycloakPaths
+
+  - it: omits inactive Keycloak paths with PingFederate
+    templates: *registryIngress
+    set:
+      global.domain: example.com
+      global.ingress.routingMode: path
+      global.ingress.additionalHostnames: [alias.example.com]
+      global.authProvider.type: pingfederate
+    asserts: *noKeycloakPaths
+
+  - it: retains required paths when the selected provider uses external Keycloak
+    templates: *registryIngress
+    set:
+      keycloak.create: false
+      global.domain: example.com
+      global.ingress.routingMode: path
+      global.authProvider.type: keycloak
+      global.authProvider.keycloak.externalUrl: https://example.com/identity
+    asserts:
+      - equal:
+          path: spec.rules[0].http.paths[2].path
+          value: /keycloak
+      - equal:
+          path: spec.rules[0].http.paths[5].path
+          value: /identity
+
+  - it: retains external Keycloak routing when an empty provider uses the default
+    templates: *registryIngress
+    set:
+      keycloak.create: false
+      global.domain: example.com
+      global.ingress.routingMode: path
+      global.ingress.additionalHostnames: [alias.example.com]
+      global.authProvider.type: ""
+      global.authProvider.keycloak.externalUrl: https://example.com/identity
+    asserts:
+      - equal:
+          path: spec.rules[0].http.paths[2].path
+          value: /keycloak
+      - equal:
+          path: spec.rules[1].http.paths[5].path
+          value: /identity
+
   - it: uses an HTTP listener without an HTTPS redirect when TLS is disabled
     templates:
       - charts/registry/templates/ingress.yaml

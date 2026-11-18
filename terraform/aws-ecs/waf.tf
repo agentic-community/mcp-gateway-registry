@@ -275,7 +275,7 @@ resource "aws_wafv2_web_acl_logging_configuration" "mcp_gateway" {
 
 # WAFv2 Web ACL for Keycloak ALB
 resource "aws_wafv2_web_acl" "keycloak" {
-  count = var.enable_waf ? 1 : 0
+  count = local.keycloak_selected && var.enable_waf ? 1 : 0
 
   name  = "${var.name}-keycloak-waf"
   scope = "REGIONAL"
@@ -484,9 +484,9 @@ resource "aws_wafv2_web_acl" "keycloak" {
 
 # Associate WAF with Keycloak ALB
 resource "aws_wafv2_web_acl_association" "keycloak" {
-  count = var.enable_waf ? 1 : 0
+  count = local.keycloak_selected && var.enable_waf ? 1 : 0
 
-  resource_arn = aws_lb.keycloak.arn
+  resource_arn = aws_lb.keycloak[0].arn
   web_acl_arn  = aws_wafv2_web_acl.keycloak[0].arn
 }
 
@@ -510,7 +510,7 @@ resource "aws_cloudwatch_log_group" "waf_keycloak" {
 
 # WAF Logging Configuration for Keycloak
 resource "aws_wafv2_web_acl_logging_configuration" "keycloak" {
-  count = var.enable_waf ? 1 : 0
+  count = local.keycloak_selected && var.enable_waf ? 1 : 0
 
   resource_arn            = aws_wafv2_web_acl.keycloak[0].arn
   log_destination_configs = [aws_cloudwatch_log_group.waf_keycloak[0].arn]
@@ -533,5 +533,5 @@ output "mcp_gateway_waf_arn" {
 
 output "keycloak_waf_arn" {
   description = "ARN of WAF Web ACL for Keycloak"
-  value       = var.enable_waf ? aws_wafv2_web_acl.keycloak[0].arn : ""
+  value       = local.keycloak_selected && var.enable_waf ? aws_wafv2_web_acl.keycloak[0].arn : ""
 }

@@ -69,9 +69,9 @@ module "mcp_gateway" {
   # Keycloak configuration
   # Mode 1: CloudFront-only - use CloudFront domain
   # Mode 2 & 3: Custom domain (Route53 enabled) - use custom domain
-  keycloak_domain = var.enable_route53_dns ? local.keycloak_domain : (
+  keycloak_domain = local.keycloak_selected ? (var.enable_route53_dns ? local.keycloak_domain : (
     var.enable_cloudfront ? aws_cloudfront_distribution.keycloak[0].domain_name : local.keycloak_domain
-  )
+  )) : ""
 
   # CloudFront configuration - allows CloudFront IPs to reach ALB
   enable_cloudfront           = var.enable_cloudfront
