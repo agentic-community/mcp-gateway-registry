@@ -58,6 +58,7 @@ from ..utils.url_guard import (
     validate_url as _validate_url_guard,
 )
 from ..utils.url_utils import (
+    GIT_COMMIT_SHA_PATTERN,
     extract_repository_url,
     translate_skill_url,
 )
@@ -246,6 +247,8 @@ _LANG_BY_EXT: dict[str, str] = {
 # enterprise GitHub instances mirror the public path layout.
 _BLOB_PATH_PATTERN = re.compile(r"^/([^/]+)/([^/]+)/blob/([^/]+)/(.+)$")
 _RAW_PATH_PATTERN = re.compile(r"^/([^/]+)/([^/]+)/refs/heads/([^/]+)/(.+)$")
+# A raw URL pinned to a commit has the SHA where refs/heads/{branch} would be.
+_RAW_COMMIT_PATH_PATTERN = re.compile(rf"^/([^/]+)/([^/]+)/({GIT_COMMIT_SHA_PATTERN})/(.+)$")
 
 
 def _api_base_for_skill_host(
@@ -281,7 +284,8 @@ def _resolve_tree_api(
     """Resolve the GitHub/GHES Trees API endpoint for a SKILL.md URL.
 
     Parses both blob-style URLs (``github.com/{owner}/{repo}/blob/{ref}/...``)
-    and raw-content URLs (``raw.githubusercontent.com/{owner}/{repo}/refs/heads/{ref}/...``),
+    and raw-content URLs (``raw.githubusercontent.com/{owner}/{repo}/refs/heads/{ref}/...``,
+    or ``.../{owner}/{repo}/{commit sha}/...`` for a URL pinned to a commit),
     plus the corresponding GHES variants.
 
     Returns:
@@ -292,7 +296,7 @@ def _resolve_tree_api(
         - ``encoded_project``: ``{owner}/{repo}`` (kept for backward compat
           with the documented contract; GitHub's API uses owner+repo
           separately so callers can ignore this).
-        - ``ref``: branch name resolved from the SKILL.md URL.
+        - ``ref``: branch name or commit SHA resolved from the SKILL.md URL.
         - ``skill_dir``: directory portion of the path leading up to
           ``SKILL.md`` (``""`` when SKILL.md is at the repo root).
     """
@@ -313,7 +317,11 @@ def _resolve_tree_api(
     if not hostname:
         return None
 
-    match = _BLOB_PATH_PATTERN.match(parsed.path) or _RAW_PATH_PATTERN.match(parsed.path)
+    match = (
+        _BLOB_PATH_PATTERN.match(parsed.path)
+        or _RAW_PATH_PATTERN.match(parsed.path)
+        or _RAW_COMMIT_PATH_PATTERN.match(parsed.path)
+    )
     if not match:
         return None
 

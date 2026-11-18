@@ -9,7 +9,13 @@ and its ImportError fall-through.
 import sys
 from unittest.mock import patch
 
-from registry.utils.url_utils import derive_resource_url, extract_repository_url
+from registry.utils.url_utils import (
+    derive_resource_url,
+    extract_repository_url,
+    translate_skill_url,
+)
+
+COMMIT_SHA = "079cb9e4a37af120f8e2bc5d12ed89286f2a4af6"
 
 
 class TestExtractRepositoryUrl:
@@ -145,3 +151,47 @@ class TestDeriveResourceUrl:
             result = derive_resource_url(skill_md_url, "asset.png")
 
         assert result == ("https://raw.githubusercontent.com/o/r/refs/heads/main/asset.png")
+
+
+class TestTranslateSkillUrl:
+    """Blob-to-raw translation for branch and commit-pinned GitHub URLs."""
+
+    def test_branch_blob_url_keeps_refs_heads_form(self):
+        """A branch URL keeps the refs/heads form, so stored raw URLs do not change."""
+        url = "https://github.com/o/r/blob/main/skills/x/SKILL.md"
+
+        _, raw_url = translate_skill_url(url)
+
+        assert raw_url == "https://raw.githubusercontent.com/o/r/refs/heads/main/skills/x/SKILL.md"
+
+    def test_commit_blob_url_uses_bare_sha(self):
+        """A commit permalink must not become refs/heads/{sha}, which GitHub 404s."""
+        url = f"https://github.com/o/r/blob/{COMMIT_SHA}/skills/x/SKILL.md"
+
+        _, raw_url = translate_skill_url(url)
+
+        assert raw_url == f"https://raw.githubusercontent.com/o/r/{COMMIT_SHA}/skills/x/SKILL.md"
+
+    def test_enterprise_commit_blob_url_uses_bare_sha(self):
+        """GHES permalinks follow the same rule as public GitHub."""
+        url = f"https://github.example.com/o/r/blob/{COMMIT_SHA}/SKILL.md"
+
+        _, raw_url = translate_skill_url(url)
+
+        assert raw_url == f"https://raw.github.example.com/o/r/{COMMIT_SHA}/SKILL.md"
+
+    def test_short_hex_ref_is_treated_as_branch(self):
+        """Only a full 40-character SHA counts as a commit; a short one may be a branch."""
+        url = "https://github.com/o/r/blob/079cb9e/SKILL.md"
+
+        _, raw_url = translate_skill_url(url)
+
+        assert raw_url == "https://raw.githubusercontent.com/o/r/refs/heads/079cb9e/SKILL.md"
+
+    def test_commit_raw_url_is_kept_as_is(self):
+        """A raw URL already pinned to a commit needs no translation."""
+        url = f"https://raw.githubusercontent.com/o/r/{COMMIT_SHA}/SKILL.md"
+
+        _, raw_url = translate_skill_url(url)
+
+        assert raw_url == url
