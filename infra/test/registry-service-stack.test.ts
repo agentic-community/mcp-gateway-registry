@@ -489,6 +489,92 @@ describe('no secret value reaches the synthesized template', () => {
   });
 });
 
+describe('operator credentials reach containers as secrets (issue #2063)', () => {
+  const SHARED = [
+    'AUTH0_MANAGEMENT_API_TOKEN',
+    'REGISTRY_API_TOKEN',
+    'FEDERATION_STATIC_TOKEN',
+    'FEDERATION_ENCRYPTION_KEY',
+    'ANS_API_KEY',
+    'ANS_API_SECRET',
+  ];
+  const REGISTRY_ONLY = ['GITHUB_PAT', 'GITHUB_APP_PRIVATE_KEY'];
+  const ALL = [...SHARED, ...REGISTRY_ONLY];
+  const CANARY = 'canary-credential-value-0123456789';  // pragma: allowlist secret
+
+  function _configWithAllCredentials() {
+    const config = testConfig();
+    config.auth0 = { ...config.auth0, managementApiToken: CANARY };
+    config.staticTokenAuth = { ...config.staticTokenAuth, registryApiToken: CANARY };
+    config.federation = { ...config.federation, staticToken: CANARY, encryptionKey: CANARY };
+    config.ans = { ...config.ans, apiKey: CANARY, apiSecret: CANARY };
+    config.github = { ...config.github, pat: CANARY, appPrivateKey: CANARY };
+    return config;
+  }
+
+  let template: Template;
+
+  beforeAll(() => {
+    template = buildStacks(_configWithAllCredentials()).template;
+  });
+
+  it('puts no credential in any container environment', () => {
+    for (const def of Object.values(containers(template))) {
+      const env = envOf(def);
+      for (const name of ALL) {
+        expect(env).not.toHaveProperty(name);
+      }
+      expect(JSON.stringify(def.Environment ?? [])).not.toContain(CANARY);
+    }
+  });
+
+  it('injects the shared credentials into both services', () => {
+    for (const service of ['registry', 'auth-server']) {
+      const secrets = secretsOf(container(template, service));
+      for (const name of SHARED) {
+        expect(secrets).toHaveProperty(name);
+      }
+    }
+  });
+
+  it('injects the GitHub credentials into the registry only', () => {
+    const registry = secretsOf(container(template, 'registry'));
+    const auth = secretsOf(container(template, 'auth-server'));
+    for (const name of REGISTRY_ONLY) {
+      expect(registry).toHaveProperty(name);
+      expect(auth).not.toHaveProperty(name);
+    }
+  });
+
+  it('denies the auth-server execution role the GitHub credentials', () => {
+    const registry = secretsOf(container(template, 'registry'));
+    const githubIds = REGISTRY_ONLY.map(
+      (name) => secretIdentity(JSON.parse(String(registry[name]))),
+    );
+    for (const [logicalId, policy] of Object.entries(
+      template.findResources('AWS::IAM::Policy'),
+    )) {
+      if (!logicalId.toLowerCase().includes('auth')) continue;
+      const serialized = JSON.stringify(policy);
+      for (const id of githubIds) {
+        expect(serialized).not.toContain(id.replace(/^Ref:/, ''));
+      }
+    }
+  });
+
+  it('creates no secret and injects nothing when a credential is unset', () => {
+    const { template: unset } = buildStacks(testConfig());
+    for (const service of ['registry', 'auth-server']) {
+      const def = container(unset, service);
+      for (const name of ALL) {
+        expect(secretsOf(def)).not.toHaveProperty(name);
+        expect(envOf(def)).not.toHaveProperty(name);
+      }
+    }
+    expect(emptySecretStrings(unset)).toEqual([]);
+  });
+});
+
 describe('mcpgw', () => {
   it('knows the registry external URL', () => {
     const { template, serviceStack } = buildStacks(testConfig());

@@ -46,15 +46,11 @@ its ARN (`cognito.clientSecretArn`, `pingfederate.clientSecretArn`,
 imports it, so no secret value passes through synthesis. Use this for anything
 new.
 
-**By value, legacy.** The remaining secrets come from `CDK_*` environment
-variables (see `SECRET_ENV_PATHS`) and are written into the template's
-`SecretString`. That means the value sits in plaintext in `cdk.out` and in the
-deployed CloudFormation stack, readable by anyone with
-`cloudformation:GetTemplate`. It affects the Keycloak admin password, the
-embeddings API key, all three Okta secrets, both Auth0 secrets, the Entra
-client secret and the Grafana admin password. Treat `cdk.out` as secret-bearing
-until those move to ARN references. Terraform has the same exposure through
-`terraform.tfstate`.
+**By value, legacy.** The remaining secrets come from `CDK_*` environment variables (see `SECRET_ENV_PATHS`). CDK creates a Secrets Manager secret from each value and writes the value into the template's `SecretString`. That means the value sits in plaintext in `cdk.out` and in the deployed CloudFormation stack, readable by anyone with `cloudformation:GetTemplate`. It affects the Keycloak admin password, the embeddings API key, all three Okta secrets, both Auth0 secrets, the Entra client secret, the Grafana admin password, the OTLP exporter headers, and the eight container credentials listed below. Treat `cdk.out` as secret-bearing until those move to ARN references. Terraform has the same exposure through `terraform.tfstate`.
+
+Every secret reaches its container through the task definition's `secrets` block, so the task definition carries only the ARN. That includes `AUTH0_MANAGEMENT_API_TOKEN`, `REGISTRY_API_TOKEN`, `FEDERATION_STATIC_TOKEN`, `FEDERATION_ENCRYPTION_KEY`, `ANS_API_KEY` and `ANS_API_SECRET` (registry and auth-server), and `GITHUB_PAT` and `GITHUB_APP_PRIVATE_KEY` (registry only). Those eight were plain environment values until [#2063](https://github.com/agentic-community/mcp-gateway-registry/issues/2063), which stored them in the task definition. A credential left unset creates no secret and injects nothing.
+
+When you upgrade a stack deployed before that change, the new task definition revision holds only ARNs, but the earlier revisions still hold the values and stay readable through `ecs:DescribeTaskDefinition`. Deregister and delete the earlier registry and auth-server revisions, then rotate any of the eight credentials you had set.
 
 If a secret you reference by ARN is encrypted with a customer-managed KMS key,
 grant the ECS task execution role `kms:Decrypt` on that key. CDK cannot
