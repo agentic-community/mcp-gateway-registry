@@ -297,6 +297,8 @@ keycloak:
   # Keep httpRelativePath=/ for the bundled gateway. Proxy headers use
   # KC_PROXY_HEADERS=xforwarded. The separate sslInit Job replaces postStart.
   postgres:
+    # Target role/database names, not passwords. Set custom names here once.
+    # Restore/existing overlays must not replace these reviewed values.
     database: keycloak
     username: keycloak
     # Choose explicitly, then retain the mode on normal upgrades. Restore

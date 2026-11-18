@@ -65,8 +65,9 @@ postgres:
     # dump/restore. Bump deliberately.
     tag: "17.12"
     pullPolicy: IfNotPresent
-  # Keycloak's own role and database. The role is created without superuser,
-  # CREATEDB or CREATEROLE and owns only this database.
+  # Configurable target names; 1-63 ASCII letters/digits/_/-, first letter or _.
+  # Preserve them on retained storage: changing values does not rename a role/DB.
+  # The role owns this database and has no superuser, CREATEDB or CREATEROLE grants.
   database: keycloak
   username: keycloak
   existingSecret: "" # defaults to {{ .Release.Name }}-keycloak-postgresql

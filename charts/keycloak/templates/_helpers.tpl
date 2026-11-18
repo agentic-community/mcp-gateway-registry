@@ -134,8 +134,20 @@ true
 {{- $_ := set $seen .name true -}}
 {{- end -}}
 {{- $bootstrap := .Values.postgres.bootstrap -}}
-{{- if eq .Values.postgres.username "postgres" -}}
-{{- fail "keycloak.postgres.username must be a dedicated non-superuser role, not postgres" -}}
+{{- range $field := list "username" "database" -}}
+{{- $name := index $.Values.postgres $field -}}
+{{- if not (kindIs "string" $name) -}}
+{{- fail (printf "keycloak.postgres.%s must be a string" $field) -}}
+{{- end -}}
+{{- if not (regexMatch "^[A-Za-z_][A-Za-z0-9_-]{0,62}$" $name) -}}
+{{- fail (printf "keycloak.postgres.%s must be 1-63 ASCII letters, digits, underscores or hyphens, starting with a letter or underscore" $field) -}}
+{{- end -}}
+{{- end -}}
+{{- if or (has (lower .Values.postgres.username) (list "postgres" "public")) (hasPrefix "pg_" (lower .Values.postgres.username)) -}}
+{{- fail "keycloak.postgres.username must be a dedicated non-superuser role, not postgres, public or a pg_-prefixed role" -}}
+{{- end -}}
+{{- if has (lower .Values.postgres.database) (list "postgres" "template0" "template1") -}}
+{{- fail "keycloak.postgres.database must be a dedicated database, not postgres, template0 or template1" -}}
 {{- end -}}
 {{- if semverCompare "<26.8.2" .Values.image.tag -}}
 {{- fail "the bundled Keycloak chart requires version 26.8.2 or newer" -}}

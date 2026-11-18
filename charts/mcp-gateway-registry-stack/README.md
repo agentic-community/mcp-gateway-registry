@@ -61,6 +61,8 @@ Choose `keycloak.postgres.bootstrap.mode` before installing the bundled Keycloak
 Use `fresh-install` only for a new database. Existing deployments must follow
 [Keycloak database cutover](#keycloak-database-cutover).
 
+Set `keycloak.postgres.username` and `keycloak.postgres.database` in your reviewed base values to choose the dedicated PostgreSQL role and database. Both default to `keycloak`; they need not match. See the cutover section for name rules and checks that keep these values unchanged after initialization.
+
 ### Authentication Provider Selection
 
 This chart supports five authentication providers: Keycloak (default), Microsoft Entra ID, Okta, Auth0, and AWS Cognito.
@@ -874,7 +876,7 @@ The chart uses Keycloak 26.8.2 and PostgreSQL 17.12. PostgreSQL restores through
 
 ### 1. Identify the source and save the release configuration
 
-Run from the repository root in Bash. Install `helm`, `kubectl`, `jq`, and `envsubst` locally. Use the same shell throughout so the variables remain available. All names below are examples; verify them against your namespace before proceeding.
+Run from the repository root in Bash. Install `helm`, `kubectl`, `jq`, `envsubst`, and Mike Farah's `yq` v4 locally. Helm must support `--dry-run=server` for the read-only renders below. Use the same shell throughout so the variables remain available. All names below are examples; verify them against your namespace before proceeding.
 
 ```bash
 set -euo pipefail
@@ -930,6 +932,8 @@ export OLD_REVISION="$(h history "$RELEASE" -o json | jq -r 'map(select(.status 
 export OLD_KEYCLOAK_REPLICAS="$(k get "$OLD_KEYCLOAK_WORKLOAD" -o jsonpath='{.spec.replicas}')"
 export SOURCE_PV="$(k get pvc "$SOURCE_DATA_PVC" -o jsonpath='{.spec.volumeName}')"
 ```
+
+`PGUSER` and `PGDATABASE` select the source backup connection. They do not choose the target role or database. Set those names once in the reviewed base values in step 3; the source and target names may differ.
 
 Use a PostgreSQL client compatible with the source version. These commands use 17.12 and must not run against a newer PostgreSQL major version. Keep `PGSSLMODE=require` for a TLS-enabled source; use `verify-full` with your mounted CA for certificate verification. If the source has no TLS, explicitly set `PGSSLMODE=disable` only for its trusted private cluster connection. Confirm that the chosen storage class supports the backup pod's UID/GID 999 and can provision enough space for the archive. A zonal RWO snapshot PVC can constrain where the new PostgreSQL pod runs; ensure its target data volume can attach in the same zone.
 
@@ -1090,9 +1094,22 @@ Create `upgrade-values.yaml` in the private backup directory from your deploymen
 
 For a normal Helm upgrade, leave existing chart-managed Secret references managed by the chart so `lookup` preserves their values. Set `global.generateSecrets=false` to refuse accidental generation. Do not change a chart-managed Secret to `existingSecret` with the same name without reviewing Helm ownership: omitting it from the new manifest can make Helm delete it. Follow the existing-Secret adoption guidance above when migrating an older Job-created client Secret.
 
-In the reviewed values, keep the existing Keycloak administrator username and password. Set `keycloak.postgres.username=keycloak` and `keycloak.postgres.database=keycloak` for the restored target. The bootstrap creates that role without superuser privileges, even when the source used a superuser named `keycloak`. The source's database owner does not need to match the target owner because the archive excludes ownership and ACLs.
+Keep the existing Keycloak administrator username and password in the reviewed values. Choose `keycloak.postgres.username` and `keycloak.postgres.database` once in `upgrade-values.yaml`. Both default to `keycloak`; they can differ from each other. For example, this fragment uses fictional target identities:
 
-Create the restore overlay and inspect a server-side dry run. The dry run includes Secret manifests, so save it privately.
+```yaml
+keycloak:
+  postgres:
+    username: "sso_runtime"
+    database: "sso_catalog"
+```
+
+Each name must be a string of 1-63 ASCII characters matching `[A-Za-z_][A-Za-z0-9_-]*`. The chart preserves case and exact spelling. It rejects roles `postgres` and `public` and any `pg_` role prefix, plus databases `postgres`, `template0`, and `template1`, regardless of case. Passwords still use the existing Secret references. Bootstrap creates the chosen role without superuser privileges. The source owner can differ because the archive excludes ownership and ACLs.
+
+Keep both names out of the restore and existing overlays. Once the target database initializes, changing values does not rename its role or database. Keep the chosen names fixed across the transition to `existing` and later upgrades. If reviewed values differ from the names on retained target data, stop and plan a migration.
+
+New database initialization records the chosen names in `.keycloak-bootstrap-identity` inside the data directory. Retries must keep those names. An interrupted staging directory from an older chart that lacks this identity marker requires offline inspection/recovery; do not guess its owner or write a marker to force startup. Completed older volumes remain compatible when the configured database exists and belongs to the configured nonprivileged LOGIN role. A successful bootstrap receipt alone does not permit changing names.
+
+Create the restore overlay, render the merged values, and inspect a server-side dry run. Store both outputs in the private backup directory because they can include Secrets. The render reads the cluster so Helm can preserve chart-managed Secrets through `lookup`.
 
 ```bash
 export VALUES="$BACKUP_DIR/upgrade-values.yaml"
@@ -1102,8 +1119,6 @@ global:
   generateSecrets: false
 keycloak:
   postgres:
-    username: keycloak
-    database: keycloak
     bootstrap:
       mode: restore
       existingClaim: "$SNAPSHOT_PVC"
@@ -1112,9 +1127,30 @@ keycloak:
       existingVerified: false
 YAML
 helm dependency build "$CHART"
+render_target_names() {
+  h template "$RELEASE" "$CHART" -f "$VALUES" -f "$1" \
+    --is-upgrade --dry-run=server > "$2"
+  yq eval-all -o=json '.' "$2" | jq -s -S -e --arg sts "$TARGET_PG_STS" '
+    [.[] | select(.kind == "StatefulSet" and .metadata.name == $sts)
+      | .spec.template.spec.containers[] | select(.name == "postgresql")
+      | .env | map(select(.name == "KEYCLOAK_DB_USER" or .name == "KEYCLOAK_DB_NAME")
+        | {key: .name, value: .value}) | from_entries]
+    | if length == 1 then .[0] else error("Expected one target PostgreSQL container") end
+    | if (.KEYCLOAK_DB_USER | type) == "string" and (.KEYCLOAK_DB_NAME | type) == "string"
+        and (.KEYCLOAK_DB_USER | length) > 0 and (.KEYCLOAK_DB_NAME | length) > 0
+      then . else error("Missing target database names") end
+  '
+}
+render_target_names "$BACKUP_DIR/restore-values.yaml" "$BACKUP_DIR/restore-rendered.yaml" \
+  > "$BACKUP_DIR/target-names.json"
+export TARGET_DB_USER="$(jq -er '.KEYCLOAK_DB_USER' "$BACKUP_DIR/target-names.json")"
+export TARGET_DB_NAME="$(jq -er '.KEYCLOAK_DB_NAME' "$BACKUP_DIR/target-names.json")"
+printf 'Target role: %s\nTarget database: %s\n' "$TARGET_DB_USER" "$TARGET_DB_NAME"
 h upgrade "$RELEASE" "$CHART" -f "$VALUES" -f "$BACKUP_DIR/restore-values.yaml" \
   --dry-run=server > "$BACKUP_DIR/restore-dry-run.txt"
 ```
+
+Confirm these rendered names match the reviewed base values before preparing target storage. Keep `target-names.json` and the two exported names unchanged for the rest of the procedure. Do not reset them to accept a later mismatch.
 
 Choose a timeout long enough for your archive and Keycloak schema update. The PostgreSQL startup-probe allowance defaults to 24 hours; a shorter Helm timeout can report failure while the pod continues working. Inspect progress before retrying. Do not add `--atomic`: automatic manifest rollback after a database migration can start an old Keycloak image against a changed schema. Keep rollback under operator control.
 
@@ -1207,6 +1243,9 @@ Do not use `helm upgrade --force` to replace storage resources. Never delete a p
 After completing the storage preparation and reviewing the server-side dry run, run the upgrade with the same values and snapshot:
 
 ```bash
+render_target_names "$BACKUP_DIR/restore-values.yaml" "$BACKUP_DIR/restore-final-rendered.yaml" \
+  > "$BACKUP_DIR/restore-final-names.json"
+diff -u "$BACKUP_DIR/target-names.json" "$BACKUP_DIR/restore-final-names.json"
 h upgrade "$RELEASE" "$CHART" -f "$VALUES" -f "$BACKUP_DIR/restore-values.yaml" \
   --wait --timeout 30m > "$BACKUP_DIR/restore-upgrade.log" 2>&1
 ```
@@ -1223,18 +1262,30 @@ k wait --for=condition=complete job/setup-keycloak --timeout=10m
 k logs "$TARGET_PG_POD" --tail=100
 k logs "job/${RELEASE}-keycloak-admin-init" --tail=50
 k logs job/setup-keycloak --tail=100
-k exec -i "$TARGET_PG_POD" -- psql -X -U postgres -d keycloak -At -v ON_ERROR_STOP=1 \
-  < "$BACKUP_DIR/counts.sql" > "$BACKUP_DIR/restored-counts.txt"
+k exec "$TARGET_PG_POD" -- sh -ec '
+  test "$KEYCLOAK_DB_USER" = "$1"
+  test "$KEYCLOAK_DB_NAME" = "$2"
+' sh "$TARGET_DB_USER" "$TARGET_DB_NAME"
+k exec -i "$TARGET_PG_POD" -- sh -ec '
+  exec psql -X -U postgres -d "$KEYCLOAK_DB_NAME" -At -v ON_ERROR_STOP=1
+' < "$BACKUP_DIR/counts.sql" > "$BACKUP_DIR/restored-counts.txt"
 diff -u "$BACKUP_DIR/source-counts.txt" "$BACKUP_DIR/restored-counts.txt"
-k exec "$TARGET_PG_POD" -- psql -X -U postgres -d keycloak -At -v ON_ERROR_STOP=1 -c \
-  "SELECT rolname, rolsuper, rolcreatedb, rolcreaterole, rolreplication FROM pg_roles WHERE rolname = 'keycloak'; SELECT intent FROM _mcp_bootstrap.receipt;"
+cat > "$BACKUP_DIR/role-receipt.sql" <<'SQL'
+SELECT rolname, rolsuper, rolcreatedb, rolcreaterole, rolreplication
+FROM pg_roles WHERE rolname = :'target_role';
+SELECT intent FROM _mcp_bootstrap.receipt;
+SQL
+k exec -i "$TARGET_PG_POD" -- sh -ec '
+  exec psql -X -U postgres -d "$KEYCLOAK_DB_NAME" -At -v ON_ERROR_STOP=1 \
+    -v target_role="$KEYCLOAK_DB_USER"
+' < "$BACKUP_DIR/role-receipt.sql"
 k exec "$TARGET_PG_POD" -- sh -ec '
   test ! -e /var/lib/postgresql/data/.keycloak-bootstrap-pending
   cat "$PGDATA/.keycloak-bootstrap-complete"
 '
 ```
 
-All four role flags must be `f`. The database and filesystem receipts must contain `restore:` followed by `SNAPSHOT_SHA`. Investigate every count difference using the saved baseline and setup logs; expected additions are not proof that all original records survived. Check important realm, user and client identities, group memberships and existing client secrets.
+The role query must return the chosen `TARGET_DB_USER` with all four flags `f`. The database and filesystem receipts must contain `restore:` followed by `SNAPSHOT_SHA`. Investigate every count difference using the saved baseline and setup logs; expected additions are not proof that all original records survived. Check important realm, user and client identities, group memberships and existing client secrets.
 
 Sign out and log in through the public gateway with an existing administrator. Check `/api/auth/me` for the expected groups and `is_admin=true`, and verify that expected resources are visible. Use an existing workload's unchanged credential to obtain a fresh token and call an allowed operation. Confirm a restricted user still receives a denial for an ungranted operation. Compare the running deployment environment with the rendered values; changing a Secret alone does not restart its consumers.
 
@@ -1242,7 +1293,7 @@ Keep the old source stopped. If any of these checks fail, do not reopen login or
 
 ### 7. Transition from restore to existing
 
-After data and authentication checks pass, replace the restore overlay with this one. Supply the same reviewed base values and change all four restore-specific settings together. `existing` verifies the retained target; it does not restore the archive again or change its data.
+After data and authentication checks pass, replace the restore overlay with this one. Supply the same reviewed base values and keep both target names unchanged. Change all four restore-specific settings together. `existing` verifies the retained target; it does not restore the archive again or rename its role or database. The name comparisons below must pass before upgrading. Stop on a mismatch; do not change the saved expected names to fit a new render.
 
 ```bash
 cat > "$BACKUP_DIR/existing-values.yaml" <<'YAML'
@@ -1250,8 +1301,6 @@ global:
   generateSecrets: false
 keycloak:
   postgres:
-    username: keycloak
-    database: keycloak
     bootstrap:
       mode: existing
       existingVerified: true
@@ -1259,6 +1308,13 @@ keycloak:
       sha256: ""
       sourceQuiesced: false
 YAML
+render_target_names "$BACKUP_DIR/existing-values.yaml" "$BACKUP_DIR/existing-rendered.yaml" \
+  > "$BACKUP_DIR/existing-names.json"
+diff -u "$BACKUP_DIR/target-names.json" "$BACKUP_DIR/existing-names.json"
+k exec "$TARGET_PG_POD" -- sh -ec '
+  test "$KEYCLOAK_DB_USER" = "$1"
+  test "$KEYCLOAK_DB_NAME" = "$2"
+' sh "$TARGET_DB_USER" "$TARGET_DB_NAME"
 h upgrade "$RELEASE" "$CHART" -f "$VALUES" -f "$BACKUP_DIR/existing-values.yaml" \
   --dry-run=server > "$BACKUP_DIR/existing-dry-run.txt"
 h upgrade "$RELEASE" "$CHART" -f "$VALUES" -f "$BACKUP_DIR/existing-values.yaml" \
@@ -1270,7 +1326,11 @@ k exec "$TARGET_PG_POD" -- sh -ec '
   test ! -e /var/lib/postgresql/data/.keycloak-bootstrap-pending
   test "$(cat "$PGDATA/.keycloak-bootstrap-complete")" = "existing:"
 '
-k exec -i "$TARGET_PG_POD" -- psql -X -U postgres -d keycloak -At -v ON_ERROR_STOP=1 \
+k exec -i "$TARGET_PG_POD" -- sh -ec '
+  test "$KEYCLOAK_DB_USER" = "$1"
+  test "$KEYCLOAK_DB_NAME" = "$2"
+  exec psql -X -U postgres -d "$KEYCLOAK_DB_NAME" -At -v ON_ERROR_STOP=1
+' sh "$TARGET_DB_USER" "$TARGET_DB_NAME" \
   < "$BACKUP_DIR/counts.sql" > "$BACKUP_DIR/existing-counts.txt"
 diff -u "$BACKUP_DIR/restored-counts.txt" "$BACKUP_DIR/existing-counts.txt"
 ```

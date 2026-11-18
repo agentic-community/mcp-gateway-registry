@@ -78,9 +78,16 @@ spec:
             - /bin/sh
             - -c
             - |
-              until pg_isready -h {{ include "keycloak.postgresName" . }} -p 5432 -U {{ .Values.postgres.username }}; do
+              until pg_isready -h "$PGHOST" -p 5432 -U "$PGUSER" -d "$PGDATABASE"; do
                 echo "waiting for postgres..."; sleep 3
               done
+          env:
+            - name: PGHOST
+              value: {{ include "keycloak.postgresName" . | quote }}
+            - name: PGUSER
+              value: {{ .Values.postgres.username | quote }}
+            - name: PGDATABASE
+              value: {{ .Values.postgres.database | quote }}
         # The root filesystem is read-only, so lib/quarkus is an emptyDir. The
         # launcher reads the image's build output from it before rebuilding,
         # so seed it with the image's copy first.

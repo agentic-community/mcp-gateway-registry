@@ -63,12 +63,17 @@ global:
 keycloak:
   create: true
   postgres:
+    username: "sso_runtime"  # Fictional role; default is keycloak
+    database: "sso_catalog"  # Fictional database; default is keycloak
     bootstrap:
       mode: fresh-install  # Only for an intentionally empty database
 ```
 
 The bundled chart uses official Keycloak 26.8.2 and PostgreSQL 17.12 images.
 Existing databases require the [backup, restore, and transition-to-existing runbook](mcp-gateway-registry-stack/README.md#keycloak-database-cutover), including the snapshot pod manifest and same-PVC upgrade procedure.
+
+Choose `keycloak.postgres.username` and `keycloak.postgres.database` in your reviewed base values. Both default to `keycloak`. Each must be a string of 1-63 ASCII characters matching `[A-Za-z_][A-Za-z0-9_-]*`; the chart preserves case and exact spelling. It rejects roles `postgres` and `public` and the `pg_` role prefix, plus databases `postgres`, `template0`, and `template1`, regardless of case. Passwords still come from Secrets. Pin both names across `restore`, `existing`, and later upgrades. Changing these values after initialization does not rename the role or database; plan a migration for that.
+
 For an external Keycloak, set `keycloak.create=false` and configure its public URL
 with `global.authProvider.keycloak.externalUrl`. Supply its internal URL and credentials
 through the existing-Secret settings described in the stack README.

@@ -348,7 +348,8 @@ Keycloak nginx routes use the resolved `AUTH_PROVIDER` setting, including config
 | Admin username | `KEYCLOAK_ADMIN` | `keycloak_admin` | `global.authProvider.keycloak.adminUsername` | — |
 | Admin password **(secret)** | `KEYCLOAK_ADMIN_PASSWORD` | `keycloak_admin_password` | `keycloak.auth.adminPassword` | Helm generates the administrator Secret on first install and preserves it on upgrade. Bootstrap creates the administrator once; changing the Secret does not rotate an existing realm password. |
 | DB password **(secret)** | `KEYCLOAK_DB_PASSWORD` | `keycloak_database_password` | `keycloak.postgresql.auth.password` / `.postgresPassword` | The Helm stack retains these password inputs for its generated PostgreSQL Secret. The official-image subchart uses `keycloak.postgres.existingSecret` for an operator-owned Secret. Changing either password against retained data does not rotate the database role. |
-| DB username | — | `keycloak_database_username` | — | — |
+| DB username | Not exposed | `keycloak_database_username` | `keycloak.postgres.username` | Dedicated non-superuser PostgreSQL role. Helm defaults to `keycloak`; choose and pin the name before initialization. |
+| DB name | Not exposed | Not exposed | `keycloak.postgres.database` | Keycloak's PostgreSQL database. Helm defaults to `keycloak`; it can differ from the role name. |
 | Web client id | `KEYCLOAK_CLIENT_ID` | — | — | Populated by `init-keycloak.sh`. |
 | Web client secret **(secret)** | `KEYCLOAK_CLIENT_SECRET` |  | `global.authProvider.keycloak.clientSecret` | Secret of the `mcp-gateway-web` client. Helm renders it into `keycloak-client-secret`, and the setup-keycloak Job writes it into the realm and fails if the realm holds a different value. Empty generates one on first install and keeps it on upgrade. |
 | M2M client id | `KEYCLOAK_M2M_CLIENT_ID` | — | `auth-server.keycloak.m2mClientId` | — |
@@ -371,6 +372,19 @@ Keycloak nginx routes use the resolved `AUTH_PROVIDER` setting, including config
 | Keycloak cache | Deployment configuration | Deployment configuration | `keycloak.cache` | `local` supports one replica. Multiple replicas require `ispn`, using JDBC discovery through the shared database. |
 | Administrator ingress CIDRs | Private local admin listener | `keycloak_admin_cidr_blocks` | Private cluster administration | Terraform/CDK default to the general ingress CIDRs; CDK uses `registry.keycloakAdminCidrBlocks`. A narrower list restricts Keycloak admin/master paths and includes the gateway's NAT addresses. CloudFront cannot enforce a distinct client-IP list at the ALB, so that combination is rejected. |
 | A2A issuer URL | `KEYCLOAK_EXTERNAL_URL` in the sample agents | Passed to the sample agents | Not used by these sample deployments | The sample A2A middleware validates the public issuer while fetching signing keys through its internal `KEYCLOAK_URL`. Both inputs are required for verified JWT authentication. |
+
+The Helm role and database names must be strings of 1-63 ASCII characters matching `[A-Za-z_][A-Za-z0-9_-]*`. The chart preserves their case and exact spelling. It rejects roles `postgres` and `public` and any `pg_` role prefix, plus databases `postgres`, `template0`, and `template1`, regardless of case. Passwords remain in the existing Secret references.
+
+Choose both names once in the reviewed `upgrade-values.yaml`, for example:
+
+```yaml
+keycloak:
+  postgres:
+    username: "sso_runtime"
+    database: "sso_catalog"
+```
+
+These are fictional target identities. The backup client's `PGUSER` and `PGDATABASE` select the source connection and do not set either target name. Keep names out of the restore and existing-mode overlays so those overlays cannot override the reviewed base values. Verify the rendered target names before each upgrade and stop if they differ from the names on the retained database. Changing values after initialization does not rename an existing role or database; that requires a planned migration.
 
 For the command sequence, snapshot PVC/client manifests, same-PVC source preservation, verification, and removal of the restore mount, follow the [Keycloak backup, restore, and existing-mode runbook](../charts/mcp-gateway-registry-stack/README.md#keycloak-database-cutover).
 
@@ -944,6 +958,7 @@ These have no `.env` equivalent because they describe the infrastructure, not th
 | `global.ingress.className`, `tls`, `routingMode`, `paths.*`, `inboundCidrs` | ALB ingress shape. |
 | `keycloak.create` | Deploy Keycloak in-chart vs external. |
 | `keycloak.httpRelativePath` | Keycloak base path. |
+| `keycloak.postgres.username`, `.database` | Dedicated PostgreSQL role and database, each defaulting to `keycloak`. Use the name rules in the Keycloak section above; pin both names before initialization and retain them on upgrades. |
 | `keycloakIngress.enabled` | Create a Keycloak ingress. |
 | `<subchart>.service.type`, `.service.port` | K8s service shape. |
 | `<subchart>.resources.{requests,limits}` | Pod resource sizing. |
