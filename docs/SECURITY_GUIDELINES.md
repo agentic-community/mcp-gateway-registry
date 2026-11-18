@@ -1036,6 +1036,7 @@ surface.
   trivially dodged by a case-mutated copy (`Change-Me-...`).
 - **No secrets as Docker build `ARG`s** — they persist in image history. Inject at
   runtime.
+- **A credential reaches a container through a secret reference, never as a plain environment value.** A plain value is stored in the workload definition, which far more principals can read than the secret itself. On ECS, an `environment` entry sits in the task definition, readable by anyone with `ecs:DescribeTaskDefinition`; use `secrets` with `valueFrom` pointing at Secrets Manager or an SSM `SecureString`, so the task definition holds only the ARN. On Kubernetes, use `valueFrom.secretKeyRef`, never `value:`, because the Deployment spec is readable more widely than Secrets. In CDK, a value written into a template's `SecretString` or container env is also readable through `cloudformation:GetTemplate`. An empty optional credential injects nothing, rather than an empty secret. To audit a surface, list every variable marked `sensitive` (Terraform) or every secret-like value (Helm) and confirm none feeds a plain env entry: #2069 found 14 that did in Terraform.
 - **Don't bind-mount broad credential dirs** (e.g. `~/.aws`) into a
   network-facing container by default; mount the single needed file or use a
   scoped role.

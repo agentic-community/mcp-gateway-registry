@@ -465,7 +465,9 @@ working in those areas.
   `react/jsx-no-script-url`.
 - **Deployment/config:** sensitive ports on loopback not `0.0.0.0`; no working
   default for a required secret (`${VAR:?}` + reject weak literals); no secrets in
-  Docker build ARGs; pin image tags; TLS verify on by default (private certs via
+  Docker build ARGs; a credential reaches a container only through a secret
+  reference (ECS `secrets`/`valueFrom`, Kubernetes `secretKeyRef`), never a plain
+  env value, which lands in the broadly readable task definition or Deployment spec; pin image tags; TLS verify on by default (private certs via
   a CA bundle, never `verify=False`); dangerous toggles require an explicit flag +
   localhost guard.
 - **Approval TOCTOU:** snapshot what a user approves (destinations, token
