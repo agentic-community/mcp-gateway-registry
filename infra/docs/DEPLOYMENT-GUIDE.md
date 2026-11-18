@@ -2,6 +2,8 @@
 
 End-to-end deployment, credentials, and troubleshooting for the CDK deployment.
 
+> **Status: not actively maintained.** The supported AWS deployment is the Terraform stack in [`terraform/aws-ecs/`](../../terraform/aws-ecs/). This CDK stack can lag behind it in features and configuration settings. Issue [#1961](https://github.com/agentic-community/mcp-gateway-registry/issues/1961) tracks the work to bring the two back into parity.
+
 ## Quickstart
 
 ```bash
