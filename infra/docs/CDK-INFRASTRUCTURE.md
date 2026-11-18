@@ -90,7 +90,7 @@ collide with that proxy.
 cd infra
 npm install
 npm test        # jest + aws-cdk-lib/assertions, no AWS credentials needed
-npm run build   # tsc --noEmit equivalent via the build script
+npm run build   # tsc, compiles to dist/
 ```
 
 The suites in `test/` synthesize the real stack graph and assert on the
@@ -113,14 +113,13 @@ fields. Extend both together.
 **The rest** pins the application's contract: an incomplete Cognito or
 PingFederate block, PingFederate without the admin password its manager raises
 without, an egress config on a non-Mongo storage backend, an unsupported
-secret-store backend, a Cognito domain passed as a hostname where the
-auth-server wants a prefix, and a comma-separated OBO audience list the
+secret-store backend, a Cognito domain that is empty or passed as a hostname
+where the auth-server wants a prefix, and a comma-separated OBO audience list the
 application would read as one value.
 
 Deliberately accepted, because the application and Terraform both support
-them: an empty Cognito domain, which the auth-server derives from the user pool
-id, and an empty OBO audience allowlist, which falls back to a shape rule
-admitting only an internal server's own IdP audience.
+it: an empty OBO audience allowlist, which falls back to a shape rule admitting
+only an internal server's own IdP audience.
 
 ## Deploying
 

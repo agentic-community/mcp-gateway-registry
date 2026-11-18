@@ -348,9 +348,10 @@ export class RegistryServiceStack extends cdk.Stack {
       EGRESS_OAUTH_CALLBACK_BASE_URL: config.egress.oauthCallbackBaseUrl,
       EGRESS_TOKEN_REFRESH_SKEW_SECONDS: String(config.egress.tokenRefreshSkewSeconds),
       EGRESS_STATE_TTL_SECONDS: String(config.egress.stateTtlSeconds),
-      // Audiences an OBO-exchanged token may carry. Enforced against this
-      // allowlist so an upstream cannot replay a delegated token back at the
-      // gateway.
+      // Registration-time allowlist of the target audiences an obo_exchange
+      // server may declare (registry/core/schemas.py). It decides which
+      // audiences the gateway will ever exchange into. It is not the replay
+      // check on exchanged tokens, which uses accepted_audiences().
       EGRESS_OBO_ALLOWED_AUDIENCES: config.egress.oboAllowedAudiences,
       // PingFederate admin API, registry only: it creates OAuth clients and
       // PCV users there. The auth-server never calls this API.
@@ -677,13 +678,14 @@ export class RegistryServiceStack extends cdk.Stack {
             new iam.PolicyStatement({
               sid: 'OboCacheVaultCrud',
               effect: iam.Effect.ALLOW,
+              // Exactly the four calls the secret store makes
+              // (registry/secrets/secrets_manager/store.py), matching
+              // terraform/aws-ecs/modules/mcp-gateway/iam.tf.
               actions: [
                 'secretsmanager:CreateSecret',
                 'secretsmanager:GetSecretValue',
                 'secretsmanager:PutSecretValue',
                 'secretsmanager:DeleteSecret',
-                'secretsmanager:DescribeSecret',
-                'secretsmanager:ListSecretVersionIds',
               ],
               resources: [
                 `arn:${this.partition}:secretsmanager:${this.region}:${this.account}:secret:${config.egress.secretsManagerPathPrefix}/${OBO_CACHE_NAMESPACE_SEGMENT}/*`,
