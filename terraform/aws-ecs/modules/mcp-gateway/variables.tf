@@ -717,7 +717,7 @@ variable "documentdb_credentials_secret_arn" {
 # discrete variables. Prefer mongodb_connection_string_secret_arn when the
 # URI contains credentials to avoid storing secrets in Terraform state.
 variable "mongodb_connection_string" {
-  description = "Optional full MongoDB connection string override (plain text). Takes precedence over documentdb_* variables. Leave empty to use documentdb_* variables."
+  description = "Optional full MongoDB connection string override (plain text). Takes precedence over documentdb_* variables. Leave empty to use documentdb_* variables. The module stores it in Secrets Manager and injects it through the task secrets block, so it does not appear in the task definition; it does still appear in Terraform state."
   type        = string
   default     = ""
   sensitive   = true
