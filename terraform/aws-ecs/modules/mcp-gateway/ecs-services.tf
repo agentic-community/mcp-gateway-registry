@@ -2952,17 +2952,28 @@ module "ecs_service_openapi_mcp" {
       versionConsistency     = "disabled"
       readonlyRootFilesystem = false
 
+      # The empty lists below are what ECS stores for this container. With a
+      # linuxParameters block present the provider compares the definition
+      # strictly, so leaving them unset made every plan replace the task
+      # definition and restart the service.
       linuxParameters = {
         capabilities = {
+          add  = []
           drop = ["ALL"]
         }
       }
+      mountPoints    = []
+      volumesFrom    = []
+      systemControls = []
 
       portMappings = [
         {
           name          = "openapi-mcp"
           containerPort = local.openapi_mcp_port
-          protocol      = "tcp"
+          # ECS stores hostPort equal to containerPort in awsvpc mode; see the
+          # note on linuxParameters above.
+          hostPort = local.openapi_mcp_port
+          protocol = "tcp"
         }
       ]
 
