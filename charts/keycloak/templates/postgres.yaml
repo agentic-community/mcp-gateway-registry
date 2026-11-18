@@ -168,10 +168,11 @@ spec:
             name: {{ include "keycloak.postgresInitName" . }}
             defaultMode: 0555
         {{- if eq $pg.bootstrap.mode "restore" }}
+        # Kubelet must relabel the reused PVC for this pod on SELinux nodes.
+        # Enforce read-only access at the container volumeMount above.
         - name: migration
           persistentVolumeClaim:
             claimName: {{ $pg.bootstrap.existingClaim | quote }}
-            readOnly: true
         {{- end }}
   volumeClaimTemplates:
     - metadata:

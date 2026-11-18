@@ -72,7 +72,12 @@ tests:
             name: migration
             persistentVolumeClaim:
               claimName: verified-snapshot
-              readOnly: true
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: migration
+            mountPath: /migration
+            readOnly: true
   - it: keeps management probes at root when the public listener has a prefix
     templates:
       - templates/keycloak.yaml
