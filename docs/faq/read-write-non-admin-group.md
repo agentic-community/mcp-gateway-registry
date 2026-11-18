@@ -167,7 +167,7 @@ uv run python api/registry_management.py \
   add-to-groups --server <new-server-name> --groups read-select-register-new
 ```
 
-After this, `readselect-user` will see the server in their listing. With the `read-all-register-new` group this admin step is not needed, because that group's `list_service` is `all`.
+`--server` takes the server's path without slashes (for `/my-server/`, pass `my-server`), and that path name is what the command adds to the group's `list_service`, because the server listing matches entries by path. After this, `readselect-user` will see the server in their listing. With the `read-all-register-new` group this admin step is not needed, because that group's `list_service` is `all`.
 
 ## What these users still cannot do
 
