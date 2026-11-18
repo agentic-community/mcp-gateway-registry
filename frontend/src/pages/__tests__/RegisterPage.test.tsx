@@ -44,6 +44,7 @@ jest.mock('../../components/DuplicateCheckModal', () => {
 const mockIsEgressAuthEnabled = jest.fn<Promise<boolean>, []>();
 let mockDeploymentMode: 'with-gateway' | 'registry-only' = 'with-gateway';
 jest.mock('../../utils/egressAuth', () => ({
+  ...jest.requireActual('../../utils/egressAuth'),
   isEgressAuthEnabled: () => mockIsEgressAuthEnabled(),
 }));
 jest.mock('../../hooks/useRegistryConfig', () => ({

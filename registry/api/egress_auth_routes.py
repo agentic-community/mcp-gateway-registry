@@ -46,7 +46,11 @@ from registry.egress_auth.browser_binding import (
     set_consent_cookie,
 )
 from registry.egress_auth.factory import get_egress_auth_service
-from registry.egress_auth.providers import list_provider_names, resolve_provider
+from registry.egress_auth.providers import (
+    PROVIDER_REGISTRY,
+    list_provider_names,
+    resolve_provider,
+)
 from registry.egress_auth.schemas import (
     OAuthProviderConfig,
     OAuthState,
@@ -1571,6 +1575,79 @@ def build_oauth_provider_config(
         return eo
     _apply_client_secret(
         eo, provider, custom_token_auth_style, client_id, client_secret, prior_secret_encrypted
+    )
+    return eo
+
+
+def provider_requires_dcr(
+    provider: str,
+) -> bool:
+    """Return whether a built-in provider gets its client from dynamic registration.
+
+    An unknown or ``custom`` provider returns False, so the caller's normal
+    validation (``build_oauth_provider_config``) still reports it.
+    """
+    cfg = PROVIDER_REGISTRY.get(provider)
+    return bool(cfg and cfg.requires_dcr)
+
+
+def build_discovery_dcr_config(
+    *,
+    server: dict,
+    provider: str,
+    scopes: list[str],
+    expected_issuer: str | None = None,
+) -> dict:
+    """Build a discovery-identity OAuth config that reuses the server's egress client.
+
+    A dynamic-client-registration provider (``atlassian-rovo``) has no client an
+    operator can type in, and only the per-user egress save registers one. The
+    discovery consent returns through the same egress callback URL, so the client
+    egress registered fits it as long as it was registered for this provider and
+    for scopes that cover the requested ones. That is the check egress applies
+    before reusing its own client.
+
+    Args:
+        server: The stored server document, including ``egress_oauth``.
+        provider: The provider requested for discovery.
+        scopes: The requested discovery scopes; empty means the provider defaults.
+        expected_issuer: Optional issuer pin, validated as for egress.
+
+    Returns:
+        The discovery ``oauth`` config, carrying the egress ``client_id`` and no secret.
+
+    Raises:
+        HTTPException: 400 when the server has no fitting egress client yet.
+    """
+    egress = server.get("egress_oauth") or {}
+    if server.get("egress_auth_mode") != "oauth_user" or not egress.get("client_id"):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail=f"provider '{provider}' uses dynamic client registration. Save this "
+            f"server's per-user egress configuration with provider '{provider}' first, "
+            "so the gateway registers a client that discovery can reuse",
+        )
+    eo = build_oauth_provider_config(
+        provider=provider,
+        client_id=egress["client_id"],
+        client_secret=None,
+        scopes=scopes,
+        expected_issuer=expected_issuer,
+        dcr_supported=True,
+    )
+    if not _stored_dcr_client_reusable(egress, provider, _callback_url(), eo["scopes"]):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="the server's egress client was registered for another provider, "
+            "callback URL or a narrower scope set. Save the egress configuration "
+            f"with provider '{provider}' and these scopes first",
+        )
+    for key in ("dcr_provider", "dcr_redirect_uri", "dcr_scopes"):
+        eo[key] = egress.get(key)
+    logger.info(
+        "discovery identity reuses the egress DCR client for provider %s on %s",
+        provider,
+        server.get("path"),
     )
     return eo
 

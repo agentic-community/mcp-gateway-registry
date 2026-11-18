@@ -467,21 +467,47 @@ describe('ServerEditModal', () => {
       expect(clientId).toHaveValue('stored-client');
     });
 
-    it('does not use the egress provider list for the discovery identity', () => {
+    function discoverySelect(): HTMLSelectElement {
+      return screen
+        .getByRole('option', { name: 'Custom (OAuth 2.1)' })
+        .closest('select') as HTMLSelectElement;
+    }
+
+    it('offers atlassian-rovo for the discovery identity, labelled as reusing the egress client', () => {
       render(
         <Harness
           initial={{ ...baseForm, oauth_discovery_enabled: true, egress_auth_mode: 'oauth_user' }}
           egressEnabled
         />,
       );
-      // Two provider pickers: the egress one offers Rovo, the discovery one must not.
-      const rovoOptions = screen.getAllByRole('option', { name: OPTION });
-      expect(rovoOptions).toHaveLength(1);
-      const discoverySelect = screen
-        .getByRole('option', { name: 'Custom (OAuth 2.1)' })
-        .closest('select') as HTMLSelectElement;
-      expect(within(discoverySelect).queryByRole('option', { name: OPTION })).not.toBeInTheDocument();
-      expect(within(discoverySelect).getByRole('option', { name: 'Atlassian' })).toBeInTheDocument();
+      // The egress picker keeps its own Rovo option; the discovery one has a distinct label.
+      expect(screen.getAllByRole('option', { name: OPTION })).toHaveLength(1);
+      const select = discoverySelect();
+      expect(
+        within(select).getByRole('option', { name: 'Atlassian Rovo (reuses the egress client)' }),
+      ).toBeInTheDocument();
+      expect(within(select).getByRole('option', { name: 'Atlassian' })).toBeInTheDocument();
+    });
+
+    it('hides the discovery client fields for atlassian-rovo and clears a typed client', () => {
+      render(
+        <Harness
+          initial={{
+            ...baseForm,
+            oauth_discovery_enabled: true,
+            oauth_discovery_provider: 'custom',
+            oauth_discovery_client_id: 'typed-client',
+            oauth_discovery_client_secret: 'typed-secret',
+          }}
+          egressEnabled
+        />,
+      );
+      fireEvent.change(discoverySelect(), { target: { value: 'atlassian-rovo' } });
+      expect(screen.getByText(/Uses the client the gateway registered/)).toBeInTheDocument();
+      expect(screen.queryByText('Client Secret')).not.toBeInTheDocument();
+      // Switching back shows the client ID field again, emptied by the switch.
+      fireEvent.change(discoverySelect(), { target: { value: 'github' } });
+      expect(inputFor('Client ID')).toHaveValue('');
     });
   });
 
