@@ -173,7 +173,7 @@ describe('values that reach an IAM policy Resource', () => {
     expect(() =>
       loadWith({
         storageBackend: 'documentdb',
-        egress: { enabled: true, secretsManagerPathPrefix: 'mcp/*' },
+        egress: { enabled: true, secretsManagerPathPrefix: 'mcp/*' },  // pragma: allowlist secret
       }),
     ).toThrow(/must not contain "\*"/);
   });
@@ -196,7 +196,7 @@ describe('values that reach an IAM policy Resource', () => {
   it('accepts the default prefix', () => {
     const config = loadWith({
       storageBackend: 'documentdb',
-      egress: { enabled: true, secretsManagerPathPrefix: 'mcp/egress' },
+      egress: { enabled: true, secretsManagerPathPrefix: 'mcp/egress' },  // pragma: allowlist secret
     });
     expect(config.egress.secretsManagerPathPrefix).toEqual('mcp/egress');
   });
@@ -220,7 +220,7 @@ describe('the application contract this config has to match', () => {
   });
 
   it('offers only secret-store backends the registry accepts', () => {
-    // registry/core/config.py, secret_store_backend: "secrets-manager, openbao".
+    // registry/core/config.py, secret_store_backend: "secrets-manager, openbao".  // pragma: allowlist secret
     // openbao is excluded because this stack provisions none.
     expect(loadWith({}).egress.secretStoreBackend).toEqual('secrets-manager');
     for (const backend of ['openbao', 'documentdb', 'vault']) {
@@ -280,14 +280,14 @@ describe('cognito validation', () => {
   });
 
   it('requires a complete secret ARN, not a value', () => {
-    expect(() => loadWith({ cognito: { ...validCognito, clientSecretArn: 'my-secret-value' } }))
+    expect(() => loadWith({ cognito: { ...validCognito, clientSecretArn: 'my-secret-value' } }))  // pragma: allowlist secret
       .toThrow(/complete Secrets Manager secret ARN/);
     // A partial ARN would read the wrong secret rather than failing.
     expect(() =>
       loadWith({
         cognito: {
           ...validCognito,
-          clientSecretArn: 'arn:aws:secretsmanager:us-west-2:123456789012:secret:mcp/cognito',
+          clientSecretArn: 'arn:aws:secretsmanager:us-west-2:123456789012:secret:mcp/cognito',  // pragma: allowlist secret
         },
       }),
     ).toThrow(/complete Secrets Manager secret ARN/);
@@ -342,7 +342,7 @@ describe('pingfederate validation', () => {
   });
 
   it('validates an M2M secret ARN when one is given', () => {
-    expect(() => loadWith({ pingfederate: { ...validPing, m2mClientSecretArn: 'not-an-arn' } }))
+    expect(() => loadWith({ pingfederate: { ...validPing, m2mClientSecretArn: 'not-an-arn' } }))  // pragma: allowlist secret
       .toThrow(/complete Secrets Manager secret ARN/);
   });
 });
@@ -394,7 +394,7 @@ describe('egress validation', () => {
   });
 
   it('rejects a path prefix that could widen the vault grant', () => {
-    expect(() => loadEgress({ secretsManagerPathPrefix: 'mcp/*' }))
+    expect(() => loadEgress({ secretsManagerPathPrefix: 'mcp/*' }))  // pragma: allowlist secret
       .toThrow(/secretsManagerPathPrefix/);
   });
 

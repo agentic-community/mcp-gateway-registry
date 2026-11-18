@@ -15,7 +15,7 @@ import { RegistryAuthStack } from '../lib/registry/registry-auth-stack';
 import { RegistryServiceStack } from '../lib/registry/registry-service-stack';
 
 /** Placeholder secrets. Long enough to clear the synth-time length checks. */
-const TEST_SECRET = 'test-only-not-a-real-secret-0123456789abcdef';
+const TEST_SECRET = 'test-only-not-a-real-secret-0123456789abcdef';  // pragma: allowlist secret
 
 /**
  * Build a complete Secrets Manager ARN for a pre-existing secret.

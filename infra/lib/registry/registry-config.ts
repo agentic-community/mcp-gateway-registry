@@ -799,8 +799,8 @@ export const DEFAULT_REGISTRY_CONFIG: RegistryConfig = {
   egress: {
     enabled: false,
     credentialEncryptionKeyArn: '',
-    secretStoreBackend: 'secrets-manager',
-    secretsManagerPathPrefix: 'mcp/egress',
+    secretStoreBackend: 'secrets-manager',  // pragma: allowlist secret
+    secretsManagerPathPrefix: 'mcp/egress',  // pragma: allowlist secret
     secretsManagerKmsKeyArn: '',
     registryInternalUrl: 'http://registry:8091',
     oauthCallbackBaseUrl: '',
@@ -1005,7 +1005,7 @@ const IAM_RESOURCE_UNSAFE_PATTERN = /[*?:\s]/;
  * alphabet for a name prefix, since a prefix is just a name's leading part.
  * https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_CreateSecret.html
  */
-const SECRET_NAME_ALPHABET = 'A-Za-z0-9/_+=.@\\-';
+const SECRET_NAME_ALPHABET = 'A-Za-z0-9/_+=.@\\-';  // pragma: allowlist secret
 
 /**
  * Reject a value that becomes part of an ARN in an IAM policy.
@@ -1307,9 +1307,9 @@ function _validateEgress(config: RegistryConfig): void {
         'otherwise every cached token is born expired.',
       );
     }
-    if (config.egress.secretStoreBackend !== 'secrets-manager') {
+    if (config.egress.secretStoreBackend !== 'secrets-manager') {  // pragma: allowlist secret
       throw new Error(
-        'egress.oboCacheEnabled=true needs egress.secretStoreBackend="secrets-manager" on ECS ' +
+        'egress.oboCacheEnabled=true needs egress.secretStoreBackend="secrets-manager" on ECS ' +  // pragma: allowlist secret
         `(the only backend this stack provisions), got ${JSON.stringify(config.egress.secretStoreBackend)}.`,
       );
     }

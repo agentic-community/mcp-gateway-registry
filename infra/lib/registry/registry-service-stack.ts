@@ -620,7 +620,7 @@ export class RegistryServiceStack extends cdk.Stack {
     // that excludes `*`, so an operator cannot widen this grant past the
     // vault through config. Secrets Manager appends a random 6-character
     // suffix to every ARN, which is what the trailing wildcard covers.
-    if (config.egress.enabled && config.egress.secretStoreBackend === 'secrets-manager') {
+    if (config.egress.enabled && config.egress.secretStoreBackend === 'secrets-manager') {  // pragma: allowlist secret
       const vaultStatements: iam.PolicyStatement[] = [
         new iam.PolicyStatement({
           sid: 'EgressCredentialVaultCrud',
@@ -669,7 +669,7 @@ export class RegistryServiceStack extends cdk.Stack {
     if (
       config.egress.enabled
       && config.egress.oboCacheEnabled
-      && config.egress.secretStoreBackend === 'secrets-manager'
+      && config.egress.secretStoreBackend === 'secrets-manager'  // pragma: allowlist secret
     ) {
       authTaskRolePolicies.push(
         new iam.ManagedPolicy(this, 'AuthServerOboCacheVaultPolicy', {

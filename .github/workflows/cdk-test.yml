@@ -53,18 +53,27 @@ jobs:
 
       # Synthesizing the whole app catches what per-stack unit tests cannot:
       # a cross-stack reference or a CloudFormation-level validation error.
-      # Placeholder secrets only; no AWS credentials are used or needed.
+      #
+      # CDK_DEFAULT_ACCOUNT is deliberately NOT set. A concrete account makes
+      # the stacks environment-specific, and CDK then resolves real
+      # availability zones through a context lookup that needs AWS
+      # credentials. Left unset, the stacks are environment-agnostic and CDK
+      # uses placeholder AZs, so this step needs no credentials at all. Any
+      # future `fromLookup` would fail here, which is the correct signal:
+      # credential-free synth is what makes this job runnable on a fork PR.
+      #
+      # Secrets below are placeholders that only have to pass the loader's
+      # length checks.
       - name: Synth
         id: synth
         run: npx cdk synth --quiet
         env:
-          CDK_DEFAULT_ACCOUNT: '123456789012'
           CDK_DEFAULT_REGION: us-west-2
-          CDK_KEYCLOAK_ADMIN_PASSWORD: ci-synth-placeholder-not-a-real-secret
-          CDK_KEYCLOAK_DATABASE_PASSWORD: ci-synth-placeholder-not-a-real-secret
-          CDK_DOCUMENTDB_ADMIN_PASSWORD: ci-synth-placeholder-not-a-real-secret
+          CDK_KEYCLOAK_ADMIN_PASSWORD: ci-synth-placeholder-not-a-real-secret  # pragma: allowlist secret
+          CDK_KEYCLOAK_DATABASE_PASSWORD: ci-synth-placeholder-not-a-real-secret  # pragma: allowlist secret
+          CDK_DOCUMENTDB_ADMIN_PASSWORD: ci-synth-placeholder-not-a-real-secret  # pragma: allowlist secret
           # Required because config.yaml enables observability.
-          CDK_GRAFANA_ADMIN_PASSWORD: ci-synth-placeholder-not-a-real-secret
+          CDK_GRAFANA_ADMIN_PASSWORD: ci-synth-placeholder-not-a-real-secret  # pragma: allowlist secret
 
       - name: Results summary
         if: always()
