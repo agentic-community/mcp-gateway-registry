@@ -1,9 +1,9 @@
 # MCP Gateway Registry CDK Infrastructure
 
-The CDK app under `infra/` deploys the registry to AWS as 7 stacks (TypeScript).
+The CDK app under `infra/` deploys the registry to AWS as 6 stacks (TypeScript).
 Mirrors the Terraform deployment in `terraform/aws-ecs/`.
 
-> **Status: not actively maintained.** The supported AWS deployment is the Terraform stack in [`terraform/aws-ecs/`](../../terraform/aws-ecs/). This CDK stack can lag behind it in features and configuration settings. Issue [#1961](https://github.com/agentic-community/mcp-gateway-registry/issues/1961) tracks the work to bring the two back into parity.
+> **Status: not actively maintained.** The supported AWS deployment is the Terraform stack in [`terraform/aws-ecs/`](../../terraform/aws-ecs/). This CDK stack lags behind it in features and configuration settings, and those gaps are not planned work. See the [known gaps](../README.md#known-gaps).
 
 ## Stacks
 
