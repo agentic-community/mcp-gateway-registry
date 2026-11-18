@@ -862,7 +862,8 @@ services:
       KC_HOSTNAME_BACKCHANNEL_DYNAMIC: 'false'
 
       # Features
-      KC_FEATURES: token-exchange,admin-api,hostname:v2
+      KC_FEATURES: token-exchange,admin-api,hostname:v2,cimd
+      KC_FEATURES_DISABLED: device-flow,ciba
 
       # Logging
       KC_LOG_LEVEL: INFO

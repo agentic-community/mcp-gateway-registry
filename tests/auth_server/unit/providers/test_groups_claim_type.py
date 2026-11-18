@@ -141,6 +141,126 @@ class TestKeycloakGroupsType:
         assert result["groups"] == ["mcp-registry-user"]
 
 
+KEYCLOAK_GROUP_PATH_CASES = [
+    pytest.param("/registry-admins", "registry-admins", True, id="top-level-admin"),
+    pytest.param("/mcp-registry-user", "mcp-registry-user", False, id="top-level-other"),
+    pytest.param(
+        "/team/registry-admins", "team/registry-admins", False, id="subgroup-named-like-admin"
+    ),
+    pytest.param(
+        "/a/b/registry-admins", "a/b/registry-admins", False, id="deeply-nested-admin-name"
+    ),
+    pytest.param(
+        "/mcp-servers-unrestricted/read",
+        "mcp-servers-unrestricted/read",
+        False,
+        id="top-level-name-containing-slash",
+    ),
+    pytest.param("registry-admins", "registry-admins", True, id="legacy-flat-admin"),
+    pytest.param(
+        "team/registry-admins", "team/registry-admins", False, id="legacy-flat-with-slash"
+    ),
+    pytest.param("//registry-admins", "/registry-admins", False, id="double-leading-slash"),
+    pytest.param("/", None, False, id="root-path"),
+    pytest.param("", None, False, id="empty"),
+]
+
+
+class TestKeycloakBearerGroupPaths:
+    """Only the dedicated signed claim is interpreted as Keycloak paths."""
+
+    def _validate(self, groups) -> dict:
+        provider = _make_provider()
+        private_key, jwks = _build_keypair()
+        claims = _claims(provider, _ABSENT)
+        claims["mcpgw_group_paths"] = groups
+        token = _sign_token(private_key, claims)
+        with patch.object(provider, "get_jwks", return_value=jwks):
+            return provider.validate_token(token)
+
+    @pytest.mark.parametrize(("claim", "expected", "is_admin"), KEYCLOAK_GROUP_PATH_CASES)
+    def test_group_claim_maps_to_gateway_name(self, claim, expected, is_admin):
+        from registry.auth.privileged_constants import ADMIN_GROUP_MARKERS
+
+        result = self._validate([claim, "/mcp-registry-user"])
+
+        expected_groups = ([expected] if expected is not None else []) + ["mcp-registry-user"]
+        assert result["groups"] == expected_groups
+        assert ("registry-admins" in ADMIN_GROUP_MARKERS.intersection(result["groups"])) is is_admin
+
+    @pytest.mark.parametrize(("claim", "expected", "is_admin"), KEYCLOAK_GROUP_PATH_CASES)
+    def test_registry_names_admin_api_groups_like_the_token(self, claim, expected, is_admin):
+        """Group updates must use the same names as the token's authorization groups."""
+        from providers.keycloak import _normalize_keycloak_groups
+
+        from registry.utils.keycloak_manager import _membership_group_name
+
+        token_side = _normalize_keycloak_groups([claim], source="test")
+        registry_side = _membership_group_name({"id": "g1", "path": claim})
+
+        assert token_side == ([expected] if expected is not None else [])
+        assert registry_side == (expected or "")
+
+    @pytest.mark.asyncio
+    async def test_subgroup_does_not_inherit_admin_group_scopes(self):
+        """Scope mapping is by exact name, so only the top-level group maps."""
+        from auth_server import server as srv
+
+        mappings = {"registry-admins": ["mcp-registry-admin"]}
+
+        class _FakeScopeRepo:
+            async def get_group_mappings_bulk(self, groups):
+                return [scope for group in groups for scope in mappings.get(group, [])]
+
+        admin = self._validate(["/registry-admins"])
+        subgroup = self._validate(["/x/registry-admins"])
+        with patch.object(srv, "get_scope_repository", return_value=_FakeScopeRepo()):
+            admin_scopes = await srv.map_groups_to_scopes(admin["groups"])
+            subgroup_scopes = await srv.map_groups_to_scopes(subgroup["groups"])
+
+        assert admin_scopes == ["mcp-registry-admin"]
+        assert subgroup_scopes == []
+
+    @pytest.mark.parametrize(
+        ("group_claims", "expected"),
+        [
+            ({"groups": ["/registry-admins"]}, ["/registry-admins"]),
+            ({"groups": ["registry-admins"]}, ["registry-admins"]),
+            ({"groups": ["registry-admins"], "mcpgw_group_paths": []}, []),
+            (
+                {"groups": ["registry-admins"], "mcpgw_group_paths": ["/team/registry-admins"]},
+                ["team/registry-admins"],
+            ),
+            (
+                {"groups": ["/registry-admins"], "mcpgw_group_paths": ["/registry-admins"]},
+                ["registry-admins"],
+            ),
+            (
+                {"groups": {"registry-admins": True}, "mcpgw_group_paths": ["/mcp-registry-user"]},
+                ["mcp-registry-user"],
+            ),
+        ],
+    )
+    def test_signed_claim_cutover_never_reinterprets_or_merges_legacy_groups(
+        self, group_claims, expected
+    ):
+        provider = _make_provider()
+        private_key, jwks = _build_keypair()
+        claims = {**_claims(provider, _ABSENT), **group_claims}
+        with patch.object(provider, "get_jwks", return_value=jwks):
+            result = provider.validate_token(_sign_token(private_key, claims))
+        assert result["groups"] == expected
+
+    @pytest.mark.parametrize("malformed", [None, "/registry-admins", {}, [True], ["/ok", 1]])
+    def test_malformed_path_claim_denies_despite_legacy_admin(self, malformed):
+        provider = _make_provider()
+        private_key, jwks = _build_keypair()
+        claims = _claims(provider, ["registry-admins"])
+        claims["mcpgw_group_paths"] = malformed
+        with patch.object(provider, "get_jwks", return_value=jwks), pytest.raises(ValueError):
+            provider.validate_token(_sign_token(private_key, claims))
+
+
 class TestFilterSessionGroupsFailClosed:
     @pytest.mark.asyncio
     async def test_object_valued_groups_rejected(self):

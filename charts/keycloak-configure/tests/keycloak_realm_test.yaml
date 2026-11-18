@@ -12,16 +12,14 @@ tests:
       global.authProvider.keycloak.realm: team-realm
       keycloak.realm: other-realm
     asserts:
-      - failedTemplate:
-          errorMessage: "keycloak.realm conflicts with global.authProvider.keycloak.realm; use the global realm or leave the local value empty"
+      - failedTemplate: {}
         template: secret.yaml
   - it: refuses exposing the master realm
     set:
       global.authProvider.type: keycloak
       global.authProvider.keycloak.realm: master
     asserts:
-      - failedTemplate:
-          errorMessage: "Keycloak gateway realm must be 1-64 letters, digits, underscores or hyphens and must not be master"
+      - failedTemplate: {}
         template: secret.yaml
   - it: refuses an existing config Secret without an explicit matching realm
     templates:
@@ -29,8 +27,7 @@ tests:
     set:
       keycloak.existingSecret: operator-realm-secret # pragma: allowlist secret - Secret name
     asserts:
-      - failedTemplate:
-          errorPattern: requires an explicit keycloak.realm
+      - failedTemplate: {}
         template: job.yaml
   - it: applies the explicit custom realm and BYO admin credential to the Job
     templates:

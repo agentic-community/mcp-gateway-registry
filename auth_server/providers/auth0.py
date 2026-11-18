@@ -151,14 +151,13 @@ class Auth0Provider(AuthProvider):
                 f"{claims.get('nickname', claims.get('sub', 'unknown'))}"
             )
 
-            # Extract groups from the custom namespaced claim, falling back to
-            # the Auth0 RBAC 'permissions' claim. The resolved claim is strictly
-            # validated as a JSON array of strings (fail closed on a non-array
-            # claim) rather than iterated into group names.
-            raw_groups = claims.get(self.groups_claim)
-            if not raw_groups:
-                raw_groups = claims.get("permissions")
-            groups = normalize_groups_claim(raw_groups, source="auth0 groups")
+            # Validate the primary claim before deciding whether RBAC permissions
+            # supply the fallback. Malformed falsy claims must not bypass validation.
+            groups = normalize_groups_claim(claims.get(self.groups_claim), source="auth0 groups")
+            if not groups:
+                groups = normalize_groups_claim(
+                    claims.get("permissions"), source="auth0 permissions"
+                )
 
             return {
                 "valid": True,
@@ -561,7 +560,7 @@ class Auth0Provider(AuthProvider):
                 - subject: The id_token ``sub`` (the egress vault key)
 
         Raises:
-            ValueError: If the ID token is missing from the response.
+            ValueError: The ID token is missing or a group claim has an invalid type.
             IdTokenVerificationError: If the ID token is present but fails
                 cryptographic verification (signature/issuer/audience/expiry).
                 Callers MUST fail closed on this error.
@@ -578,14 +577,15 @@ class Auth0Provider(AuthProvider):
             )
             logger.info(f"Auth0 ID token claims decoded for sub: {id_token_claims.get('sub')}")
 
-            # Extract groups from the custom namespaced id_token claim, falling
-            # back to the Auth0 RBAC 'permissions' claim. Requires an Auth0
-            # Action/Rule to add groups to the ID token. The resolved claim is
-            # strictly validated as a JSON array of strings (fail closed).
-            raw_groups = id_token_claims.get(self.groups_claim)
-            if not raw_groups:
-                raw_groups = id_token_claims.get("permissions")
-            groups = normalize_groups_claim(raw_groups, source="auth0 id_token groups")
+            # Validate the primary claim before the permissions fallback, just
+            # as bearer validation does. A falsy malformed claim must deny login.
+            groups = normalize_groups_claim(
+                id_token_claims.get(self.groups_claim), source="auth0 id_token groups"
+            )
+            if not groups:
+                groups = normalize_groups_claim(
+                    id_token_claims.get("permissions"), source="auth0 id_token permissions"
+                )
 
             return {
                 "username": id_token_claims.get("nickname")

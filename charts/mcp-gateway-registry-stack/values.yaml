@@ -293,6 +293,8 @@ keycloak:
     # Empty generates a password on first install and preserves it on upgrades.
     # Changing this value does not change an existing Keycloak admin password.
     adminPassword: ""
+  # Set "cimd" with keycloak-configure.cimd.enabled=true to accept metadata documents.
+  features: ""
   # Keycloak serves from its root; nginx strips the public /keycloak alias.
   # Keep httpRelativePath=/ for the bundled gateway. Proxy headers use
   # KC_PROXY_HEADERS=xforwarded. The separate sslInit Job replaces postStart.
@@ -325,18 +327,27 @@ keycloak-configure:
   keycloak:
     realm: "" # Inherits global.authProvider.keycloak.realm; conflicts are rejected.
     adminUser: *keycloakAdmin
-  # MCP Dynamic Client Registration (RFC 7591) realm setup. When true, the
-  # post-install/post-upgrade Job applies four changes that together let
-  # Claude Code, Claude.ai connectors, and Cursor self-register as OAuth
-  # clients against this realm:
-  #   - groups + audience mappers on the `basic` client-scope
-  #   - "Allowed Client Scopes" client-registration policy widened to all
-  #     realm scopes (anonymous + authenticated subTypes)
-  #   - "Trusted Hosts" policy relaxed for cloud-egress MCP clients
-  # Disable for closed deployments (no MCP coding-assistant users) or when
-  # using a pre-configured external Keycloak with its own DCR setup.
+  # Extra operator-provisioned clients with scopes outside the registration allowlist.
+  registrationTrustedClientIds: []
+  # DCR is opt-in. Both registration subtypes restrict scopes, client mappers
+  # and default roles. Turning DCR off disables anonymous registration and
+  # unlisted clients; review the inventory before acknowledging a sweep.
+  # Exact keepClients entries supplement the built-in and safe-shape keep rules.
+  # Disable keycloak-configure entirely to leave an external realm untouched.
   dcr:
-    enabled: true
+    enabled: false
+    sweepAcknowledged: false
+    keepClients: []
+  # Requires Keycloak 26.8.2 and keycloak.features: "cimd".
+  # Native callback/JWKS hosts share a list; protect outbound fetches separately.
+  cimd:
+    enabled: false
+    trustedDomains:
+      - vscode.dev
+      - code.visualstudio.com
+      - claude.ai
+      - "127.0.0.1"
+      - localhost
 # Mongodb configuration job
 mongodb-configure:
   enabled: true # Whether to run the MongoDB configuration job

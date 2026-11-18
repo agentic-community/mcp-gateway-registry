@@ -648,10 +648,9 @@ class EntraIdProvider(AuthProvider):
             # Extract group memberships. M2M tokens carry them in 'roles',
             # user tokens in 'groups'. Whichever applies, the claim is strictly
             # validated as a JSON array of strings.
-            raw_groups = claims.get("groups")
-            if not raw_groups and "roles" in claims:
-                raw_groups = claims.get("roles")
-            groups = normalize_groups_claim(raw_groups, source="entra groups")
+            groups = normalize_groups_claim(claims.get("groups"), source="entra groups")
+            if not groups:
+                groups = normalize_groups_claim(claims.get("roles"), source="entra roles")
 
             scopes = _delegated_scopes(claims)
             return {

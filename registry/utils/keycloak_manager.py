@@ -7,7 +7,9 @@ It handles authentication, group CRUD operations, and integrates with the regist
 
 import logging
 import os
+from collections.abc import AsyncIterator
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -78,16 +80,90 @@ def _auth_headers(token: str, content_type: str | None = "application/json") -> 
     return headers
 
 
+def _membership_group_name(group: dict[str, Any]) -> str:
+    """Name an Admin API membership exactly as the normalized token claim."""
+    path = group.get("path")
+    if not isinstance(path, str):
+        return ""
+    return path[1:] if path.startswith("/") else path
+
+
+async def _group_pages(
+    client: httpx.AsyncClient,
+    token: str,
+    url: str,
+) -> AsyncIterator[list[dict[str, Any]]]:
+    """Read every group page, rejecting malformed responses."""
+    offset = 0
+    while True:
+        response = await client.get(
+            url,
+            headers=_auth_headers(token, None),
+            params={"first": offset, "max": 100, "briefRepresentation": "false"},
+        )
+        response.raise_for_status()
+        page = response.json()
+        if not isinstance(page, list) or any(not isinstance(group, dict) for group in page):
+            raise KeycloakAdminError("Keycloak returned an invalid group page")
+        yield page
+        if len(page) < 100:
+            return
+        offset += len(page)
+
+
+async def _collect_group_paths(
+    client: httpx.AsyncClient,
+    token: str,
+    groups: list[dict[str, Any]],
+    parent: str,
+    names: dict[str, str],
+    seen: set[str],
+) -> None:
+    """Walk modern child pages or legacy embedded groups before mapper writes."""
+    for group in groups:
+        group_id, name = group.get("id"), group.get("name")
+        if not isinstance(group_id, str) or not group_id or not isinstance(name, str) or not name:
+            raise KeycloakAdminError("Keycloak returned an incomplete group")
+        if group_id in seen:
+            raise KeycloakAdminError("Keycloak returned a repeated group while paging")
+        seen.add(group_id)
+        path = f"{parent}/{name}"
+        token_name = path[1:]
+        if token_name in names and names[token_name] != group_id:
+            raise KeycloakAdminError("Distinct Keycloak groups share a full path")
+        names[token_name] = group_id
+        count = group.get("subGroupCount")
+        if "subGroupCount" in group and (type(count) is not int or count < 0):
+            raise KeycloakAdminError("Keycloak returned an invalid subgroup count")
+        if "subGroups" in group and (
+            not isinstance(group["subGroups"], list)
+            or any(not isinstance(child, dict) for child in group["subGroups"])
+        ):
+            raise KeycloakAdminError("Keycloak returned invalid subgroups")
+        if count == 0:
+            continue
+        if count is None and "subGroups" in group:
+            await _collect_group_paths(client, token, group["subGroups"], path, names, seen)
+            continue
+        url = (
+            f"{KEYCLOAK_ADMIN_URL}/admin/realms/{KEYCLOAK_REALM}/groups/"
+            f"{quote(group_id, safe='')}/children"
+        )
+        async for page in _group_pages(client, token, url):
+            await _collect_group_paths(client, token, page, path, names, seen)
+
+
 async def _get_group_name_map(
     client: httpx.AsyncClient,
     token: str,
 ) -> dict[str, str]:
-    """Return mapping of Keycloak group name to ID."""
+    """Map normalized full paths to IDs, refusing ambiguous group names."""
     groups_url = f"{KEYCLOAK_ADMIN_URL}/admin/realms/{KEYCLOAK_REALM}/groups"
-    response = await client.get(groups_url, headers=_auth_headers(token, None))
-    response.raise_for_status()
-    groups = response.json()
-    return {group.get("name"): group.get("id") for group in groups if group.get("id")}
+    names: dict[str, str] = {}
+    seen: set[str] = set()
+    async for page in _group_pages(client, token, groups_url):
+        await _collect_group_paths(client, token, page, "", names, seen)
+    return names
 
 
 async def _find_client_uuid(
@@ -466,12 +542,19 @@ async def _get_user_groups(
     token: str,
     user_id: str,
 ) -> list[str]:
-    """Fetch group names for a given Keycloak user."""
+    """Fetch memberships with the same full-path names as token claims."""
     groups_url = f"{KEYCLOAK_ADMIN_URL}/admin/realms/{KEYCLOAK_REALM}/users/{user_id}/groups"
-    response = await client.get(groups_url, headers=_auth_headers(token, None))
-    response.raise_for_status()
-    groups = response.json()
-    return [group.get("name") for group in groups if group.get("name")]
+    memberships: dict[str, str] = {}
+    async for page in _group_pages(client, token, groups_url):
+        for group in page:
+            name = _membership_group_name(group)
+            group_id = group.get("id")
+            if not name or not isinstance(group_id, str) or not group_id:
+                raise KeycloakAdminError("Keycloak returned an incomplete group membership")
+            if name in memberships and memberships[name] != group_id:
+                raise KeycloakAdminError("Distinct Keycloak groups share a full path")
+            memberships[name] = group_id
+    return list(memberships)
 
 
 async def _get_user_by_username(
@@ -549,18 +632,114 @@ async def _ensure_client(
     return client_uuid
 
 
+async def _check_inherited_group_path_mappers(
+    client: httpx.AsyncClient, token: str, client_uuid: str
+) -> None:
+    """Reject inherited emitters that can forge the reserved full-path claim."""
+    realm_url = f"{KEYCLOAK_ADMIN_URL}/admin/realms/{KEYCLOAK_REALM}"
+    checked: set[str] = set()
+    for scope_kind in ("default-client-scopes", "optional-client-scopes"):
+        response = await client.get(
+            f"{realm_url}/clients/{client_uuid}/{scope_kind}",
+            headers=_auth_headers(token, None),
+        )
+        response.raise_for_status()
+        scopes = response.json()
+        if not isinstance(scopes, list) or any(not isinstance(scope, dict) for scope in scopes):
+            raise KeycloakAdminError("Keycloak returned invalid client scopes")
+        for scope in scopes:
+            scope_id = scope.get("id")
+            if not isinstance(scope_id, str) or not scope_id:
+                raise KeycloakAdminError("Keycloak returned a client scope without an ID")
+            if scope_id in checked:
+                continue
+            checked.add(scope_id)
+            response = await client.get(
+                f"{realm_url}/client-scopes/{quote(scope_id, safe='')}/protocol-mappers/models",
+                headers=_auth_headers(token, None),
+            )
+            response.raise_for_status()
+            mappers = response.json()
+            if not isinstance(mappers, list) or any(
+                not isinstance(mapper, dict) for mapper in mappers
+            ):
+                raise KeycloakAdminError("Keycloak returned invalid inherited protocol mappers")
+            for mapper in mappers:
+                config = mapper.get("config") or {}
+                if not isinstance(config, dict):
+                    raise KeycloakAdminError("Keycloak returned invalid mapper configuration")
+                claim_name = config.get("claim.name")
+                if (
+                    isinstance(claim_name, str)
+                    and claim_name.split(".", 1)[0] == "mcpgw_group_paths"
+                ):
+                    if (
+                        claim_name != "mcpgw_group_paths"
+                        or mapper.get("protocol") != "openid-connect"
+                        or mapper.get("protocolMapper") != "oidc-group-membership-mapper"
+                        or config.get("full.path") != "true"
+                    ):
+                        raise KeycloakAdminError(
+                            "Inherited mapper conflicts with mcpgw_group_paths"
+                        )
+
+
 async def _ensure_groups_mapper(
     client: httpx.AsyncClient,
     token: str,
     client_uuid: str,
 ) -> None:
-    """Ensure the standard groups protocol mapper exists for the client."""
+    """Create or update a full-path groups mapper after checking for collisions."""
+    await _get_group_name_map(client, token)
+    await _check_inherited_group_path_mappers(client, token, client_uuid)
     mapper_url = f"{KEYCLOAK_ADMIN_URL}/admin/realms/{KEYCLOAK_REALM}/clients/{client_uuid}/protocol-mappers/models"
     response = await client.get(mapper_url, headers=_auth_headers(token, None))
     response.raise_for_status()
 
     mappers = response.json()
-    if any(mapper.get("name") == "groups" for mapper in mappers):
+    if not isinstance(mappers, list) or any(not isinstance(mapper, dict) for mapper in mappers):
+        raise KeycloakAdminError("Keycloak returned invalid protocol mappers")
+    existing = None
+    for mapper in mappers:
+        config = mapper.get("config") or {}
+        if not isinstance(config, dict):
+            raise KeycloakAdminError("Keycloak returned invalid mapper configuration")
+        if mapper.get("name") == "groups":
+            if (
+                existing is not None
+                or mapper.get("protocolMapper") != "oidc-group-membership-mapper"
+                or mapper.get("protocol") != "openid-connect"
+                or config.get("claim.name") not in ("groups", "mcpgw_group_paths")
+                or (
+                    config.get("claim.name") == "mcpgw_group_paths"
+                    and config.get("full.path") != "true"
+                )
+            ):
+                raise KeycloakAdminError("Existing groups mapper is ambiguous or incompatible")
+            existing = mapper
+        elif (
+            isinstance(config.get("claim.name"), str)
+            and config["claim.name"].split(".", 1)[0] == "mcpgw_group_paths"
+        ):
+            raise KeycloakAdminError("Another protocol mapper emits the mcpgw_group_paths claim")
+    if existing is not None:
+        config = existing.get("config") or {}
+        if config.get("full.path") == "true" and config.get("claim.name") == "mcpgw_group_paths":
+            return
+        mapper_id = existing.get("id")
+        if not isinstance(mapper_id, str) or not mapper_id:
+            raise KeycloakAdminError("Existing groups mapper has no ID")
+        updated = {
+            **existing,
+            "config": {**config, "full.path": "true", "claim.name": "mcpgw_group_paths"},
+        }
+        response = await client.put(
+            f"{mapper_url}/{quote(mapper_id, safe='')}", headers=_auth_headers(token), json=updated
+        )
+        if response.status_code != 204:
+            raise KeycloakAdminError(
+                f"Failed to update groups mapper (HTTP {response.status_code})"
+            )
         return
 
     mapper_payload = {
@@ -569,10 +748,10 @@ async def _ensure_groups_mapper(
         "protocolMapper": "oidc-group-membership-mapper",
         "consentRequired": False,
         "config": {
-            "full.path": "false",
+            "full.path": "true",
             "id.token.claim": "true",
             "access.token.claim": "true",
-            "claim.name": "groups",
+            "claim.name": "mcpgw_group_paths",
             "userinfo.token.claim": "true",
         },
     }
@@ -580,7 +759,7 @@ async def _ensure_groups_mapper(
     create_response = await client.post(
         mapper_url, headers=_auth_headers(token), json=mapper_payload
     )
-    if create_response.status_code not in (201, 409):
+    if create_response.status_code != 201:
         logger.error(
             "Failed to create groups mapper for client %s: %s",
             client_uuid,

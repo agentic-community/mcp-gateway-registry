@@ -601,7 +601,8 @@ export class KeycloakService extends Construct {
         AWS_REGION: region,
         KC_DB: 'mysql',
         // Both public and custom images apply these settings at startup.
-        KC_FEATURES: 'token-exchange',
+        KC_FEATURES: 'token-exchange,cimd',
+        KC_FEATURES_DISABLED: 'device-flow,ciba',
         KC_PROXY_HEADERS: 'xforwarded',
         KC_HOSTNAME: this.keycloakUrl,
         KC_HOSTNAME_ADMIN: this.keycloakUrl,

@@ -1156,7 +1156,7 @@ Confirm these rendered names match the reviewed base values before preparing tar
 
 Choose a timeout long enough for your archive and Keycloak schema update. The PostgreSQL startup-probe allowance defaults to 24 hours; a shorter Helm timeout can report failure while the pod continues working. Inspect progress before retrying. Do not add `--atomic`: automatic manifest rollback after a database migration can start an old Keycloak image against a changed schema. Keep rollback under operator control.
 
-The restore preserves realm data, then the `setup-keycloak` hook reconciles the configured clients, groups and users. Review those intended changes before upgrading. An older experimental realm with full-path group mappers also needs an application image that understands those claims; restoring the database does not convert its mapper format.
+The restore preserves realm data, then the `setup-keycloak` hook reconciles the configured clients, groups and users. Deploy auth-server and registry images that normalize full group paths before this hook converts mappers. It refuses colliding group paths and requires `keycloak-configure.dcr.sweepAcknowledged=true` before disabling clients outside the DCR-off keep rules. Review the inventory and `dcr.keepClients` first. See [realm-policy and group-path migration](../../docs/keycloak-mcp-clients.md#enable-registration-and-migrate-an-existing-realm) for CIMD opt-in and existing-session handling.
 
 ### 4. Prepare target storage without destroying the source
 

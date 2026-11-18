@@ -12,19 +12,78 @@
 #
 # Or set these in a .env file in the project root
 
-set -e
+set -eo pipefail
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../keycloak/setup" && pwd)/group-path-preflight.sh"
 
 # These will be set properly after loading .env in main()
 KEYCLOAK_URL=""  # Will be overridden with KEYCLOAK_ADMIN_URL after .env is loaded
 REALM="mcp-gateway"
-KEYCLOAK_ADMIN=""
-KEYCLOAK_ADMIN_PASSWORD=""
 
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
+
+# Emit full group paths in mcpgw_group_paths, distinct from legacy flat groups.
+# The auth-server removes exactly one leading slash only from this claim.
+GROUPS_MAPPER_JSON='{
+    "name": "groups",
+    "protocol": "openid-connect",
+    "protocolMapper": "oidc-group-membership-mapper",
+    "consentRequired": false,
+    "config": {
+        "full.path": "true",
+        "id.token.claim": "true",
+        "access.token.claim": "true",
+        "claim.name": "mcpgw_group_paths",
+        "userinfo.token.claim": "true"
+    }
+}'
+
+# Security baseline merged over a realm's current representation (the jq
+# input): a stronger setting already in place is kept, a missing or weaker one
+# is raised to the baseline. $gateway (true for the gateway realm) adds the
+# password policy and the offline-session cap; the master realm gets the
+# quick-login settings instead. adminEventsDetailsEnabled is always false so
+# request bodies, which can carry secrets, are not stored in admin events.
+# The same program is in keycloak/setup/init-keycloak.sh,
+# keycloak/setup/upgrade-realm-for-dcr.sh and the Helm Job script.
+REALM_SECURITY_BASELINE_JQ='
+    if type != "object" then error("not a realm representation") else . end
+    | . as $r
+    | {
+        bruteForceProtected: true,
+        permanentLockout: ($r.permanentLockout == true),
+        failureFactor: (if $r.bruteForceProtected == true and ($r.failureFactor // 0) > 0
+                        then ([$r.failureFactor, 5] | min) else 5 end),
+        waitIncrementSeconds: ([($r.waitIncrementSeconds // 0), 60] | max),
+        maxFailureWaitSeconds: ([($r.maxFailureWaitSeconds // 0), 900] | max),
+        eventsEnabled: true,
+        eventsExpiration: (if $r.eventsExpiration == 0 or ($r.eventsExpiration // 0) >= 2592000
+                           then $r.eventsExpiration else 2592000 end),
+        adminEventsEnabled: true,
+        adminEventsDetailsEnabled: false
+      }
+    + (if $adminExpiry then {attributes: (($r.attributes // {}) + {
+            adminEventsExpiration: (if $r.attributes.adminEventsExpiration == "0"
+                or (($r.attributes.adminEventsExpiration // "0") | tonumber) >= 2592000
+                then $r.attributes.adminEventsExpiration else "2592000" end)})} else {} end)
+    + (if $gateway then {
+        passwordPolicy: (if (($r.passwordPolicy // "") | length) > 0
+                         then $r.passwordPolicy else "length(8) and notUsername and notEmail" end),
+        offlineSessionMaxLifespanEnabled: true,
+        offlineSessionMaxLifespan: (if $r.offlineSessionMaxLifespanEnabled == true
+                                       and ($r.offlineSessionMaxLifespan // 0) > 0
+                                       and $r.offlineSessionMaxLifespan <= 2592000
+                                    then $r.offlineSessionMaxLifespan else 2592000 end)
+      } else {
+        minimumQuickLoginWaitSeconds: ([($r.minimumQuickLoginWaitSeconds // 0), 60] | max),
+        quickLoginCheckMilliSeconds: ([($r.quickLoginCheckMilliSeconds // 0), 1000] | max),
+        maxDeltaTimeSeconds: ([($r.maxDeltaTimeSeconds // 0), 43200] | max)
+      } end)
+    | with_entries(select(.value != null))'
 
 echo -e "${YELLOW}Keycloak initialization script for MCP Gateway Registry${NC}"
 echo "=============================================="
@@ -51,16 +110,195 @@ wait_for_keycloak() {
     exit 1
 }
 
-# Function to get admin token
-get_admin_token() {
-    local response=$(curl -s -X POST "${KEYCLOAK_URL}/realms/master/protocol/openid-connect/token" \
-        -H "Content-Type: application/x-www-form-urlencoded" \
-        --data-urlencode "username=${KEYCLOAK_ADMIN}" \
-        --data-urlencode "password=${KEYCLOAK_ADMIN_PASSWORD}" \
-        --data-urlencode "grant_type=password" \
-        --data-urlencode "client_id=admin-cli")
+# admin token can expire, rather than once per high-level operation.
+_realm_fresh_token() {
+    local now saved=0 token="" cache="$CREDENTIAL_IO_DIR/realm-token"
+    now=$(date +%s) || return 1
+    if [ -f "$cache" ]; then
+        { IFS= read -r saved; IFS= read -r token; } < "$cache" || return 1
+    fi
+    if [ -z "$token" ] || [ "$((now - saved))" -ge 20 ]; then
+        token=$(get_admin_token) || return 1
+        if [ -z "$token" ]; then
+            echo "Could not refresh Keycloak administrator credentials." >&2
+            return 1
+        fi
+        printf '%s\n%s\n' "$now" "$token" | credential_write "$cache" || return 1
+    fi
+    printf '%s' "$token"
+}
 
-    echo "$response" | grep -o '"access_token":"[^"]*' | cut -d'"' -f4
+_admin_event_expiry_supported() {
+    _keycloak_policy_version_supported "$KEYCLOAK_URL" "$1"
+}
+
+get_admin_token() {
+    # Parse JSON structurally; whitespace in an OAuth response is insignificant.
+    local response
+    response=$(printf '%s' "$KEYCLOAK_ADMIN_PASSWORD" | \
+        credential_curl -fsS -X POST "${KEYCLOAK_URL}/realms/master/protocol/openid-connect/token" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            --data-urlencode "username=${KEYCLOAK_ADMIN}" \
+            --data-urlencode "password@-" \
+            --data-urlencode "grant_type=password" \
+            --data-urlencode "client_id=admin-cli") || return 1
+    jq -er '.access_token | select(type == "string" and length > 0)' <<< "$response"
+}
+
+
+# URL-encode a single query-parameter value.
+_uri_encode() {
+    jq -rn --arg v "$1" '$v|@uri'
+}
+
+# GET an Admin API path (relative to /admin/realms/) and print the body only on
+# HTTP 200. Any other status returns 1 so callers fail closed instead of parsing
+# an error body as "nothing found".
+_kc_get() {
+    local token=$1
+    local path=$2
+    local response status
+    response=$(realm_curl -sS -w $'\n%{http_code}' \
+        -H "Authorization: Bearer ${token}" \
+        "${KEYCLOAK_URL}/admin/realms/${path}") || return 1
+    status="${response##*$'\n'}"
+    if [ "$status" != "200" ]; then
+        echo -e "${RED}Error: GET /admin/realms/${path} returned HTTP ${status}${NC}" >&2
+        return 1
+    fi
+    printf '%s' "${response%$'\n'*}"
+}
+
+_find_client_uuid() {
+    local token=$1
+    local client_id=$2
+    local body
+    body=$(_kc_get "$token" "${REALM}/clients?clientId=$(_uri_encode "$client_id")") || return 1
+    printf '%s' "$body" | jq -r --arg c "$client_id" \
+        'if type == "array" then ([.[] | select(.clientId == $c) | .id] | first // "") else error("unexpected clients response") end'
+}
+
+_upsert_groups_mapper() {
+    local token=$1
+    local client_uuid=$2
+    local label=$3
+    local mappers_path="${REALM}/clients/${client_uuid}/protocol-mappers/models"
+    local mappers mapper_ids mapper_id mapper_json status
+
+
+    mappers=$(_kc_get "$token" "$mappers_path") || return 1
+    mapper_ids=$(printf '%s' "$mappers" | jq -r '
+        def gateway_groups: .protocol == "openid-connect"
+            and .protocolMapper == "oidc-group-membership-mapper"
+            and (.config["claim.name"] == "groups" or .config["claim.name"] == "mcpgw_group_paths");
+        if type != "array" then error("unexpected mappers response")
+        elif any(.[]; (.name == "groups" or .config["claim.name"] == "mcpgw_group_paths") and (gateway_groups | not))
+        then error("conflicting groups mapper")
+        else .[] | select(gateway_groups) | .id
+            | if type == "string" and length > 0 then . else error("groups mapper has no id") end end') || return 1
+
+    _check_client_group_path_mappers "$KEYCLOAK_URL" "$REALM" "$token" "$client_uuid" || return 1
+    if [ -n "$mapper_ids" ] && jq -e 'all(.[] | select(.protocol == "openid-connect"
+        and .protocolMapper == "oidc-group-membership-mapper"
+        and (.config["claim.name"] == "groups" or .config["claim.name"] == "mcpgw_group_paths"));
+        .config["full.path"] == "true" and .config["claim.name"] == "mcpgw_group_paths")' >/dev/null <<< "$mappers"; then
+        return 0
+    fi
+    _check_group_paths "$KEYCLOAK_URL" "$REALM" "$token" || return 1
+    if [ -z "$mapper_ids" ]; then
+        status=$(realm_curl -sS -o /dev/null -w "%{http_code}" \
+            -X POST "${KEYCLOAK_URL}/admin/realms/${mappers_path}" \
+            -H "Authorization: Bearer ${token}" \
+            -H "Content-Type: application/json" \
+            -d "$GROUPS_MAPPER_JSON") || status="000"
+        if [ "$status" = "201" ]; then
+            echo "  - Groups mapper created for ${label}"
+            return 0
+        fi
+        echo -e "${RED}  - Failed to create groups mapper for ${label} (HTTP ${status})${NC}" >&2
+        return 1
+    fi
+
+    for mapper_id in $mapper_ids; do
+        mapper_json=$(printf '%s' "$mappers" | jq -c --arg id "$mapper_id" \
+            '.[] | select(.id == $id)') || return 1
+        if jq -e '.config["full.path"] == "true" and .config["claim.name"] == "mcpgw_group_paths"' >/dev/null <<< "$mapper_json"; then
+            continue
+        fi
+        mapper_json=$(jq -c '.config = ((.config // {}) + {"full.path": "true", "claim.name": "mcpgw_group_paths"})' <<< "$mapper_json") || return 1
+        status=$(realm_curl -sS -o /dev/null -w "%{http_code}" \
+            -X PUT "${KEYCLOAK_URL}/admin/realms/${mappers_path}/${mapper_id}" \
+            -H "Authorization: Bearer ${token}" \
+            -H "Content-Type: application/json" \
+            -d "$mapper_json") || status="000"
+        if [ "$status" != "204" ]; then
+            echo -e "${RED}  - Failed to update groups mapper ${mapper_id} for ${label} (HTTP ${status})${NC}" >&2
+            return 1
+        fi
+        echo "  - Groups mapper ${mapper_id} updated to mcpgw_group_paths (full.path=true) for ${label}"
+    done
+}
+
+# Print the security settings to PUT on realm $2: REALM_SECURITY_BASELINE_JQ
+# applied to the realm's current representation. $3 is true for the gateway
+# realm. Returns 1 if the realm cannot be read, so nothing is written.
+_realm_security_settings() {
+    local token=$1
+    local realm=$2
+    local gateway=$3
+    local current admin_expiry
+
+    admin_expiry=$(_admin_event_expiry_supported "$token") || return 1
+    current=$(_kc_get "$token" "$realm") || return 1
+    if ! jq -ec --argjson gateway "$gateway" --argjson adminExpiry "$admin_expiry" "$REALM_SECURITY_BASELINE_JQ" <<< "$current"; then
+        echo -e "${RED}Error: could not read the current settings of realm ${realm}${NC}" >&2
+        return 1
+    fi
+}
+
+# PUT the bootstrap's realm settings ($2) onto the existing gateway realm, with
+# the security fields merged over its current values so a stronger setting the
+# operator chose is kept. Partial PUT: other fields keep their values.
+_update_realm_settings() {
+    local token=$1
+    local realm_json=$2
+    local settings body update_response update_status
+
+    settings=$(_realm_security_settings "$token" "$REALM" true) || return 1
+    body=$(jq -c --argjson s "$settings" '. + $s' <<< "$realm_json")
+    update_response=$(realm_curl -sS -w $'\n%{http_code}' \
+        -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}" \
+        -H "Authorization: Bearer ${token}" \
+        -H "Content-Type: application/json" \
+        -d "$body") || update_response=$'\n000'
+    update_status="${update_response##*$'\n'}"
+    if [ "$update_status" = "204" ]; then
+        echo -e "${GREEN}Realm already exists; settings updated (stronger existing settings kept).${NC}"
+        return 0
+    fi
+    echo -e "${RED}Failed to update existing realm (HTTP ${update_status})${NC}" >&2
+    echo "  response: ${update_response%$'\n'*}" >&2
+    return 1
+}
+
+harden_master_realm() {
+    local token=$1
+    local status master_json
+    echo "Hardening master realm..."
+    master_json=$(_realm_security_settings "$token" "master" false) || return 1
+    status=$(realm_curl -sS -o /dev/null -w "%{http_code}" \
+        -X PUT "${KEYCLOAK_URL}/admin/realms/master" \
+        -H "Authorization: Bearer ${token}" \
+        -H "Content-Type: application/json" \
+        -d "$master_json") || status="000"
+    case "$status" in
+        2??)
+            echo -e "${GREEN}Master realm hardened (stronger existing settings kept).${NC}"
+            return 0
+            ;;
+    esac
+    echo -e "${RED}Failed to harden master realm (HTTP ${status})${NC}" >&2
+    return 1
 }
 
 # Function to refresh admin token (call before each major operation)
@@ -72,14 +310,22 @@ refresh_token() {
     fi
 }
 
-# Function to check if realm exists
+# Check whether the realm exists: returns 0 if it does, 2 if Keycloak answers
+# 404, and 1 on any other response so an auth or server error is never read as
+# "absent".
 realm_exists() {
     local token=$1
-    local response=$(curl -s -o /dev/null -w "%{http_code}" \
+    local response
+    response=$(realm_curl -s -o /dev/null -w "%{http_code}" \
         -H "Authorization: Bearer ${token}" \
         "${KEYCLOAK_URL}/admin/realms/${REALM}")
 
-    [ "$response" = "200" ]
+    case "$response" in
+        200) return 0 ;;
+        404) return 2 ;;
+    esac
+    echo -e "${RED}Could not check whether realm ${REALM} exists (HTTP ${response})${NC}" >&2
+    return 1
 }
 
 # Function to create realm step by step
@@ -88,8 +334,9 @@ create_realm() {
 
     echo "Creating MCP Gateway realm..."
 
-    # Realm settings the bootstrap owns. Declared before the existence check so
-    # the create and the update path cannot drift.
+    # Realm settings the bootstrap owns, as created. On an existing realm the
+    # security fields are merged over its current values instead (see
+    # _update_realm_settings).
     local realm_json='{
         "realm": "mcp-gateway",
         "enabled": true,
@@ -102,30 +349,35 @@ create_realm() {
         "failureFactor": 5,
         "waitIncrementSeconds": 60,
         "maxFailureWaitSeconds": 900,
-        "permanentLockout": false
+        "permanentLockout": false,
+        "passwordPolicy": "length(8) and notUsername and notEmail",
+        "eventsEnabled": true,
+        "eventsExpiration": 2592000,
+        "adminEventsEnabled": true,
+        "adminEventsDetailsEnabled": false,
+        "offlineSessionMaxLifespanEnabled": true,
+        "offlineSessionMaxLifespan": 2592000
     }'
+    local admin_expiry
+    admin_expiry=$(_admin_event_expiry_supported "$token") || return 1
+    if [ "$admin_expiry" = true ]; then
+        realm_json=$(jq -c '.attributes = {adminEventsExpiration: "2592000"}' <<< "$realm_json") || return 1
+    fi
 
     # An existing realm is UPDATED, not skipped. Skipping meant a security setting
     # added here (e.g. bruteForceProtected) never reached a deployment whose realm
     # already existed, while the script still reported success.
-    if realm_exists "$token"; then
-        local update_status update_response
-        update_response=$(curl -sS -w $'\n%{http_code}' \
-            -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}" \
-            -H "Authorization: Bearer ${token}" \
-            -H "Content-Type: application/json" \
-            -d "$realm_json")
-        update_status="${update_response##*$'\n'}"
-        if [ "$update_status" = "204" ]; then
-            echo -e "${GREEN}Realm already exists; settings updated.${NC}"
-            return 0
-        fi
-        echo -e "${RED}Failed to update existing realm (HTTP ${update_status})${NC}" >&2
-        echo "  response: ${update_response%$'\n'*}" >&2
+    local exists_rc=0
+    realm_exists "$token" || exists_rc=$?
+    if [ "$exists_rc" = "1" ]; then
         return 1
     fi
+    if [ "$exists_rc" = "0" ]; then
+        _update_realm_settings "$token" "$realm_json"
+        return
+    fi
 
-    local response=$(curl -s -o /dev/null -w "%{http_code}" \
+    local response=$(realm_curl -s -o /dev/null -w "%{http_code}" \
         -X POST "${KEYCLOAK_URL}/admin/realms" \
         -H "Authorization: Bearer ${token}" \
         -H "Content-Type: application/json" \
@@ -135,24 +387,11 @@ create_realm() {
         echo -e "${GREEN}Realm created successfully!${NC}"
         return 0
     elif [ "$response" = "409" ]; then
-        # Existing realm: PUT the settings rather than skipping, otherwise a
-        # security setting added here (e.g. bruteForceProtected) never reaches a
-        # deployment whose realm already exists while the script reports success.
-        local update_status
-        update_status=$(curl -s -o /dev/null -w "%{http_code}" \
-            -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}" \
-            -H "Authorization: Bearer ${token}" \
-            -H "Content-Type: application/json" \
-            -d "$realm_json")
-        if [ "$update_status" = "204" ]; then
-            echo -e "${YELLOW}Realm already exists; settings updated.${NC}"
-            return 0
-        fi
-        echo -e "${RED}Failed to update existing realm (HTTP ${update_status})${NC}" >&2
-        return 1
+        # Lost a race with a concurrent bootstrap; the realm exists, so apply the
+        # settings rather than continuing with an unknown configuration.
+        _update_realm_settings "$token" "$realm_json"
+        return
     else
-        # No second POST here: re-sending the create just to print a body is a
-        # duplicate create attempt that can succeed on a transient failure.
         echo -e "${RED}Failed to create realm. HTTP status: ${response}${NC}" >&2
         return 1
     fi
@@ -215,13 +454,13 @@ create_clients() {
         "protocol": "openid-connect",
         "standardFlowEnabled": true,
         "implicitFlowEnabled": false,
-        "directAccessGrantsEnabled": true,
+        "directAccessGrantsEnabled": false,
         "serviceAccountsEnabled": false,
         "fullScopeAllowed": false,
         "publicClient": false
     }'
 
-    local web_response=$(curl -s -o /dev/null -w "%{http_code}" \
+    local web_response=$(realm_curl -s -o /dev/null -w "%{http_code}" \
         -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/clients" \
         -H "Authorization: Bearer ${token}" \
         -H "Content-Type: application/json" \
@@ -231,7 +470,7 @@ create_clients() {
         echo "  - Web client created"
     elif [ "$web_response" = "409" ]; then
         echo "  - Web client already exists, updating..."
-        local web_client_uuid=$(curl -s -H "Authorization: Bearer ${token}" \
+        local web_client_uuid=$(realm_curl -s -H "Authorization: Bearer ${token}" \
             "${KEYCLOAK_URL}/admin/realms/${REALM}/clients?clientId=mcp-gateway-web" 2>/dev/null | \
             jq -r 'if type == "array" then (.[0].id // empty) else empty end' 2>/dev/null)
         if [ -z "$web_client_uuid" ] || [ "$web_client_uuid" = "null" ]; then
@@ -241,7 +480,7 @@ create_clients() {
             echo -e "${RED}  - Could not resolve mcp-gateway-web client id; cannot apply client settings${NC}" >&2
             return 1
         fi
-        local update_response=$(curl -s -o /dev/null -w "%{http_code}" \
+        local update_response=$(realm_curl -s -o /dev/null -w "%{http_code}" \
             -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}/clients/${web_client_uuid}" \
             -H "Authorization: Bearer ${token}" \
             -H "Content-Type: application/json" \
@@ -271,7 +510,7 @@ create_clients() {
         "publicClient": false
     }'
 
-    local m2m_response=$(curl -s -o /dev/null -w "%{http_code}" \
+    local m2m_response=$(realm_curl -s -o /dev/null -w "%{http_code}" \
         -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/clients" \
         -H "Authorization: Bearer ${token}" \
         -H "Content-Type: application/json" \
@@ -317,7 +556,7 @@ create_groups() {
             }
         }'
 
-        curl -s -X POST "${KEYCLOAK_URL}/admin/realms/mcp-gateway/groups" \
+        realm_curl -s -X POST "${KEYCLOAK_URL}/admin/realms/mcp-gateway/groups" \
             -H "Authorization: Bearer ${token}" \
             -H "Content-Type: application/json" \
             -d "$group_json" > /dev/null
@@ -343,7 +582,7 @@ create_scopes() {
             "protocol": "openid-connect"
         }'
 
-        local response=$(curl -s -o /dev/null -w "%{http_code}" \
+        local response=$(realm_curl -s -o /dev/null -w "%{http_code}" \
             -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/client-scopes" \
             -H "Authorization: Bearer ${token}" \
             -H "Content-Type: application/json" \
@@ -370,7 +609,7 @@ setup_m2m_scopes() {
     echo "Setting up M2M client scopes..."
 
     # Get M2M client ID
-    local m2m_client_id=$(curl -s -H "Authorization: Bearer ${token}" \
+    local m2m_client_id=$(realm_curl -s -H "Authorization: Bearer ${token}" \
         "${KEYCLOAK_URL}/admin/realms/${REALM}/clients?clientId=mcp-gateway-m2m" 2>/dev/null | \
         jq -r 'if type == "array" then (.[0].id // empty) else empty end' 2>/dev/null)
 
@@ -384,13 +623,13 @@ setup_m2m_scopes() {
 
     for scope in "${scopes[@]}"; do
         # Get scope ID
-        local scope_id=$(curl -s -H "Authorization: Bearer ${token}" \
+        local scope_id=$(realm_curl -s -H "Authorization: Bearer ${token}" \
             "${KEYCLOAK_URL}/admin/realms/${REALM}/client-scopes" 2>/dev/null | \
             jq -r 'if type == "array" then (.[] | select(.name=="'$scope'") | .id) else empty end' 2>/dev/null)
 
         if [ ! -z "$scope_id" ] && [ "$scope_id" != "null" ]; then
             # Add scope as default client scope
-            local response=$(curl -s -o /dev/null -w "%{http_code}" \
+            local response=$(realm_curl -s -o /dev/null -w "%{http_code}" \
                 -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}/clients/${m2m_client_id}/default-client-scopes/${scope_id}" \
                 -H "Authorization: Bearer ${token}")
 
@@ -417,7 +656,7 @@ create_service_account_user() {
     echo "Creating service account user: $service_account_username"
 
     # Check if user already exists
-    local existing_user=$(curl -s -H "Authorization: Bearer ${token}" \
+    local existing_user=$(realm_curl -s -H "Authorization: Bearer ${token}" \
         "${KEYCLOAK_URL}/admin/realms/${REALM}/users?username=$service_account_username" 2>/dev/null | \
         jq -r 'if type == "array" then (.[0].id // empty) else empty end' 2>/dev/null)
 
@@ -434,7 +673,7 @@ create_service_account_user() {
         "serviceAccountClientId": "mcp-gateway-m2m"
     }'
 
-    local response=$(curl -s -o /dev/null -w "%{http_code}" \
+    local response=$(realm_curl -s -o /dev/null -w "%{http_code}" \
         -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/users" \
         -H "Authorization: Bearer ${token}" \
         -H "Content-Type: application/json" \
@@ -444,19 +683,19 @@ create_service_account_user() {
         echo -e "${GREEN}Service account user created successfully!${NC}"
 
         # Get the newly created user ID
-        local user_id=$(curl -s -H "Authorization: Bearer ${token}" \
+        local user_id=$(realm_curl -s -H "Authorization: Bearer ${token}" \
             "${KEYCLOAK_URL}/admin/realms/${REALM}/users?username=$service_account_username" 2>/dev/null | \
             jq -r 'if type == "array" then (.[0].id // empty) else empty end' 2>/dev/null)
 
         echo "Created service account user with ID: $user_id"
 
         # Assign user to mcp-servers-unrestricted group
-        local group_id=$(curl -s -H "Authorization: Bearer ${token}" \
+        local group_id=$(realm_curl -s -H "Authorization: Bearer ${token}" \
             "${KEYCLOAK_URL}/admin/realms/${REALM}/groups" 2>/dev/null | \
             jq -r 'if type == "array" then (.[] | select(.name=="mcp-servers-unrestricted") | .id) else empty end' 2>/dev/null)
 
         if [ ! -z "$group_id" ] && [ "$group_id" != "null" ]; then
-            local group_response=$(curl -s -o /dev/null -w "%{http_code}" \
+            local group_response=$(realm_curl -s -o /dev/null -w "%{http_code}" \
                 -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}/users/$user_id/groups/$group_id" \
                 -H "Authorization: Bearer ${token}")
 
@@ -470,12 +709,12 @@ create_service_account_user() {
         fi
 
         # Assign user to a2a-agent-admin group for A2A agent access
-        local a2a_group_id=$(curl -s -H "Authorization: Bearer ${token}" \
+        local a2a_group_id=$(realm_curl -s -H "Authorization: Bearer ${token}" \
             "${KEYCLOAK_URL}/admin/realms/${REALM}/groups" 2>/dev/null | \
             jq -r 'if type == "array" then (.[] | select(.name=="a2a-agent-admin") | .id) else empty end' 2>/dev/null)
 
         if [ ! -z "$a2a_group_id" ] && [ "$a2a_group_id" != "null" ]; then
-            local a2a_response=$(curl -s -o /dev/null -w "%{http_code}" \
+            local a2a_response=$(realm_curl -s -o /dev/null -w "%{http_code}" \
                 -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}/users/$user_id/groups/$a2a_group_id" \
                 -H "Authorization: Bearer ${token}")
 
@@ -530,7 +769,7 @@ create_service_account_clients() {
             "protocol": "openid-connect"
         }'
 
-        local response=$(curl -s -o /dev/null -w "%{http_code}" \
+        local response=$(realm_curl -s -o /dev/null -w "%{http_code}" \
             -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/clients" \
             -H "Authorization: Bearer ${token}" \
             -H "Content-Type: application/json" \
@@ -546,7 +785,7 @@ create_service_account_clients() {
         fi
 
         # Get the client UUID
-        local client_uuid=$(curl -s -H "Authorization: Bearer ${token}" \
+        local client_uuid=$(realm_curl -s -H "Authorization: Bearer ${token}" \
             "${KEYCLOAK_URL}/admin/realms/${REALM}/clients?clientId=${client_name}" 2>/dev/null | \
             jq -r 'if type == "array" then (.[0].id // empty) else empty end' 2>/dev/null)
 
@@ -556,7 +795,7 @@ create_service_account_clients() {
         fi
 
         # Get the service account user ID
-        local service_account_user=$(curl -s -H "Authorization: Bearer ${token}" \
+        local service_account_user=$(realm_curl -s -H "Authorization: Bearer ${token}" \
             "${KEYCLOAK_URL}/admin/realms/${REALM}/clients/${client_uuid}/service-account-user" 2>/dev/null | \
             jq -r '.id // empty' 2>/dev/null)
 
@@ -566,7 +805,7 @@ create_service_account_clients() {
         fi
 
         # Get the group ID
-        local group_id=$(curl -s -H "Authorization: Bearer ${token}" \
+        local group_id=$(realm_curl -s -H "Authorization: Bearer ${token}" \
             "${KEYCLOAK_URL}/admin/realms/${REALM}/groups" 2>/dev/null | \
             jq -r 'if type == "array" then (.[] | select(.name=="'$group_name'") | .id) else empty end' 2>/dev/null)
 
@@ -576,7 +815,7 @@ create_service_account_clients() {
         fi
 
         # Assign service account to the group
-        local group_response=$(curl -s -o /dev/null -w "%{http_code}" \
+        local group_response=$(realm_curl -s -o /dev/null -w "%{http_code}" \
             -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}/users/${service_account_user}/groups/${group_id}" \
             -H "Authorization: Bearer ${token}")
 
@@ -586,35 +825,8 @@ create_service_account_clients() {
             echo -e "${YELLOW}    - Warning: Could not assign to group (HTTP $group_response)${NC}"
         fi
 
-        # Add groups mapper to the client so groups appear in JWT token
-        echo "    - Adding groups mapper to client..."
-        local groups_mapper_json='{
-            "name": "groups",
-            "protocol": "openid-connect",
-            "protocolMapper": "oidc-group-membership-mapper",
-            "consentRequired": false,
-            "config": {
-                "full.path": "false",
-                "id.token.claim": "true",
-                "access.token.claim": "true",
-                "claim.name": "groups",
-                "userinfo.token.claim": "true"
-            }
-        }'
-
-        local mapper_response=$(curl -s -o /dev/null -w "%{http_code}" \
-            -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/clients/${client_uuid}/protocol-mappers/models" \
-            -H "Authorization: Bearer ${token}" \
-            -H "Content-Type: application/json" \
-            -d "$groups_mapper_json")
-
-        if [ "$mapper_response" = "201" ]; then
-            echo "    - Groups mapper created successfully"
-        elif [ "$mapper_response" = "409" ]; then
-            echo "    - Groups mapper already exists"
-        else
-            echo -e "${YELLOW}    - Warning: Could not create groups mapper (HTTP $mapper_response)${NC}"
-        fi
+        # Upsert full paths without changing the service-account bootstrap.
+        _upsert_groups_mapper "$token" "$client_uuid" "$client_name" || return 1
     done
 
     echo -e "${GREEN}Service account clients created successfully!${NC}"
@@ -627,7 +839,7 @@ update_user_password() {
     local password=$3
 
     # Get user ID
-    local user_id=$(curl -s -H "Authorization: Bearer ${token}" \
+    local user_id=$(realm_curl -s -H "Authorization: Bearer ${token}" \
         "${KEYCLOAK_URL}/admin/realms/${REALM}/users?username=${username}" 2>/dev/null | \
         jq -r 'if type == "array" then (.[0].id // empty) else empty end' 2>/dev/null)
 
@@ -642,7 +854,7 @@ update_user_password() {
         "temporary": true
     }'
 
-    local response=$(curl -s -o /dev/null -w "%{http_code}" \
+    local response=$(realm_curl -s -o /dev/null -w "%{http_code}" \
         -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}/users/${user_id}/reset-password" \
         -H "Authorization: Bearer ${token}" \
         -H "Content-Type: application/json" \
@@ -692,7 +904,7 @@ create_users() {
         ]
     }'
 
-    local admin_response=$(curl -s -o /dev/null -w "%{http_code}" \
+    local admin_response=$(realm_curl -s -o /dev/null -w "%{http_code}" \
         -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/users" \
         -H "Authorization: Bearer ${token}" \
         -H "Content-Type: application/json" \
@@ -728,7 +940,7 @@ create_users() {
         ]
     }'
 
-    curl -s -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/users" \
+    realm_curl -s -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/users" \
         -H "Authorization: Bearer ${token}" \
         -H "Content-Type: application/json" \
         -d "$lob1_user_json" > /dev/null
@@ -750,7 +962,7 @@ create_users() {
         ]
     }'
 
-    curl -s -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/users" \
+    realm_curl -s -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/users" \
         -H "Authorization: Bearer ${token}" \
         -H "Content-Type: application/json" \
         -d "$lob2_user_json" > /dev/null
@@ -758,32 +970,32 @@ create_users() {
     echo "Assigning users to groups..."
 
     # Get user IDs
-    local admin_user_id=$(curl -s -H "Authorization: Bearer ${token}" \
+    local admin_user_id=$(realm_curl -s -H "Authorization: Bearer ${token}" \
         "${KEYCLOAK_URL}/admin/realms/${REALM}/users?username=$admin_username" 2>/dev/null | \
         jq -r 'if type == "array" then (.[0].id // empty) else empty end' 2>/dev/null)
 
-    local lob1_user_id=$(curl -s -H "Authorization: Bearer ${token}" \
+    local lob1_user_id=$(realm_curl -s -H "Authorization: Bearer ${token}" \
         "${KEYCLOAK_URL}/admin/realms/${REALM}/users?username=$lob1_username" 2>/dev/null | \
         jq -r 'if type == "array" then (.[0].id // empty) else empty end' 2>/dev/null)
 
-    local lob2_user_id=$(curl -s -H "Authorization: Bearer ${token}" \
+    local lob2_user_id=$(realm_curl -s -H "Authorization: Bearer ${token}" \
         "${KEYCLOAK_URL}/admin/realms/${REALM}/users?username=$lob2_username" 2>/dev/null | \
         jq -r 'if type == "array" then (.[0].id // empty) else empty end' 2>/dev/null)
 
     # Get the group IDs the admin and LOB users need
-    local admin_group_id=$(curl -s -H "Authorization: Bearer ${token}" \
+    local admin_group_id=$(realm_curl -s -H "Authorization: Bearer ${token}" \
         "${KEYCLOAK_URL}/admin/realms/${REALM}/groups" 2>/dev/null | \
         jq -r 'if type == "array" then (.[] | select(.name=="mcp-registry-admin") | .id) else empty end' 2>/dev/null)
 
-    local unrestricted_group_id=$(curl -s -H "Authorization: Bearer ${token}" \
+    local unrestricted_group_id=$(realm_curl -s -H "Authorization: Bearer ${token}" \
         "${KEYCLOAK_URL}/admin/realms/${REALM}/groups" 2>/dev/null | \
         jq -r 'if type == "array" then (.[] | select(.name=="mcp-servers-unrestricted") | .id) else empty end' 2>/dev/null)
 
-    local lob1_group_id=$(curl -s -H "Authorization: Bearer ${token}" \
+    local lob1_group_id=$(realm_curl -s -H "Authorization: Bearer ${token}" \
         "${KEYCLOAK_URL}/admin/realms/${REALM}/groups" 2>/dev/null | \
         jq -r 'if type == "array" then (.[] | select(.name=="registry-users-lob1") | .id) else empty end' 2>/dev/null)
 
-    local lob2_group_id=$(curl -s -H "Authorization: Bearer ${token}" \
+    local lob2_group_id=$(realm_curl -s -H "Authorization: Bearer ${token}" \
         "${KEYCLOAK_URL}/admin/realms/${REALM}/groups" 2>/dev/null | \
         jq -r 'if type == "array" then (.[] | select(.name=="registry-users-lob2") | .id) else empty end' 2>/dev/null)
 
@@ -793,41 +1005,41 @@ create_users() {
     local lob2_username="lob2-user"
 
     # Get registry-admins group ID for admin user
-    local registry_admins_group_id=$(curl -s -H "Authorization: Bearer ${token}" \
+    local registry_admins_group_id=$(realm_curl -s -H "Authorization: Bearer ${token}" \
         "${KEYCLOAK_URL}/admin/realms/${REALM}/groups" 2>/dev/null | \
         jq -r 'if type == "array" then (.[] | select(.name=="registry-admins") | .id) else empty end' 2>/dev/null)
 
     # Assign admin user to admin group and unrestricted servers group
     if [ ! -z "$admin_user_id" ] && [ ! -z "$admin_group_id" ]; then
-        curl -s -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}/users/$admin_user_id/groups/$admin_group_id" \
+        realm_curl -s -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}/users/$admin_user_id/groups/$admin_group_id" \
             -H "Authorization: Bearer ${token}" > /dev/null
         echo "  - $admin_username assigned to mcp-registry-admin group"
     fi
 
     # Also assign admin to unrestricted servers group for full access
     if [ ! -z "$admin_user_id" ] && [ ! -z "$unrestricted_group_id" ]; then
-        curl -s -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}/users/$admin_user_id/groups/$unrestricted_group_id" \
+        realm_curl -s -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}/users/$admin_user_id/groups/$unrestricted_group_id" \
             -H "Authorization: Bearer ${token}" > /dev/null
         echo "  - $admin_username assigned to mcp-servers-unrestricted group"
     fi
 
     # Assign admin to registry-admins group for full UI permissions
     if [ ! -z "$admin_user_id" ] && [ ! -z "$registry_admins_group_id" ]; then
-        curl -s -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}/users/$admin_user_id/groups/$registry_admins_group_id" \
+        realm_curl -s -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}/users/$admin_user_id/groups/$registry_admins_group_id" \
             -H "Authorization: Bearer ${token}" > /dev/null
         echo "  - $admin_username assigned to registry-admins group"
     fi
 
     # Assign lob1-user to registry-users-lob1 group
     if [ ! -z "$lob1_user_id" ] && [ ! -z "$lob1_group_id" ]; then
-        curl -s -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}/users/$lob1_user_id/groups/$lob1_group_id" \
+        realm_curl -s -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}/users/$lob1_user_id/groups/$lob1_group_id" \
             -H "Authorization: Bearer ${token}" > /dev/null
         echo "  - $lob1_username assigned to registry-users-lob1 group"
     fi
 
     # Assign lob2-user to registry-users-lob2 group
     if [ ! -z "$lob2_user_id" ] && [ ! -z "$lob2_group_id" ]; then
-        curl -s -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}/users/$lob2_user_id/groups/$lob2_group_id" \
+        realm_curl -s -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}/users/$lob2_user_id/groups/$lob2_group_id" \
             -H "Authorization: Bearer ${token}" > /dev/null
         echo "  - $lob2_username assigned to registry-users-lob2 group"
     fi
@@ -844,30 +1056,30 @@ setup_client_secrets() {
     echo "Setting up client secrets..."
 
     # Get web client ID
-    local web_client_id=$(curl -s -H "Authorization: Bearer ${token}" \
+    local web_client_id=$(realm_curl -s -H "Authorization: Bearer ${token}" \
         "${KEYCLOAK_URL}/admin/realms/${REALM}/clients?clientId=mcp-gateway-web" 2>/dev/null | \
         jq -r 'if type == "array" then (.[0].id // empty) else empty end' 2>/dev/null)
 
     # Generate secret for web client
-    curl -s -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/clients/${web_client_id}/client-secret" \
+    realm_curl -s -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/clients/${web_client_id}/client-secret" \
         -H "Authorization: Bearer ${token}" \
         -H "Content-Type: application/json" > /dev/null
 
-    local web_secret_response=$(curl -s "${KEYCLOAK_URL}/admin/realms/${REALM}/clients/${web_client_id}/client-secret" \
+    local web_secret_response=$(realm_curl -s "${KEYCLOAK_URL}/admin/realms/${REALM}/clients/${web_client_id}/client-secret" \
         -H "Authorization: Bearer ${token}")
     web_secret=$(echo "$web_secret_response" | jq -r '.value // empty')
 
     # Get M2M client ID
-    local m2m_client_id=$(curl -s -H "Authorization: Bearer ${token}" \
+    local m2m_client_id=$(realm_curl -s -H "Authorization: Bearer ${token}" \
         "${KEYCLOAK_URL}/admin/realms/${REALM}/clients?clientId=mcp-gateway-m2m" 2>/dev/null | \
         jq -r 'if type == "array" then (.[0].id // empty) else empty end' 2>/dev/null)
 
     # Generate secret for M2M client
-    curl -s -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/clients/${m2m_client_id}/client-secret" \
+    realm_curl -s -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/clients/${m2m_client_id}/client-secret" \
         -H "Authorization: Bearer ${token}" \
         -H "Content-Type: application/json" > /dev/null
 
-    local m2m_secret_response=$(curl -s "${KEYCLOAK_URL}/admin/realms/${REALM}/clients/${m2m_client_id}/client-secret" \
+    local m2m_secret_response=$(realm_curl -s "${KEYCLOAK_URL}/admin/realms/${REALM}/clients/${m2m_client_id}/client-secret" \
         -H "Authorization: Bearer ${token}")
     m2m_secret=$(echo "$m2m_secret_response" | jq -r '.value // empty')
 
@@ -934,72 +1146,17 @@ setup_groups_mapper() {
 
     echo "Setting up groups mapper for OAuth2 clients..."
 
-    # Create groups mapper JSON
-    local groups_mapper_json='{
-        "name": "groups",
-        "protocol": "openid-connect",
-        "protocolMapper": "oidc-group-membership-mapper",
-        "consentRequired": false,
-        "config": {
-            "full.path": "false",
-            "id.token.claim": "true",
-            "access.token.claim": "true",
-            "claim.name": "groups",
-            "userinfo.token.claim": "true"
-        }
-    }'
-
-    # Setup groups mapper for mcp-gateway-web client
-    echo "Setting up groups mapper for mcp-gateway-web client..."
-    local web_client_id=$(curl -s -H "Authorization: Bearer ${token}" \
-        "${KEYCLOAK_URL}/admin/realms/${REALM}/clients?clientId=mcp-gateway-web" 2>/dev/null | \
-        jq -r 'if type == "array" then (.[0].id // empty) else empty end' 2>/dev/null)
-
-    if [ -z "$web_client_id" ] || [ "$web_client_id" = "null" ]; then
-        echo -e "${RED}Error: Could not find mcp-gateway-web client${NC}"
-        return 1
-    fi
-
-    local response=$(curl -s -o /dev/null -w "%{http_code}" \
-        -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/clients/${web_client_id}/protocol-mappers/models" \
-        -H "Authorization: Bearer ${token}" \
-        -H "Content-Type: application/json" \
-        -d "$groups_mapper_json")
-
-    if [ "$response" = "201" ]; then
-        echo -e "${GREEN}Groups mapper created for mcp-gateway-web!${NC}"
-    elif [ "$response" = "409" ]; then
-        echo -e "${YELLOW}Groups mapper already exists for mcp-gateway-web. Continuing...${NC}"
-    else
-        echo -e "${RED}Failed to create groups mapper for mcp-gateway-web. HTTP status: ${response}${NC}"
-        return 1
-    fi
-
-    # Setup groups mapper for mcp-gateway-m2m client
-    echo "Setting up groups mapper for mcp-gateway-m2m client..."
-    local m2m_client_id=$(curl -s -H "Authorization: Bearer ${token}" \
-        "${KEYCLOAK_URL}/admin/realms/${REALM}/clients?clientId=mcp-gateway-m2m" 2>/dev/null | \
-        jq -r 'if type == "array" then (.[0].id // empty) else empty end' 2>/dev/null)
-
-    if [ -z "$m2m_client_id" ] || [ "$m2m_client_id" = "null" ]; then
-        echo -e "${RED}Error: Could not find mcp-gateway-m2m client${NC}"
-        return 1
-    fi
-
-    local m2m_response=$(curl -s -o /dev/null -w "%{http_code}" \
-        -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/clients/${m2m_client_id}/protocol-mappers/models" \
-        -H "Authorization: Bearer ${token}" \
-        -H "Content-Type: application/json" \
-        -d "$groups_mapper_json")
-
-    if [ "$m2m_response" = "201" ]; then
-        echo -e "${GREEN}Groups mapper created for mcp-gateway-m2m!${NC}"
-    elif [ "$m2m_response" = "409" ]; then
-        echo -e "${YELLOW}Groups mapper already exists for mcp-gateway-m2m. Continuing...${NC}"
-    else
-        echo -e "${RED}Failed to create groups mapper for mcp-gateway-m2m. HTTP status: ${m2m_response}${NC}"
-        return 1
-    fi
+    local client_id client_uuid
+    for client_id in "mcp-gateway-web" "mcp-gateway-m2m"; do
+        echo "Setting up groups mapper for ${client_id} client..."
+        client_uuid=$(_find_client_uuid "$token" "$client_id") || return 1
+        if [ -z "$client_uuid" ]; then
+            echo -e "${RED}Error: Could not find ${client_id} client${NC}" >&2
+            return 1
+        fi
+        _upsert_groups_mapper "$token" "$client_uuid" "$client_id" || return 1
+    done
+    echo -e "${GREEN}Groups mappers configured (full.path=true).${NC}"
 }
 
 # Function to load values from terraform-outputs.json
@@ -1079,6 +1236,31 @@ main() {
     PROJECT_ROOT="$( cd "$SCRIPT_DIR/../.." && pwd )"
     ENV_FILE="$PROJECT_ROOT/.env"
 
+    # Load environment variables from .env file if it exists
+    if [ -f "$ENV_FILE" ]; then
+        echo "Loading environment variables from $ENV_FILE..."
+        local caller_vars="AWS_REGION KEYCLOAK_ADMIN_URL KEYCLOAK_ADMIN KEYCLOAK_ADMIN_PASSWORD REGISTRY_URL AUTH_SERVER_EXTERNAL_URL CLOUDFRONT_REGISTRY_URL DEPLOYMENT_MODE INITIAL_ADMIN_PASSWORD LOB1_USER_PASSWORD LOB2_USER_PASSWORD ENABLE_DCR_CONFIG ENABLE_CIMD_CONFIG DCR_KEEP_CLIENTS DCR_SWEEP_ACKNOWLEDGED DCR_ALLOWED_SCOPES CIMD_TRUSTED_DOMAINS REGISTRATION_TRUSTED_CLIENT_IDS"
+        local name present saved
+        local -a caller_names=() caller_values=()
+        for name in $caller_vars; do
+            eval 'present=${'"$name"'+set}'
+            if [ "$present" = set ]; then
+                caller_names+=("$name")
+                caller_values+=("${!name}")
+            fi
+        done
+        set -a
+        source "$ENV_FILE"
+        set +a
+        local index
+        for ((index=0; index<${#caller_names[@]}; index++)); do
+            export "${caller_names[$index]}=${caller_values[$index]}"
+        done
+        echo "Environment variables loaded successfully"
+    else
+        echo "No .env file found at $ENV_FILE"
+    fi
+
     # Check for AWS_REGION - required for SSM and Secrets Manager operations
     if [ -z "$AWS_REGION" ]; then
         echo -e "${RED}Error: AWS_REGION environment variable is required${NC}"
@@ -1089,17 +1271,6 @@ main() {
         exit 1
     fi
     echo "Using AWS Region: $AWS_REGION"
-
-    # Load environment variables from .env file if it exists
-    if [ -f "$ENV_FILE" ]; then
-        echo "Loading environment variables from $ENV_FILE..."
-        set -a  # Automatically export all variables
-        source "$ENV_FILE"
-        set +a  # Turn off automatic export
-        echo "Environment variables loaded successfully"
-    else
-        echo "No .env file found at $ENV_FILE"
-    fi
 
     # Try to load missing values from terraform-outputs.json
     if [ -z "$AUTH_SERVER_EXTERNAL_URL" ] || [ -z "$REGISTRY_URL" ] || [ -z "$KEYCLOAK_ADMIN_URL" ]; then
@@ -1115,7 +1286,11 @@ main() {
         echo "or ensure terraform-outputs.json contains keycloak_url."
         exit 1
     fi
-    KEYCLOAK_ADMIN="${KEYCLOAK_ADMIN:-admin}"
+    KEYCLOAK_ADMIN="${KEYCLOAK_ADMIN-admin}"
+    if [ -z "$KEYCLOAK_ADMIN" ]; then
+        echo "KEYCLOAK_ADMIN must not be empty." >&2
+        return 1
+    fi
     echo "Using Keycloak API URL: $KEYCLOAK_URL"
 
     # Display loaded configuration
@@ -1127,7 +1302,7 @@ main() {
     echo ""
 
     # Try to load admin credentials from SSM Parameter Store if not set
-    if [ -z "$KEYCLOAK_ADMIN_PASSWORD" ]; then
+    if [ "${KEYCLOAK_ADMIN_PASSWORD+x}" != x ]; then
         echo "Attempting to load KEYCLOAK_ADMIN_PASSWORD from SSM Parameter Store..."
         if command -v aws &> /dev/null; then
             SSM_PASSWORD=$(aws ssm get-parameter --name "/keycloak/admin_password" --with-decryption --query 'Parameter.Value' --output text --region "${AWS_REGION}" 2>/dev/null)
@@ -1171,9 +1346,32 @@ main() {
 
     echo -e "${GREEN}Authentication successful!${NC}"
 
+    DCR_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../keycloak/setup" && pwd)/upgrade-realm-for-dcr.sh"
+    if ! KEYCLOAK_ADMIN_URL="$KEYCLOAK_URL" KEYCLOAK_ADMIN="$KEYCLOAK_ADMIN" KEYCLOAK_ADMIN_PASSWORD="$KEYCLOAK_ADMIN_PASSWORD" \
+        ENABLE_DCR_CONFIG="${ENABLE_DCR_CONFIG:-false}" ENABLE_CIMD_CONFIG="${ENABLE_CIMD_CONFIG:-false}" \
+        DCR_KEEP_CLIENTS="${DCR_KEEP_CLIENTS:-}" DCR_SWEEP_ACKNOWLEDGED="${DCR_SWEEP_ACKNOWLEDGED:-false}" \
+        DCR_ALLOWED_SCOPES="${DCR_ALLOWED_SCOPES:-}" CIMD_TRUSTED_DOMAINS="${CIMD_TRUSTED_DOMAINS:-}" \
+        REGISTRATION_TRUSTED_CLIENT_IDS="${REGISTRATION_TRUSTED_CLIENT_IDS:-[]}" \
+        bash "$DCR_SCRIPT" --reconcile-registration; then
+        exit 1
+    fi
+    if ! harden_master_realm "$TOKEN"; then
+        exit 1
+    fi
+
     # Create realm and configure it step by step
     # Refresh token before each operation to prevent expiration
     if create_realm "$TOKEN"; then
+
+        # Constrain registration before any client emits the reserved group claim.
+        if ! KEYCLOAK_ADMIN_URL="$KEYCLOAK_URL" KEYCLOAK_ADMIN="$KEYCLOAK_ADMIN" KEYCLOAK_ADMIN_PASSWORD="$KEYCLOAK_ADMIN_PASSWORD" \
+            ENABLE_DCR_CONFIG="${ENABLE_DCR_CONFIG:-false}" ENABLE_CIMD_CONFIG="${ENABLE_CIMD_CONFIG:-false}" \
+            DCR_KEEP_CLIENTS="${DCR_KEEP_CLIENTS:-}" DCR_SWEEP_ACKNOWLEDGED="${DCR_SWEEP_ACKNOWLEDGED:-false}" \
+            DCR_ALLOWED_SCOPES="${DCR_ALLOWED_SCOPES:-}" CIMD_TRUSTED_DOMAINS="${CIMD_TRUSTED_DOMAINS:-}" \
+            REGISTRATION_TRUSTED_CLIENT_IDS="${REGISTRATION_TRUSTED_CLIENT_IDS:-[]}" \
+            bash "$DCR_SCRIPT" --restrict-group-claims; then
+            exit 1
+        fi
         refresh_token
         create_clients "$TOKEN"
 
@@ -1201,20 +1399,28 @@ main() {
         refresh_token
         setup_m2m_scopes "$TOKEN"
 
-        # MCP Dynamic Client Registration (DCR) support. Adds the groups + audience
-        # mappers to the 'basic' client-scope (so DCR'd-client tokens carry a groups
-        # claim and aud=mcp-gateway), widens the Allowed Client Scopes policy, and
-        # relaxes the Trusted Hosts policy so MCP clients (Claude Code, claude.ai
-        # connectors, Cursor) can self-register. Delegates to the canonical,
-        # idempotent script (single source of truth) rather than duplicating it.
+        # MCP Dynamic Client Registration (DCR) support: groups + audience
+        # mappers on the 'basic' client-scope, an explicit Allowed Client
+        # Scopes allowlist, a relaxed Trusted Hosts policy, no client-supplied
+        # mappers and no device grant, so MCP clients (Claude Code, claude.ai
+        # connectors, Cursor) can self-register safely. Delegates to the
+        # canonical, idempotent script (single source of truth) rather than
+        # duplicating it.
         refresh_token
         DCR_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../keycloak/setup" 2>/dev/null && pwd)/upgrade-realm-for-dcr.sh"
-        if [ -f "$DCR_SCRIPT" ]; then
-            echo "Applying MCP Dynamic Client Registration (DCR) realm configuration..."
-            KEYCLOAK_ADMIN_URL="$KEYCLOAK_URL" KEYCLOAK_ADMIN="$KEYCLOAK_ADMIN" KEYCLOAK_ADMIN_PASSWORD="$KEYCLOAK_ADMIN_PASSWORD" \
-                bash "$DCR_SCRIPT" || echo -e "${YELLOW}WARNING: DCR setup did not complete; MCP clients may not be able to self-register. Re-run manually: $DCR_SCRIPT${NC}"
-        else
-            echo -e "${YELLOW}WARNING: DCR script not found at $DCR_SCRIPT; skipping DCR setup. MCP client auto-registration will not work until configured.${NC}"
+        if [ ! -f "$DCR_SCRIPT" ]; then
+            echo -e "${RED}Error: DCR script not found at $DCR_SCRIPT. Run this script from a full repository checkout.${NC}"
+            exit 1
+        fi
+        echo "Applying MCP Dynamic Client Registration (DCR) realm configuration..."
+        if ! KEYCLOAK_ADMIN_URL="$KEYCLOAK_URL" KEYCLOAK_ADMIN="$KEYCLOAK_ADMIN" KEYCLOAK_ADMIN_PASSWORD="$KEYCLOAK_ADMIN_PASSWORD" \
+        ENABLE_DCR_CONFIG="${ENABLE_DCR_CONFIG:-false}" ENABLE_CIMD_CONFIG="${ENABLE_CIMD_CONFIG:-false}" \
+        DCR_KEEP_CLIENTS="${DCR_KEEP_CLIENTS:-}" DCR_SWEEP_ACKNOWLEDGED="${DCR_SWEEP_ACKNOWLEDGED:-false}" \
+        DCR_ALLOWED_SCOPES="${DCR_ALLOWED_SCOPES:-}" CIMD_TRUSTED_DOMAINS="${CIMD_TRUSTED_DOMAINS:-}" \
+        REGISTRATION_TRUSTED_CLIENT_IDS="${REGISTRATION_TRUSTED_CLIENT_IDS:-[]}" \
+            bash "$DCR_SCRIPT"; then
+            echo -e "${RED}Error: DCR realm configuration failed (see the [n/7] step above). Fix the cause and re-run this script; it is idempotent.${NC}"
+            exit 1
         fi
     else
         exit 1

@@ -69,7 +69,11 @@ locals {
     },
     {
       name  = "KC_FEATURES"
-      value = "token-exchange"
+      value = "token-exchange,cimd"
+    },
+    {
+      name  = "KC_FEATURES_DISABLED"
+      value = "device-flow,ciba"
     }
   ]
 

@@ -914,6 +914,9 @@ sanitizer that isn't called) is equivalent to no check.
   authorization path. Apply it in every provider, including the self-signed and
   userinfo paths, because a validator that one reading skips is the reading an
   attacker uses.
+- Validate a primary authorization claim before using its emptiness to select a fallback. Falsy malformed values such as
+  `{}`, `""`, `false` and `0` must not skip validation and acquire permissions or roles from another claim. Test bearer
+  and login readers together; preserve only the documented absent/null/empty-array fallback.
 - **A relaxed check for a name the gateway invents is safe only if the gateway answers that name on every path and never forwards it.** Issue #1860 added a synthetic `connect_mcpgw_<server>` tool that `tools/list` returns before egress consent. It is authorized like `tools/list`, so a user with access to the server can call it without a grant for that tool. If the gateway answered it only while consent was pending and forwarded it afterwards, a backend tool with the same name would run with the user's vaulted credential under the weaker check. The rule has three parts. Answer the invented name at the gateway in every state: `_connect_tool_local_result` in `auth_server/server.py` covers the connected, OBO and non-egress cases. Match on the one exact name derived for the server. Grant the relaxed check only on routes where every request reaches the answering hop: direct routes, which nginx always sends to `/mcp-proxy` (pinned by `test_direct_route_location_only_proxies_to_mcp_proxy`). Virtual routes get no exemption, because nginx proxies their non-egress backends straight to the backend. A hop token that lacks the route claim gets none either.
 - **A cache in front of a token exchange must re-establish what the exchange checked.** Without the cache, the IdP
   verifies the subject token on every exchange, so the gateway never needed to: on a cookie-authenticated
@@ -991,6 +994,26 @@ surface.
   document's grants. Creating an IdP client scope named after an admin scope
   document is therefore equivalent to creating a requestable admin credential,
   which is how the two slash-free names above came to matter.
+- Enforce effective scopes at every registration path, including CIMD, inherited realm defaults, historical assignments
+  and refresh. Keycloak's DCR allowlist checks submitted fields and exempts existing assignments; its CIMD persistence
+  does not run DCR registration policies. A vendor-selected scope must never become a gateway grant through empty-group
+  fallback. Preserve trusted operator machine scopes through explicit client ownership, not registrant-controlled
+  metadata.
+- Verify native policy behavior with an issued token, not only HTTP success and configuration readback. Keycloak accepts
+  the unsupported scope type `any`, then its condition never matches; the supported enum is `Any`. Preserve exact
+  provider enum values and test an actual denied grant alongside the valid login/refresh path.
+- Revoke persisted registrations when a mechanism is disabled or vendor trust is withdrawn. Removing a CIMD policy stops
+  validation but leaves the client usable through ordinary login and refresh. Cleanup must run independently of other
+  registration switches and keep-lists, preserve unrelated clients, and never revive a disabled client without
+  administrator review.
+- Separate loopback callback permission from server-side fetching. CIMD validates `jwks_uri` against the same host list
+  as callbacks, and Keycloak also fetches sector identifiers, request objects and logout URLs later. Apply the public
+  HTTPS transport at connection time to every fetched URL, with redirects disabled; a check of the initial metadata
+  client ID does not secure these later requests.
+- Known accepted exception for native Keycloak 26.8.2 CIMD: the official image has no setting that separates loopback
+  callbacks from JWKS fetch destinations or pins public DNS results for later client URL fetches. CIMD remains opt-in
+  with this risk documented in `docs/keycloak-mcp-clients.md`; do not claim that native host filtering closes it. Custom
+  Java/image builds are outside this deployment model. Reassess this exception when upstream adds the missing controls.
 
 ## Frontend (React) URL / href handling
 
@@ -1017,6 +1040,9 @@ surface.
 - Treat configured database and role names as data at every boundary. Validate their supported format before initialization, preserve their exact spelling, pass them through quoted environment arguments, and use identifier-aware SQL formatting. A successful bootstrap receipt does not authorize changing the database identity on retained storage; verify the configured owner and role before startup. Migration overlays must not override an operator's chosen names with example defaults.
 - Verify initializer authentication without a terminal on the shipped image. A piped password does not prove that a CLI reads stdin. Run administrator reconciliation separately from server readiness so stale bootstrap credentials cannot restart healthy pods.
 - Pin the IdP's public URL across server hostname settings, nginx headers and issuer validation. Keep internal signing-key transport separate from public issuer identity, and exercise HTTP/HTTPS listeners and path-prefixed deployments together.
+- Change the signed claim name when changing authorization-claim semantics. New Keycloak full paths use `mcpgw_group_paths`; readers select it by presence and normalize exactly one slash, while old `groups` strings keep their meaning. Never normalize an old flat token as a new path token: a literal `/registry-admins` name would become privileged. Empty or malformed new claims must not fall back to legacy data. Check all mapper writers and inherited claim emitters, and refuse colliding group paths before conversion.
+- Verify realm-policy provider support before writing configuration and read back required controls. Apply DCR scope, protocol-mapper and privileged-default-role limits to anonymous and authenticated registration. A DCR-off sweep requires an operator-reviewed keep-list and acknowledgement before disabling clients; invalidate non-built-in registration tokens and document that existing access tokens survive until expiry.
+- Keep CIMD metadata client-ID hosts separate from callback hosts. Require public HTTPS fetches for metadata, JWKS and subsequent client URLs; loopback callback entries never authorize a server-side fetch. Enable the server feature and realm policy separately. On disable or vendor withdrawal, revoke persisted clients before removing the gateway-owned CIMD policy/profile, while preserving unrelated policy configuration.
 - **Publish sensitive ports on loopback, not `0.0.0.0`.** In compose/dev stacks,
   bind datastores, vaults, IdP admin ports, and backend services to `127.0.0.1:`;
   only the intended front door (nginx 80/443) listens on all interfaces.

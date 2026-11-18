@@ -1,0 +1,20 @@
+suite: Configure Job credential Secret permissions
+templates:
+  - templates/role.yaml
+release:
+  name: test
+  namespace: default
+tests:
+  - it: limits existing Secret access to login credentials without list or watch
+    asserts:
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [""]
+              resources: ["secrets"]
+              resourceNames: ["registry-login-credentials"]
+              verbs: ["get", "patch", "update"]
+            # Kubernetes cannot restrict Secret creation by resourceNames.
+            - apiGroups: [""]
+              resources: ["secrets"]
+              verbs: ["create"]

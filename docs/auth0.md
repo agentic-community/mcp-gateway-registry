@@ -83,6 +83,8 @@ User groups are extracted from the Auth0 ID token using a **custom namespaced cl
 
 If neither claim contains data, the user will have an empty groups list and no permissions.
 
+Bearer and browser-login validation check the primary claim's type before selecting `permissions`. An absent, null or empty array permits the fallback. A malformed value such as an object, string, number or boolean rejects authentication, even if `permissions` contains valid group names.
+
 ---
 
 ## Complete Setup Guide

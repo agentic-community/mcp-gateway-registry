@@ -22,10 +22,11 @@ auth:
 adminRealm: master
 
 # Comma-separated KC_FEATURES. Empty preserves the server defaults.
+# Set "cimd" with keycloak-configure.cimd.enabled=true for metadata documents.
 features: ""
 
 # Comma-separated KC_FEATURES_DISABLED.
-disabledFeatures: ""
+disabledFeatures: "device-flow,ciba"
 
 # Reverse-proxy / HTTP settings (Keycloak runs HTTP behind the registry nginx).
 proxyHeaders: xforwarded

@@ -13,6 +13,8 @@
 
 This document provides comprehensive guidance for implementing Keycloak authentication in the MCP Gateway, including design aspects, operational procedures, configuration parameters, and management scripts.
 
+Service-account mappers emit full paths in `mcpgw_group_paths`. The gateway strips one slash only from that new claim: `/mcp-servers-unrestricted` maps to `mcp-servers-unrestricted`, while `/team/mcp-servers-unrestricted` retains its `team/` prefix. Tokens without the new claim keep their legacy `groups` strings unchanged. Deploy the matching auth-server and registry before changing mappers. Setup refuses conflicting claim emitters and group-path collisions. See [realm-policy migration](keycloak-mcp-clients.md#enable-registration-and-migrate-an-existing-realm) for existing-token handling, DCR-off keep rules and cleanup acknowledgement.
+
 ## Table of Contents
 
 1. [Architecture & Design](#architecture--design)
