@@ -26,6 +26,7 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+
 # Constants
 # The built-in registry-admin group that per-type custom-entity scopes are minted
 # to on type-create. Admins get the full scope set so they can manage records of a
@@ -49,6 +50,18 @@ STANDARD_METHODS: list[str] = [
 # (single source of truth, shared with the repository-layer guard and the
 # admin-derivation rule). Re-exported here so existing callers/tests that import
 # it from this module keep working.
+
+
+def _ui_scope_server_name(
+    server_path: str,
+) -> str:
+    """Return the name a group's ``list_service`` entry must use for a server.
+
+    The server list compares ``list_service`` entries against the server's path
+    with its slashes stripped (``/example-server/`` becomes ``example-server``),
+    so a display name there matches nothing and hides the server in the UI.
+    """
+    return server_path.strip("/")
 
 
 def _grants_all(granted_resources: object) -> bool:
@@ -284,11 +297,11 @@ async def add_server_to_groups(
                 tools=tool_names,
             )
 
-            # Add to UI-Scopes for web interface visibility
-            server_name = server_info.get("server_name", server_path.lstrip("/").rstrip("/"))
+            # Add to UI-Scopes for web interface visibility. The server list
+            # matches list_service against the path name, never the display name.
             await scope_repo.add_server_to_ui_scopes(
                 group_name=group_name,
-                server_name=server_name,
+                server_name=_ui_scope_server_name(server_path),
             )
 
             logger.info(f"Added server {server_path} to group {group_name}")
@@ -320,13 +333,13 @@ async def remove_server_from_groups(
     try:
         scope_repo = get_scope_repository()
 
-        # Get server info for UI-Scopes updates
+        # UI-Scopes entries use the path name. Entries written before that fix
+        # used the display name, so remove that form too.
+        ui_names = [_ui_scope_server_name(server_path)]
         server_info = await server_service.get_server_info(server_path)
-        if server_info:
-            server_name = server_info.get("server_name", server_path.lstrip("/").rstrip("/"))
-        else:
-            # If server not found, derive name from path
-            server_name = server_path.lstrip("/").rstrip("/")
+        display_name = (server_info or {}).get("server_name")
+        if display_name and display_name not in ui_names:
+            ui_names.append(display_name)
 
         # Remove server from each group
         for group_name in group_names:
@@ -342,10 +355,11 @@ async def remove_server_from_groups(
             )
 
             # Remove from UI-Scopes
-            await scope_repo.remove_server_from_ui_scopes(
-                group_name=group_name,
-                server_name=server_name,
-            )
+            for ui_name in ui_names:
+                await scope_repo.remove_server_from_ui_scopes(
+                    group_name=group_name,
+                    server_name=ui_name,
+                )
 
             logger.info(f"Removed server {server_path} from group {group_name}")
 
