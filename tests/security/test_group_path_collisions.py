@@ -110,7 +110,7 @@ if path == "/admin/serverinfo":
         body["features"] = [{"name": "TOKEN_EXCHANGE_STANDARD_V2", "enabled": True}]
     if scenario.startswith("cimd-"):
         body["features"] = [] if scenario == "cimd-feature-missing" else [{"name": "CIMD", "enabled": True}]
-        body["componentTypes"]["org.keycloak.services.clientpolicy.condition.ClientPolicyConditionProvider"] = [] if scenario == "cimd-condition-missing" else [{"id": name} for name in ("client-id-uri", "client-scopes", "client-roles", "client-access-type", "client-type")]
+        body["componentTypes"]["org.keycloak.services.clientpolicy.condition.ClientPolicyConditionProvider"] = [] if scenario == "cimd-condition-missing" else [{"id": name} for name in ("client-id-uri", "client-scopes", "client-roles", "client-access-type", "client-type", "client-attributes", "grant-type")]
         body["componentTypes"]["org.keycloak.services.clientpolicy.executor.ClientPolicyExecutorProvider"] = [] if scenario == "cimd-executor-missing" else [{"id": name} for name in ("client-id-metadata-document", "reject-request", "pkce-enforcer")]
 elif path.endswith("/client-policies/policies"):
     body = {"policies": [{"name": "mcp-restrict-token-exchange"}, {"name": "unrelated"}]}
@@ -144,7 +144,7 @@ elif path.endswith("/components"):
                 state.write_text(json.dumps(policies))
     body = policies
 elif path == "/admin/realms/mcp-gateway":
-    body = {"id": "realm-id", "attributes": {"mcpgw.cimd.provenance.v1": "true"}}
+    body = {"id": "realm-id"}
 elif path == "/admin/realms/team-realm":
     state = Path(os.environ["API_LOG"]).with_suffix(".realm.json")
     if method == "GET":

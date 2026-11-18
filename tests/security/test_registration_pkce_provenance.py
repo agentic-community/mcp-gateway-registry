@@ -1,4 +1,4 @@
-"""Exercise native registration PKCE and CIMD provenance through the Admin API."""
+"""Exercise native registration PKCE and CIMD lifecycle through the Admin API."""
 
 import json
 import shutil
@@ -9,7 +9,6 @@ from tests.security import test_group_path_collisions as shell
 from tests.security.test_registration_reconciliation import PROVISIONERS, cimd, client
 
 REALM_PATH = "/admin/realms/mcp-gateway"
-MARKER = "mcpgw.cimd.provenance.v1"
 CONDITION_TYPE = "org.keycloak.services.clientpolicy.condition.ClientPolicyConditionProvider"
 EXECUTOR_TYPE = "org.keycloak.services.clientpolicy.executor.ClientPolicyExecutorProvider"
 
@@ -46,20 +45,18 @@ elif path.startswith(base + "/client-policies/"):
                         entry["executors"][0]["configuration"]["auto-configure"] = False
                     if entry["name"] == "mcp-public-pkce-policy":
                         entry["mode"] = "LENIENT"
+                    if entry["name"] == "mcp-cimd-runtime-guard":
+                        entry["executors"] = []
+                    if entry["name"] == "mcp-cimd-runtime-guard-policy":
+                        entry["mode"] = "LENIENT"
         state["written"].append(key)
     body = {key: state[key]}
     if method == "GET" and key in state["written"] and scenario == key + "-readback-http-error":
         status = 503
-elif path == base:
-    if method == "PUT":
-        status = 204
-        if scenario == "marker-write-error":
-            status = 500
-        elif scenario != "marker-readback-missing":
-            state["realm"].update(json.loads(body_arg))
-    body = state["realm"]
-    if method == "GET" and scenario == "realm-read-error":
+    if method == "GET" and scenario == key + "-read-error":
         status = 503
+    if method == "GET" and scenario == key + "-invalid-json":
+        raw = "{invalid"
 elif path == base + "/clients":
     first = int(query.get("first", [0])[0])
     maximum = int(query.get("max", [100])[0])
@@ -75,14 +72,10 @@ elif path.startswith(base + "/clients/"):
     uuid = unquote(path.removeprefix(base + "/clients/"))
     body = state["clients"].get(uuid, {})
     status = 200 if uuid in state["clients"] else 404
-    if method == "DELETE":
-        if scenario == "client-delete-error" and uuid == "second":
-            status = 500
-        elif scenario == "client-delete-readback-failed":
-            status = 204
-        else:
-            state["clients"].pop(uuid, None)
-            status, body = 204, {}
+    if method == "PUT":
+        state["clients"][uuid].update(json.loads(body_arg))
+        body = state["clients"][uuid]
+        status = 204
 else:
     print("Unexpected API request: " + path, file=sys.stderr)
     sys.exit(97)
@@ -118,6 +111,8 @@ def serverinfo():
                     "client-scopes",
                     "client-roles",
                     "client-id-uri",
+                    "client-attributes",
+                    "grant-type",
                 )
             ],
             EXECUTOR_TYPE: [
@@ -138,7 +133,6 @@ def run(
     command,
     *,
     clients=(),
-    attributes=None,
     info=None,
     scenario="supported",
     profiles=None,
@@ -146,11 +140,6 @@ def run(
 ):
     state = {
         "serverinfo": serverinfo() if info is None else info,
-        "realm": {
-            "id": "realm-id",
-            "realm": "mcp-gateway",
-            "attributes": {"unrelated-setting": "preserve", **(attributes or {})},
-        },
         "clients": {entry["id"]: entry for entry in clients},
         "profiles": [{"name": "unrelated-profile"}] if profiles is None else profiles,
         "policies": [{"name": "unrelated-policy"}] if policies is None else policies,
@@ -231,7 +220,7 @@ def test_oidc_registration_rejects_absent_inventory(tmp_path, monkeypatch, path,
     [
         "_require_oidc_registration_only",
         "_preflight_registration_security",
-        "_reset_untrusted_cimd_cache",
+        "_check_cimd_first_enable",
     ],
 )
 @pytest.mark.parametrize("scenario", ["serverinfo-http-error", "serverinfo-invalid-json"])
@@ -338,224 +327,255 @@ def test_pkce_write_and_readback_failures_are_fatal(
 
 @pytest.mark.parametrize("path", PROVISIONERS)
 @pytest.mark.parametrize("enabled", [True, False])
-def test_untrusted_cimd_reset_requires_ack_for_every_cached_client(
-    tmp_path, monkeypatch, path, enabled
-):
+@pytest.mark.parametrize("ack", ["false", "true"])
+def test_first_enable_refuses_every_cached_client(tmp_path, monkeypatch, path, enabled, ack):
+    record = cimd(enabled=enabled)
     result, requests, state = run(
         tmp_path,
         monkeypatch,
         path,
-        '_reset_untrusted_cimd_cache "$TOKEN"',
-        clients=[cimd(enabled=enabled)],
+        f'DCR_SWEEP_ACKNOWLEDGED={ack}\n_check_cimd_first_enable "$TOKEN"',
+        clients=[record],
     )
     assert result.returncode != 0
     assert mutations(requests) == []
-    assert MARKER not in state["realm"]["attributes"]
+    assert state["clients"] == {"cimd": record}
+
+
+@pytest.mark.parametrize("path", PROVISIONERS)
+@pytest.mark.parametrize("enabled", ["false", "true"])
+def test_first_guard_install_refuses_cache_in_both_modes(tmp_path, monkeypatch, path, enabled):
+    result, requests, state = run(
+        tmp_path,
+        monkeypatch,
+        path,
+        f'ENABLE_CIMD_CONFIG={enabled}\nDCR_SWEEP_ACKNOWLEDGED=true\n_prepare_cimd_lifecycle "$TOKEN"',
+        clients=[cimd(enabled=False)],
+    )
+    assert result.returncode != 0
+    assert mutations(requests) == []
     assert "cimd" in state["clients"]
 
 
 @pytest.mark.parametrize("path", PROVISIONERS)
-def test_untrusted_cimd_reset_deletes_all_marked_clients_before_receipt(
-    tmp_path, monkeypatch, path
-):
-    ordinary = [client(f"ordinary-{i}", f"ordinary-{i}") for i in range(101)]
-    ordinary += [
-        client("https-ordinary", "https://vendor.example/ordinary.json"),
-        client("first-party", "mcp-gateway-web", publicClient=True),
-    ]
-    marked = [
-        cimd("first", host="claude.ai"),
-        cimd("second"),
-        client("forged", "non-url-forged-client", attributes={"cimd.cache.expiry.time.in.sec": ""}),
-    ]
+def test_first_enable_detects_empty_marker_on_later_page(tmp_path, monkeypatch, path):
+    records = [client(f"ordinary-{i}", f"ordinary-{i}") for i in range(101)]
+    records.append(client("forged", "not-a-url", attributes={"cimd.cache.expiry.time.in.sec": ""}))
     result, requests, state = run(
         tmp_path,
         monkeypatch,
         path,
-        "DCR_SWEEP_ACKNOWLEDGED=true\nDCR_KEEP_CLIENTS=all\n"
-        'CIMD_TRUSTED_DOMAINS=\'["claude.ai"]\'\n_reset_untrusted_cimd_cache "$TOKEN"',
-        clients=ordinary + marked,
-        policies=[{"name": "unrelated-policy"}, {"name": "cimd-vendors-policy", "enabled": True}],
+        '_check_cimd_first_enable "$TOKEN"',
+        clients=records,
     )
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert state["clients"] == {entry["id"]: entry for entry in ordinary}
-    assert state["realm"]["attributes"] == {"unrelated-setting": "preserve", MARKER: "true"}
-    deletes = [(i, request) for i, request in enumerate(requests) if request["method"] == "DELETE"]
-    assert {request["path"] for _, request in deletes} == {
-        f"{REALM_PATH}/clients/{entry['id']}" for entry in marked
-    }
-    marker_writes = [
-        i
-        for i, request in enumerate(requests)
-        if request["method"] == "PUT" and request["path"] == REALM_PATH
-    ]
-    assert len(marker_writes) == 1
-    assert max(i for i, _ in deletes) < marker_writes[0]
-    assert state["policies"] == [{"name": "unrelated-policy"}]
-    close_policy = next(
-        i
-        for i, request in enumerate(requests)
-        if request["method"] == "PUT" and request["path"].endswith("/policies")
-    )
-    assert close_policy < min(i for i, _ in deletes)
+    assert result.returncode != 0
+    assert mutations(requests) == []
+    assert state["clients"] == {record["id"]: record for record in records}
     assert any(
-        int(request["query"].get("first", [0])[0]) > 0
-        for request in requests
-        if request["path"] == REALM_PATH + "/clients"
+        int(r["query"].get("first", [0])[0]) > 0 for r in requests if r["path"].endswith("/clients")
     )
 
 
 @pytest.mark.parametrize("path", PROVISIONERS)
-def test_untrusted_cimd_empty_reset_sets_receipt_without_ack(tmp_path, monkeypatch, path):
-    record = client("ordinary", "ordinary", attributes={"another": "attribute"})
+def test_first_enable_without_cache_is_read_only(tmp_path, monkeypatch, path):
+    record = client("ordinary", "https://vendor.example/client.json")
     result, requests, state = run(
-        tmp_path, monkeypatch, path, '_reset_untrusted_cimd_cache "$TOKEN"', clients=[record]
+        tmp_path,
+        monkeypatch,
+        path,
+        '_check_cimd_first_enable "$TOKEN"',
+        clients=[record],
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert state["realm"]["attributes"][MARKER] == "true"
+    assert mutations(requests) == []
     assert state["clients"] == {"ordinary": record}
-    assert not any(request["method"] == "DELETE" for request in requests)
+    assert not any(r["path"] == REALM_PATH for r in requests)
 
 
 @pytest.mark.parametrize("path", PROVISIONERS)
-def test_provenance_receipt_preserves_new_native_cimd_cache(tmp_path, monkeypatch, path):
-    record = cimd()
-    result, requests, state = run(
+def test_existing_guard_skips_first_enable_cache_refusal(tmp_path, monkeypatch, path):
+    result, requests, _ = run(
         tmp_path,
         monkeypatch,
         path,
-        '_reset_untrusted_cimd_cache "$TOKEN" && _reset_untrusted_cimd_cache "$TOKEN"',
-        clients=[record],
-        attributes={MARKER: "true"},
+        '_check_cimd_first_enable "$TOKEN"',
+        clients=[cimd()],
+        policies=[{"name": "mcp-cimd-runtime-guard-policy"}],
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert state["clients"] == {"cimd": record}
     assert mutations(requests) == []
-
-
-@pytest.mark.parametrize("path", PROVISIONERS)
-@pytest.mark.parametrize("marker", ["false", "", "TRUE"])
-def test_incomplete_provenance_receipt_does_not_bypass_reset(tmp_path, monkeypatch, path, marker):
-    result, requests, state = run(
-        tmp_path,
-        monkeypatch,
-        path,
-        '_reset_untrusted_cimd_cache "$TOKEN"',
-        clients=[cimd()],
-        attributes={MARKER: marker},
-    )
-    assert result.returncode != 0
-    assert mutations(requests) == []
-    assert state["realm"]["attributes"][MARKER] == marker
-
-
-@pytest.mark.parametrize("path", PROVISIONERS)
-def test_acknowledged_disabled_cimd_record_requires_admin_review(tmp_path, monkeypatch, path):
-    record = cimd(enabled=False)
-    result, requests, state = run(
-        tmp_path,
-        monkeypatch,
-        path,
-        'DCR_SWEEP_ACKNOWLEDGED=true\n_reset_untrusted_cimd_cache "$TOKEN"',
-        clients=[record],
-    )
-    assert result.returncode != 0
-    assert "administrator review" in result.stdout + result.stderr
-    assert not any(request["method"] == "DELETE" for request in requests)
-    assert MARKER not in state["realm"]["attributes"]
-    assert state["clients"] == {"cimd": record}
+    assert not any(r["path"].endswith("/clients") for r in requests)
+    inventory = next(i for i, r in enumerate(requests) if r["path"] == "/admin/serverinfo")
+    policies = next(i for i, r in enumerate(requests) if r["path"].endswith("/policies"))
+    assert inventory < policies
 
 
 @pytest.mark.parametrize("path", PROVISIONERS)
 @pytest.mark.parametrize(
     "scenario",
-    ["realm-read-error", "client-list-error", "client-list-malformed", "client-later-page-error"],
+    [
+        "client-list-error",
+        "client-list-malformed",
+        "client-later-page-error",
+        "policies-read-error",
+        "policies-invalid-json",
+    ],
 )
-def test_untrusted_cimd_inventory_failure_prevents_deletion_and_receipt(
-    tmp_path, monkeypatch, path, scenario
-):
-    records = [cimd()] + [client(f"ordinary-{i}", f"ordinary-{i}") for i in range(101)]
+def test_first_enable_inventory_failure_prevents_mutation(tmp_path, monkeypatch, path, scenario):
+    records = [client(f"ordinary-{i}", f"ordinary-{i}") for i in range(101)]
     result, requests, state = run(
         tmp_path,
         monkeypatch,
         path,
-        'DCR_SWEEP_ACKNOWLEDGED=true\n_reset_untrusted_cimd_cache "$TOKEN"',
+        '_check_cimd_first_enable "$TOKEN"',
         clients=records,
         scenario=scenario,
     )
     assert result.returncode != 0
     assert mutations(requests) == []
-    assert MARKER not in state["realm"]["attributes"]
     assert state["clients"] == {record["id"]: record for record in records}
 
 
 @pytest.mark.parametrize("path", PROVISIONERS)
-def test_failed_cimd_delete_never_sets_provenance_receipt(tmp_path, monkeypatch, path):
+@pytest.mark.parametrize("collection", ["profiles", "policies"])
+@pytest.mark.parametrize(
+    "failure", ["write-error", "readback-missing", "readback-corrupt", "readback-http-error"]
+)
+def test_runtime_guard_write_and_readback_failures_are_fatal(
+    tmp_path, monkeypatch, path, collection, failure
+):
+    result, requests, _ = run(
+        tmp_path,
+        monkeypatch,
+        path,
+        'ENABLE_CIMD_CONFIG=false\n_configure_cimd_runtime_guard "$TOKEN"',
+        scenario=f"{collection}-{failure}",
+    )
+    assert result.returncode != 0
+    assert not any(r["method"] == "DELETE" or "/clients/" in r["path"] for r in requests)
+    if collection == "profiles":
+        assert not any(r["method"] == "PUT" and r["path"].endswith("/policies") for r in requests)
+
+
+@pytest.mark.parametrize("path", PROVISIONERS)
+@pytest.mark.parametrize(
+    "kind,missing",
+    [
+        (CONDITION_TYPE, "client-attributes"),
+        (CONDITION_TYPE, "grant-type"),
+        (EXECUTOR_TYPE, "reject-request"),
+    ],
+)
+def test_runtime_guard_capability_failure_prevents_sweeps(
+    tmp_path, monkeypatch, path, kind, missing
+):
+    info = serverinfo()
+    info["componentTypes"][kind] = [
+        entry for entry in info["componentTypes"][kind] if entry["id"] != missing
+    ]
     result, requests, state = run(
         tmp_path,
         monkeypatch,
         path,
-        'DCR_SWEEP_ACKNOWLEDGED=true\n_reset_untrusted_cimd_cache "$TOKEN"',
-        clients=[cimd("first"), cimd("second"), client("ordinary", "ordinary")],
-        scenario="client-delete-error",
+        'ENABLE_CIMD_CONFIG=false\nDCR_SWEEP_ACKNOWLEDGED=true\n_prepare_cimd_lifecycle "$TOKEN"',
+        clients=[cimd()],
+        info=info,
+        policies=[{"name": "mcp-cimd-runtime-guard-policy"}],
     )
     assert result.returncode != 0
-    assert "first" not in state["clients"]
-    assert set(state["clients"]) == {"second", "ordinary"}
-    assert MARKER not in state["realm"]["attributes"]
-    assert not any(
-        request["method"] == "PUT" and request["path"] == REALM_PATH for request in requests
-    )
+    assert mutations(requests) == []
+    assert state["clients"]["cimd"]["enabled"] is True
 
 
 @pytest.mark.parametrize("path", PROVISIONERS)
-@pytest.mark.parametrize("scenario", ["marker-write-error", "marker-readback-missing"])
-def test_failed_cimd_receipt_write_or_readback_is_fatal(tmp_path, monkeypatch, path, scenario):
-    result, _, state = run(
+@pytest.mark.parametrize("scenario", ["serverinfo-http-error", "serverinfo-invalid-json"])
+def test_existing_guard_does_not_bypass_provider_inventory(tmp_path, monkeypatch, path, scenario):
+    result, requests, _ = run(
         tmp_path,
         monkeypatch,
         path,
-        'DCR_SWEEP_ACKNOWLEDGED=true\n_reset_untrusted_cimd_cache "$TOKEN"',
-        clients=[cimd()],
+        '_check_cimd_first_enable "$TOKEN"',
+        policies=[{"name": "mcp-cimd-runtime-guard-policy"}],
         scenario=scenario,
     )
     assert result.returncode != 0
-    assert state["clients"] == {}
-    assert MARKER not in state["realm"]["attributes"]
+    assert mutations(requests) == []
 
 
 @pytest.mark.parametrize("path", PROVISIONERS)
-def test_cimd_delete_readback_requires_absent_client(tmp_path, monkeypatch, path):
+@pytest.mark.parametrize("collection", ["profiles", "policies"])
+@pytest.mark.parametrize("failure", ["write-error", "readback-corrupt", "readback-http-error"])
+def test_failed_runtime_guard_prevents_creation_shutdown_and_revocation(
+    tmp_path, monkeypatch, path, collection, failure
+):
     record = cimd()
     result, requests, state = run(
         tmp_path,
         monkeypatch,
         path,
-        'DCR_SWEEP_ACKNOWLEDGED=true\n_reset_untrusted_cimd_cache "$TOKEN"',
+        'ENABLE_CIMD_CONFIG=false\nDCR_SWEEP_ACKNOWLEDGED=true\n_prepare_cimd_lifecycle "$TOKEN"',
         clients=[record],
-        scenario="client-delete-readback-failed",
+        scenario=f"{collection}-{failure}",
+        policies=[{"name": "mcp-cimd-runtime-guard-policy"}, {"name": "cimd-vendors-policy"}],
     )
     assert result.returncode != 0
     assert state["clients"] == {"cimd": record}
-    assert MARKER not in state["realm"]["attributes"]
+    assert any(p["name"] == "cimd-vendors-policy" for p in state["policies"])
     assert not any(
-        request["method"] == "PUT" and request["path"] == REALM_PATH for request in requests
+        r["method"] == "DELETE" or (r["method"] == "PUT" and "/clients/" in r["path"])
+        for r in requests
     )
 
 
 @pytest.mark.parametrize("path", PROVISIONERS)
-@pytest.mark.parametrize("failure", ["write-error", "readback-missing", "readback-http-error"])
-def test_cimd_creation_must_close_before_cache_deletion(tmp_path, monkeypatch, path, failure):
+@pytest.mark.parametrize("enabled", ["false", "true"])
+def test_runtime_guard_matches_native_markers_and_exact_hosts(tmp_path, monkeypatch, path, enabled):
     result, requests, state = run(
         tmp_path,
         monkeypatch,
         path,
-        'DCR_SWEEP_ACKNOWLEDGED=true\n_reset_untrusted_cimd_cache "$TOKEN"',
-        clients=[cimd()],
-        policies=[{"name": "cimd-vendors-policy", "enabled": True}],
-        scenario=f"policies-{failure}",
+        f'ENABLE_CIMD_CONFIG={enabled}\nCIMD_TRUSTED_DOMAINS=\'["vendor.example", "other.example", "localhost", "127.0.0.1"]\'\n'
+        '_configure_cimd_runtime_guard "$TOKEN" && _configure_cimd_runtime_guard "$TOKEN"',
     )
-    assert result.returncode != 0
-    assert "cimd" in state["clients"]
-    assert MARKER not in state["realm"]["attributes"]
-    assert not any(request["method"] == "DELETE" for request in requests)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert {"name": "unrelated-profile"} in state["profiles"]
+    assert {"name": "unrelated-policy"} in state["policies"]
+    profiles = [p for p in state["profiles"] if p["name"] == "mcp-cimd-runtime-guard"]
+    policies = [p for p in state["policies"] if p["name"] == "mcp-cimd-runtime-guard-policy"]
+    assert len(profiles) == len(policies) == 1
+    assert [e["executor"] for e in profiles[0]["executors"]] == ["reject-request"]
+    policy = policies[0]
+    assert policy["enabled"] is True
+    assert policy["mode"] == "STRICT"
+    assert policy["profiles"] == ["mcp-cimd-runtime-guard"]
+    assert policy["conditions"][0] == {
+        "condition": "grant-type",
+        "configuration": {"grant_types": [], "is-negative-logic": True},
+    }
+    conditions = policy["conditions"][1:]
+    assert all(c["condition"] == "client-attributes" for c in conditions)
+    positive = [
+        c["configuration"]
+        for c in conditions
+        if not c["configuration"].get("is-negative-logic", False)
+    ]
+    negative = [
+        c["configuration"]
+        for c in conditions
+        if c["configuration"].get("is-negative-logic") is True
+    ]
+    assert len(positive) == 1
+    assert json.loads(positive[0]["attributes"]) == [
+        {"key": "display.on.consent.screen", "value": "true"}
+    ]
+    hosts = {"vendor.example", "other.example"} if enabled == "true" else set()
+    assert len(negative) == len(hosts)
+    assert {json.loads(c["attributes"])[0]["value"] for c in negative} == {
+        f"The client's hostname is {host}" for host in hosts
+    }
+    assert all(
+        len(json.loads(c["attributes"])) == 1
+        and json.loads(c["attributes"])[0]["key"] == "consent.screen.text"
+        for c in negative
+    )
+    assert not any(r["method"] == "DELETE" or r["path"] == REALM_PATH for r in requests)

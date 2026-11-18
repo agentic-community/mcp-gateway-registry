@@ -200,8 +200,8 @@ data:
 
     _cimd_domains() {
         local domains="${CIMD_TRUSTED_DOMAINS:-[\"vscode.dev\",\"code.visualstudio.com\",\"claude.ai\",\"127.0.0.1\",\"localhost\"]}"
-        jq -ce 'if type == "array" and all(.[]; type == "string" and length > 0)
-            then map(ascii_downcase) | unique else error("CIMD_TRUSTED_DOMAINS must be an array of domain strings") end' <<< "$domains"
+        jq -ce 'if type == "array" and all(.[]; type == "string" and length > 0 and (contains("*") | not))
+            then map(ascii_downcase) | unique else error("CIMD_TRUSTED_DOMAINS requires explicit host strings; wildcard hosts are unsupported") end' <<< "$domains"
     }
 
     _cimd_client_id_domains() {
@@ -223,45 +223,63 @@ data:
         fi
     }
 
-    # Cached entries from the unrestricted native provider cannot prove provenance.
-    # Recreate them through verified metadata once; never re-enable disabled records.
-    _reset_untrusted_cimd_cache() {
-        local token=$1 realm clients entries entry id status attributes
+    # Before the first managed setup, cached metadata is unexpected: never delete or trust it.
+    # The persistent guard identifies realms whose CIMD clients were created under these controls.
+    _check_cimd_first_enable() {
+        local token=$1 policies clients entries
         _require_oidc_registration_only "$token" || return 1
-        realm=$(_admin_get "$token" "/admin/realms/$REALM") || return 1
-        [ "$(jq -r '.attributes["mcpgw.cimd.provenance.v1"] // "false"' <<< "$realm")" != true ] || return 0
-        clients=$(_list_all_clients "$token") || return 1
-        entries=$(jq -c '.[] | select((.attributes // {}) | has("cimd.cache.expiry.time.in.sec")) | {id, clientId, enabled}' <<< "$clients") || return 1
-        if [ -n "$entries" ]; then
-            echo "CIMD cache reset inventory (old registrations will be removed):"
-            jq -sr '.[] | [.id, (.clientId | gsub("[^A-Za-z0-9._:/@-]"; "?"))] | @tsv' <<< "$entries"
-            if [ "${DCR_SWEEP_ACKNOWLEDGED:-false}" != true ]; then
-                echo "Review the one-time CIMD cache removal and set DCR_SWEEP_ACKNOWLEDGED=true. Old cache attributes could have been supplied by native DCR." >&2
-                return 1
-            fi
-            # Stop new metadata creation while removing the untrusted cache records.
-            _registration_policy_write "$token" policies cimd-vendors-policy null || return 1
-            while IFS= read -r entry; do
-                id=$(jq -er '.id | @uri' <<< "$entry") || return 1
-                if [ "$(jq -r '.enabled' <<< "$entry")" = false ]; then
-                    echo "Disabled CIMD client $id requires administrator review before cache reset; remove it explicitly or retain CIMD disabled." >&2
-                    return 1
-                fi
-                status=$(realm_curl -sS -o /dev/null -w '%{http_code}' -X DELETE \
-                    "$KEYCLOAK_URL/admin/realms/$REALM/clients/$id" -H "Authorization: Bearer $token") || return 1
-                [ "$status" = 204 ] || return 1
-                status=$(realm_curl -sS -o /dev/null -w '%{http_code}' \
-                    "$KEYCLOAK_URL/admin/realms/$REALM/clients/$id" -H "Authorization: Bearer $token") || return 1
-                [ "$status" = 404 ] || return 1
-            done <<< "$entries"
+        policies=$(_admin_get "$token" "/admin/realms/$REALM/client-policies/policies") || return 1
+        jq -e '.policies | type == "array"' <<< "$policies" >/dev/null || return 1
+        if jq -e 'any(.policies[]; .name == "mcp-cimd-runtime-guard-policy")' <<< "$policies" >/dev/null; then
+            return 0
         fi
-        attributes=$(jq -c '{attributes: ((.attributes // {}) + {"mcpgw.cimd.provenance.v1": "true"})}' <<< "$realm") || return 1
-        status=$(realm_curl -sS -o /dev/null -w '%{http_code}' -X PUT \
-            "$KEYCLOAK_URL/admin/realms/$REALM" -H "Authorization: Bearer $token" \
-            -H 'Content-Type: application/json' -d "$attributes") || return 1
-        [ "$status" = 204 ] || return 1
-        realm=$(_admin_get "$token" "/admin/realms/$REALM") || return 1
-        jq -e '.attributes["mcpgw.cimd.provenance.v1"] == "true"' <<< "$realm" >/dev/null
+        clients=$(_list_all_clients "$token") || return 1
+        entries=$(jq -r '.[] | select((.attributes // {}) | has("cimd.cache.expiry.time.in.sec"))
+            | [.id, (.clientId | gsub("[^A-Za-z0-9._:/@-]"; "?"))] | @tsv' <<< "$clients") || return 1
+        if [ -n "$entries" ]; then
+            printf 'Unexpected CIMD clients before first enablement:\n%s\n' "$entries" >&2
+            echo "Administrator review required. Setup will not delete or adopt these records; resolve them before enabling CIMD." >&2
+            return 1
+        fi
+    }
+
+    # Keycloak 26.8.2 writes these attributes itself in PersistentClientIdMetadataDocumentProvider.
+    # OIDC metadata cannot set them. GrantTypeCondition abstains on Admin API events;
+    # STRICT skips those events while negative empty grant_types matches every OAuth grant.
+    _configure_cimd_runtime_guard() {
+        local token=$1 info hosts='[]' profile policy
+        info=$(_admin_get "$token" /admin/serverinfo) || return 1
+        if ! jq -e 'any(.componentTypes["org.keycloak.services.clientpolicy.condition.ClientPolicyConditionProvider"][]?; .id == "client-attributes")
+            and any(.componentTypes["org.keycloak.services.clientpolicy.condition.ClientPolicyConditionProvider"][]?; .id == "grant-type")
+            and any(.componentTypes["org.keycloak.services.clientpolicy.executor.ClientPolicyExecutorProvider"][]?; .id == "reject-request")' <<< "$info" >/dev/null; then
+            echo "CIMD lifecycle enforcement requires native client-attributes, grant-type and reject-request providers; no clients were swept." >&2
+            return 1
+        fi
+        if [ "${ENABLE_CIMD_CONFIG:-false}" = true ]; then
+            hosts=$(_cimd_client_id_domains) || return 1
+        fi
+        profile='{"name":"mcp-cimd-runtime-guard","executors":[{"executor":"reject-request","configuration":{}}]}'
+        policy=$(jq -nc --argjson hosts "$hosts" '{name: "mcp-cimd-runtime-guard-policy", enabled: true, mode: "STRICT",
+            conditions: ([{condition: "grant-type", configuration: {grant_types: [], "is-negative-logic": true}},
+                {condition: "client-attributes", configuration: {attributes: ([{key: "display.on.consent.screen", value: "true"}] | tojson)}}]
+                + [$hosts[] | {condition: "client-attributes", configuration: {"is-negative-logic": true,
+                    attributes: ([{key: "consent.screen.text", value: ("The client\u0027s hostname is " + .)}] | tojson)}}]),
+            profiles: ["mcp-cimd-runtime-guard"]}') || return 1
+        _registration_policy_write "$token" profiles mcp-cimd-runtime-guard "$profile" || return 1
+        _registration_policy_write "$token" policies mcp-cimd-runtime-guard-policy "$policy"
+    }
+
+    _prepare_cimd_lifecycle() {
+        local token=$1 targets
+        _check_cimd_first_enable "$token" || return 1
+        targets=$(_cimd_sweep_targets "$token") || return 1
+        _confirm_cimd_sweep "$targets" || return 1
+        # Deny all CIMD until the new metadata policy is installed and verified.
+        # Otherwise a failed enable/update could leave allowed clients without validation.
+        (ENABLE_CIMD_CONFIG=false; _configure_cimd_runtime_guard "$token") || return 1
+        # Keep denial installed if creation-policy removal, inventory, or revocation fails.
+        _registration_policy_write "$token" policies cimd-vendors-policy null || return 1
+        reconcile_cimd_clients "$token"
     }
 
     _configure_public_pkce_policy() {
@@ -523,9 +541,8 @@ data:
         _preflight_cimd_support "$KEYCLOAK_URL" "$token" || return 1
         domains=$(_cimd_domains) || return 1
         hosts=$(_cimd_client_id_domains) || return 1
-        _reset_untrusted_cimd_cache "$token" || return 1
+        _prepare_cimd_lifecycle "$token" || return 1
         configure_registration_security_policy "$token" || return 1
-        reconcile_cimd_clients "$token" || return 1
         reconcile_registered_client_scopes "$token" || return 1
         profile=$(jq -nc --argjson domains "$domains" '{name: "cimd-vendors",
             executors: [{executor: "client-id-metadata-document", configuration: {
@@ -534,13 +551,13 @@ data:
             conditions: [{condition: "client-id-uri", configuration: {"client-id-uri-scheme": ["https"],
                 "client-id-uri-allow-permitted-domains": $hosts}}], profiles: ["cimd-vendors"]}') || return 1
         _registration_policy_write "$token" profiles cimd-vendors "$profile" || return 1
-        _registration_policy_write "$token" policies cimd-vendors-policy "$policy"
+        _registration_policy_write "$token" policies cimd-vendors-policy "$policy" || return 1
+        _configure_cimd_runtime_guard "$token"
     }
 
     _remove_cimd_client_policy() {
         local token=$1
-        reconcile_cimd_clients "$token" || return 1
-        _registration_policy_write "$token" policies cimd-vendors-policy null || return 1
+        _prepare_cimd_lifecycle "$token" || return 1
         _registration_policy_write "$token" profiles cimd-vendors null
     }
 
@@ -555,8 +572,7 @@ data:
         # Close anonymous registration during the cutover, including already-open realms.
         disable_anonymous_dcr "$token" || return 1
         if [ "${ENABLE_CIMD_CONFIG:-false}" = true ]; then
-            _reset_untrusted_cimd_cache "$token" || return 1
-            reconcile_cimd_clients "$token" || return 1
+            _prepare_cimd_lifecycle "$token" || return 1
         else
             _remove_cimd_client_policy "$token" || return 1
         fi

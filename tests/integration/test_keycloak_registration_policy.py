@@ -131,6 +131,41 @@ def _configure(
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def _lifecycle_helper(
+    client: httpx.Client,
+    password: str,
+    command: str,
+    *,
+    cimd: bool = False,
+    domains: list[str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    env = {
+        **os.environ,
+        "KEYCLOAK_URL": str(client.base_url).rstrip("/"),
+        "REALM": REALM,
+        "TOKEN": _admin_token(client, password),
+        "ENABLE_CIMD_CONFIG": str(cimd).lower(),
+        "CIMD_TRUSTED_DOMAINS": json.dumps(domains or ["vscode.dev"]),
+        "DCR_SWEEP_ACKNOWLEDGED": "true",
+    }
+    return subprocess.run(
+        [
+            "bash",
+            "-c",
+            "source keycloak/setup/group-path-preflight.sh\n"
+            'realm_curl() { credential_curl "$@"; }\n'
+            '_admin_get() { realm_curl -fsS -H "Authorization: Bearer $1" "$KEYCLOAK_URL$2"; }\n'
+            '_list_all_clients() { _admin_get "$1" "/admin/realms/$REALM/clients?max=10000"; }\n'
+            + command,
+        ],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+
 @pytest.fixture(scope="module")
 def keycloak():
     name = "kc-registration-test-" + uuid.uuid4().hex[:12]
@@ -221,22 +256,6 @@ def keycloak():
                     "email": "policy-user@example.invalid",
                     "emailVerified": True,
                     "credentials": [{"type": "password", "value": password, "temporary": False}],
-                },
-            )
-            _admin(
-                client,
-                password,
-                "POST",
-                "/clients",
-                {
-                    "clientId": "https://vscode.dev/legacy-client.json",
-                    "protocol": "openid-connect",
-                    "enabled": True,
-                    "publicClient": True,
-                    "standardFlowEnabled": True,
-                    "redirectUris": [CALLBACK],
-                    "defaultClientScopes": ["basic", "registry-admins"],
-                    "attributes": {"cimd.cache.expiry.time.in.sec": "0"},
                 },
             )
             _configure(client, password)
@@ -522,14 +541,42 @@ def test_operator_machine_retains_privileged_scopes(keycloak):
     assert "registry-admins" in response.json()["scope"].split()
 
 
-def test_untrusted_legacy_cimd_cache_is_removed_once(keycloak):
+def test_first_enable_refuses_unexpected_cimd_without_deleting(keycloak):
     client, password = keycloak
-    response = _admin(
-        client, password, "GET", "/clients?clientId=https%3A%2F%2Fvscode.dev%2Flegacy-client.json"
+    policies = _admin(client, password, "GET", "/client-policies/policies").json()
+    client_id = "https://vscode.dev/unexpected-" + uuid.uuid4().hex + ".json"
+    _admin(
+        client,
+        password,
+        "POST",
+        "/clients",
+        {
+            "clientId": client_id,
+            "protocol": "openid-connect",
+            "enabled": False,
+            "attributes": {"cimd.cache.expiry.time.in.sec": "2147483647"},
+        },
     )
-    assert response.json() == []
-    realm = _admin(client, password, "GET", "").json()
-    assert realm["attributes"]["mcpgw.cimd.provenance.v1"] == "true"
+    record = _client_record(client, password, client_id)
+    try:
+        _admin(
+            client,
+            password,
+            "PUT",
+            "/client-policies/policies",
+            {
+                "policies": [
+                    p for p in policies["policies"] if p["name"] != "mcp-cimd-runtime-guard-policy"
+                ]
+            },
+        )
+        result = _lifecycle_helper(client, password, '_check_cimd_first_enable "$TOKEN"')
+        assert result.returncode != 0
+        assert "Administrator review required" in result.stderr
+        assert _client_record(client, password, client_id)["enabled"] is False
+    finally:
+        _admin(client, password, "PUT", "/client-policies/policies", policies)
+        _admin(client, password, "DELETE", f"/clients/{record['id']}")
 
 
 def test_native_cimd_privileged_assignment_blocks_login_and_refresh(keycloak):
@@ -769,3 +816,126 @@ def test_public_code_exchange_requires_bound_verifier(keycloak, supplied_verifie
     response = client.post(f"/realms/{REALM}/protocol/openid-connect/token", data=data)
     assert response.status_code == 400
     assert "access_token" not in response.json()
+
+
+@pytest.mark.parametrize("cutover", ["disabled", "withdrawn", "failed-sweep"])
+def test_cimd_runtime_guard_denies_late_client_code_refresh_and_login(keycloak, cutover):
+    client, password = keycloak
+    _configure(client, password)
+    existing = _admin(
+        client, password, "GET", "/clients?clientId=" + quote(VENDOR_CLIENT, safe="")
+    ).json()
+    if existing:
+        _admin(client, password, "PUT", f"/clients/{existing[0]['id']}", {"enabled": True})
+    tokens = _code_token(client, password, VENDOR_CLIENT)
+    code = _code_token(client, password, VENDOR_CLIENT, return_code=True)
+    record = _client_record(client, password, VENDOR_CLIENT)
+    # A client that commits after the inventory is still enabled. Keep it enabled
+    # here to prove the native runtime rule, independently of the cleanup sweep.
+    assert record["attributes"]["display.on.consent.screen"] == "true"
+    assert record["attributes"]["consent.screen.text"] == "The client's hostname is vscode.dev"
+    try:
+        command = '_configure_cimd_runtime_guard "$TOKEN"'
+        if cutover == "failed-sweep":
+            command = 'reconcile_cimd_clients() { return 1; }\n_prepare_cimd_lifecycle "$TOKEN"'
+        result = _lifecycle_helper(
+            client,
+            password,
+            command,
+            cimd=cutover == "withdrawn",
+            domains=["claude.ai"],
+        )
+        assert (result.returncode != 0) == (cutover == "failed-sweep"), (
+            result.stdout + result.stderr
+        )
+        # Admin views must still work under denial so cleanup can inspect and disable.
+        current = _admin(client, password, "GET", f"/clients/{record['id']}").json()
+        assert current["enabled"] is True
+        for grant in (
+            {
+                "grant_type": "authorization_code",
+                "code": code["code"],
+                "code_verifier": code["verifier"],
+                "redirect_uri": CALLBACK,
+            },
+            {"grant_type": "refresh_token", "refresh_token": tokens["refresh_token"]},
+        ):
+            response = client.post(
+                f"/realms/{REALM}/protocol/openid-connect/token",
+                data={"client_id": VENDOR_CLIENT, **grant},
+            )
+            assert response.status_code == 400
+            assert "access_token" not in response.json()
+        response = client.get(
+            f"/realms/{REALM}/protocol/openid-connect/auth",
+            params={
+                "client_id": VENDOR_CLIENT,
+                "redirect_uri": CALLBACK,
+                "response_type": "code",
+                "scope": "openid profile email",
+                "code_challenge": "a" * 43,
+                "code_challenge_method": "S256",
+            },
+        )
+        assert response.status_code == 400 or "error=" in response.headers.get("location", "")
+    finally:
+        _configure(client, password)
+
+
+def test_cimd_late_persisted_client_stays_denied_after_disable(keycloak):
+    client, password = keycloak
+    _configure(client, password)
+    existing = _client_record(client, password, VENDOR_CLIENT)
+    _admin(client, password, "PUT", f"/clients/{existing['id']}", {"enabled": True})
+    _code_token(client, password, VENDOR_CLIENT)
+    original = _client_record(client, password, VENDOR_CLIENT)
+    late_id = "https://vscode.dev/late-" + uuid.uuid4().hex + ".json"
+    try:
+        _configure(client, password, cimd=False)
+        # Simulate persistence completing after the setup inventory. Use attributes
+        # observed on a real CIMD client rather than a fabricated policy fixture.
+        _admin(
+            client,
+            password,
+            "POST",
+            "/clients",
+            {
+                "clientId": late_id,
+                "protocol": "openid-connect",
+                "enabled": True,
+                "publicClient": True,
+                "standardFlowEnabled": True,
+                "redirectUris": [CALLBACK],
+                "attributes": original["attributes"],
+            },
+        )
+        response = client.get(
+            f"/realms/{REALM}/protocol/openid-connect/auth",
+            params={
+                "client_id": late_id,
+                "redirect_uri": CALLBACK,
+                "response_type": "code",
+                "scope": "openid",
+                "code_challenge": "a" * 43,
+                "code_challenge_method": "S256",
+            },
+        )
+        assert response.status_code == 400 or "error=" in response.headers.get("location", "")
+        # Standard OIDC DCR still works while CIMD is disabled.
+        registered = client.post(
+            f"/realms/{REALM}/clients-registrations/openid-connect",
+            json={
+                "redirect_uris": [CALLBACK],
+                "token_endpoint_auth_method": "none",
+                "grant_types": ["authorization_code", "refresh_token"],
+            },
+        )
+        assert registered.status_code == 201
+        assert "access_token" in _code_token(client, password, registered.json()["client_id"])
+    finally:
+        records = _admin(
+            client, password, "GET", "/clients?clientId=" + quote(late_id, safe="")
+        ).json()
+        for record in records:
+            _admin(client, password, "DELETE", f"/clients/{record['id']}")
+        _configure(client, password)

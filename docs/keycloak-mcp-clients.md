@@ -40,7 +40,7 @@ Dynamic Client Registration (DCR) and Client ID Metadata Documents (CIMD) are se
 
 ```bash
 ENABLE_DCR_CONFIG=true bash keycloak/setup/upgrade-realm-for-dcr.sh
-ENABLE_CIMD_CONFIG=true DCR_KEEP_CLIENTS=https://vscode.dev/oauth/client-metadata.json bash keycloak/setup/upgrade-realm-for-dcr.sh
+ENABLE_CIMD_CONFIG=true bash keycloak/setup/upgrade-realm-for-dcr.sh
 ```
 
 Set both variables when both mechanisms are needed. False applies the corresponding cleanup rather than leaving earlier configuration unchanged. Compose and ECS enable the server's `cimd` feature; realm setup remains opt-in. In Helm, enable the server feature and configure the realm together:
@@ -52,8 +52,6 @@ keycloak-configure:
   dcr:
     enabled: false
     sweepAcknowledged: false
-    keepClients:
-      - https://vscode.dev/oauth/client-metadata.json
   cimd:
     enabled: true
     trustedDomains:
@@ -64,11 +62,11 @@ keycloak-configure:
       - localhost
 ```
 
-`CIMD_TRUSTED_DOMAINS` accepts a JSON array for shell setup. Include each vendor metadata host and the document's
-referenced hosts. Keycloak 26.8.2 uses the same document-host allowlist for callbacks and `jwks_uri`; loopback callback
-entries also permit loopback JWKS destinations. The client-ID HTTPS/domain condition does not protect that later fetch.
-This branch preserves native CIMD as an explicit opt-in with that outbound-fetch risk unresolved. An operator who cannot
-accept it must leave CIMD disabled or provide independent outbound protection.
+`CIMD_TRUSTED_DOMAINS` accepts a JSON array for shell setup. Use exact vendor metadata hosts and the document's
+referenced hosts. Setup refuses wildcards. Keycloak 26.8.2 uses the same document-host allowlist for callbacks and
+`jwks_uri`; loopback callback entries also permit loopback JWKS destinations. The client-ID HTTPS/domain condition
+does not protect that later fetch. This branch preserves native CIMD as an explicit opt-in with that outbound-fetch
+risk unresolved. An operator who cannot accept it must leave CIMD disabled or provide independent outbound protection.
 
 Setup removes scopes outside `DCR_ALLOWED_SCOPES` from both realm-default scope lists; existing first-party client
 assignments remain unchanged. A native client policy rejects token flows using catalog scopes outside the allowlist
@@ -84,16 +82,32 @@ through `REGISTRATION_TRUSTED_CLIENT_IDS`, a JSON array (Helm: `keycloak-configu
 scope exemption is separate from the DCR cleanup keep-list; never use it for self-registered clients. Setup removes the
 trusted role when the client leaves the approved list and never assigns it to a CIMD client.
 
-Disabling CIMD or removing vendor trust inventories persisted CIMD clients independently of DCR. Review the inventory
-and set `DCR_SWEEP_ACKNOWLEDGED=true` (Helm: `dcr.sweepAcknowledged=true`) to disable those clients and invalidate their
-earlier refresh capability. A `DCR_KEEP_CLIENTS` entry does not override withdrawn CIMD trust. Setup removes only its
-own CIMD policy/profile and preserves unrelated policies. Re-enabling CIMD does not re-enable disabled client records;
-an administrator must review and re-enable each client. Already issued access tokens can remain valid at the gateway
-until expiry.
+CIMD has never been enabled in these deployments. On first enable, setup refuses unexpected persisted records with
+CIMD cache markers and leaves them for administrator review. It does not delete them or use a migration receipt to
+declare them trusted. Review their origin and resolve them through the Admin API before retrying.
 
-CIMD clients use their metadata URL as a stable client ID and have their own cleanup inventory. DCR-off cleanup does not
-require a CIMD keep-list entry after the provenance cutover. Disabling CIMD or removing its trusted host still revokes
-the client regardless of `DCR_KEEP_CLIENTS`.
+Runtime CIMD detection depends on the pinned official Keycloak 26.8.2 image. Its native metadata path generates
+`display.on.consent.screen` and `consent.screen.text`; vendors cannot set these markers through CIMD metadata.
+The cache-expiry attribute alone does not prove origin. Keep unrestricted native DCR disabled and reassess the marker
+contract before changing the image version.
+
+Disabling CIMD or removing vendor trust inventories persisted CIMD clients independently of DCR. If the inventory
+includes enabled clients to disable, review it and set `DCR_SWEEP_ACKNOWLEDGED=true` (Helm:
+`dcr.sweepAcknowledged=true`). A `DCR_KEEP_CLIENTS` entry does not override withdrawn CIMD trust.
+
+Setup first installs a native runtime policy that denies all CIMD authorization, authorization-code exchange and
+refresh during the lifecycle change. It restores exact-host allowance only after verifying the metadata profile and
+policy. This creates a brief CIMD maintenance denial; OIDC DCR remains unchanged. If setup fails, CIMD stays denied.
+Rerun full setup to recover. `--reconcile-registration` alone leaves CIMD denied until full setup completes.
+
+The runtime deny policy remains installed when CIMD is off and blocks saved and late-arriving clients outside current
+trust. Setup installs deny before removing metadata enforcement or sweeping clients. It preserves unrelated policies
+and profiles and never re-enables disabled client records; an administrator must review and re-enable each client.
+The gateway can still accept already issued JWT access tokens until expiry.
+
+CIMD clients use their metadata URL as a stable client ID and have their own cleanup inventory. DCR-off cleanup does
+not require a CIMD keep-list entry. Disabling CIMD or removing its trusted host still revokes the client regardless of
+`DCR_KEEP_CLIENTS`.
 
 With DCR off, setup inventories enabled clients before changing policies. Review the proposed disables, add exact IDs to
 `DCR_KEEP_CLIENTS` (Helm: `dcr.keepClients`), then set `DCR_SWEEP_ACKNOWLEDGED=true` (Helm:
@@ -733,8 +747,8 @@ Run `bash keycloak/setup/init-keycloak.sh`. The script:
 
 Run `bash keycloak/setup/upgrade-realm-for-dcr.sh` with the registration options described
 in [migration controls](#enable-registration-and-migrate-an-existing-realm). Review the keep-list before repeating
-DCR-off setup, including the metadata URLs of CIMD clients you intend to keep. `--preflight` performs the capability and
-inventory checks without applying realm changes.
+DCR-off setup. CIMD clients have a separate cleanup inventory and need no DCR keep-list entry. `--preflight` performs
+the capability and inventory checks without applying realm changes.
 
 ### Registration lifecycle limits
 
@@ -742,9 +756,9 @@ DCR creates persistent client records. The configured Max Clients Limit bounds r
 review stale clients before deleting them. Use `bash keycloak/setup/cleanup-stale-dcr-clients.sh --dry-run` to preview
 that separate cleanup.
 
-CIMD uses a vendor metadata URL as a stable client ID. It still creates a persisted Keycloak client. Keep approved
-metadata URLs in the DCR-off keep-list, and retain the existing network and rate-limit controls on registration
-endpoints.
+CIMD uses a vendor metadata URL as a stable client ID and creates a persisted Keycloak client. Its runtime deny policy
+enforces the current mechanism and vendor trust settings even for clients that arrive after the cleanup inventory.
+Retain the existing network and rate-limit controls on registration endpoints.
 
 ### Pointers when something breaks
 

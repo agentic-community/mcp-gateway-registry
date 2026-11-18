@@ -1002,14 +1002,24 @@ surface.
 - Verify native policy behavior with an issued token, not only HTTP success and configuration readback. Keycloak accepts
   the unsupported scope type `any`, then its condition never matches; the supported enum is `Any`. Preserve exact
   provider enum values and test an actual denied grant alongside the valid login/refresh path.
-- Revoke persisted registrations when a mechanism is disabled or vendor trust is withdrawn. Removing a CIMD policy stops
-  validation but leaves the client usable through ordinary login and refresh. Cleanup must run independently of other
-  registration switches and keep-lists, preserve unrelated clients, and never revive a disabled client without
-  administrator review.
-- A client-controlled attribute cannot prove registration provenance. Native Keycloak DCR can write
-  `cimd.cache.expiry.time.in.sec` and choose a vendor-shaped client ID, causing CIMD to skip metadata fetching and
-  cleanup to trust the forged record. Disable the unrestricted native registration provider, retain OIDC DCR, and remove
-  untrusted pre-cutover cache records before recording an administrator-owned migration receipt.
+- Install and retain runtime deny before removing metadata enforcement or starting a disable sweep. Removing a CIMD
+  metadata policy leaves saved clients usable through ordinary login and refresh. The native deny policy must cover
+  saved and late-arriving clients at authorization, code exchange and refresh, including cleanup failures and CIMD-off.
+  Review and acknowledge existing enabled targets before disabling them. Run CIMD cleanup independently of DCR and
+  keep-lists, preserve unrelated policies, and never revive a disabled client without administrator review. The gateway
+  can accept already issued JWT access tokens until expiry.
+- Deny all CIMD during lifecycle changes. Restore exact-host allowance only after verifying the metadata profile and
+  policy; allowing surviving hosts before that check can bypass metadata enforcement after a failed enable. Failed
+  setup must leave CIMD denied until a full setup run succeeds. `--reconcile-registration` alone must retain denial.
+  This brief maintenance denial must leave OIDC DCR unchanged.
+- Scope runtime denial to OAuth events so administrators can still inspect and disable clients. Keycloak's attribute condition also matches Admin API views; combine it with a grant-type condition in STRICT mode, which skips administrative events. Verify a direct Admin API read under denial alongside rejected code and refresh grants.
+- A client-controlled cache-expiry attribute cannot prove registration provenance. Native Keycloak DCR can write
+  `cimd.cache.expiry.time.in.sec` and choose a vendor-shaped client ID, causing CIMD to skip metadata fetching.
+  Disable unrestricted native DCR and retain OIDC DCR. CIMD has never been enabled in these deployments; first enable
+  must refuse unexpected persisted cache-marked records for administrator review without deleting them or recording a
+  migration receipt. Runtime detection depends on the pinned official Keycloak 26.8.2 source generating
+  `display.on.consent.screen` and `consent.screen.text`, which vendor metadata cannot control. Reassess that contract
+  before changing the image. Require exact vendor hosts and refuse wildcards so runtime trust matches metadata trust.
 - Enforce S256 on the authorization server for public code flows, rather than relying on clients to send it. A
   metadata-fetch policy runs at pre-authorization and does not by itself enforce PKCE on the authorization and token
   events. Test missing/plain challenges and missing verifiers, plus normal registration and refresh.

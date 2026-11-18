@@ -63,11 +63,17 @@ dcr:
     - offline_access
   keepClients: []
 
-# CIMD requires Keycloak 26.8.2 and KC_FEATURES=cimd.
+# CIMD requires the pinned official Keycloak 26.8.2 image and KC_FEATURES=cimd.
+# Use exact vendor hosts; setup refuses wildcards.
 # Native Keycloak shares callback and JWKS hosts; protect outbound fetches separately.
-# Disabling CIMD or removing vendor trust disables persisted CIMD clients
-# independently of DCR and requires dcr.sweepAcknowledged after inventory review.
-# First CIMD enable after cutover removes untrusted cache records with that acknowledgement.
+# Off/trust withdrawal requires dcr.sweepAcknowledged for reviewed enabled targets,
+# independently of DCR and keep-lists. Setup never re-enables disabled clients.
+# Runtime deny covers saved and late-arriving CIMD at authorization/code/refresh.
+# Install deny before removing metadata policy or sweeping; keep it on failure/off.
+# First enable refuses unexpected persisted cache-marked records for admin review.
+# Setup does not delete those records or use a migration receipt.
+# Setup denies all CIMD until metadata policy verification; OIDC DCR is unchanged.
+# Failure or --reconcile-registration alone leaves denial; rerun full setup to recover.
 cimd:
   enabled: false
   trustedDomains:

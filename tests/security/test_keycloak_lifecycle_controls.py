@@ -353,12 +353,14 @@ def test_cimd_separates_metadata_hosts_from_loopback_callbacks(tmp_path, path):
         "cimd-vendors",
         "mcp-registration-scope-guard",
         "mcp-public-pkce",
+        "mcp-cimd-runtime-guard",
     }
     assert {policy["name"] for policy in policies} == {
         "unrelated",
         "cimd-vendors-policy",
         "mcp-registration-scope-guard-policy",
         "mcp-public-pkce-policy",
+        "mcp-cimd-runtime-guard-policy",
     }
     assert {"name": "unrelated-profile"} in profiles
     assert {"name": "unrelated"} in policies
@@ -387,7 +389,15 @@ def test_cimd_separates_metadata_hosts_from_loopback_callbacks(tmp_path, path):
 
 @pytest.mark.parametrize("path", PROVISIONERS)
 @pytest.mark.parametrize(
-    "domains", ['["localhost", "127.0.0.1", "::1", "[::1]"]', "[]", "{}", "[42]"]
+    "domains",
+    [
+        '["localhost", "127.0.0.1", "::1", "[::1]"]',
+        "[]",
+        "{}",
+        "[42]",
+        '["*.vendor.example"]',
+        '["vendor.example", "*.other.example"]',
+    ],
 )
 def test_cimd_rejects_invalid_or_loopback_only_metadata_allowlist(tmp_path, path, domains):
     command = f"CIMD_TRUSTED_DOMAINS='{domains}'\n" + 'configure_cimd_client_policy "$TOKEN"'
@@ -397,24 +407,29 @@ def test_cimd_rejects_invalid_or_loopback_only_metadata_allowlist(tmp_path, path
 
 
 @pytest.mark.parametrize("path", PROVISIONERS)
-def test_cimd_disable_removes_only_owned_policy_and_profile(tmp_path, path):
+def test_cimd_disable_retains_runtime_guard_and_unrelated_entries(tmp_path, path):
     result, requests = _run_shell(
         tmp_path, path, 'remove_cimd_client_policy "$TOKEN"', "cimd-supported"
     )
     assert result.returncode == 0, result.stdout + result.stderr
     writes = [request for request in requests if request["method"] == "PUT"]
     assert all(request["path"].rsplit("/", 1)[-1] in {"profiles", "policies"} for request in writes)
-    final_policies = json.loads(writes[-2]["body"])["policies"]
-    final_profiles = json.loads(writes[-1]["body"])["profiles"]
+    documents = {
+        request["path"].rsplit("/", 1)[-1]: json.loads(request["body"]) for request in writes
+    }
+    final_policies = documents["policies"]["policies"]
+    final_profiles = documents["profiles"]["profiles"]
     assert {policy["name"] for policy in final_policies} == {
         "unrelated",
         "mcp-registration-scope-guard-policy",
         "mcp-public-pkce-policy",
+        "mcp-cimd-runtime-guard-policy",
     }
     assert {profile["name"] for profile in final_profiles} == {
         "unrelated-profile",
         "mcp-registration-scope-guard",
         "mcp-public-pkce",
+        "mcp-cimd-runtime-guard",
     }
     assert {"name": "unrelated"} in final_policies
     assert {"name": "unrelated-profile"} in final_profiles

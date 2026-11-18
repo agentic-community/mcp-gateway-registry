@@ -23,7 +23,7 @@ elif path == "/admin/serverinfo":
     body = {"systemInfo": {"version": "26.8.2"}, "features": [{"name": "CIMD", "enabled": True}],
             "providers": {"client-registration": {"providers": {"openid-connect": {}}}},
             "componentTypes": {
-                "org.keycloak.services.clientpolicy.condition.ClientPolicyConditionProvider": [{"id": name} for name in ("client-scopes", "client-roles", "client-id-uri", "client-access-type", "client-type")],
+                "org.keycloak.services.clientpolicy.condition.ClientPolicyConditionProvider": [{"id": name} for name in ("client-scopes", "client-roles", "client-id-uri", "client-access-type", "client-type", "client-attributes", "grant-type")],
                 "org.keycloak.services.clientpolicy.executor.ClientPolicyExecutorProvider": [{"id": name} for name in ("reject-request", "client-id-metadata-document", "pkce-enforcer")],
                 "org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy": [{"id": "default-roles"}]}}
     if scenario == "native-policy-missing":
@@ -34,7 +34,7 @@ elif path == "/admin/serverinfo":
     if scenario == "default-roles-missing":
         body["componentTypes"]["org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy"] = []
 elif path == base:
-    body = {"id": "realm-id", "attributes": {"mcpgw.cimd.provenance.v1": "true"}}
+    body = {"id": "realm-id"}
 elif path.startswith(base + "/client-policies/"):
     key = path.rsplit("/", 1)[1]
     if method == "PUT":
@@ -45,6 +45,14 @@ elif path.startswith(base + "/client-policies/"):
                 for policy in state[key]:
                     if policy["name"] == "mcp-registration-scope-guard-policy":
                         policy["conditions"][0]["configuration"]["scopes"].append("basic")
+        metadata_name = "cimd-vendors" if key == "profiles" else "cimd-vendors-policy"
+        metadata = next((entry for entry in json.loads(body_arg)[key] if entry["name"] == metadata_name), None)
+        if metadata and (metadata.get("executors") or metadata.get("conditions")):
+            if scenario == "metadata-" + key + "-write-error":
+                state[key] = [entry for entry in state[key] if entry["name"] != metadata_name]
+                status = 500
+            elif scenario == "metadata-" + key + "-readback-missing":
+                state[key] = [entry for entry in state[key] if entry["name"] != metadata_name]
     body = {key: state[key]}
 elif path == base + "/client-scopes":
     body = state["catalog"]
@@ -60,6 +68,9 @@ elif path.startswith(base + "/default-default-client-scopes") or path.startswith
 elif path == base + "/clients":
     first = int(query.get("first", [0])[0])
     maximum = int(query.get("max", [100])[0])
+    state["client_inventories"] += first == 0
+    if scenario == "late-cimd" and state["client_inventories"] == 2 and first == 0:
+        state["clients"]["late"] = {"id": "late", "clientId": "https://withdrawn.example/late.json", "enabled": True, "attributes": {"cimd.cache.expiry.time.in.sec": "300"}}
     body = list(state["clients"].values())[first:first + maximum]
 elif path.startswith(base + "/clients/"):
     parts = path.removeprefix(base + "/clients/").split("/")
@@ -124,8 +135,26 @@ def run(
     state = {
         "clients": {c["id"]: c for c in clients},
         "scopes": scopes or {},
-        "profiles": [{"name": "unrelated-profile"}, {"name": "cimd-vendors"}],
-        "policies": [{"name": "unrelated-policy"}, {"name": "cimd-vendors-policy"}],
+        "profiles": [
+            {"name": "unrelated-profile"},
+            {"name": "cimd-vendors"},
+            {
+                "name": "mcp-cimd-runtime-guard",
+                "executors": [{"executor": "reject-request", "configuration": {}}],
+            },
+        ],
+        "policies": [
+            {"name": "unrelated-policy"},
+            {"name": "cimd-vendors-policy"},
+            {
+                "name": "mcp-cimd-runtime-guard-policy",
+                "enabled": True,
+                "mode": "STRICT",
+                "profiles": ["mcp-cimd-runtime-guard"],
+                "conditions": [],
+            },
+        ],
+        "client_inventories": 0,
         "components": [],
         "roles": roles or {},
         "catalog": [
@@ -177,11 +206,13 @@ def test_cimd_off_revokes_even_when_dcr_on_or_kept(tmp_path, monkeypatch, path, 
         "unrelated-policy",
         "mcp-registration-scope-guard-policy",
         "mcp-public-pkce-policy",
+        "mcp-cimd-runtime-guard-policy",
     }
     assert {p["name"] for p in state["profiles"]} == {
         "unrelated-profile",
         "mcp-registration-scope-guard",
         "mcp-public-pkce",
+        "mcp-cimd-runtime-guard",
     }
 
 
@@ -198,7 +229,7 @@ def test_cimd_trust_withdrawal_is_paginated_and_does_not_reenable(tmp_path, monk
         monkeypatch,
         path,
         "ENABLE_DCR_CONFIG=true\nENABLE_CIMD_CONFIG=true\nDCR_SWEEP_ACKNOWLEDGED=true\n"
-        'CIMD_TRUSTED_DOMAINS=\'["*.vendor.example"]\'\nreconcile_cimd_clients "$TOKEN"',
+        'CIMD_TRUSTED_DOMAINS=\'["vendor.example"]\'\nreconcile_cimd_clients "$TOKEN"',
         clients,
     )
     assert result.returncode == 0, result.stdout + result.stderr
@@ -209,9 +240,7 @@ def test_cimd_trust_withdrawal_is_paginated_and_does_not_reenable(tmp_path, monk
         ["0"],
         ["100"],
     ]
-    assert [r["path"] for r in requests if r["method"] == "PUT"] == [
-        "/admin/realms/mcp-gateway/clients/withdrawn"
-    ]
+    assert state["clients"]["disabled"]["notBefore"] > 0
 
 
 @pytest.mark.parametrize("path", PROVISIONERS)
@@ -230,8 +259,8 @@ def test_cimd_revocation_requires_review_even_with_keep(tmp_path, monkeypatch, p
 
 
 @pytest.mark.parametrize("path", PROVISIONERS)
-def test_cimd_cleanup_works_without_native_policy_support(tmp_path, monkeypatch, path):
-    result, _, state = run(
+def test_cimd_cleanup_refuses_without_native_policy_support(tmp_path, monkeypatch, path):
+    result, requests, state = run(
         tmp_path,
         monkeypatch,
         path,
@@ -239,9 +268,10 @@ def test_cimd_cleanup_works_without_native_policy_support(tmp_path, monkeypatch,
         [cimd()],
         scenario="old-server",
     )
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert state["clients"]["cimd"]["enabled"] is False
-    assert state["policies"] == [{"name": "unrelated-policy"}]
+    assert result.returncode != 0
+    assert state["clients"]["cimd"]["enabled"] is True
+    assert any(p["name"] == "cimd-vendors-policy" for p in state["policies"])
+    assert not any(r["method"] in ("PUT", "DELETE") and "/clients/" in r["path"] for r in requests)
 
 
 @pytest.mark.parametrize("path", PROVISIONERS)
@@ -704,3 +734,123 @@ def test_scope_trust_does_not_mutate_protected_builtin_roles(tmp_path, monkeypat
     assert result.returncode == 0, result.stdout + result.stderr
     assert not any("/clients/builtin/roles" in request["path"] for request in requests)
     assert "mcp-registration-trusted" in state["roles"]["machine"]
+
+
+@pytest.mark.parametrize("path", PROVISIONERS)
+@pytest.mark.parametrize("enabled", ["false", "true"])
+def test_lifecycle_installs_guard_before_closing_creation_and_revoking_clients(
+    tmp_path, monkeypatch, path, enabled
+):
+    result, requests, state = run(
+        tmp_path,
+        monkeypatch,
+        path,
+        f"ENABLE_CIMD_CONFIG={enabled}\nCIMD_TRUSTED_DOMAINS='[\"vendor.example\"]'\n"
+        'DCR_SWEEP_ACKNOWLEDGED=true\n_prepare_cimd_lifecycle "$TOKEN"',
+        [cimd("withdrawn", "withdrawn.example")],
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    writes = [(i, r) for i, r in enumerate(requests) if r["method"] == "PUT"]
+    guard = next(
+        i
+        for i, r in writes
+        if r["path"].endswith("/policies")
+        and any(
+            p["name"] == "mcp-cimd-runtime-guard-policy" and p.get("conditions")
+            for p in json.loads(r["body"])["policies"]
+        )
+    )
+    close = next(
+        i
+        for i, r in writes
+        if r["path"].endswith("/policies")
+        and not any(p["name"] == "cimd-vendors-policy" for p in json.loads(r["body"])["policies"])
+    )
+    revoke = next(i for i, r in writes if r["path"].endswith("/clients/withdrawn"))
+    assert guard < close < revoke
+    assert any(r["path"].endswith("/clients") for r in requests[:guard])
+    assert state["clients"]["withdrawn"]["enabled"] is False
+    runtime = next(p for p in state["policies"] if p["name"] == "mcp-cimd-runtime-guard-policy")
+    assert len(runtime["conditions"]) == 2
+    configuration = runtime["conditions"][1]["configuration"]
+    assert not configuration.get("is-negative-logic", False)
+    assert json.loads(configuration["attributes"]) == [
+        {"key": "display.on.consent.screen", "value": "true"}
+    ]
+    assert not any(r["method"] == "DELETE" for r in requests)
+
+
+@pytest.mark.parametrize("path", PROVISIONERS)
+def test_lifecycle_refuses_unacknowledged_revocation_before_guard_mutation(
+    tmp_path, monkeypatch, path
+):
+    result, requests, state = run(
+        tmp_path,
+        monkeypatch,
+        path,
+        'ENABLE_CIMD_CONFIG=false\nDCR_SWEEP_ACKNOWLEDGED=false\n_prepare_cimd_lifecycle "$TOKEN"',
+        [cimd()],
+    )
+    assert result.returncode != 0
+    assert state["clients"]["cimd"]["enabled"] is True
+    assert not any(r["method"] in ("PUT", "DELETE") for r in requests)
+
+
+@pytest.mark.parametrize("path", PROVISIONERS)
+@pytest.mark.parametrize("ack", ["false", "true"])
+def test_lifecycle_repeats_inventory_after_installing_guard(tmp_path, monkeypatch, path, ack):
+    result, requests, state = run(
+        tmp_path,
+        monkeypatch,
+        path,
+        f'ENABLE_CIMD_CONFIG=false\nDCR_SWEEP_ACKNOWLEDGED={ack}\n_prepare_cimd_lifecycle "$TOKEN"',
+        scenario="late-cimd",
+    )
+    assert state["client_inventories"] >= 2
+    assert (result.returncode == 0) == (ack == "true"), result.stdout + result.stderr
+    assert state["clients"]["late"]["enabled"] == (ack == "false")
+    assert any(
+        p["name"] == "mcp-cimd-runtime-guard-policy" and p["conditions"] for p in state["policies"]
+    )
+    assert not any(p["name"] == "cimd-vendors-policy" for p in state["policies"])
+    assert not any(r["method"] == "DELETE" for r in requests)
+
+
+@pytest.mark.parametrize("path", PROVISIONERS)
+@pytest.mark.parametrize("collection", ["profiles", "policies"])
+@pytest.mark.parametrize("failure", ["write-error", "readback-missing"])
+def test_metadata_install_failure_retains_all_cimd_denial(
+    tmp_path, monkeypatch, path, collection, failure
+):
+    result, requests, state = run(
+        tmp_path,
+        monkeypatch,
+        path,
+        "ENABLE_CIMD_CONFIG=true\nCIMD_TRUSTED_DOMAINS='[\"vendor.example\"]'\n"
+        'DCR_SWEEP_ACKNOWLEDGED=true\nconfigure_cimd_client_policy "$TOKEN"',
+        [cimd()],
+        scenario=f"metadata-{collection}-{failure}",
+    )
+    assert result.returncode != 0
+    assert state["clients"]["cimd"]["enabled"] is True
+    runtime = next(p for p in state["policies"] if p["name"] == "mcp-cimd-runtime-guard-policy")
+    assert runtime["enabled"] is True
+    assert runtime["mode"] == "STRICT"
+    assert runtime["profiles"] == ["mcp-cimd-runtime-guard"]
+    assert len(runtime["conditions"]) == 2
+    condition = runtime["conditions"][1]
+    assert condition["condition"] == "client-attributes"
+    assert not condition["configuration"].get("is-negative-logic", False)
+    assert json.loads(condition["configuration"]["attributes"]) == [
+        {"key": "display.on.consent.screen", "value": "true"}
+    ]
+    assert any(
+        r["method"] == "PUT"
+        and any(
+            p["name"] == ("cimd-vendors" if collection == "profiles" else "cimd-vendors-policy")
+            and (p.get("executors") or p.get("conditions"))
+            for p in json.loads(r["body"])[collection]
+        )
+        for r in requests
+        if r["path"].endswith("/" + collection)
+    )
