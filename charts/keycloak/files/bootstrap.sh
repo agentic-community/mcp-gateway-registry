@@ -64,6 +64,13 @@ fi
 # docker-entrypoint.sh defines the official image's initialization helpers when sourced.
 source /usr/local/bin/docker-entrypoint.sh
 server_started=false
+prepare_data_directory() {
+  # Kubernetes fsGroup may add group-write bits when a retained PVC is mounted.
+  # PostgreSQL refuses those modes; narrow only this process's real data directory.
+  [ -d "$PGDATA" ] && [ ! -L "$PGDATA" ] || fail "PGDATA must be a real directory"
+  [ "$(stat -c %u "$PGDATA")" = "$(id -u)" ] || fail "PGDATA must belong to the PostgreSQL user"
+  chmod 0700 "$PGDATA"
+}
 stop_server() {
   if [ "$server_started" = true ]; then docker_temp_server_stop; server_started=false; fi
 }
@@ -99,6 +106,7 @@ if [ -f "$target/$receipt_name" ] && [ "$BOOTSTRAP_MODE" != existing ]; then
   [ "$(cat "$target/$receipt_name")" = "$intent" ] || fail "completed volume belongs to another bootstrap intent; use existing only after external verification"
   # A receipt does not authorize changing the database or its owning role.
   docker_setup_env
+  prepare_data_directory
   docker_temp_server_start postgres
   server_started=true
   verify_database_identity
@@ -109,6 +117,7 @@ fi
 
 if [ "$BOOTSTRAP_MODE" = existing ]; then
   docker_setup_env
+  prepare_data_directory
   docker_temp_server_start postgres
   server_started=true
   verify_existing
@@ -156,6 +165,7 @@ fi
 
 export PGDATA="$staging"
 docker_setup_env
+prepare_data_directory
 docker_temp_server_start postgres
 server_started=true
 # Only bootstrap staging is modified. The source and input archive are read-only.

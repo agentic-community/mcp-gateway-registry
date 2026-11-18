@@ -218,6 +218,19 @@ def test_fresh_install_preserves_writes_on_regular_restart(postgres, username, d
         database,
     )
     docker("stop", name)
+    docker(
+        "run",
+        "--rm",
+        "--network",
+        "none",
+        "--volumes-from",
+        name,
+        "--entrypoint",
+        "chmod",
+        IMAGE,
+        "0770",
+        "/var/lib/postgresql/data/pgdata",
+    )
     second = postgres("fresh-install", username=username, database=database)
     ready(second)
     assert_database_identity(second, username, database)
@@ -240,6 +253,19 @@ def test_restore_preserves_records_and_restart_does_not_replay(
     assert_database_identity(name, username, database)
     sql(name, "INSERT INTO user_entity VALUES ('post-cutover-user')", database)
     docker("stop", name)
+    docker(
+        "run",
+        "--rm",
+        "--network",
+        "none",
+        "--volumes-from",
+        name,
+        "--entrypoint",
+        "chmod",
+        IMAGE,
+        "0770",
+        "/var/lib/postgresql/data/pgdata",
+    )
     second = postgres("restore", digest=digest, username=username, database=database)
     ready(second)
     assert_database_identity(second, username, database)
@@ -250,6 +276,19 @@ def test_restore_preserves_records_and_restart_does_not_replay(
     # Model an externally verified cluster that predates the bootstrap receipt.
     docker("exec", second, "rm", "/var/lib/postgresql/data/pgdata/.keycloak-bootstrap-complete")
     docker("stop", second)
+    docker(
+        "run",
+        "--rm",
+        "--network",
+        "none",
+        "--volumes-from",
+        second,
+        "--entrypoint",
+        "chmod",
+        IMAGE,
+        "0770",
+        "/var/lib/postgresql/data/pgdata",
+    )
     existing = postgres("existing", username=username, database=database, existing_verified=True)
     ready(existing)
     assert_database_identity(existing, username, database)

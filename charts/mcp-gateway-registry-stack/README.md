@@ -1339,6 +1339,8 @@ diff -u "$BACKUP_DIR/restored-counts.txt" "$BACKUP_DIR/existing-counts.txt"
 
 The filesystem receipt changes to `existing:`. The database's `_mcp_bootstrap.receipt` still records the original restore intent; that is expected. Confirm browser login and workload access again after the hooks finish. Merge `existing-values.yaml` into the deployment's maintained values so the next upgrade cannot accidentally return to the old restore intent. Keep `existingVerified=true` for normal upgrades of this verified target.
 
+Kubernetes `fsGroup` handling can add group-write permissions when remounting the data PVC. PostgreSQL refuses that data-directory mode. The bootstrap verifies that `PGDATA` is a real directory owned by the PostgreSQL process and narrows its permissions before starting a retained or staging database. This applies to restore retries and `existing` mode without changing database contents.
+
 Only after the StatefulSet no longer references the snapshot, access checks pass, and backup retention requirements are met may you retire the snapshot PVC. Removing it while `restore` mode is configured breaks later pod starts.
 
 ```bash
