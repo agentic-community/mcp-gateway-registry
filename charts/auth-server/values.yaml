@@ -285,7 +285,7 @@ cognito:
   userPoolId: "" # Cognito User Pool ID
   clientId: ""
   clientSecret: ""
-  domain: "" # Optional: custom Cognito domain
+  domain: "" # Optional: hosted-UI domain PREFIX, not a hostname. Empty derives it from the user pool id
   region: "us-east-1" # AWS region for the User Pool
   # Optional comma/space-separated allowlist of Cognito app-client ids that mint
   # machine (client_credentials) access tokens the gateway should accept. Empty =

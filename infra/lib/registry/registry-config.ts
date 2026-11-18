@@ -263,10 +263,10 @@ export interface CognitoConfig {
   /**
    * Cognito hosted-UI domain PREFIX, not a hostname. The auth-server appends
    * `.auth.<region>.amazoncognito.com`, so `my-pool` yields
-   * `my-pool.auth.us-west-2.amazoncognito.com`. Required when Cognito is
-   * enabled: the browser login URLs come from auth_server/oauth2_providers.yml,
-   * which interpolates `${COGNITO_DOMAIN}` as is, so an empty value yields
-   * `https://.auth.<region>.amazoncognito.com`.
+   * `my-pool.auth.us-west-2.amazoncognito.com`. Empty derives the prefix from
+   * the user pool id (auth_server/providers/cognito.py,
+   * resolve_cognito_domain_prefix), which works only if the pool's domain uses
+   * that prefix.
    */
   domain: string;
   /**
@@ -1131,18 +1131,14 @@ function _requireSecretArn(value: string, settingName: string): void {
 function _validateCognito(config: RegistryConfig): void {
   if (!config.cognito.enabled) return;
 
-  // cognito.domain IS required. auth_server/providers/cognito.py derives a
-  // domain from the user pool id when it is empty, but the browser login
-  // URLs come from auth_server/oauth2_providers.yml, which interpolates
-  // `${COGNITO_DOMAIN}` as is: the derivation in auth_server/server.py only
-  // fires on `${COGNITO_DOMAIN:-auto}`. An empty value therefore yields
-  // `https://.auth.<region>.amazoncognito.com`, and Cognito never creates a
-  // hosted-UI domain named after the pool id anyway.
+  // cognito.domain is not required: the auth-server derives the prefix from
+  // the user pool id when it is empty, for both the browser login URLs and
+  // the token endpoints (resolve_cognito_domain_prefix in
+  // auth_server/providers/cognito.py).
   const missing: string[] = [];
   if (!config.cognito.userPoolId) missing.push('cognito.userPoolId');
   if (!config.cognito.clientId) missing.push('cognito.clientId');
   if (!config.cognito.clientSecretArn) missing.push('cognito.clientSecretArn');
-  if (!config.cognito.domain) missing.push('cognito.domain');
   if (missing.length > 0) {
     throw new Error(
       `cognito.enabled=true needs ${missing.join(', ')}. The auth-server resolves the pool, ` +
@@ -1168,7 +1164,8 @@ function _validateCognito(config: RegistryConfig): void {
       `cognito.domain must be the hosted-UI domain PREFIX, not a hostname, got ` +
       `${JSON.stringify(config.cognito.domain)}. The auth-server appends ` +
       '".auth.<region>.amazoncognito.com", so pass "my-pool", not ' +
-      '"my-pool.auth.us-west-2.amazoncognito.com".',
+      '"my-pool.auth.us-west-2.amazoncognito.com". Leave it empty to derive the domain ' +
+      'from the user pool id.',
     );
   }
 }

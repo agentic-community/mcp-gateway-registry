@@ -21,11 +21,12 @@ providers:
     display_name: "AWS Cognito"
     client_id: "${COGNITO_CLIENT_ID}"
     client_secret: "${COGNITO_CLIENT_SECRET}"
-    # Domain will be auto-derived from user pool ID if COGNITO_DOMAIN is not set
-    auth_url: "https://${COGNITO_DOMAIN}.auth.${AWS_REGION}.amazoncognito.com/oauth2/authorize"
-    token_url: "https://${COGNITO_DOMAIN}.auth.${AWS_REGION}.amazoncognito.com/oauth2/token"
-    user_info_url: "https://${COGNITO_DOMAIN}.auth.${AWS_REGION}.amazoncognito.com/oauth2/userInfo"
-    logout_url: "https://${COGNITO_DOMAIN}.auth.${AWS_REGION}.amazoncognito.com/logout"
+    # COGNITO_DOMAIN is the hosted-UI domain PREFIX. Empty, unset or "auto" derives
+    # it from COGNITO_USER_POOL_ID (see resolve_cognito_domain_prefix).
+    auth_url: "https://${COGNITO_DOMAIN:-auto}.auth.${AWS_REGION}.amazoncognito.com/oauth2/authorize"
+    token_url: "https://${COGNITO_DOMAIN:-auto}.auth.${AWS_REGION}.amazoncognito.com/oauth2/token"
+    user_info_url: "https://${COGNITO_DOMAIN:-auto}.auth.${AWS_REGION}.amazoncognito.com/oauth2/userInfo"
+    logout_url: "https://${COGNITO_DOMAIN:-auto}.auth.${AWS_REGION}.amazoncognito.com/logout"
     scopes: ["openid", "email", "profile", "aws.cognito.signin.user.admin"]
     response_type: "code"
     grant_type: "authorization_code"

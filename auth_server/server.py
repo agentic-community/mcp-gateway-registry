@@ -110,6 +110,7 @@ except ImportError:
 
 # Import provider factory
 from providers.base import normalize_groups_claim
+from providers.cognito import resolve_cognito_domain_prefix
 from providers.factory import get_auth_provider
 from pydantic import (
     BaseModel,
@@ -6803,15 +6804,9 @@ def auto_derive_cognito_domain(user_pool_id: str) -> str:
     """
     Auto-derive Cognito domain from User Pool ID.
 
-    Example: us-east-1_KmP5A3La3 → us-east-1kmp5a3la3
+    Example: us-east-1_KmP5A3La3 becomes us-east-1kmp5a3la3
     """
-    if not user_pool_id:
-        return ""
-
-    # Remove underscore and convert to lowercase
-    domain = user_pool_id.replace("_", "").lower()
-    logger.info(f"Auto-derived Cognito domain '{domain}' from user pool ID '{user_pool_id}'")
-    return domain
+    return resolve_cognito_domain_prefix(None, user_pool_id)
 
 
 def substitute_env_vars(config):
@@ -6824,13 +6819,13 @@ def substitute_env_vars(config):
         try:
             # Handle special case for auto-derived Cognito domain
             if "COGNITO_DOMAIN:-auto" in config:
-                # Check if COGNITO_DOMAIN is set, if not auto-derive from user pool ID
-                cognito_domain = os.environ.get("COGNITO_DOMAIN")
-                if not cognito_domain:
-                    user_pool_id = os.environ.get("COGNITO_USER_POOL_ID", "")
-                    cognito_domain = auto_derive_cognito_domain(user_pool_id)
-
-                # Replace the template with the derived domain
+                # Same resolution as the Cognito provider, so the browser login
+                # URLs and the provider's own endpoints agree. Empty, unset and
+                # "auto" all derive the prefix from the user pool id.
+                cognito_domain = resolve_cognito_domain_prefix(
+                    os.environ.get("COGNITO_DOMAIN"),
+                    os.environ.get("COGNITO_USER_POOL_ID", ""),
+                )
                 config = config.replace("${COGNITO_DOMAIN:-auto}", cognito_domain)
 
             template = Template(config)

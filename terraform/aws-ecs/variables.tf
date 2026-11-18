@@ -984,7 +984,7 @@ variable "cognito_client_secret" {
 }
 
 variable "cognito_domain" {
-  description = "Optional Cognito hosted UI domain prefix or custom domain. Leave empty to derive it from the User Pool ID (e.g. https://<pool-id-without-underscore>.auth.<region>.amazoncognito.com)."
+  description = "Optional Cognito hosted-UI domain PREFIX (for example \"mcp-gw\"), not a hostname: the auth server appends \".auth.<region>.amazoncognito.com\", so a custom domain is not supported. Leave empty to derive it from the User Pool ID (us-east-1_KmP5A3La3 becomes us-east-1kmp5a3la3). That works only if the pool's domain uses that prefix, so set it explicitly otherwise."
   type        = string
   default     = ""
 }

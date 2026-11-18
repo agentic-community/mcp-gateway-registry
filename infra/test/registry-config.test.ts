@@ -295,11 +295,10 @@ describe('cognito validation', () => {
     ).toThrow(/complete Secrets Manager secret ARN/);
   });
 
-  it('rejects an empty domain, which would break the browser login URLs', () => {
-    // auth_server/oauth2_providers.yml interpolates ${COGNITO_DOMAIN} as is,
-    // so an empty value yields https://.auth.<region>.amazoncognito.com.
-    expect(() => loadWith({ cognito: { ...validCognito, domain: '' } }))
-      .toThrow(/cognito\.domain/);
+  it('accepts an empty domain, which the auth-server derives from the pool id', () => {
+    const config = loadWith({ cognito: { ...validCognito, domain: '' } });
+    expect(config.cognito.enabled).toBe(true);
+    expect(config.cognito.domain).toEqual('');
   });
 
   it('accepts a well-formed config', () => {

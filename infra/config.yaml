@@ -184,8 +184,8 @@ registry:
     # clientSecretArn: "arn:aws:secretsmanager:us-east-1:123456789012:secret:mcp/cognito-AbCdEf"
     # Hosted-UI domain PREFIX, not a hostname: the auth-server appends
     # ".auth.<region>.amazoncognito.com". Pass "my-pool", not
-    # "my-pool.auth.us-east-1.amazoncognito.com". Required when Cognito is
-    # enabled: an empty value breaks the browser login URLs.
+    # "my-pool.auth.us-east-1.amazoncognito.com". Leave empty to derive it
+    # from userPoolId, which works only if the pool's domain uses that prefix.
     # domain: "my-pool"
     # M2M app client ids the auth-server accepts, comma or whitespace
     # separated. Empty denies every client-credentials token.
