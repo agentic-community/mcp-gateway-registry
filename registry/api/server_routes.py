@@ -5441,7 +5441,11 @@ async def put_server_oauth_discovery(
     An existing designation is preserved -- see below.
     """
     from ..egress_auth.service import vault_principal
-    from .egress_auth_routes import build_oauth_provider_config
+    from .egress_auth_routes import (
+        build_discovery_dcr_config,
+        build_oauth_provider_config,
+        provider_requires_dcr,
+    )
 
     set_audit_action(
         request,
@@ -5521,19 +5525,29 @@ async def put_server_oauth_discovery(
     # -- self-contained under Backend Auth, no egress_oauth dependency. Blank
     # client_secret keeps the stored ciphertext (edit).
     prior = (existing_server.get("oauth_discovery") or {}).get("oauth") or {}
-    oauth_cfg = build_oauth_provider_config(
-        provider=body.provider,
-        client_id=body.client_id,
-        client_secret=body.client_secret,
-        scopes=body.scopes,
-        custom_authorize_url=body.custom_authorize_url,
-        custom_token_url=body.custom_token_url,
-        custom_scope_separator=body.custom_scope_separator,
-        custom_token_auth_style=body.custom_token_auth_style,
-        custom_resource=body.custom_resource,
-        expected_issuer=body.expected_issuer,
-        prior_secret_encrypted=prior.get("client_secret_encrypted"),
-    )
+    if provider_requires_dcr(body.provider):
+        # No client can be typed in for a DCR provider: reuse the one the server's
+        # per-user egress save registered (same callback URL), or refuse with 400.
+        oauth_cfg = build_discovery_dcr_config(
+            server=existing_server,
+            provider=body.provider,
+            scopes=body.scopes,
+            expected_issuer=body.expected_issuer,
+        )
+    else:
+        oauth_cfg = build_oauth_provider_config(
+            provider=body.provider,
+            client_id=body.client_id,
+            client_secret=body.client_secret,
+            scopes=body.scopes,
+            custom_authorize_url=body.custom_authorize_url,
+            custom_token_url=body.custom_token_url,
+            custom_scope_separator=body.custom_scope_separator,
+            custom_token_auth_style=body.custom_token_auth_style,
+            custom_resource=body.custom_resource,
+            expected_issuer=body.expected_issuer,
+            prior_secret_encrypted=prior.get("client_secret_encrypted"),
+        )
     oauth_cfg["updated_at"] = datetime.now(UTC).isoformat()
 
     # Preserve an EXISTING designation. This endpoint both configures the provider

@@ -79,7 +79,7 @@ channels:history,groups:history,im:history,mpim:history,channels:read,files:read
 offline_access,read:confluence-content.all,read:jira-user,read:jira-work,search:confluence,write:confluence-content,write:jira-work
 ```
 
-**Atlassian Rovo MCP v2** (provider: `atlassian-rovo`, Jira). The gateway registers its own OAuth client for this provider, so leave `client_id` and `client_secret` empty. The provider is not in the UI dropdown yet: configure it with `POST /api/servers/{path}/egress-auth` or `registry_management.py egress-configure`. These are the default scopes, used when you send none. `read:account` is required and is added to any list you send. An Atlassian organization admin must also allow the gateway's domain first; see [Atlassian Rovo MCP](../egress-credential-vault.md#atlassian-rovo).
+**Atlassian Rovo MCP v2** (provider: `atlassian-rovo`, Jira). The gateway registers its own OAuth client for this provider, so leave `client_id` and `client_secret` empty. Configure it in the server's edit form (Per-user OAuth (3LO), provider "Atlassian Rovo MCP"), with `POST /api/servers/{path}/egress-auth`, or with `registry_management.py egress-configure`. To fill the registry's tool list, also designate a discovery identity with the same provider; it reuses the client egress registered. These are the default scopes, used when you send none. `read:account` is required and is added to any list you send. An Atlassian organization admin must also allow the gateway's domain first; see [Atlassian Rovo MCP](../egress-credential-vault.md#atlassian-rovo).
 
 ```
 read:me,read:account,offline_access,read:jira:agent-interface,write:jira:agent-interface,search:jira:agent-interface
