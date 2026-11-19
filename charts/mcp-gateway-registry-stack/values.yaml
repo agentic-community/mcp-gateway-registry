@@ -331,14 +331,14 @@ keycloak-configure:
   registrationTrustedClientIds: []
   # DCR is opt-in. Both registration subtypes restrict scopes, client mappers
   # and default roles. Turning DCR off disables anonymous registration and
-  # unlisted clients; review the inventory before acknowledging a sweep.
+  # unlisted clients by default. Set sweepAcknowledged=false to require review.
   # Exact keepClients entries supplement the built-in and safe-shape keep rules.
   # Disable keycloak-configure entirely to leave an external realm untouched.
   # Native Keycloak 26.8.2 requires DCR and CIMD to be exclusive. Set one
   # enabled flag true and the other false in the same upgrade.
   dcr:
     enabled: false
-    sweepAcknowledged: false
+    sweepAcknowledged: true
     keepClients: []
   # Requires Keycloak 26.8.2 and keycloak.features: "cimd".
   # Native callback/JWKS hosts share a list; protect outbound fetches separately.
@@ -346,6 +346,7 @@ keycloak-configure:
   # Already disabled clients are not re-enabled when switching back.
   cimd:
     enabled: false
+    sweepAcknowledged: false
     trustedDomains:
       - vscode.dev
       - code.visualstudio.com

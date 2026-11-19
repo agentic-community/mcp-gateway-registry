@@ -140,7 +140,7 @@ REALM_SECURITY_BASELINE_JQ='
     | with_entries(select(.value != null))'
 
 # Variables a caller-supplied value keeps over .env (see main).
-CALLER_PRECEDENCE_VARS="KEYCLOAK_ADMIN_URL ENABLE_DCR_CONFIG ENABLE_CIMD_CONFIG DCR_KEEP_CLIENTS DCR_SWEEP_ACKNOWLEDGED DCR_ALLOWED_SCOPES KEYCLOAK_ADMIN KEYCLOAK_ADMIN_PASSWORD INITIAL_ADMIN_PASSWORD CIMD_TRUSTED_DOMAINS REGISTRATION_TRUSTED_CLIENT_IDS AWS_REGION"
+CALLER_PRECEDENCE_VARS="KEYCLOAK_ADMIN_URL ENABLE_DCR_CONFIG ENABLE_CIMD_CONFIG DCR_KEEP_CLIENTS DCR_SWEEP_ACKNOWLEDGED CIMD_SWEEP_ACKNOWLEDGED DCR_ALLOWED_SCOPES KEYCLOAK_ADMIN KEYCLOAK_ADMIN_PASSWORD INITIAL_ADMIN_PASSWORD CIMD_TRUSTED_DOMAINS REGISTRATION_TRUSTED_CLIENT_IDS AWS_REGION"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -1235,7 +1235,7 @@ _confirm_dcr_sweep() {
     while IFS=$'\t' read -r action uuid display; do
         [ "$action" != disable ] || destructive=true
     done <<< "$targets"
-    if [ "$destructive" = true ] && [ "${DCR_SWEEP_ACKNOWLEDGED:-false}" != true ]; then
+    if [ "$destructive" = true ] && [ "${DCR_SWEEP_ACKNOWLEDGED-true}" != true ]; then
         echo "Refusing to disable clients without DCR_SWEEP_ACKNOWLEDGED=true (Helm: dcr.sweepAcknowledged=true). Review this inventory and set DCR_KEEP_CLIENTS to exact client IDs to preserve. No sweep was performed." >&2
         return 1
     fi

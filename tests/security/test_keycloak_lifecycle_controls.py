@@ -47,9 +47,12 @@ def test_dcr_role_policy_installed_for_both_registration_subtypes(tmp_path, path
 
 
 @pytest.mark.parametrize("path", PROVISIONERS)
-def test_sweep_preflight_lists_targets_and_refuses_without_acknowledgment(tmp_path, path):
+def test_sweep_preflight_lists_targets_and_respects_explicit_review(tmp_path, path):
     result, requests = _run_shell(
-        tmp_path, path, 'ENABLE_DCR_CONFIG=false; preflight_dcr_upgrade "$TOKEN"', "sweep"
+        tmp_path,
+        path,
+        'ENABLE_DCR_CONFIG=false; DCR_SWEEP_ACKNOWLEDGED=false; preflight_dcr_upgrade "$TOKEN"',
+        "sweep",
     )
     assert result.returncode != 0
     assert "registered-browser" in result.stdout
@@ -61,9 +64,13 @@ def test_sweep_preflight_lists_targets_and_refuses_without_acknowledgment(tmp_pa
 
 @pytest.mark.parametrize("path", PROVISIONERS)
 @pytest.mark.parametrize(
-    "choice", ["DCR_SWEEP_ACKNOWLEDGED=true", "DCR_KEEP_CLIENTS=registered-browser"]
+    "choice",
+    [
+        "unset DCR_SWEEP_ACKNOWLEDGED",
+        "DCR_KEEP_CLIENTS=registered-browser; DCR_SWEEP_ACKNOWLEDGED=false",
+    ],
 )
-def test_sweep_preflight_accepts_explicit_operator_choice(tmp_path, path, choice):
+def test_sweep_preflight_accepts_default_or_explicit_keep(tmp_path, path, choice):
     result, requests = _run_shell(
         tmp_path,
         path,

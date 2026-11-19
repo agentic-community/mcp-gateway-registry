@@ -47,7 +47,7 @@ ENABLE_DCR_CONFIG=true ENABLE_CIMD_CONFIG=false bash keycloak/setup/upgrade-real
 ENABLE_DCR_CONFIG=false ENABLE_CIMD_CONFIG=true bash keycloak/setup/upgrade-realm-for-dcr.sh
 ```
 
-Switching from CIMD to DCR disables persisted CIMD clients. Review the inventory and set `DCR_SWEEP_ACKNOWLEDGED=true`
+Switching from CIMD to DCR disables persisted CIMD clients. Review the inventory and set `CIMD_SWEEP_ACKNOWLEDGED=true`
 only after approving the disables; returning to CIMD does not re-enable them. Already issued access tokens remain valid
 until expiry. The first setup run after a failed switch must complete before the intended registration path opens.
 Compose and ECS enable the server's `cimd` feature; realm setup remains opt-in. In Helm, enable the server feature and
@@ -103,8 +103,8 @@ The cache-expiry attribute alone does not prove origin. Keep unrestricted native
 contract before changing the image version.
 
 Disabling CIMD or removing vendor trust inventories persisted CIMD clients independently of DCR. If the inventory
-includes enabled clients to disable, review it and set `DCR_SWEEP_ACKNOWLEDGED=true` (Helm:
-`dcr.sweepAcknowledged=true`). A `DCR_KEEP_CLIENTS` entry does not override withdrawn CIMD trust.
+includes enabled clients to disable, review it and set `CIMD_SWEEP_ACKNOWLEDGED=true` (Helm:
+`cimd.sweepAcknowledged=true`). A `DCR_KEEP_CLIENTS` entry does not override withdrawn CIMD trust.
 
 Setup first installs a native runtime policy that denies all CIMD authorization, authorization-code exchange and
 refresh during the lifecycle change. It restores exact-host allowance only after verifying the metadata profile and
@@ -120,9 +120,7 @@ CIMD clients use their metadata URL as a stable client ID and have their own cle
 not require a CIMD keep-list entry. Disabling CIMD or removing its trusted host still revokes the client regardless of
 `DCR_KEEP_CLIENTS`.
 
-With DCR off, setup inventories enabled clients before changing policies. Review the proposed disables, add exact IDs to
-`DCR_KEEP_CLIENTS` (Helm: `dcr.keepClients`), then set `DCR_SWEEP_ACKNOWLEDGED=true` (Helm:
-`dcr.sweepAcknowledged=true`) to proceed. Built-in clients remain intact; the keep-list also recognizes the configured
+With DCR off, setup inventories enabled clients and sweeps unlisted clients by default. Add exact IDs to `DCR_KEEP_CLIENTS` (Helm: `dcr.keepClients`) before upgrading to preserve custom clients. Set `DCR_SWEEP_ACKNOWLEDGED=false` (Helm: `dcr.sweepAcknowledged=false`) to stop for review if the sweep would disable an enabled client. Built-in clients remain intact; the keep-list also recognizes the configured
 first-party web client and validated service-account or IDE client shapes. It invalidates registration access tokens for
 non-built-in clients. Disabled clients cannot start new grants or refresh tokens, but the gateway can accept an already
 issued access token until its expiry.

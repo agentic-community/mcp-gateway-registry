@@ -43,7 +43,7 @@ registrationTrustedClientIds: []
 # Both registration subtypes use an explicit scope allowlist, reject client
 # mappers and default roles, and enforce the realm's device-grant restriction.
 # With DCR off, setup disables anonymous registration and unlisted clients.
-# Review the printed client inventory and acknowledge any destructive sweep.
+# The sweep runs by default. Set sweepAcknowledged=false to require review.
 # Built-ins, the web client, verified public PKCE IDE clients, explicit keep
 # entries, and client-secret service accounts without browser flows survive.
 # Setup invalidates every kept non-built-in client's registration access token.
@@ -53,7 +53,7 @@ registrationTrustedClientIds: []
 # executor rejects CIMD creation/update contexts. Switch both flags in one upgrade.
 dcr:
   enabled: false
-  sweepAcknowledged: false
+  sweepAcknowledged: true
   allowedScopes:
     - openid
     - basic
@@ -68,7 +68,7 @@ dcr:
 # CIMD requires the pinned official Keycloak 26.8.2 image and KC_FEATURES=cimd.
 # Use exact vendor hosts; setup refuses wildcards.
 # Native Keycloak shares callback and JWKS hosts; protect outbound fetches separately.
-# Off/trust withdrawal requires dcr.sweepAcknowledged for reviewed enabled targets,
+# Off/trust withdrawal requires cimd.sweepAcknowledged for reviewed enabled targets,
 # independently of DCR and keep-lists. Setup never re-enables disabled clients.
 # Runtime deny covers saved and late-arriving CIMD at authorization/code/refresh.
 # Install deny before removing metadata policy or sweeping; keep it on failure/off.
@@ -80,6 +80,7 @@ dcr:
 # the affected registration path closed until a successful full setup run.
 cimd:
   enabled: false
+  sweepAcknowledged: false
   trustedDomains:
     - vscode.dev
     - code.visualstudio.com

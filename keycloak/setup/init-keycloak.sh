@@ -1816,7 +1816,7 @@ _confirm_dcr_sweep() {
     while IFS=$'\t' read -r action uuid display; do
         [ "$action" != disable ] || destructive=true
     done <<< "$targets"
-    if [ "$destructive" = true ] && [ "${DCR_SWEEP_ACKNOWLEDGED:-false}" != true ]; then
+    if [ "$destructive" = true ] && [ "${DCR_SWEEP_ACKNOWLEDGED-true}" != true ]; then
         echo "Refusing to disable clients without DCR_SWEEP_ACKNOWLEDGED=true (Helm: dcr.sweepAcknowledged=true). Review this inventory and set DCR_KEEP_CLIENTS to exact client IDs to preserve. No sweep was performed." >&2
         return 1
     fi
@@ -1887,7 +1887,7 @@ main() {
     # realm and break login with invalid_redirect_uri. KEYCLOAK_ADMIN_URL is in the
     # list for the same reason in reverse -- a stale .env would otherwise retarget
     # the entire run at a local Keycloak.
-    CALLER_PRECEDENCE_VARS="KEYCLOAK_ADMIN_URL REGISTRY_URL AUTH_SERVER_EXTERNAL_URL ENABLE_DCR_CONFIG ENABLE_CIMD_CONFIG DCR_KEEP_CLIENTS DCR_SWEEP_ACKNOWLEDGED DCR_ALLOWED_SCOPES KEYCLOAK_ADMIN KEYCLOAK_ADMIN_PASSWORD INITIAL_ADMIN_PASSWORD CIMD_TRUSTED_DOMAINS REGISTRATION_TRUSTED_CLIENT_IDS AWS_REGION"
+    CALLER_PRECEDENCE_VARS="KEYCLOAK_ADMIN_URL REGISTRY_URL AUTH_SERVER_EXTERNAL_URL ENABLE_DCR_CONFIG ENABLE_CIMD_CONFIG DCR_KEEP_CLIENTS DCR_SWEEP_ACKNOWLEDGED CIMD_SWEEP_ACKNOWLEDGED DCR_ALLOWED_SCOPES KEYCLOAK_ADMIN KEYCLOAK_ADMIN_PASSWORD INITIAL_ADMIN_PASSWORD CIMD_TRUSTED_DOMAINS REGISTRATION_TRUSTED_CLIENT_IDS AWS_REGION"
     if [ -f "$ENV_FILE" ]; then
         echo "Loading environment variables from $ENV_FILE..."
         # Snapshot the caller's values before `set -a; source` overwrites them.

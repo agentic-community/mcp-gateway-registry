@@ -193,7 +193,7 @@ def test_cimd_off_revokes_even_when_dcr_on_or_kept(tmp_path, monkeypatch, path, 
         tmp_path,
         monkeypatch,
         path,
-        f"ENABLE_DCR_CONFIG={dcr}\nENABLE_CIMD_CONFIG=false\nDCR_SWEEP_ACKNOWLEDGED=true\n"
+        f"ENABLE_DCR_CONFIG={dcr}\nENABLE_CIMD_CONFIG=false\nCIMD_SWEEP_ACKNOWLEDGED=true\n"
         f'DCR_KEEP_CLIENTS={record["clientId"]}\nremove_cimd_client_policy "$TOKEN"',
         [record, client("ordinary", "https://vendor.example/ordinary")],
     )
@@ -230,7 +230,7 @@ def test_cimd_trust_withdrawal_is_paginated_and_does_not_reenable(tmp_path, monk
         tmp_path,
         monkeypatch,
         path,
-        "ENABLE_DCR_CONFIG=true\nENABLE_CIMD_CONFIG=true\nDCR_SWEEP_ACKNOWLEDGED=true\n"
+        "ENABLE_DCR_CONFIG=true\nENABLE_CIMD_CONFIG=true\nCIMD_SWEEP_ACKNOWLEDGED=true\n"
         'CIMD_TRUSTED_DOMAINS=\'["vendor.example"]\'\nreconcile_cimd_clients "$TOKEN"',
         clients,
     )
@@ -255,7 +255,7 @@ def test_cimd_revocation_requires_review_even_with_keep(tmp_path, monkeypatch, p
         [cimd()],
     )
     assert result.returncode != 0
-    assert "DCR_SWEEP_ACKNOWLEDGED=true" in result.stderr
+    assert "CIMD_SWEEP_ACKNOWLEDGED=true" in result.stderr
     assert state["clients"]["cimd"]["enabled"] is True
     assert not any(r["method"] == "PUT" for r in requests)
 
@@ -266,7 +266,7 @@ def test_cimd_cleanup_refuses_without_native_policy_support(tmp_path, monkeypatc
         tmp_path,
         monkeypatch,
         path,
-        'ENABLE_DCR_CONFIG=false\nDCR_SWEEP_ACKNOWLEDGED=true\nremove_cimd_client_policy "$TOKEN"',
+        'ENABLE_DCR_CONFIG=false\nCIMD_SWEEP_ACKNOWLEDGED=true\nremove_cimd_client_policy "$TOKEN"',
         [cimd()],
         scenario="old-server",
     )
@@ -337,7 +337,7 @@ def test_cimd_only_removes_dcr_uri_guard_without_removing_unrelated_policies(
         tmp_path,
         monkeypatch,
         path,
-        "ENABLE_DCR_CONFIG=false\nENABLE_CIMD_CONFIG=true\nDCR_SWEEP_ACKNOWLEDGED=true\n"
+        "ENABLE_DCR_CONFIG=false\nENABLE_CIMD_CONFIG=true\nCIMD_SWEEP_ACKNOWLEDGED=true\n"
         "CIMD_TRUSTED_DOMAINS='[\"vendor.example\"]'\n"
         'configure_cimd_client_policy "$TOKEN"',
     )
@@ -517,7 +517,7 @@ def test_client_revocation_readback_failure_is_fatal(tmp_path, monkeypatch, path
         tmp_path,
         monkeypatch,
         path,
-        'DCR_SWEEP_ACKNOWLEDGED=true\nreconcile_cimd_clients "$TOKEN"',
+        'CIMD_SWEEP_ACKNOWLEDGED=true\nreconcile_cimd_clients "$TOKEN"',
         [cimd()],
         scenario="client-readback-failed",
     )
@@ -544,7 +544,7 @@ def test_cimd_revocation_precedes_unknown_scope_failure(tmp_path, monkeypatch, p
         tmp_path,
         monkeypatch,
         path,
-        'ENABLE_DCR_CONFIG=false\nDCR_SWEEP_ACKNOWLEDGED=true\nreconcile_registration_security "$TOKEN"',
+        'ENABLE_DCR_CONFIG=false\nCIMD_SWEEP_ACKNOWLEDGED=true\nreconcile_registration_security "$TOKEN"',
         [cimd(), client("unknown", "unknown-browser")],
         {"unknown": {"default-client-scopes": [{"id": "admin", "name": "kc-admin-api"}]}},
     )
@@ -568,7 +568,7 @@ def test_malformed_managed_cimd_id_is_revoked(tmp_path, monkeypatch, path):
         monkeypatch,
         path,
         "ENABLE_CIMD_CONFIG=true\nCIMD_TRUSTED_DOMAINS='[\"vendor.example\"]'\n"
-        'DCR_SWEEP_ACKNOWLEDGED=true\nreconcile_cimd_clients "$TOKEN"',
+        'CIMD_SWEEP_ACKNOWLEDGED=true\nreconcile_cimd_clients "$TOKEN"',
         [record],
     )
     assert result.returncode == 0, result.stdout + result.stderr
@@ -597,7 +597,7 @@ def test_reconciliation_is_idempotent_in_one_setup(tmp_path, monkeypatch, path):
         tmp_path,
         monkeypatch,
         path,
-        "ENABLE_DCR_CONFIG=false\nDCR_SWEEP_ACKNOWLEDGED=true\n"
+        "ENABLE_DCR_CONFIG=false\nCIMD_SWEEP_ACKNOWLEDGED=true\n"
         'reconcile_registration_security "$TOKEN"\nreconcile_registration_security "$TOKEN"',
         [cimd()],
     )
@@ -793,7 +793,7 @@ def test_parameterized_scopes_do_not_block_off_state_cleanup(tmp_path, monkeypat
         tmp_path,
         monkeypatch,
         path,
-        "ENABLE_DCR_CONFIG=false\nENABLE_CIMD_CONFIG=false\nDCR_SWEEP_ACKNOWLEDGED=true\n"
+        "ENABLE_DCR_CONFIG=false\nENABLE_CIMD_CONFIG=false\nCIMD_SWEEP_ACKNOWLEDGED=true\n"
         'reconcile_registration_security "$TOKEN"',
         [cimd()],
         scenario="is.parameterized.scope",
@@ -826,7 +826,7 @@ def test_lifecycle_installs_guard_before_closing_creation_and_revoking_clients(
         monkeypatch,
         path,
         f"ENABLE_CIMD_CONFIG={enabled}\nCIMD_TRUSTED_DOMAINS='[\"vendor.example\"]'\n"
-        'DCR_SWEEP_ACKNOWLEDGED=true\n_prepare_cimd_lifecycle "$TOKEN"',
+        'CIMD_SWEEP_ACKNOWLEDGED=true\n_prepare_cimd_lifecycle "$TOKEN"',
         [cimd("withdrawn", "withdrawn.example")],
     )
     assert result.returncode == 0, result.stdout + result.stderr
@@ -868,7 +868,7 @@ def test_lifecycle_refuses_unacknowledged_revocation_before_guard_mutation(
         tmp_path,
         monkeypatch,
         path,
-        'ENABLE_CIMD_CONFIG=false\nDCR_SWEEP_ACKNOWLEDGED=false\n_prepare_cimd_lifecycle "$TOKEN"',
+        'ENABLE_CIMD_CONFIG=false\nCIMD_SWEEP_ACKNOWLEDGED=false\n_prepare_cimd_lifecycle "$TOKEN"',
         [cimd()],
     )
     assert result.returncode != 0
@@ -883,7 +883,7 @@ def test_lifecycle_repeats_inventory_after_installing_guard(tmp_path, monkeypatc
         tmp_path,
         monkeypatch,
         path,
-        f'ENABLE_CIMD_CONFIG=false\nDCR_SWEEP_ACKNOWLEDGED={ack}\n_prepare_cimd_lifecycle "$TOKEN"',
+        f'ENABLE_CIMD_CONFIG=false\nCIMD_SWEEP_ACKNOWLEDGED={ack}\n_prepare_cimd_lifecycle "$TOKEN"',
         scenario="late-cimd",
     )
     assert state["client_inventories"] >= 2
@@ -907,7 +907,7 @@ def test_metadata_install_failure_retains_all_cimd_denial(
         monkeypatch,
         path,
         "ENABLE_CIMD_CONFIG=true\nCIMD_TRUSTED_DOMAINS='[\"vendor.example\"]'\n"
-        'DCR_SWEEP_ACKNOWLEDGED=true\nconfigure_cimd_client_policy "$TOKEN"',
+        'CIMD_SWEEP_ACKNOWLEDGED=true\nconfigure_cimd_client_policy "$TOKEN"',
         [cimd()],
         scenario=f"metadata-{collection}-{failure}",
     )

@@ -114,6 +114,7 @@ def _configure(
         "ENABLE_DCR_CONFIG": str(dcr).lower(),
         "ENABLE_CIMD_CONFIG": str(cimd).lower(),
         "DCR_SWEEP_ACKNOWLEDGED": "true",
+        "CIMD_SWEEP_ACKNOWLEDGED": "true",
         "DCR_KEEP_CLIENTS": keep,
         "REGISTRATION_TRUSTED_CLIENT_IDS": "[]",
         "CIMD_TRUSTED_DOMAINS": json.dumps(
@@ -147,6 +148,7 @@ def _lifecycle_helper(
         "ENABLE_CIMD_CONFIG": str(cimd).lower(),
         "CIMD_TRUSTED_DOMAINS": json.dumps(domains or ["vscode.dev"]),
         "DCR_SWEEP_ACKNOWLEDGED": "true",
+        "CIMD_SWEEP_ACKNOWLEDGED": "true",
     }
     return subprocess.run(
         [

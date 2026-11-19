@@ -46,6 +46,8 @@ spec:
               value: {{ .Values.dcr.enabled | default false | toString | quote }}
             - name: DCR_SWEEP_ACKNOWLEDGED
               value: {{ .Values.dcr.sweepAcknowledged | default false | toString | quote }}
+            - name: CIMD_SWEEP_ACKNOWLEDGED
+              value: {{ .Values.cimd.sweepAcknowledged | default false | toString | quote }}
             - name: DCR_ALLOWED_SCOPES
               value: {{ required "keycloak-configure.dcr.allowedScopes must list at least one scope" (join " " (.Values.dcr.allowedScopes | default list)) | quote }}
             - name: DCR_KEEP_CLIENTS

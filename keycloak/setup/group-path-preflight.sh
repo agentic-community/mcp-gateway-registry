@@ -594,8 +594,8 @@ _confirm_cimd_sweep() {
     [ -n "$targets" ] || return 0
     echo "CIMD revocation inventory (UUID, client ID, currently enabled):"
     printf '%s\n' "$targets"
-    if grep -q $'\ttrue$' <<< "$targets" && [ "${DCR_SWEEP_ACKNOWLEDGED:-false}" != true ]; then
-        echo "Review CIMD revocations and set DCR_SWEEP_ACKNOWLEDGED=true (Helm: dcr.sweepAcknowledged=true). DCR_KEEP_CLIENTS does not override CIMD off or withdrawn host trust." >&2
+    if grep -q $'\ttrue$' <<< "$targets" && [ "${CIMD_SWEEP_ACKNOWLEDGED:-false}" != true ]; then
+        echo "Review CIMD revocations and set CIMD_SWEEP_ACKNOWLEDGED=true (Helm: cimd.sweepAcknowledged=true)." >&2
         return 1
     fi
 }

@@ -150,7 +150,7 @@ def run(
     result, requests = shell._run_shell(
         tmp_path,
         path,
-        "ENABLE_CIMD_CONFIG=true\nDCR_SWEEP_ACKNOWLEDGED=false\n" + command,
+        "ENABLE_CIMD_CONFIG=true\nCIMD_SWEEP_ACKNOWLEDGED=false\n" + command,
         scenario,
     )
     persisted = tmp_path / "api.state.json"
@@ -334,7 +334,7 @@ def test_first_enable_refuses_every_cached_client(tmp_path, monkeypatch, path, e
         tmp_path,
         monkeypatch,
         path,
-        f'DCR_SWEEP_ACKNOWLEDGED={ack}\n_check_cimd_first_enable "$TOKEN"',
+        f'CIMD_SWEEP_ACKNOWLEDGED={ack}\n_check_cimd_first_enable "$TOKEN"',
         clients=[record],
     )
     assert result.returncode != 0
@@ -349,7 +349,7 @@ def test_first_guard_install_refuses_cache_in_both_modes(tmp_path, monkeypatch, 
         tmp_path,
         monkeypatch,
         path,
-        f'ENABLE_CIMD_CONFIG={enabled}\nDCR_SWEEP_ACKNOWLEDGED=true\n_prepare_cimd_lifecycle "$TOKEN"',
+        f'ENABLE_CIMD_CONFIG={enabled}\nCIMD_SWEEP_ACKNOWLEDGED=true\n_prepare_cimd_lifecycle "$TOKEN"',
         clients=[cimd(enabled=False)],
     )
     assert result.returncode != 0
@@ -477,7 +477,7 @@ def test_runtime_guard_capability_failure_prevents_sweeps(
         tmp_path,
         monkeypatch,
         path,
-        'ENABLE_CIMD_CONFIG=false\nDCR_SWEEP_ACKNOWLEDGED=true\n_prepare_cimd_lifecycle "$TOKEN"',
+        'ENABLE_CIMD_CONFIG=false\nCIMD_SWEEP_ACKNOWLEDGED=true\n_prepare_cimd_lifecycle "$TOKEN"',
         clients=[cimd()],
         info=info,
         policies=[{"name": "mcp-cimd-runtime-guard-policy"}],
@@ -513,7 +513,7 @@ def test_failed_runtime_guard_prevents_creation_shutdown_and_revocation(
         tmp_path,
         monkeypatch,
         path,
-        'ENABLE_CIMD_CONFIG=false\nDCR_SWEEP_ACKNOWLEDGED=true\n_prepare_cimd_lifecycle "$TOKEN"',
+        'ENABLE_CIMD_CONFIG=false\nCIMD_SWEEP_ACKNOWLEDGED=true\n_prepare_cimd_lifecycle "$TOKEN"',
         clients=[record],
         scenario=f"{collection}-{failure}",
         policies=[{"name": "mcp-cimd-runtime-guard-policy"}, {"name": "cimd-vendors-policy"}],

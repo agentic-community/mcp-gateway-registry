@@ -5,7 +5,7 @@ release:
   name: test
   namespace: default
 tests:
-  - it: keeps self-registration and destructive cleanup opt-in
+  - it: defaults to DCR cleanup while requiring CIMD cleanup approval
     asserts:
       - contains:
           path: spec.template.spec.containers[0].env
@@ -16,6 +16,11 @@ tests:
           path: spec.template.spec.containers[0].env
           content:
             name: DCR_SWEEP_ACKNOWLEDGED
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CIMD_SWEEP_ACKNOWLEDGED
             value: "false"
       - contains:
           path: spec.template.spec.containers[0].env
