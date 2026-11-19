@@ -27,7 +27,6 @@ from ..core.config import settings
 from ..core.endpoint_utils import get_endpoint_url_from_server_info
 from ..core.mcp_apps import (
     count_mcp_app_tools,
-    mcp_app_signature,
 )
 from ..exceptions import UrlValidationError
 from ..utils.tool_list_hash import (
@@ -1921,19 +1920,17 @@ class HealthMonitoringService:
         version_changed = bool(new_version) and (
             current_server_info.get("mcp_server_version") != new_version
         )
-        # MCP App pages live in _meta.ui, which the hash does not cover.
-        ui_changed = mcp_app_signature(current_tool_list) != mcp_app_signature(tool_list)
-        if not (list_changed or version_changed or ui_changed):
+        if not (list_changed or version_changed):
             return None
 
-        # current_server_info was read without credentials, so a full-card write
-        # would replace nested documents such as egress_oauth without their
-        # secrets and wipe them. Persist only the fields discovery owns.
-        updated_server_info = current_server_info.copy()
-        updated_server_info["tool_list"] = tool_list
-        updated_server_info["num_tools"] = len(tool_list)
-        updated_server_info["num_mcp_app_tools"] = count_mcp_app_tools(tool_list)
-        updated_server_info["tool_list_hash"] = new_hash
+        # Persist only discovery-owned fields. The read above omits credentials
+        # and may predate concurrent registration edits.
+        updated_server_info = {
+            "tool_list": tool_list,
+            "num_tools": len(tool_list),
+            "num_mcp_app_tools": count_mcp_app_tools(tool_list),
+            "tool_list_hash": new_hash,
+        }
         discovered_fields = ["tool_list", "num_tools", "num_mcp_app_tools", "tool_list_hash"]
         # The first discovery fills an empty list; that is not a change.
         if list_changed and current_tool_list:

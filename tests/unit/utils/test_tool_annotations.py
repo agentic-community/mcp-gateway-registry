@@ -243,6 +243,11 @@ import sys
 sys.modules["mcp"] = None
 import registry.utils.tool_schema
 import registry.utils.tool_annotations
+import registry.utils.tool_list_hash
+tool = {"name": "save", "ui_visibility": []}
+assert registry.utils.tool_schema.stored_tool_to_mcp(tool)["_meta"]["ui"] == {"visibility": []}
+assert not registry.core.mcp_apps.is_model_visible(tool)
+assert registry.utils.tool_list_hash.compare_tool_lists([{"name": "save"}], [tool]).changed == ["save"]
 print("imported")
 """
 

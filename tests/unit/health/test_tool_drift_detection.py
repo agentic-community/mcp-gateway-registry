@@ -127,6 +127,18 @@ class TestToolDriftDetection:
         assert result == "changed"
         assert "format" in store.card["tool_list"][0]["inputSchema"]["properties"]
 
+    async def test_page_only_change_updates_metadata_without_scope_changes(self, service, store):
+        store.card["tool_list"][0].update(
+            ui_resource_uri="ui://page/v1", ui_visibility=["model", "app"]
+        )
+        fetched = copy.deepcopy(store.card["tool_list"])
+        fetched[0].update(ui_resource_uri="ui://page/v2", ui_visibility=["app"])
+        result, scope_mock = await _save(service, store, fetched)
+        assert result == "changed"
+        assert store.card["tool_list"][0]["ui_resource_uri"] == "ui://page/v2"
+        assert store.card["tool_list"][0]["ui_visibility"] == ["app"]
+        scope_mock.assert_not_awaited()
+
     async def test_write_is_field_scoped(self, service, store):
         fetched = copy.deepcopy(STORED_TOOLS)
         fetched[1]["description"] = "Delete a note forever."

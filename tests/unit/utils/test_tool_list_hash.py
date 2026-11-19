@@ -98,6 +98,50 @@ class TestToolListHash:
         noisy[0]["annotations"] = {"readOnlyHint": "yes"}
         assert tool_list_hash(noisy) == tool_list_hash(_tools())
 
+    @pytest.mark.parametrize(
+        "field,value",
+        [("ui_resource_uri", "ui://page/v2"), ("ui_visibility", ["app"])],
+    )
+    def test_ui_only_change_is_definition_drift(self, field, value):
+        old = {
+            "name": "open",
+            "ui_resource_uri": "ui://page/v1",
+            "ui_visibility": ["model", "app"],
+        }
+        new = {**old, field: value}
+        assert tool_list_hash([old]) != tool_list_hash([new])
+        assert compare_tool_lists([old], [new]).changed == ["open"]
+
+    def test_raw_and_discovered_app_tools_compare_equal(self):
+        raw = {
+            "name": "open",
+            "_meta": {"ui": {"resourceUri": "ui://page/v1", "visibility": ["app"]}},
+        }
+        stored = {"name": "open", "ui_resource_uri": "ui://page/v1", "ui_visibility": ["app"]}
+        assert tool_list_hash([raw]) == tool_list_hash([stored])
+
+    @pytest.mark.parametrize(
+        "optional",
+        [
+            {"annotations": {"readOnlyHint": False}},
+            {"outputSchema": {}},
+            {"ui_visibility": []},
+            {"ui_visibility": ["model", "app"]},
+        ],
+    )
+    def test_explicit_optional_presence_is_definition_drift(self, optional):
+        old = {"name": "open", "ui_resource_uri": "ui://page/v1"}
+        new = {**old, **optional}
+        assert compare_tool_lists([old], [new]).changed == ["open"]
+
+    def test_schema_aliases_and_normalized_root_compare_equal(self):
+        stored = {"name": "open", "schema": {"properties": {"q": {"type": "string"}}}}
+        raw = {
+            "name": "open",
+            "inputSchema": {"type": "object", "properties": {"q": {"type": "string"}}},
+        }
+        assert tool_definition_hash(stored) == tool_definition_hash(raw)
+
 
 @pytest.mark.unit
 class TestCompareToolLists:

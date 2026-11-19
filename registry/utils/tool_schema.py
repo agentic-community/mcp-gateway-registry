@@ -16,6 +16,8 @@ at the root. ``mcp_input_schema`` applies that rule. Virtual server mappings
 import logging
 from typing import Any
 
+from registry.core.mcp_apps import stored_ui_resource_uri, stored_ui_visibility
+
 from .tool_annotations import stored_tool_metadata
 
 logger = logging.getLogger(__name__)
@@ -139,10 +141,8 @@ def stored_tool_to_mcp(
 ) -> dict[str, Any] | None:
     """Convert one stored ``tool_list`` entry to an MCP ``tools/list`` entry.
 
-    ``name``, ``description`` and ``inputSchema`` are always copied. ``title``,
-    ``annotations`` and ``outputSchema`` are copied when the stored tool has a
-    valid value, the same fields a virtual server mapping publishes for a
-    backend that has not been connected yet.
+    Optional metadata uses the same validation as discovery. MCP Apps retain
+    their page URI and explicit audience, including an empty audience list.
 
     Args:
         tool: One entry of a server's stored ``tool_list``.
@@ -161,9 +161,20 @@ def stored_tool_to_mcp(
     name = tool.get("name")
     if not isinstance(name, str) or not name:
         return None
-    return {
+    result = {
         "name": name,
         "description": _stored_description(tool),
         "inputSchema": mcp_input_schema(stored_input_schema(tool)),
         **stored_tool_metadata(tool),
     }
+    uri = stored_ui_resource_uri(tool)
+    meta = tool.get("_meta")
+    ui = meta.get("ui") if isinstance(meta, dict) else None
+    ui_metadata: dict[str, Any] = {}
+    if uri:
+        ui_metadata["resourceUri"] = uri
+    if "ui_visibility" in tool or (isinstance(ui, dict) and "visibility" in ui):
+        ui_metadata["visibility"] = stored_ui_visibility(tool)
+    if ui_metadata:
+        result["_meta"] = {"ui": ui_metadata}
+    return result

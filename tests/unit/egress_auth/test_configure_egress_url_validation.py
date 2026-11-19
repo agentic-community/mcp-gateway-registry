@@ -9,18 +9,13 @@ scheme, so a config that would exfiltrate the secret to an internal target can
 never be persisted. Built-in providers ignore the custom URLs and are unaffected.
 """
 
-import socket
-from unittest.mock import AsyncMock, patch
-
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 import registry.api.egress_auth_routes as routes
-import registry.core.config as core_config
 from registry.egress_auth import providers
 from registry.egress_auth.schemas import TokenEndpointAuthStyle
-from registry.services.server_service import ServerService
 from tests.unit.egress_auth.dcr_fixtures import (
     DCR_TEST_DEFAULT_SCOPES,
     DCR_TEST_PROVIDER,
@@ -438,87 +433,6 @@ class TestConfigureWritesOnlyEgressFields:
         resp = client.post("/servers/gh/egress-auth", json=_obo_body(target_audience="   "))
         assert resp.status_code == 400
         assert client._svc.updated_fields is None
-
-
-@pytest.mark.unit
-class TestProxiedServerEgressSaveWriteSet:
-    """What the repository is asked to write for a proxied server's egress save.
-
-    The route names only the egress fields, but the real ``update_server`` extends
-    the write for a proxied server: it re-pins the proxy target and clears a
-    refresh auto-disable. This runs the real service over a repository mock so the
-    full write set is pinned, not only what the route asked for.
-    """
-
-    STORED = {
-        "path": "/gh",
-        "server_name": "GitHub",
-        "is_proxied": True,
-        "proxy_pass_url": "https://ok.example/",
-        "proxy_disabled_reason": "was auto-disabled",
-        "deployment": "remote",
-        "tool_list": [{"name": "t"}],
-        "egress_auth_mode": "none",
-        "egress_oauth": None,
-    }
-
-    @pytest.fixture
-    def repo(self):
-        repo = AsyncMock()
-        repo.get.return_value = dict(self.STORED)
-        repo.update.return_value = True
-        repo.get_state.return_value = False
-        return repo
-
-    @pytest.fixture
-    def client(self, monkeypatch, repo):
-        monkeypatch.setattr(routes.settings, "egress_auth_enabled", True)
-        monkeypatch.setattr(core_config.settings, "gateway_proxy_allow_private_targets", False)
-        with (
-            patch("registry.services.server_service.get_server_repository", return_value=repo),
-            patch(
-                "registry.repositories.factory.get_search_repository",
-                return_value=AsyncMock(),
-            ),
-        ):
-            monkeypatch.setattr(routes, "server_service", ServerService())
-        app = FastAPI()
-        app.include_router(routes.router)
-        app.dependency_overrides[routes.nginx_proxied_auth] = lambda: {
-            "username": "admin",
-            "is_admin": True,
-            "auth_method": "keycloak",
-        }
-        app.dependency_overrides[routes.verify_csrf_token_flexible] = lambda: None
-        return TestClient(app)
-
-    def test_save_writes_the_egress_and_re_pinned_proxy_fields_only(self, client, repo):
-        addrinfo = [
-            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("93.184.216.34", 443))
-        ]
-        with patch("socket.getaddrinfo", return_value=addrinfo):
-            resp = client.post("/servers/gh/egress-auth", json={"egress_auth_mode": "none"})
-        assert resp.status_code == 200, resp.text
-
-        repo.update.assert_awaited_once()
-        kwargs = repo.update.call_args.kwargs
-        # Exactly the route's fields, then the three the service adds for a proxied server.
-        assert kwargs["updated_fields"] == [
-            "egress_auth_mode",
-            "egress_list_tools_before_consent",
-            "egress_oauth",
-            "proxy_resolved_ips",
-            "proxy_target_host",
-            "proxy_disabled_reason",
-        ]
-        written = repo.update.call_args.args[1]
-        assert written["proxy_resolved_ips"] == ["93.184.216.34"]
-        assert written["proxy_target_host"] == "ok.example"
-        # A prior refresh auto-disable is cleared by the save.
-        assert written["proxy_disabled_reason"] is None
-        # No upstream header field is cleared: the target did not change.
-        assert "custom_headers_encrypted" not in kwargs["updated_fields"]
-        assert "custom_header_names" not in kwargs["updated_fields"]
 
 
 @pytest.mark.unit

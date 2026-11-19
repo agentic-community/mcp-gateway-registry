@@ -863,7 +863,7 @@ def _extract_tool_details(
 
     Returns:
         One dict per tool with name, description, parsed_description, schema,
-        plus ui_resource_uri and ui_visibility for a tool with an MCP App page,
+        plus validated MCP App page and audience fields,
         and title, annotations and outputSchema when the server sent them.
     """
     tool_details_list: list[dict[str, Any]] = []
@@ -937,7 +937,7 @@ def _extract_tool_details(
                 # catalog and search read. "schema" stays for ToolDescription.
                 "inputSchema": tool_schema,
             }
-            # MCP Apps: ui_resource_uri and ui_visibility, only for a tool with a page.
+            # MCP Apps retain explicit audiences even for callables without a page.
             tool_detail.update(tool_ui_fields(tool))
             # title, annotations and outputSchema, only when the server sent them.
             tool_detail.update(tool_metadata_fields(tool))
