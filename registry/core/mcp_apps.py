@@ -64,13 +64,13 @@ def _clean_visibility(
     """Keep only the visibility values the spec defines.
 
     Args:
-        value: The tool's _meta.ui.visibility, which may be missing or malformed.
+        value: The tool's explicit visibility value, which may be malformed.
 
     Returns:
-        The valid values in spec order, or the spec default for a non-list value.
+        The valid values in spec order, or an empty list for a non-list value.
     """
     if not isinstance(value, list):
-        return list(MCP_APPS_VISIBILITY_VALUES)
+        return []
     return [item for item in MCP_APPS_VISIBILITY_VALUES if item in value]
 
 
@@ -164,12 +164,14 @@ def stored_ui_visibility(
     tool: dict[str, Any],
 ) -> list[str]:
     """Return validated audiences from either stored MCP tool representation."""
-    visibility = tool.get(TOOL_UI_VISIBILITY_KEY)
-    if visibility is None:
-        meta = tool.get("_meta")
-        if isinstance(meta, dict):
-            visibility = _ui_block(meta).get("visibility")
-    return _clean_visibility(visibility)
+    if TOOL_UI_VISIBILITY_KEY in tool:
+        return _clean_visibility(tool[TOOL_UI_VISIBILITY_KEY])
+    meta = tool.get("_meta")
+    if isinstance(meta, dict):
+        ui = _ui_block(meta)
+        if "visibility" in ui:
+            return _clean_visibility(ui["visibility"])
+    return list(MCP_APPS_VISIBILITY_VALUES)
 
 
 def is_model_visible(

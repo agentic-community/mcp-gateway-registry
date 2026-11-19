@@ -133,6 +133,15 @@ class TestModelVisibility:
 
         assert is_model_visible(tool) is True
 
+    @pytest.mark.parametrize("visibility", [None, "app", {"model": True}])
+    def test_malformed_explicit_visibility_excludes_model(self, visibility):
+        meta = {"ui": {"visibility": visibility}}
+        discovered = tool_ui_fields(_tool(meta))
+        assert discovered == {"ui_visibility": []}
+        assert not is_model_visible(discovered)
+        assert not is_model_visible({"_meta": meta})
+        assert not is_model_visible({"ui_visibility": visibility})
+
     @pytest.mark.parametrize(
         "tool",
         [

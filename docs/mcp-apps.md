@@ -44,7 +44,7 @@ The health check connects to each server declaring `io.modelcontextprotocol/ui`,
 | Field | Meaning |
 |---|---|
 | `ui_resource_uri` | The `ui://` address of the page. The registry keeps it only if it starts with `ui://` and is at most 2,048 characters. |
-| `ui_visibility` | Who may call the tool: `model`, `app`, or both. An absent field uses both audiences. An explicit empty list or a list with no valid audience stays empty. |
+| `ui_visibility` | Who may call the tool: `model`, `app`, or both. An absent field uses both audiences. A malformed explicit value or a list with no valid audience grants neither. |
 
 The registry keeps nothing else from the tool's `_meta`. The server-level field `num_mcp_app_tools` counts the tools that have a page. It appears in `GET /api/servers`, in `GET /api/server_details/<path>`, and in `registry_management.py server-get`. When the response includes the tool list, the count covers only the tools the caller can see. With `include_tools=false` it is the count the health check stored.
 
@@ -59,6 +59,8 @@ An app-only callable can omit a page address because an existing page calls it. 
 In the UI, a server with at least one such tool shows an **MCP APP** badge on its card. In the card's tool list, each tool with a page shows MCP APP, and a tool that only the page may call also shows APP ONLY.
 
 Background discovery and the live tools endpoint save changes to page addresses and visibility even when the tool count stays the same. They compare the same client-visible projection, including the presence of optional metadata. Each refresh writes only discovery fields and the derived page count, then indexes a fresh credential-free read. Concurrent edits to registration settings survive.
+
+If the registration changes during a live tools fetch, the endpoint rejects the stale write with HTTP 409. A new request can fetch tools for the current registration.
 
 Catalog refresh events invalidate pending list reads. Cards and sidebar counts update from the trailing read together; refresh callers wait for that read. Changing registry configuration or leaving the page cancels the old requests.
 

@@ -3572,6 +3572,9 @@ async def get_service_tools(
         new_hash = tool_list_hash(tool_list)
 
         if tool_list_hash(server_info.get("tool_list")) != new_hash:
+            revision = server_info.get("updated_at")
+            if not revision:
+                raise HTTPException(status_code=409, detail="Server revision unavailable")
             logger.info(f"Updating tool list for {service_path}. New count: {new_tool_count}")
 
             # A concurrent credential, endpoint or tool-block edit must survive
@@ -3589,11 +3592,14 @@ async def get_service_tools(
                 service_path,
                 updated_server_info,
                 updated_fields=list(updated_server_info),
+                expected_updated_at=revision,
             )
             if success:
                 logger.info(f"Successfully updated tool list for {service_path}")
             else:
-                logger.error(f"Failed to save updated tool list for {service_path}")
+                raise HTTPException(
+                    status_code=409, detail="Tool refresh could not be saved; refresh again"
+                )
 
         # Issue #1026: filter live tools before returning
         filtered_tools = await annotate_blocked_tools(

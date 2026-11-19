@@ -176,14 +176,18 @@ class TestGetServiceToolsEndpoint:
         assert names == ["current_time_by_timezone"]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("repoint", [False, True])
     async def test_ui_refresh_preserves_concurrent_settings_and_updates_search(
-        self, current_time_server_info
+        self, current_time_server_info, repoint
     ):
+        from fastapi import HTTPException
+
         from registry.api.server_routes import get_service_tools
         from registry.services.server_service import ServerService
         from registry.utils.tool_list_hash import tool_list_hash
 
         stored = copy.deepcopy(current_time_server_info)
+        stored["updated_at"] = "initial-revision"
         stored["tool_list"][0].update(
             ui_resource_uri="ui://page/v1", ui_visibility=["model", "app"]
         )
@@ -194,6 +198,8 @@ class TestGetServiceToolsEndpoint:
             return copy.deepcopy(stored)
 
         async def save_card(path, data, **kwargs):
+            if kwargs.get("expected_updated_at") != stored["updated_at"]:
+                return False
             stored.update(copy.deepcopy(data))
             return True
 
@@ -212,6 +218,9 @@ class TestGetServiceToolsEndpoint:
             stored["tool_overrides"] = {"current_time_utc": {"blocked": True}}
             stored["mcp_server_version"] = "2.0.0"
             stored["versions"] = [{"version": "v2", "is_default": True}]
+            if repoint:
+                stored["proxy_pass_url"] = "https://replacement.example.com/mcp"
+                stored["updated_at"] = "repointed-revision"
             tools = copy.deepcopy(info["tool_list"])
             tools[0].update(ui_resource_uri="ui://page/v2", ui_visibility=["app"])
             return tools
@@ -228,6 +237,13 @@ class TestGetServiceToolsEndpoint:
                 side_effect=lambda path, tools: tools,
             ),
         ):
+            if repoint:
+                with pytest.raises(HTTPException) as excinfo:
+                    await get_service_tools("current_time", RESTRICTED_CONTEXT)
+                assert excinfo.value.status_code == 409
+                assert stored["tool_list"][0]["ui_resource_uri"] == "ui://page/v1"
+                search.index_server.assert_not_awaited()
+                return
             result = await get_service_tools("current_time", RESTRICTED_CONTEXT)
 
         assert result["cached"] is False
