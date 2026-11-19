@@ -1147,6 +1147,27 @@ class HealthMonitoringService:
         Returns:
             Session ID string if successful, None otherwise
         """
+        session_id, _ = await self._initialize_mcp_session_with_status(client, endpoint, headers)
+        return session_id
+
+    async def _initialize_mcp_session_with_status(
+        self,
+        client: httpx.AsyncClient,
+        endpoint: str,
+        headers: dict[str, str],
+    ) -> tuple[str | None, int | None]:
+        """Initialize an MCP session and report the HTTP status of a failed attempt.
+
+        Args:
+            client: httpx AsyncClient instance
+            endpoint: The MCP endpoint URL
+            headers: Headers to send with the request
+
+        Returns:
+            (session_id, None) on success, (None, status_code) when the server
+            answered with a non-2xx status, and (None, None) when the request
+            itself failed.
+        """
         import uuid
 
         try:
@@ -1181,7 +1202,7 @@ class HealthMonitoringService:
                     logger.warning(
                         f"MCP initialize failed endpoint={redact_url(endpoint)} status={response.status_code}",
                     )
-                    return None
+                    return None, response.status_code
 
                 # Get session ID from response headers (server-generated)
                 server_session_id = response.headers.get("Mcp-Session-Id") or response.headers.get(
@@ -1192,20 +1213,20 @@ class HealthMonitoringService:
             logger.warning(
                 f"MCP initialize failed for {redact_url(endpoint)} type={type(e).__name__}"
             )
-            return None
+            return None, None
 
         await self._send_initialized_notification(client, endpoint, headers, server_session_id)
 
         if server_session_id:
             logger.debug(f"Server returned session ID: {server_session_id}")
-            return server_session_id
+            return server_session_id, None
 
         # If server doesn't return a session ID, generate one for stateless servers
         client_session_id = str(uuid.uuid4())
         logger.debug(
             f"Server did not return session ID, using client-generated: {client_session_id}"
         )
-        return client_session_id
+        return client_session_id, None
 
     async def _send_initialized_notification(
         self,
@@ -1482,7 +1503,7 @@ class HealthMonitoringService:
                             f"[TRACE] Auth failure detected status={response.status_code} endpoint={redact_url(proxy_pass_url)}; trying ping without auth",
                         )
                         if await self._try_ping_without_auth(client, proxy_pass_url):
-                            return True, HealthStatus.HEALTHY
+                            return True, HealthStatus.HEALTHY_AUTH_EXPIRED
                         else:
                             return False, "unhealthy: auth failed and ping without auth failed"
 
@@ -1539,7 +1560,9 @@ class HealthMonitoringService:
                 logger.info(
                     f"[TRACE] Initializing MCP session for endpoint: {redact_url(endpoint)}"
                 )
-                session_id = await self._initialize_mcp_session(client, endpoint, headers)
+                session_id, init_status = await self._initialize_mcp_session_with_status(
+                    client, endpoint, headers
+                )
 
                 # If initialize failed, check if it was due to auth (401/403)
                 # Try ping without auth before giving up
@@ -1548,6 +1571,12 @@ class HealthMonitoringService:
                         f"Failed to initialize MCP session for {redact_url(endpoint)}, trying ping without auth"
                     )
                     if await self._try_ping_without_auth(client, endpoint):
+                        # Reachable, but it refused the gateway's credentials (or
+                        # their absence): report that, so callers that need a
+                        # working credential, such as virtual servers, can tell
+                        # (issues #167 and #2079).
+                        if init_status in (401, 403):
+                            return True, HealthStatus.HEALTHY_AUTH_EXPIRED
                         return True, HealthStatus.HEALTHY
                     else:
                         return (
@@ -1570,30 +1599,11 @@ class HealthMonitoringService:
                         f"[TRACE] Auth failure detected ({response.status_code}) for {redact_url(endpoint)}, trying ping without auth"
                     )
                     if await self._try_ping_without_auth(client, endpoint):
-                        # ============================================================================
-                        # TEMPORARY WORKAROUND - TODO: REVERT AFTER CREDENTIALS MANAGER IS IMPLEMENTED
-                        # ============================================================================
-                        # Issue: https://github.com/agentic-community/mcp-gateway-registry/issues/167
-                        #
-                        # Temporarily marking servers with auth failures as "healthy" instead of
-                        # "healthy-auth-expired" to avoid confusing users when servers are registered
-                        # with auth requirements but no credentials manager is in place yet.
-                        #
-                        # This allows servers like customer-support-assistant (Bedrock AgentCore) to
-                        # show as healthy when they respond to ping, even though live tool fetching
-                        # requires authentication.
-                        #
-                        # BEFORE CREDENTIALS MANAGER: Return healthy (current behavior)
-                        # AFTER CREDENTIALS MANAGER:  Return healthy-auth-expired (proper behavior)
-                        #
-                        # When the credentials manager container is implemented (see design doc at
-                        # .scratchpad/credentials-manager-design.md), this should be changed back to:
-                        #   return True, HealthStatus.HEALTHY_AUTH_EXPIRED
-                        # ============================================================================
-                        return (
-                            True,
-                            HealthStatus.HEALTHY,
-                        )  # TODO: Change back to HEALTHY_AUTH_EXPIRED
+                        # Reachable, but the request was refused for its credentials.
+                        # healthy-auth-expired still routes (get_healthy_statuses),
+                        # and per-user egress credentials now come from the egress
+                        # broker, which ends the #167 workaround (issue #2079).
+                        return True, HealthStatus.HEALTHY_AUTH_EXPIRED
                     else:
                         return False, "unhealthy: auth failed and ping without auth failed"
 

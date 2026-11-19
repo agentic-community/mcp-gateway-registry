@@ -55,6 +55,11 @@ local MAPPING_CACHE_TTL = 10
 local SESSION_CACHE_TTL = 30
 local ENRICHED_CACHE_TTL = 60
 local STATELESS_CACHE_VALUE = "1"
+-- One backend's discovery list, kept per user so a failing or credentialed
+-- sibling does not force every backend to be fetched again (issue #2079).
+local BACKEND_LIST_CACHE_TTL = 60
+-- How long a backend whose list fetch failed is skipped before it is retried.
+local BACKEND_FAILURE_CACHE_TTL = 10
 
 
 -- Supported MCP protocol versions (newest first for negotiation)
@@ -659,6 +664,8 @@ local LIST_UNSUPPORTED = "unsupported"
 local LIST_FAILED = "failed"
 local LIST_UNVERIFIED = "unverified"
 local LIST_DENIED = "denied"
+-- tools/list only: the grant passed and the mapping file supplies the tools.
+local LIST_MAPPING = "mapping"
 
 
 -- Classify a 200 JSON-RPC list response body. A JSON-RPC error is the
@@ -1254,39 +1261,186 @@ local function _egress_locations(mapping)
 end
 
 
+-- Backend locations whose lists are always fetched live and never cached:
+-- egress backends, whose list can depend on the caller's credential, and any
+-- backend the mapping marks live_discovery (the bundled registry tools filter
+-- their own list per caller).
+local function _live_locations(mapping)
+    local locations = _egress_locations(mapping)
+    for _, tool in ipairs(mapping.tools or {}) do
+        if tool.live_discovery == true and tool.backend_location then
+            locations[tool.backend_location] = true
+        end
+    end
+    return locations
+end
+
+
+-- Per-user cache key for one backend's list, or nil without a validated
+-- identity. Partitioned by rendered config generation like the mapping cache.
+local function _backend_list_cache_key(prefix, backend_loc, method_name)
+    local user_id = _auth_user_id()
+    if not user_id then
+        return nil
+    end
+    return prefix .. (ngx.var.vs_config_generation or "") .. ":" .. method_name .. ":"
+        .. #backend_loc .. ":" .. backend_loc .. ":" .. #user_id .. ":" .. user_id
+end
+
+
+-- Run the backend grant check for a discovery method without sending the
+-- request. Returns LIST_OK, LIST_DENIED or LIST_UNVERIFIED.
+local function _authorize_list(backend_loc, method_name)
+    local body = cjson.encode({
+        jsonrpc = "2.0",
+        id = "dl-" .. (ngx.var.request_id or "0"),
+        method = method_name,
+        params = {},
+    })
+    ngx.req.clear_header("X-MCP-Server-Version")
+    local auth = _authorize_backend(backend_loc, body)
+    if auth == AUTH_OK then
+        return LIST_OK
+    end
+    if auth == AUTH_DENIED then
+        return LIST_DENIED
+    end
+    return LIST_UNVERIFIED
+end
+
+
+-- Read a cached backend list. Returns (outcome, items) or nil on a miss.
+local function _cached_backend_list(list_key)
+    local cached = list_key and session_cache:get(list_key)
+    if not cached then
+        return nil
+    end
+    local ok, entry = pcall(cjson.decode, cached)
+    if not ok or type(entry) ~= "table" or type(entry.items) ~= "table" then
+        return nil
+    end
+    if entry.outcome ~= LIST_OK and entry.outcome ~= LIST_UNSUPPORTED then
+        return nil
+    end
+    return entry.outcome, entry.items
+end
+
+
+-- Fetch one non-live backend's list through the per-user cache (issue #2079).
+-- A cache hit, and a backend remembered as failing, still run the backend
+-- grant check first, so a revoked grant denies at once and a denied caller
+-- never gets mapping metadata for that backend. Only ok and unsupported
+-- answers are cached; a failure is remembered for BACKEND_FAILURE_CACHE_TTL.
+local function _fetch_backend_list_cached(backend_loc, method_name, result_key,
+                                          client_session_id, server_id)
+    local list_key = _backend_list_cache_key("blist:", backend_loc, method_name)
+    local fail_key = _backend_list_cache_key("bfail:", backend_loc, method_name)
+    local cached_outcome, cached_items = _cached_backend_list(list_key)
+    if cached_outcome or (fail_key and session_cache:get(fail_key)) then
+        local grant = _authorize_list(backend_loc, method_name)
+        if grant ~= LIST_OK then
+            return grant
+        end
+        if cached_outcome then
+            return cached_outcome, cached_items
+        end
+        return LIST_FAILED
+    end
+
+    local outcome, items = _fetch_backend_list(backend_loc, method_name, result_key,
+        client_session_id, server_id, false)
+    if list_key and (outcome == LIST_OK or outcome == LIST_UNSUPPORTED) then
+        local ok_enc, encoded = pcall(cjson.encode, { outcome = outcome, items = items or {} })
+        if ok_enc then
+            session_cache:set(list_key, encoded, BACKEND_LIST_CACHE_TTL)
+        end
+    elseif fail_key and outcome == LIST_FAILED then
+        session_cache:set(fail_key, "1", BACKEND_FAILURE_CACHE_TTL)
+    end
+    return outcome, items
+end
+
+
+-- Answer one backend's tools/list from the mapping file after the backend
+-- grant check (issue #2079). The registry refreshes the stored tool list when
+-- TOOL_REFRESH_ENABLED is on, and only then does the mapping ask for this.
+local function _mapping_backend_tools(backend_loc)
+    local grant = _authorize_list(backend_loc, "tools/list")
+    if grant ~= LIST_OK then
+        return grant
+    end
+    return LIST_MAPPING
+end
+
+
+-- Backend locations asked for resources: those with a mapped MCP App tool,
+-- since a virtual server advertises resources only for their ui:// pages
+-- (issue #2079). Returns nil for a mapping written before the registry set
+-- advertise_resources, so an older file keeps asking every backend.
+local function _resource_locations(mapping)
+    if mapping.advertise_resources == nil then
+        return nil
+    end
+    local locations = {}
+    for _, tool in ipairs(mapping.tools or {}) do
+        if tool.mcp_app == true and tool.backend_location then
+            locations[tool.backend_location] = true
+        end
+    end
+    return locations
+end
+
+
 -- Fetch every backend's list and classify it. Returns per-backend results in
 -- mapping order. A backend whose grant the caller lacks is reported LIST_DENIED
 -- and omitted by the aggregators; it never blanks siblings the caller may use.
-local function _discover_backends(method_name, result_key, mapping, client_session_id, server_id)
+-- With from_mapping, non-live backends answer tools/list from the mapping.
+-- With only_locations, backends outside that set are not asked at all.
+local function _discover_backends(method_name, result_key, mapping, client_session_id, server_id,
+                                  from_mapping, only_locations)
     local egress_locations = _egress_locations(mapping)
+    local live_locations = _live_locations(mapping)
     local results = {}
     for _, backend_loc in ipairs(_collect_backend_locations(mapping)) do
-        local outcome, items = _fetch_backend_list(backend_loc, method_name, result_key,
-            client_session_id, server_id, egress_locations[backend_loc])
-        results[#results + 1] = {
-            location = backend_loc,
-            outcome = outcome,
-            items = items,
-            egress = egress_locations[backend_loc] == true,
-        }
+        if not only_locations or only_locations[backend_loc] then
+            local outcome, items
+            if live_locations[backend_loc] then
+                outcome, items = _fetch_backend_list(backend_loc, method_name, result_key,
+                    client_session_id, server_id, egress_locations[backend_loc])
+            elseif from_mapping then
+                outcome = _mapping_backend_tools(backend_loc)
+            else
+                outcome, items = _fetch_backend_list_cached(backend_loc, method_name, result_key,
+                    client_session_id, server_id)
+            end
+            results[#results + 1] = {
+                location = backend_loc,
+                outcome = outcome,
+                items = items,
+                egress = egress_locations[backend_loc] == true,
+            }
+        end
     end
     return results
 end
 
 
--- Whether any backend answered (ok, consent pending, or unsupported), and
--- whether any backend refused the caller's grant. When nothing answered the
--- aggregate is an error -- a denial if every non-answer included a refusal.
+-- Whether any backend answered (ok, consent pending, or unsupported), whether
+-- any backend refused the caller's grant, and whether any backend failed or
+-- could not be verified. When nothing answered and nothing failed, every
+-- backend denied the caller, and a list method answers with an empty list.
 local function _summarize_backends(results)
-    local answered, any_denied = false, false
+    local answered, any_denied, any_failed = false, false, false
     for _, result in ipairs(results) do
         if result.outcome == LIST_DENIED then
             any_denied = true
-        elseif result.outcome ~= LIST_FAILED and result.outcome ~= LIST_UNVERIFIED then
+        elseif result.outcome == LIST_FAILED or result.outcome == LIST_UNVERIFIED then
+            any_failed = true
+        else
             answered = true
         end
     end
-    return answered, any_denied
+    return answered, any_denied, any_failed
 end
 
 
@@ -1334,10 +1488,35 @@ local function _list_result(method, result_key, items, modern)
 end
 
 
+-- Append one backend's mapped tools for a mapping answer (issue #2079). A tool
+-- whose x-mcp-header annotations break the 2026-07-28 rules is left out, as
+-- the live path does in _absorb_modern_tool_list; the mapping does not record
+-- the backend's protocol era, so the check applies to every backend.
+local function _append_checked_mapping_tools(enriched_tools, mapping, backend_location)
+    local valid = {}
+    for _, tool in ipairs(mapping.tools or {}) do
+        if tool.backend_location == backend_location then
+            local entries, reason = _x_mcp_header_entries(tool.inputSchema)
+            if entries then
+                valid[#valid + 1] = tool
+            else
+                ngx.log(ngx.WARN, "Dropping tool ", tostring(tool.name), " from ",
+                    backend_location, ": ", reason)
+            end
+        end
+    end
+    _append_mapping_tools_for_backend(enriched_tools, { tools = valid }, backend_location)
+end
+
+
 local function _handle_tools_list(request_id, mapping, user_scopes_str, client_session_id, server_id,
                                   modern)
     -- Egress discovery depends on individual credentials and must be fresh.
     local has_egress_backend = next(_egress_locations(mapping)) ~= nil
+    -- The registry sets this only when TOOL_REFRESH_ENABLED keeps the stored
+    -- tool lists current; the mapping answer needs no whole-list cache.
+    local from_mapping = mapping.serve_tools_from_mapping == true
+    local use_enriched_cache = not has_egress_backend and not from_mapping
 
     if not _has_scopes(user_scopes_str, mapping.required_scopes) then
         return _jsonrpc_error(request_id, -32603, "Access denied: missing required server scopes")
@@ -1367,7 +1546,7 @@ local function _handle_tools_list(request_id, mapping, user_scopes_str, client_s
     local enriched_cache_key = "tools_enriched:" .. (ngx.var.vs_config_generation or "") .. ":"
         .. (server_id or "unknown") .. ":" .. #user_id .. ":" .. user_id
     local enriched_tools = nil
-    local cached_enriched = not has_egress_backend and session_cache:get(enriched_cache_key)
+    local cached_enriched = use_enriched_cache and session_cache:get(enriched_cache_key)
     if cached_enriched then
         -- Every hit re-checks every backing grant. A cached list was built with
         -- each backend's tools, so if any grant no longer passes (or the check
@@ -1392,14 +1571,18 @@ local function _handle_tools_list(request_id, mapping, user_scopes_str, client_s
 
     if not enriched_tools then
         local results = _discover_backends("tools/list", "tools", mapping,
-            client_session_id, server_id)
+            client_session_id, server_id, from_mapping)
 
         enriched_tools = {}
         local cacheable = true
         local answered = false
-        local any_denied = false
+        local any_unavailable = false
         for _, result in ipairs(results) do
-            if result.outcome == LIST_OK then
+            if result.outcome == LIST_MAPPING then
+                -- The grant passed; the registry-refreshed mapping is the list.
+                answered = true
+                _append_checked_mapping_tools(enriched_tools, mapping, result.location)
+            elseif result.outcome == LIST_OK then
                 answered = true
                 -- Consent may change within the TTL; never freeze an empty list.
                 if #result.items == 0 then
@@ -1440,7 +1623,6 @@ local function _handle_tools_list(request_id, mapping, user_scopes_str, client_s
             elseif result.outcome == LIST_DENIED then
                 -- The caller lacks this backing grant: its tools are omitted (a call
                 -- to one is still refused); siblings stay listed.
-                any_denied = true
                 cacheable = false
             else
                 cacheable = false
@@ -1448,6 +1630,7 @@ local function _handle_tools_list(request_id, mapping, user_scopes_str, client_s
                     -- A credentialed backend's mapping is not proof its tools are
                     -- reachable for this user, and an unverified grant is not a
                     -- grant: hide them, keep the healthy siblings.
+                    any_unavailable = true
                     ngx.log(ngx.WARN, "Backend tools/list unavailable for ", result.location,
                         " (", result.outcome, ") -- omitting its tools from this response")
                 else
@@ -1459,16 +1642,16 @@ local function _handle_tools_list(request_id, mapping, user_scopes_str, client_s
             end
         end
 
-        if #results > 0 and not answered then
-            if any_denied then
-                return _jsonrpc_error(request_id, -32603, "Backend access denied")
-            end
+        -- Nothing answered: an error when a backend was unavailable, and an
+        -- empty list when every backend denied the caller (issue #2079), since
+        -- a caller with nothing it may see has an empty list, not an error.
+        if #results > 0 and not answered and any_unavailable then
             return _jsonrpc_error(request_id, -32603, "Backend discovery unavailable")
         end
 
         -- Cache only fully discovered results. A fallback response remains complete,
         -- but the next request should retry failed backends instead of serving it for 60s.
-        if cacheable and not has_egress_backend then
+        if cacheable and use_enriched_cache then
             local ok_enc, encoded = pcall(cjson.encode, enriched_tools)
             if ok_enc then
                 session_cache:set(enriched_cache_key, encoded, ENRICHED_CACHE_TTL)
@@ -1523,27 +1706,31 @@ end
 
 -- Aggregate resource/prompt lists without a cross-user cache: backend content
 -- and access can depend on the current user's egress credentials. Returns the
--- items, an item -> backend lookup, and a denial flag; items are nil only when
--- no backend answered (denied when that included a grant refusal). A backend
--- whose grant the caller lacks is omitted.
+-- items, an item -> backend lookup, a denial flag and a failure flag. Items
+-- are nil only when no backend answered: denied is true when that included a
+-- grant refusal, and failed is true when a backend failed or could not be
+-- verified. A backend whose grant the caller lacks is omitted.
 --
--- A complete answer (every backend ok or unsupported, none credentialed) also
--- stores the caller's item -> backend lookup for _resolve_item_backend.
+-- Every answer that found items also stores the caller's item -> backend
+-- lookup for _resolve_item_backend. A partial lookup is safe: it only routes,
+-- the read still authorizes the owning backend, and an item it lacks is
+-- rediscovered (issue #2079).
 local function _proxy_list_to_backends(method_name, result_key, mapping, client_session_id, server_id)
+    -- Resources and templates come only from backends with an MCP App tool.
+    local only_locations = nil
+    if result_key ~= "prompts" then
+        only_locations = _resource_locations(mapping)
+    end
     local results = _discover_backends(method_name, result_key, mapping,
-        client_session_id, server_id)
-    local answered, any_denied = _summarize_backends(results)
+        client_session_id, server_id, false, only_locations)
+    local answered, any_denied, any_failed = _summarize_backends(results)
     if #results > 0 and not answered then
-        return nil, nil, any_denied
+        return nil, nil, any_denied, any_failed
     end
 
     local aggregated = setmetatable({}, empty_array_mt)
     local lookup = {}
-    local complete = true
     for _, result in ipairs(results) do
-        if result.egress or (result.outcome ~= LIST_OK and result.outcome ~= LIST_UNSUPPORTED) then
-            complete = false
-        end
         if result.outcome == LIST_OK then
             for _, item in ipairs(result.items) do
                 aggregated[#aggregated + 1] = item
@@ -1556,7 +1743,7 @@ local function _proxy_list_to_backends(method_name, result_key, mapping, client_
     end
 
     local cache_key = _lookup_cache_key(result_key, server_id)
-    if complete and cache_key then
+    if cache_key and next(lookup) ~= nil then
         local ok_enc, encoded = pcall(cjson.encode, lookup)
         if ok_enc then
             session_cache:set(cache_key, encoded, ENRICHED_CACHE_TTL)
@@ -1567,8 +1754,8 @@ end
 
 
 -- The backend that owns one resource (by uri) or prompt (by name). Served from
--- the caller's own lookup cache when a recent complete discovery recorded the
--- item; otherwise rediscovered. The cache only routes: the read itself still
+-- the caller's own lookup cache when a recent discovery recorded the item;
+-- otherwise rediscovered. The cache only routes: the read itself still
 -- authorizes the owning backend, so a revoked grant is refused there.
 -- Returns the backend location, or nil plus "denied"/"failed"/"missing".
 local function _resolve_item_backend(method_name, result_key, item_key, mapping,
@@ -1809,6 +1996,26 @@ local function _create_client_session(server_id, user_id)
 end
 
 
+-- The capabilities this virtual server advertises in initialize and
+-- server/discover. A virtual server curates tools. It advertises resources
+-- only when a mapped tool opens an MCP App page, which a client fetches with
+-- resources/read, and never prompts, so a client does not walk every backend
+-- for lists the server does not curate (issue #2079). An unreadable mapping
+-- advertises tools only.
+local function _virtual_capabilities(server_id)
+    local capabilities = {
+        tools = { listChanged = false },
+    }
+    local mapping = _get_mapping(server_id)
+    if mapping and mapping.advertise_resources == true then
+        -- An empty Lua table encodes as a JSON object ({}), which is what an
+        -- advertised capability with no sub-options is.
+        capabilities.resources = {}
+    end
+    return capabilities
+end
+
+
 local function _handle_initialize(request_id, server_id, params)
     local user_id = _auth_user_id()
     if not user_id then
@@ -1835,11 +2042,7 @@ local function _handle_initialize(request_id, server_id, params)
 
     local result = {
         protocolVersion = negotiated_version,
-        capabilities = {
-            tools = {
-                listChanged = false,
-            },
-        },
+        capabilities = _virtual_capabilities(server_id),
         serverInfo = {
             name = "mcp-gateway-virtual-server",
             version = "1.0.0",
@@ -1997,6 +2200,24 @@ end
 
 
 -- Handle resources/read - proxy to the backend that owns the resource
+-- Answer resources/list, resources/templates/list or prompts/list. When every
+-- backend denied the caller the answer is an empty list (issue #2079); only a
+-- backend that failed or could not be verified makes it an error.
+local function _handle_aggregated_list(request_id, method, result_key, mapping,
+                                       client_session_id, server_id, modern)
+    local items, _, _, failed = _proxy_list_to_backends(method, result_key, mapping,
+        client_session_id, server_id)
+    if not items and failed then
+        ngx.status = 502
+        ngx.say(_jsonrpc_error(request_id, -32603, "Backend discovery failed"))
+        return
+    end
+    ngx.status = 200
+    ngx.say(_jsonrpc_result(request_id, _list_result(method, result_key,
+        items or setmetatable({}, empty_array_mt), modern)))
+end
+
+
 local function _handle_resources_read(request_id, params, mapping, client_session_id, server_id)
     local uri = params and params.uri
     if not uri then
@@ -2186,17 +2407,11 @@ end
 
 
 -- Answer server/discover for this virtual server.
-local function _handle_discover(request_id)
+local function _handle_discover(request_id, server_id)
     return _jsonrpc_result(request_id, {
         resultType = "complete",
         supportedVersions = ADVERTISED_PROTOCOL_VERSIONS,
-        -- An empty Lua table encodes as a JSON object ({}), which is what an
-        -- advertised capability with no sub-options is.
-        capabilities = {
-            tools = { listChanged = false },
-            resources = {},
-            prompts = {},
-        },
+        capabilities = _virtual_capabilities(server_id),
         _meta = {
             [META_SERVER_INFO_KEY] = { name = "mcp-gateway-virtual-server", version = "1.0.0" },
         },
@@ -2336,7 +2551,7 @@ function _M.route()
         if method == "server/discover" then
             ngx.status = 200
             ngx.header["Content-Type"] = "application/json"
-            ngx.say(_handle_discover(request_id))
+            ngx.say(_handle_discover(request_id, server_id))
             return
         end
     end
@@ -2479,16 +2694,8 @@ function _M.route()
             ngx.say(_jsonrpc_error(request_id, -32603, "Access denied: missing required server scopes"))
             return
         end
-        local resources, _, denied = _proxy_list_to_backends("resources/list", "resources",
-            mapping, client_session_id, server_id)
-        if not resources then
-            ngx.status = denied and 403 or 502
-            ngx.say(_jsonrpc_error(request_id, -32603,
-                denied and "Backend access denied" or "Backend discovery failed"))
-            return
-        end
-        ngx.status = 200
-        ngx.say(_jsonrpc_result(request_id, _list_result("resources/list", "resources", resources, modern)))
+        _handle_aggregated_list(request_id, "resources/list", "resources", mapping,
+            client_session_id, server_id, modern)
 
     elseif method == "resources/templates/list" then
         -- Enforce server-level required_scopes
@@ -2497,16 +2704,8 @@ function _M.route()
             ngx.say(_jsonrpc_error(request_id, -32603, "Access denied: missing required server scopes"))
             return
         end
-        local templates, _, denied = _proxy_list_to_backends("resources/templates/list",
-            "resourceTemplates", mapping, client_session_id, server_id)
-        if not templates then
-            ngx.status = denied and 403 or 502
-            ngx.say(_jsonrpc_error(request_id, -32603,
-                denied and "Backend access denied" or "Backend discovery failed"))
-            return
-        end
-        ngx.status = 200
-        ngx.say(_jsonrpc_result(request_id, _list_result("resources/templates/list", "resourceTemplates", templates, modern)))
+        _handle_aggregated_list(request_id, "resources/templates/list", "resourceTemplates",
+            mapping, client_session_id, server_id, modern)
 
     elseif method == "resources/read" then
         -- Enforce server-level required_scopes
@@ -2524,16 +2723,8 @@ function _M.route()
             ngx.say(_jsonrpc_error(request_id, -32603, "Access denied: missing required server scopes"))
             return
         end
-        local prompts, _, denied = _proxy_list_to_backends("prompts/list", "prompts",
-            mapping, client_session_id, server_id)
-        if not prompts then
-            ngx.status = denied and 403 or 502
-            ngx.say(_jsonrpc_error(request_id, -32603,
-                denied and "Backend access denied" or "Backend discovery failed"))
-            return
-        end
-        ngx.status = 200
-        ngx.say(_jsonrpc_result(request_id, _list_result("prompts/list", "prompts", prompts, modern)))
+        _handle_aggregated_list(request_id, "prompts/list", "prompts", mapping,
+            client_session_id, server_id, modern)
 
     elseif method == "prompts/get" then
         -- Enforce server-level required_scopes
@@ -2564,6 +2755,8 @@ if _G._VR_TEST then
     _M._handle_resources_read = _handle_resources_read
     _M._append_mapping_tools_for_backend = _append_mapping_tools_for_backend
     _M._handle_tools_list = _handle_tools_list
+    _M._virtual_capabilities = _virtual_capabilities
+    _M._handle_discover = _handle_discover
     _M._handle_tools_call = _handle_tools_call
     _M._get_backend_session = _get_backend_session
     _M._proxy_to_backend = _proxy_to_backend
