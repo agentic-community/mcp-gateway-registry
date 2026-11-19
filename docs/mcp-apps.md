@@ -86,6 +86,7 @@ The registry's `REGISTRY_URL` must name the public origin; an internal registry 
 
 Client-supplied Host or connector headers cannot select the URL.
 The proxy requires the new nginx binding marker before signing a connector URL, so deploy the updated templates and regenerate nginx configuration with the auth-server change.
+The auth server masks the connector binding and connector URL headers in debug logs. If you ran an earlier build that logged these headers, rotate the nginx marker secret and review access to those logs.
 With an old template or no trusted connector claim, the backend reply stays unchanged.
 Virtual routes, other domain formats, other MCP methods, and unparseable replies remain unchanged.
 Additional public hostnames use the configured canonical origin, and a backend domain matching that exact connector URL needs no rewrite.
