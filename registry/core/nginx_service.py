@@ -23,6 +23,7 @@ from registry.constants import (
     DeploymentType,
     HealthStatus,
 )
+from registry.core.mcp_apps import stored_ui_resource_uri
 from registry.egress_auth.upstream_binding import registered_versions, selected_upstream
 from registry.exceptions import UrlValidationError
 from registry.schemas.proxy_mixin import _assert_egress_allowed, build_proxy_client_path
@@ -694,6 +695,38 @@ def _virtual_backend_uses_mcp_proxy(
     if egress_mode != "none":
         return True
     return is_builtin_airegistry_tools_target("mcp_server", base_path, proxy_pass_url)
+
+
+def _virtual_backend_lacks_credential(
+    server_info: dict[str, Any],
+    egress_mode: str,
+    base_path: str,
+    health_key: str,
+) -> bool:
+    """Return True when a virtual backend needs a credential the gateway cannot send.
+
+    A direct, credential-stripping virtual backend location sends no
+    Authorization header, so a backend registered with a registry-level
+    credential (auth_scheme other than "none"), or one whose health check got
+    401/403 (healthy-auth-expired), would list tools that fail when called
+    (issue #2079). Backends behind the MCP proxy get their credential from the
+    egress broker or the caller, so they are never excluded here.
+
+    Args:
+        server_info: The selected server document for the backend.
+        egress_mode: The backend's egress_auth_mode.
+        base_path: The active server path the internal location serves.
+        health_key: The path health is recorded under, as _virtual_backend_is_routable
+            reads it.
+
+    Returns:
+        True when the backend should be left out of virtual servers.
+    """
+    if _virtual_backend_uses_mcp_proxy(egress_mode, base_path, server_info.get("proxy_pass_url")):
+        return False
+    if (server_info.get("auth_scheme") or "none") != "none":
+        return True
+    return _server_health_status(health_key) == HealthStatus.HEALTHY_AUTH_EXPIRED
 
 
 def _server_health_status(
@@ -2568,6 +2601,14 @@ class NginxConfigService:
         if self._version_upstream(base_path, _VersionRoute("", version_id, selected), True) is None:
             self._warn_virtual_once(f"Skipping unsafe virtual backend endpoint for {backend_path}")
             return None
+        if _virtual_backend_lacks_credential(
+            selected, egress_mode, base_path, active.get("path") or base_path
+        ):
+            self._warn_virtual_once(
+                f"Skipping virtual backend {backend_path}: it needs a credential "
+                "the virtual server cannot send"
+            )
+            return None
         return selected, egress_mode, version_id, base_path
 
     async def _generate_virtual_backend_locations(
@@ -2850,6 +2891,9 @@ class NginxConfigService:
 
                 tools = []
                 tool_backend_map = {}
+                # A mapped MCP App tool needs resources/read for its ui:// page,
+                # so only then does the virtual server advertise resources.
+                has_mcp_app_tool = False
 
                 for tm in vs.tool_mappings:
                     # Only backends that get internal locations may appear in a
@@ -2874,13 +2918,17 @@ class NginxConfigService:
                     # title, annotations and outputSchema of the backend tool, so
                     # the Lua fallback tools/list keeps them (MCP field names).
                     tool_metadata: dict[str, Any] = {}
+                    is_mcp_app_tool = False
 
                     for st in server_info.get("tool_list", []):
                         if st.get("name") == tm.tool_name:
                             description = tm.description_override or st.get("description", "")
                             input_schema = stored_input_schema(st)
                             tool_metadata = stored_tool_metadata(st)
+                            is_mcp_app_tool = stored_ui_resource_uri(st) is not None
                             break
+                    if is_mcp_app_tool:
+                        has_mcp_app_tool = True
 
                     input_schema = _ensure_mcp_compliant_schema(input_schema)
 
@@ -2898,6 +2946,16 @@ class NginxConfigService:
                             "block_server_path": base_path,
                             "backend_version": tm.backend_version,
                             "egress_auth_mode": egress_mode,
+                            # The router always discovers these backends live: an
+                            # egress backend's list can depend on the user's
+                            # credential, and the bundled registry tools filter
+                            # their list per caller (issue #2079).
+                            "live_discovery": _virtual_backend_uses_mcp_proxy(
+                                egress_mode, base_path, server_info.get("proxy_pass_url")
+                            ),
+                            # Only backends with an MCP App tool are asked for
+                            # resources, since only their pages are advertised.
+                            "mcp_app": is_mcp_app_tool,
                             "required_scopes": required_scopes,
                             **tool_metadata,
                         }
@@ -2916,13 +2974,18 @@ class NginxConfigService:
                     "required_scopes": vs.required_scopes,
                     "tools": tools,
                     "tool_backend_map": tool_backend_map,
+                    # The stored tool lists stay current only with tool refresh
+                    # on, so only then may tools/list answer from this file.
+                    "serve_tools_from_mapping": settings.tool_refresh_enabled,
+                    "advertise_resources": has_mcp_app_tool,
                 }
 
                 # Atomic, so virtual_router.lua never reads a half-written file.
+                # Compact: the router copies the file into a shared dict.
                 mapping_path = mappings_dir / f"{server_id}.json"
                 _atomic_write_text(
                     mapping_path,
-                    json.dumps(mapping_data, indent=2, default=str),
+                    json.dumps(mapping_data, separators=(",", ":"), default=str),
                     record_metric=False,
                 )
 

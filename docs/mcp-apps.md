@@ -71,7 +71,7 @@ Use the server's gateway URL, for example `https://<your-gateway>/budget-allocat
 A virtual server does not support MCP Apps yet:
 
 - The router opens its own sessions to each backend without the UI extension, so a backend that checks for it hides its UI tools.
-- The virtual server's `initialize` reply does not advertise `resources` or the UI extension.
+- The virtual server advertises `resources` in `initialize` and `server/discover` only when a mapped tool opens a page, and it never advertises the UI extension. It asks only the backends with a mapped page-opening tool for resources.
 - A page calls tools by their backend names. A virtual server that renames a tool rejects that call, and an app-only tool has to be mapped like any other tool.
 - Two backends that use the same `ui://` address collide, because `resources/read` goes to whichever backend lists it first.
 

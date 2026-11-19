@@ -2319,12 +2319,12 @@ class TestTransportAwareModernProbe:
     async def test_legacy_server_still_uses_initialize_and_ping(
         self, health_service, mock_server_info
     ):
-        initialize = AsyncMock(return_value="session-123")
+        initialize = AsyncMock(return_value=("session-123", None))
         ping_response = MagicMock(status_code=200)
         with (
             patch("registry.health.service.validate_url", return_value=["93.184.216.34"]),
             patch.object(health_service, "_probe_server_discover", AsyncMock(return_value=False)),
-            patch.object(health_service, "_initialize_mcp_session", initialize),
+            patch.object(health_service, "_initialize_mcp_session_with_status", initialize),
             patch.object(
                 health_service, "_probe_mcp_endpoint", AsyncMock(return_value=ping_response)
             ),
@@ -2335,6 +2335,59 @@ class TestTransportAwareModernProbe:
 
         assert (is_healthy, status) == (True, HealthStatus.HEALTHY)
         initialize.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("init_status", "expected"),
+        [
+            (401, HealthStatus.HEALTHY_AUTH_EXPIRED),
+            (403, HealthStatus.HEALTHY_AUTH_EXPIRED),
+            (500, HealthStatus.HEALTHY),
+            (None, HealthStatus.HEALTHY),
+        ],
+    )
+    async def test_initialize_refused_for_credentials_is_auth_expired(
+        self,
+        health_service,
+        mock_server_info,
+        init_status,
+        expected,
+    ):
+        """A reachable server that refuses initialize for credentials is auth-expired (#2079)."""
+        initialize = AsyncMock(return_value=(None, init_status))
+        with (
+            patch("registry.health.service.validate_url", return_value=["93.184.216.34"]),
+            patch.object(health_service, "_probe_server_discover", AsyncMock(return_value=False)),
+            patch.object(health_service, "_initialize_mcp_session_with_status", initialize),
+            patch.object(health_service, "_try_ping_without_auth", AsyncMock(return_value=True)),
+        ):
+            is_healthy, status = await health_service._check_server_endpoint_transport_aware(
+                MagicMock(), "http://localhost:8000/mcp", mock_server_info
+            )
+
+        assert (is_healthy, status) == (True, expected)
+
+    @pytest.mark.asyncio
+    async def test_ping_refused_for_credentials_is_auth_expired(
+        self,
+        health_service,
+        mock_server_info,
+    ):
+        """A session ping refused with 401 ends the #167 workaround (#2079)."""
+        initialize = AsyncMock(return_value=("session-123", None))
+        refused = MagicMock(status_code=401)
+        with (
+            patch("registry.health.service.validate_url", return_value=["93.184.216.34"]),
+            patch.object(health_service, "_probe_server_discover", AsyncMock(return_value=False)),
+            patch.object(health_service, "_initialize_mcp_session_with_status", initialize),
+            patch.object(health_service, "_probe_mcp_endpoint", AsyncMock(return_value=refused)),
+            patch.object(health_service, "_try_ping_without_auth", AsyncMock(return_value=True)),
+        ):
+            is_healthy, status = await health_service._check_server_endpoint_transport_aware(
+                MagicMock(), "http://localhost:8000/mcp", mock_server_info
+            )
+
+        assert (is_healthy, status) == (True, HealthStatus.HEALTHY_AUTH_EXPIRED)
 
     @pytest.mark.asyncio
     async def test_ssrf_block_happens_before_discover_probe(self, health_service, mock_server_info):

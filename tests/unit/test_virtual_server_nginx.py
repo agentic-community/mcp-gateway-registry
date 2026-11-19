@@ -1233,12 +1233,31 @@ class TestGenerateVirtualBackendLocations:
         assert mapping["tools"] == []
 
     @pytest.mark.asyncio
-    async def test_auth_expired_backend_stays_routable(
+    async def test_auth_expired_egress_backend_stays_routable(
         self,
         mock_server_repository,
         _backends_healthy,
     ):
-        """An expired-auth backend is up, so the direct route keeps it and so do we."""
+        """An egress backend gets each user's credential, so auth-expired keeps it."""
+        _backends_healthy.return_value = "healthy-auth-expired"
+        mock_server_repository.get.return_value = {
+            "is_enabled": True,
+            "egress_auth_mode": "pat",
+            "proxy_pass_url": "https://backend.example.com/mcp",
+        }
+        from registry.core.nginx_service import NginxConfigService
+
+        result = await NginxConfigService()._generate_virtual_backend_locations([_make_vs_config()])
+
+        assert "location = /_vs_backend_github {" in result
+
+    @pytest.mark.asyncio
+    async def test_auth_expired_plain_backend_is_left_out(
+        self,
+        mock_server_repository,
+        _backends_healthy,
+    ):
+        """A plain backend that refuses the gateway would list tools that fail (#2079)."""
         _backends_healthy.return_value = "healthy-auth-expired"
         mock_server_repository.get.return_value = {
             "is_enabled": True,
@@ -1248,7 +1267,24 @@ class TestGenerateVirtualBackendLocations:
 
         result = await NginxConfigService()._generate_virtual_backend_locations([_make_vs_config()])
 
-        assert "location = /_vs_backend_github {" in result
+        assert "location = /_vs_backend_github {" not in result
+
+    @pytest.mark.asyncio
+    async def test_registry_credential_backend_is_left_out(
+        self,
+        mock_server_repository,
+    ):
+        """The virtual path never sends a registry-level credential (#2079)."""
+        mock_server_repository.get.return_value = {
+            "is_enabled": True,
+            "auth_scheme": "bearer",
+            "proxy_pass_url": "https://backend.example.com/mcp",
+        }
+        from registry.core.nginx_service import NginxConfigService
+
+        result = await NginxConfigService()._generate_virtual_backend_locations([_make_vs_config()])
+
+        assert "location = /_vs_backend_github {" not in result
 
     @pytest.mark.asyncio
     async def test_health_is_read_for_the_active_document_path(
@@ -1474,6 +1510,110 @@ class TestWriteVirtualServerMappings:
                 service.reset_virtual_warnings()
                 await service._write_virtual_server_mappings([vs])
                 assert _omit_warnings() == 2
+
+
+def _github_backend(
+    tool: dict,
+    **extra: object,
+) -> dict:
+    """Return a healthy GitHub backend document with one stored tool."""
+    document = {
+        "server_name": "GitHub",
+        "is_enabled": True,
+        "proxy_pass_url": "https://github.example.com/mcp",
+        "tool_list": [tool],
+    }
+    document.update(extra)
+    return document
+
+
+class TestMappingDiscoveryFlags:
+    """Mapping fields the virtual router uses to answer discovery (issue #2079)."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("refresh_enabled", [True, False])
+    async def test_serve_tools_from_mapping_follows_tool_refresh(
+        self,
+        mock_server_repository,
+        refresh_enabled,
+    ):
+        """The mapping answers tools/list only while tool refresh keeps it current."""
+        mock_server_repository.get.return_value = _github_backend(
+            {"name": "search", "inputSchema": {"type": "object"}}
+        )
+
+        with (
+            patch("registry.core.nginx_service.settings.tool_refresh_enabled", refresh_enabled),
+            TemporaryDirectory() as tmpdir,
+        ):
+            mapping = await _write_mappings_and_read(_make_vs_config(), tmpdir)
+
+        assert mapping["serve_tools_from_mapping"] is refresh_enabled
+
+    @pytest.mark.asyncio
+    async def test_resources_advertised_only_for_mcp_app_tools(
+        self,
+        mock_server_repository,
+    ):
+        """A ui:// page needs resources/read, so only then are resources advertised."""
+        mock_server_repository.get.return_value = _github_backend(
+            {"name": "search", "inputSchema": {"type": "object"}}
+        )
+        with TemporaryDirectory() as tmpdir:
+            plain = await _write_mappings_and_read(_make_vs_config(), tmpdir)
+
+        mock_server_repository.get.return_value = _github_backend(
+            {
+                "name": "search",
+                "inputSchema": {"type": "object"},
+                "ui_resource_uri": "ui://search/page",
+            }
+        )
+        with TemporaryDirectory() as tmpdir:
+            app = await _write_mappings_and_read(_make_vs_config(), tmpdir)
+
+        assert plain["advertise_resources"] is False
+        assert app["advertise_resources"] is True
+        # The router asks only MCP App backends for resources.
+        assert plain["tools"][0]["mcp_app"] is False
+        assert app["tools"][0]["mcp_app"] is True
+
+    @pytest.mark.asyncio
+    async def test_live_discovery_marks_egress_backends(
+        self,
+        mock_server_repository,
+    ):
+        """An egress backend's list can depend on the user, so it stays live."""
+        tool = {"name": "search", "inputSchema": {"type": "object"}}
+        mock_server_repository.get.return_value = _github_backend(tool)
+        with TemporaryDirectory() as tmpdir:
+            plain = await _write_mappings_and_read(_make_vs_config(), tmpdir)
+
+        mock_server_repository.get.return_value = _github_backend(tool, egress_auth_mode="pat")
+        with TemporaryDirectory() as tmpdir:
+            egress = await _write_mappings_and_read(_make_vs_config(), tmpdir)
+
+        assert plain["tools"][0]["live_discovery"] is False
+        assert egress["tools"][0]["live_discovery"] is True
+
+    @pytest.mark.asyncio
+    async def test_mapping_is_written_as_compact_json(
+        self,
+        mock_server_repository,
+    ):
+        """The router copies the whole file into a shared dict, so no indentation."""
+        from registry.core.nginx_service import NginxConfigService
+
+        mock_server_repository.get.return_value = _github_backend(
+            {"name": "search", "inputSchema": {"type": "object"}}
+        )
+        with TemporaryDirectory() as tmpdir:
+            with patch("registry.core.nginx_service.VIRTUAL_MAPPINGS_DIR", Path(tmpdir)):
+                await NginxConfigService()._write_virtual_server_mappings([_make_vs_config()])
+            text = (Path(tmpdir) / "dev-essentials.json").read_text()
+
+        assert "\n" not in text
+        assert ", " not in text and ": " not in text
 
 
 class TestEncodePathForLocation:

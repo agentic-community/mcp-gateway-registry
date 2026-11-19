@@ -47,6 +47,18 @@ end
 
 local dict = _new_dict()
 
+-- Drop the per-backend list cache and failure memory (issue #2079). The mock
+-- dict has no TTLs, so an entry from one test would otherwise last into the
+-- next. Every test block starts by calling this.
+local function reset_backend_list_cache()
+    for key in pairs(dict._store) do
+        local prefix = key:sub(1, 6)
+        if prefix == "blist:" or prefix == "bfail:" then
+            dict._store[key] = nil
+        end
+    end
+end
+
 -- Programmable ngx.location.capture responses, keyed by backend location.
 local capture_responses = {}
 local capture_handler = nil
@@ -169,6 +181,7 @@ local M = assert(loadfile("docker/lua/virtual_router.lua"))()
 -- ---------------------------------------------------------------------------
 print("test: _append_mapping_tools_for_backend appends only the given backend")
 do
+    reset_backend_list_cache()
     local mapping = { tools = {
         { name = "a", backend_location = "/b1", inputSchema = { type = "object" } },
         { name = "b", backend_location = "/b2" },
@@ -182,6 +195,7 @@ end
 -- ---------------------------------------------------------------------------
 print("test: _append_mapping_tools_for_backend keeps title, annotations and outputSchema")
 do
+    reset_backend_list_cache()
     local mapping = { tools = {
         { name = "delete_note", backend_location = "/b1", title = "Delete note",
           annotations = { readOnlyHint = false, destructiveHint = true },
@@ -205,6 +219,7 @@ end
 -- ---------------------------------------------------------------------------
 print("test: _fetch_backend_list classifies every backend outcome the same way")
 do
+    reset_backend_list_cache()
     local function fetch(response, method, key)
         capture_responses["/_vs_backend_loc"] = response
         return M._fetch_backend_list("/_vs_backend_loc", method or "tools/list", key or "tools",
@@ -263,6 +278,7 @@ end
 -- ---------------------------------------------------------------------------
 print("test: _handle_tools_list falls back per-backend and does NOT cache partial")
 do
+    reset_backend_list_cache()
     dict._store["tools_enriched::srv1:5:alice"] = nil
     local mapping = { required_scopes = nil, tools = {
         { name = "live_tool", original_name = "live_tool", backend_location = "/_vs_backend_ok",
@@ -288,6 +304,7 @@ end
 -- ---------------------------------------------------------------------------
 print("test: egress discovery failure never presents mapping-only tools as available")
 do
+    reset_backend_list_cache()
     ngx.var.auth_user = "alice"
     local mapping = { tools = { { name = "alias", original_name = "underlying",
         backend_location = "/_vs_backend_no_consent", egress_auth_mode = "oauth" } } }
@@ -310,6 +327,7 @@ end
 
 print("test: _handle_tools_list caches when every backend succeeds")
 do
+    reset_backend_list_cache()
     dict._store["tools_enriched::srv2:5:alice"] = nil
     local mapping = { required_scopes = nil, tools = {
         { name = "live_tool", original_name = "live_tool", backend_location = "/_vs_backend_ok",
@@ -332,6 +350,7 @@ end
 -- mapping selects each tool by backend location, never by name alone.
 print("test: tools/list resolves overlapping upstream names once per mapped backend")
 do
+    reset_backend_list_cache()
     dict._store["tools_enriched::overlap:5:alice"] = nil
     local mapping = { tools = {
         { name = "regions", original_name = "regions", backend_location = "/_vs_backend_one", backend_server_path = "/one" },
@@ -352,6 +371,7 @@ end
 -- Fully discovered metadata can stay cached, but its block decision cannot.
 print("test: tools/list hides a blocked tool immediately even with cached metadata")
 do
+    reset_backend_list_cache()
     dict._store["tools_enriched::block-change:5:alice"] = nil
     local mapping = { tools = {
         { name = "docs_alias", original_name = "docs", backend_location = "/_vs_backend_backend-two.3av2",
@@ -380,6 +400,7 @@ end
 -- cache hits; the blocked original name is removed without hiding its sibling.
 print("test: tools/list batches block checks by backing server")
 do
+    reset_backend_list_cache()
     local uri = "/_internal/sessions/tool-block?server_path=%2Fok"
     local mapping = { tools = {
         { name = "first", original_name = "no_arg", backend_location = "/_vs_backend_ok",
@@ -406,6 +427,7 @@ end
 -- denies rather than routing an unsafe tool through the virtual server.
 print("test: tools/call rejects blocked or unreadable backend tool state")
 do
+    reset_backend_list_cache()
     local mapping = { tools = { { name = "docs_alias", original_name = "docs",
         backend_location = "/_vs_backend_backend-two.3av2", backend_server_path = "/backend-two:v2",
         block_server_path = "/backend-two", backend_version = "v2", required_scopes = {} } },
@@ -444,6 +466,7 @@ end
 -- ---------------------------------------------------------------------------
 print("test: _forward_identity_headers overwrites a spoofed client X-User")
 do
+    reset_backend_list_cache()
     -- Client tries to spoof identity; a validated user is present.
     ngx.req._headers = { ["X-User"] = "attacker", ["X-Username"] = "attacker" }
     ngx.var.auth_user = "alice"
@@ -458,6 +481,7 @@ end
 -- ---------------------------------------------------------------------------
 print("test: _forward_identity_headers CLEARS a spoofed X-User when auth_user is empty")
 do
+    reset_backend_list_cache()
     -- M2M / client-credentials token: authenticates but carries no user, so
     -- nginx auth_request_set yields "" for $auth_user. A client-supplied X-User
     -- must NOT survive to the backend (this is the fail-open bug from #1627).
@@ -474,6 +498,7 @@ end
 -- ---------------------------------------------------------------------------
 print("test: _forward_identity_headers CLEARS a spoofed X-User when auth_user is nil")
 do
+    reset_backend_list_cache()
     ngx.req._headers = { ["X-User"] = "attacker", ["X-Username"] = "attacker" }
     ngx.var.auth_user = nil
     ngx.var.auth_username = nil
@@ -490,6 +515,7 @@ ngx.var.auth_user = "alice"
 -- ---------------------------------------------------------------------------
 print("test: _handle_tools_list keeps empty schema arrays as [] (issue #1532)")
 do
+    reset_backend_list_cache()
     dict._store["tools_enriched::srv3:5:alice"] = nil
     local mapping = { required_scopes = nil, tools = {
         { name = "no_arg", original_name = "no_arg", backend_location = "/_vs_backend_ok", backend_server_path = "/ok" },
@@ -527,6 +553,7 @@ end
 -- ---------------------------------------------------------------------------
 print("test: a property named like a schema keyword stays an object")
 do
+    reset_backend_list_cache()
     dict._store["tools_enriched::srv4:5:alice"] = nil
     local mapping = { required_scopes = nil, tools = {
         { name = "odd", original_name = "odd", backend_location = "/_vs_backend_ok", backend_server_path = "/ok" },
@@ -545,6 +572,7 @@ end
 -- ---------------------------------------------------------------------------
 print("test: successful stateless initialize persists through L1 and L2")
 do
+    reset_backend_list_cache()
     local initialized, lookups, puts, calls = 0, 0, 0, 0
     local saved = nil
     ngx.var.auth_user = "alice"
@@ -592,6 +620,7 @@ end
 -- ---------------------------------------------------------------------------
 print("test: failed initialize is retried, not cached as stateless")
 do
+    reset_backend_list_cache()
     local initialized, calls = 0, 0
     capture_handler = function(loc, opts)
         if loc:find("/_internal/sessions/backend/", 1, true) == 1 then
@@ -619,6 +648,7 @@ end
 -- ---------------------------------------------------------------------------
 print("test: stateful backend session reuses ID and refreshes stale session")
 do
+    reset_backend_list_cache()
     local initialized, calls, deletes, ids = 0, 0, 0, {}
     capture_handler = function(loc, opts)
         if loc:find("/_internal/sessions/backend/", 1, true) == 1 then
@@ -651,6 +681,7 @@ end
 
 print("test: null version also survives stateful session invalidation")
 do
+    reset_backend_list_cache()
     local initialized, calls, deletes = 0, 0, 0
     capture_handler = function(loc, opts)
         if loc == "/_vs_auth_null_stale" then
@@ -682,6 +713,7 @@ end
 -- ---------------------------------------------------------------------------
 print("test: backend sessions are isolated by selected version")
 do
+    reset_backend_list_cache()
     local reads = 0
     local selected_versions = {}
     ngx.var.auth_user = "alice"
@@ -737,6 +769,7 @@ end
 -- ---------------------------------------------------------------------------
 print("test: virtual alias dispatches original name to backing grant and upstream")
 do
+    reset_backend_list_cache()
     local seen_auth, seen_backend = nil, nil
     ngx.var.auth_user = "alice"
     local mapping = { tool_backend_map = { alias = {
@@ -766,6 +799,7 @@ end
 -- An explicitly pinned alias selects its own auth and backend locations.
 print("test: pinned alias authorizes and calls the selected backend version")
 do
+    reset_backend_list_cache()
     local auth_location, backend_location, seen_version
     local mapping = { tools = { { name = "alias", original_name = "underlying",
         backend_location = "/_vs_backend_github.3av2", backend_server_path = "/github:v2",
@@ -798,6 +832,7 @@ end
 -- or be used with the length operator when choosing the backend session key.
 print("test: unpinned JSON mapping call handles cjson.null version")
 do
+    reset_backend_list_cache()
     local initialized, called = 0, 0
     local mapping = cjson.decode('{"tool_backend_map":{"get_me":{"backend_location":"/_vs_backend_github","backend_server_path":"/github","original_name":"get_me","backend_version":null}},"tools":[{"name":"get_me","backend_location":"/_vs_backend_github","backend_server_path":"/github","original_name":"get_me"}]}')
     capture_handler = function(loc, opts)
@@ -829,6 +864,7 @@ end
 -- ---------------------------------------------------------------------------
 print("test: user-specific tools/list cache never crosses users or freezes consent")
 do
+    reset_backend_list_cache()
     local requests, auths = 0, 0
     local mapping = { tools = { { name = "alias", original_name = "underlying",
         backend_location = "/_vs_backend_personal", backend_server_path = "/personal",
@@ -866,6 +902,7 @@ end
 -- ---------------------------------------------------------------------------
 print("test: plain backend cache rechecks authorization and isolates principals")
 do
+    reset_backend_list_cache()
     local calls, auths = 0, 0
     local mapping = { tools = { { name = "alias", original_name = "underlying",
         backend_location = "/_vs_backend_plain", backend_server_path = "/plain",
@@ -898,6 +935,7 @@ end
 -- ---------------------------------------------------------------------------
 print("test: denied backing grant never initializes or calls backend")
 do
+    reset_backend_list_cache()
     local backend_calls = 0
     ngx.var.auth_user = "alice"
     capture_handler = function(loc)
@@ -922,6 +960,7 @@ end
 -- ---------------------------------------------------------------------------
 print("test: a cold initialize reuses the request token only while it is fresh")
 do
+    reset_backend_list_cache()
     local function call_after_initialize(client_session_id, initialize_seconds)
         local auths, sent_token = 0, nil
         ngx.var.auth_user = "alice"
@@ -966,6 +1005,7 @@ end
 -- ---------------------------------------------------------------------------
 print("test: backend authorization denial blocks upstream and cached discovery")
 do
+    reset_backend_list_cache()
     local upstream = 0
     ngx.var.auth_user = "alice"
     local mapping = { tools = { { name = "alias", original_name = "underlying",
@@ -983,14 +1023,16 @@ do
         upstream = upstream + 1
     end
     local response = cjson.decode(M._handle_tools_list(1, mapping, "", nil, "blocked"))
-    check(response.error ~= nil and upstream == 0,
-        "cached tools are denied when backing grant is revoked")
+    -- Issue #2079: with every backend denied, the caller gets an empty list.
+    check(response.error == nil and #response.result.tools == 0 and upstream == 0,
+        "cached tools are withheld when backing grant is revoked")
     capture_handler = nil
 end
 
 -- ---------------------------------------------------------------------------
 print("test: synthetic initialize cannot poison PAT backend session or mixed discovery")
 do
+    reset_backend_list_cache()
     ngx.var.auth_user = "alice"
     local consent = false
     local initializes, puts, pat_puts, lists, calls = 0, 0, 0, 0, 0
@@ -1109,6 +1151,7 @@ end
 -- ---------------------------------------------------------------------------
 print("test: a plain backend's own errors and 403 fall back to mapping metadata")
 do
+    reset_backend_list_cache()
     ngx.var.auth_user = "alice"
     local mapping = { tools = { { name = "mapped", original_name = "actual",
         backend_location = "/_vs_backend_rpc_error", backend_server_path = "/rpc_error",
@@ -1130,6 +1173,7 @@ end
 -- ---------------------------------------------------------------------------
 print("test: OAuth pre-consent returns connect URL; plain marker never reaches backend")
 do
+    reset_backend_list_cache()
     ngx.var.auth_user = "alice"
     local backend_calls, auths, writes = 0, 0, 0
     local mapping = { tools = { { name = "alias", original_name = "upstream",
@@ -1178,6 +1222,7 @@ end
 -- ---------------------------------------------------------------------------
 print("test: resource and prompt discovery separates backend outage from grant denial")
 do
+    reset_backend_list_cache()
     local mapping = { tools = { { name = "mapped", backend_location = "/_vs_backend_discovery" } } }
     local session_id = "vs-cafe"
     local session_key = "csess_valid:alice:/virtual/discovery:" .. session_id
@@ -1205,6 +1250,7 @@ do
                     return { status = 503 }
                 end
             end
+            reset_backend_list_cache()
             M.route()
             check(ngx.status == 502 and cjson.decode(ngx._last_body).error.message
                 == "Backend discovery failed", method .. " returns backend error for session outage")
@@ -1218,6 +1264,7 @@ do
                     and opts.method == ngx.HTTP_GET then return { status = 404 } end
                 if loc == "/_vs_backend_discovery" then return { status = 503 } end
             end
+            reset_backend_list_cache()
             M.route()
             check(ngx.status == 502, method .. " reports backend initialize outage")
             capture_handler = function(loc, opts)
@@ -1229,15 +1276,27 @@ do
                 if loc:find("/_internal/sessions/backend/", 1, true) == 1
                     and opts.method == ngx.HTTP_GET then return { status = 404 } end
             end
+            reset_backend_list_cache()
             M.route()
-            check(ngx.status == 403, method .. " preserves denied backend initialize grant")
+            -- Issue #2079: a list whose only backend denied the caller is empty;
+            -- reading one item from that backend is still refused.
+            local is_list = method == entry.list
+            local function denied_as_expected()
+                local body = cjson.decode(ngx._last_body)
+                if is_list then
+                    local listed = body.result and (body.result.resources or body.result.prompts)
+                    return ngx.status == 200 and listed ~= nil and #listed == 0
+                end
+                return ngx.status == 403 and body.error.message == "Backend access denied"
+            end
+            check(denied_as_expected(), method .. " preserves denied backend initialize grant")
 
             capture_handler = function(loc)
                 if loc == "/_vs_auth_discovery" then return { status = 403 } end
             end
+            reset_backend_list_cache()
             M.route()
-            check(ngx.status == 403 and cjson.decode(ngx._last_body).error.message
-                == "Backend access denied", method .. " keeps genuine grant denial")
+            check(denied_as_expected(), method .. " keeps genuine grant denial")
 
             -- A healthy session can still reach a broken or denying backend.
             dict:set(backend_key, "active-session")
@@ -1247,6 +1306,7 @@ do
                 end
                 if loc == "/_vs_backend_discovery" then return { status = 503 } end
             end
+            reset_backend_list_cache()
             M.route()
             check(ngx.status == 502, method .. " treats backend HTTP 503 as outage")
             capture_handler = function(loc)
@@ -1255,6 +1315,7 @@ do
                 end
                 if loc == "/_vs_backend_discovery" then return { status = 403 } end
             end
+            reset_backend_list_cache()
             M.route()
             check(ngx.status == 502,
                 method .. " treats the backend's own HTTP 403 as an outage, not a grant denial")
@@ -1283,6 +1344,7 @@ do
                         return { status = 404 }
                     end
                 end
+                reset_backend_list_cache()
                 M.route()
                 check(ngx.status == rejected.expected and init_attempts == 1
                     and list_attempts == 1,
@@ -1296,6 +1358,7 @@ end
 -- ---------------------------------------------------------------------------
 print("test: mixed resource/prompt discovery keeps live siblings before and after PAT")
 do
+    reset_backend_list_cache()
     local connected, deny = false, false
     local calls = {}
     local mapping = { tools = {
@@ -1408,16 +1471,20 @@ do
             or response.result and response.result.owner == "healthy"),
             method .. " omits the denied backend and keeps healthy siblings")
     end
-    -- Without any grant at all, the aggregate is a denial.
+    -- Without any grant at all, the caller may see nothing: an empty list,
+    -- not an error (issue #2079).
     capture_handler = function(loc)
         if loc:find("/_vs_auth_mix_", 1, true) == 1 then return { status = 403 } end
     end
     for _, method in ipairs({ "resources/list", "prompts/list" }) do
         ngx.status = 200
         ngx.req._body = cjson.encode({ jsonrpc = "2.0", id = 11, method = method })
+        reset_backend_list_cache()
         M.route()
-        check(ngx.status == 403 and cjson.decode(ngx._last_body).error.message
-            == "Backend access denied", method .. " denies when no backing grant remains")
+        local response = cjson.decode(ngx._last_body)
+        local listed = response.result and (response.result.resources or response.result.prompts)
+        check(ngx.status == 200 and response.error == nil and listed ~= nil and #listed == 0,
+            method .. " returns an empty list when no backing grant remains")
     end
     capture_handler = nil
 end
@@ -1425,6 +1492,7 @@ end
 -- ---------------------------------------------------------------------------
 print("test: backends that answered with nothing yield an empty list, not 502")
 do
+    reset_backend_list_cache()
     ngx.var.auth_user = "alice"
     local mapping = { tools = {
         { name = "pat", backend_location = "/_vs_backend_none_pat", egress_auth_mode = "pat" },
@@ -1451,15 +1519,19 @@ do
         end
         return { status = 503 }
     end
-    items, lookup, denied = M._proxy_list_to_backends("resources/list", "resources",
+    reset_backend_list_cache()
+    local failed
+    items, lookup, denied, failed = M._proxy_list_to_backends("resources/list", "resources",
         mapping, nil, "none")
-    check(items == nil and not denied, "every backend failing is still a discovery failure")
+    check(items == nil and not denied and failed,
+        "every backend failing is still a discovery failure")
     capture_handler = nil
 end
 
 -- ---------------------------------------------------------------------------
 print("test: one credentialed backend outage keeps healthy sibling tools")
 do
+    reset_backend_list_cache()
     local outage_status = 503
     ngx.var.auth_user = "alice"
     local mapping = { tools = {
@@ -1501,6 +1573,7 @@ end
 -- ---------------------------------------------------------------------------
 print("test: mapping cache is partitioned by rendered config generation")
 do
+    reset_backend_list_cache()
     dict:set("mapping:gen-old:gen_vs", cjson.encode({ tools = { { name = "stale" } } }))
     ngx.var.vs_config_generation = "gen-new"
     local mapping = M._get_mapping("gen_vs")
@@ -1514,6 +1587,7 @@ end
 -- ---------------------------------------------------------------------------
 print("test: an auth-check failure is a backend failure, not a grant denial")
 do
+    reset_backend_list_cache()
     ngx.var.auth_user = "alice"
     for _, auth_response in ipairs({
         { status = 429 }, { status = 504 }, { status = 200, header = {} },
@@ -1558,6 +1632,7 @@ end
 -- ---------------------------------------------------------------------------
 print("test: a cached stateless marker re-initializes when the backend rejects it")
 do
+    reset_backend_list_cache()
     ngx.var.auth_user = "alice"
     dict:set("bsess_stateless:vs-flip:/_vs_backend_flip:5:alice", "1")
     local inits, lists = 0, 0
@@ -1590,6 +1665,7 @@ end
 -- ---------------------------------------------------------------------------
 print("test: resource reads reuse the caller's complete discovery, never another user's")
 do
+    reset_backend_list_cache()
     local lists, reads = 0, 0
     local mapping = { tools = {
         { name = "a", backend_location = "/_vs_backend_docs" },
@@ -1629,6 +1705,7 @@ end
 -- ---------------------------------------------------------------------------
 print("test: client session check separates malformed, unknown and unverifiable sessions")
 do
+    reset_backend_list_cache()
     local session_id = "vs-5e55"
     local cache_key = "csess_valid:alice:/virtual/session_check:" .. session_id
     local validations, validation_status = 0, nil
@@ -1719,6 +1796,7 @@ end
 
 print("test: 2026-07-28 request classification")
 do
+    reset_backend_list_cache()
     clear_modern_vars()
     check(M._is_modern_request({ _meta = MODERN_META }) == true, "_meta version -> modern")
     ngx.var.http_mcp_protocol_version = "2026-07-28"
@@ -1732,6 +1810,7 @@ end
 
 print("test: Mcp-Name base64 sentinel decoding")
 do
+    reset_backend_list_cache()
     ngx.decode_base64 = function(s) return ({ ["ZWNobw=="] = "echo" })[s] end
     check(M._decode_mcp_header_value("echo") == "echo", "plain value unchanged")
     check(M._decode_mcp_header_value("=?base64?ZWNobw==?=") == "echo", "sentinel value decoded")
@@ -1740,6 +1819,7 @@ end
 
 print("test: 2026-07-28 header and version validation at the router")
 do
+    reset_backend_list_cache()
     ngx.var.virtual_server_id = "modsrv"
     local function err_code() return cjson.decode(ngx._last_body).error.code end
 
@@ -1785,6 +1865,7 @@ end
 
 print("test: server/discover and removed methods are answered by the router")
 do
+    reset_backend_list_cache()
     ngx.var.virtual_server_id = "modsrv"
     local session_posts = 0
     capture_handler = function(loc, opts)
@@ -1816,6 +1897,7 @@ end
 
 print("test: 2026-07-28 tools/list runs on a router-owned session without client headers")
 do
+    reset_backend_list_cache()
     ngx.var.virtual_server_id = "modsrv"
     dict._store["tools_enriched::modsrv:5:alice"] = nil
     -- Start without a cached router-owned session (an earlier test made one).
@@ -1903,6 +1985,7 @@ end
 
 print("test: a legacy request keeps today's header pass-through")
 do
+    reset_backend_list_cache()
     ngx.req._headers = { ["MCP-Protocol-Version"] = "2025-11-25" }
     clear_modern_vars()
     check(M._is_modern_request({}) == false, "no 2026 markers -> legacy path")
@@ -1931,6 +2014,7 @@ end
 
 print("test: Mcp-Name / Mcp-Param-* value encoding")
 do
+    reset_backend_list_cache()
     check(M._encode_mcp_header_value("us-west1") == "us-west1", "plain string as is")
     check(M._encode_mcp_header_value(42) == "42", "integer as decimal")
     check(M._encode_mcp_header_value(true) == "true", "boolean as true")
@@ -1943,6 +2027,7 @@ end
 
 print("test: x-mcp-header annotations follow the 2026-07-28 rules")
 do
+    reset_backend_list_cache()
     local entries = M._x_mcp_header_entries({ type = "object", properties = {
         region = { type = "string", ["x-mcp-header"] = "Region" },
         opts = { type = "object", properties = { tenant = { type = "integer", ["x-mcp-header"] = "Tenant" } } },
@@ -1995,6 +2080,7 @@ end
 
 print("test: backend era is probed once and cached; failures are not cached")
 do
+    reset_backend_list_cache()
     modern_backends["/_vs_backend_era_m"] = true
     local seen = {}
     local probes = 0
@@ -2021,6 +2107,7 @@ end
 
 print("test: a 2026-07-28 backend gets a stateless request with headers from the sent body")
 do
+    reset_backend_list_cache()
     modern_backends["/_vs_backend_mod"] = true
     local seen = {}
     capture_handler = modern_backend_handler("/_vs_backend_mod", seen)
@@ -2048,6 +2135,7 @@ end
 
 print("test: tools/list from a 2026-07-28 backend drops invalid tools and feeds Mcp-Param-*")
 do
+    reset_backend_list_cache()
     modern_backends["/_vs_backend_wx"] = true
     local seen = {}
     capture_handler = modern_backend_handler("/_vs_backend_wx", seen, {
@@ -2080,6 +2168,7 @@ end
 
 print("test: backend lists are read across pages, and a failed page fails the fetch")
 do
+    reset_backend_list_cache()
     local cursors, fail_page, endless = {}, nil, false
     capture_handler = function(loc, opts)
         if loc ~= "/_vs_backend_paged" then return nil end
@@ -2110,6 +2199,7 @@ end
 
 print("test: a 2026-07-28 backend's 404 -32601 for a list means unsupported")
 do
+    reset_backend_list_cache()
     capture_handler = function(loc)
         if loc == "/_vs_backend_nores" then
             return { status = 404, body = cjson.encode({ jsonrpc = "2.0", id = 1,
@@ -2126,6 +2216,7 @@ end
 
 print("test: virtual tools/list keeps backend tool fields, also from its cache")
 do
+    reset_backend_list_cache()
     dict._store["tools_enriched::fields:5:alice"] = nil
     local mapping = { tools = {
         { name = "alias_weather", original_name = "weather", backend_location = "/_vs_backend_fields",
@@ -2164,6 +2255,7 @@ end
 
 print("test: resources/templates/list is aggregated across backends")
 do
+    reset_backend_list_cache()
     local session_id = "vs-7e7"
     dict:set("csess_valid:alice:/virtual/tpl:" .. session_id, "1")
     dict:set("mapping::tpl", cjson.encode({ tools = {
@@ -2288,6 +2380,7 @@ end
 -- ---------------------------------------------------------------------------
 print("test: only a session-related 400 counts as a session rejection")
 do
+    reset_backend_list_cache()
     check(M._is_session_rejection({ status = 404, body = "" }), "404 is a session rejection")
     check(M._is_session_rejection({ status = 410, body = "" }), "410 is a session rejection")
     check(M._is_session_rejection({ status = 400, body = "Bad Request: Missing session ID" }),
@@ -2305,6 +2398,7 @@ end
 -- ---------------------------------------------------------------------------
 print("test: a non-session 400 from a legacy backend is returned without re-initializing")
 do
+    reset_backend_list_cache()
     local inits, calls = 0, 0
     capture_handler = function(loc, opts)
         if loc == "/_vs_auth_strict400" then
@@ -2335,6 +2429,7 @@ end
 -- ---------------------------------------------------------------------------
 print("test: a 2026-07-28 client's _meta version keys never reach a legacy backend")
 do
+    reset_backend_list_cache()
     local sent = nil
     local authorized_body = nil
     capture_handler = function(loc, opts)
@@ -2388,6 +2483,7 @@ end
 -- ---------------------------------------------------------------------------
 print("test: a call sends one era probe while the backend's era is uncached")
 do
+    reset_backend_list_cache()
     -- Marked modern so the harness does not answer the probe's grant check;
     -- the handler refuses it, so the era stays legacy and uncached.
     modern_backends["/_vs_backend_probe_once"] = true
@@ -2420,6 +2516,229 @@ do
     check(calls == 1 and probes == 1, "one tools/call sends exactly one server/discover probe")
     ngx.ctx.vr_modern_client = nil
     modern_backends["/_vs_backend_probe_once"] = nil
+    capture_handler = nil
+end
+
+-- ---------------------------------------------------------------------------
+-- Issue #2079: per-backend list cache and failure memory.
+print("test: a failing backend no longer forces healthy siblings to be fetched again")
+do
+    reset_backend_list_cache()
+    ngx.var.auth_user = "alice"
+    dict._store["tools_enriched::sibling:5:alice"] = nil
+    local mapping = { tools = {
+        { name = "ok_tool", original_name = "ok_tool", backend_location = "/_vs_backend_sib_ok",
+          backend_server_path = "/ok", inputSchema = { type = "object" } },
+        { name = "down_tool", original_name = "down_tool", backend_location = "/_vs_backend_sib_down",
+          backend_server_path = "/down", inputSchema = { type = "object" } },
+    } }
+    local backend_calls, ok_grants = {}, 0
+    local deny_ok = false
+    capture_handler = function(loc)
+        if loc == "/_vs_auth_sib_ok" then
+            ok_grants = ok_grants + 1
+            if deny_ok then return { status = 403 } end
+            return { status = 200, header = { ["X-Internal-Token"] = "signed" } }
+        end
+        if loc == "/_vs_backend_sib_ok" then
+            backend_calls[loc] = (backend_calls[loc] or 0) + 1
+            return { status = 200,
+                body = cjson.encode({ result = { tools = { { name = "ok_tool" } } } }) }
+        end
+        if loc == "/_vs_backend_sib_down" then
+            backend_calls[loc] = (backend_calls[loc] or 0) + 1
+            return { status = 503 }
+        end
+    end
+    local first = cjson.decode(M._handle_tools_list(1, mapping, "", nil, "sibling"))
+    local second = cjson.decode(M._handle_tools_list(2, mapping, "", nil, "sibling"))
+    check(#first.result.tools == 2 and #second.result.tools == 2,
+        "both calls list the healthy tool and the failing backend's mapped tool")
+    check(backend_calls["/_vs_backend_sib_ok"] == 1,
+        "the healthy backend is fetched once and then served from its own cache")
+    check(backend_calls["/_vs_backend_sib_down"] == 1,
+        "the failing backend is not retried while its failure is remembered")
+    check(ok_grants == 2, "a cache hit still runs the backend grant check")
+    deny_ok = true
+    local third = cjson.decode(M._handle_tools_list(3, mapping, "", nil, "sibling"))
+    local names = {}
+    for _, tool in ipairs(third.result.tools) do names[tool.name] = true end
+    check(not names.ok_tool and names.down_tool and backend_calls["/_vs_backend_sib_ok"] == 1,
+        "a revoked grant hides the cached backend without fetching it")
+    capture_handler = nil
+end
+
+-- ---------------------------------------------------------------------------
+print("test: with serve_tools_from_mapping, tools/list answers plain backends from the mapping")
+do
+    reset_backend_list_cache()
+    ngx.var.auth_user = "alice"
+    local mapping = { serve_tools_from_mapping = true, tools = {
+        { name = "alias", original_name = "plain_tool", description = "from mapping",
+          backend_location = "/_vs_backend_map_plain", backend_server_path = "/ok",
+          inputSchema = { type = "object" } },
+        { name = "bad_header", original_name = "bad_header",
+          backend_location = "/_vs_backend_map_plain", backend_server_path = "/ok",
+          inputSchema = { type = "object", properties = {
+              region = { type = "object", ["x-mcp-header"] = "Region" } } } },
+        { name = "egress_tool", original_name = "egress_tool", egress_auth_mode = "pat",
+          backend_location = "/_vs_backend_map_egress", backend_server_path = "/oauth",
+          inputSchema = { type = "object" } },
+        { name = "live_tool", original_name = "live_tool", live_discovery = true,
+          backend_location = "/_vs_backend_map_live", backend_server_path = "/fine",
+          inputSchema = { type = "object" } },
+        { name = "denied_tool", original_name = "denied_tool",
+          backend_location = "/_vs_backend_map_denied", backend_server_path = "/one",
+          inputSchema = { type = "object" } },
+    } }
+    local backend_calls = {}
+    capture_handler = function(loc)
+        if loc == "/_vs_auth_map_denied" then return { status = 403 } end
+        if loc:sub(1, 12) == "/_vs_backend" then
+            backend_calls[loc] = (backend_calls[loc] or 0) + 1
+            local name = loc == "/_vs_backend_map_egress" and "egress_tool" or "live_tool"
+            return { status = 200,
+                body = cjson.encode({ result = { tools = { { name = name } } } }) }
+        end
+    end
+    local response = cjson.decode(M._handle_tools_list(1, mapping, "", nil, "from_mapping"))
+    local by_name = {}
+    for _, tool in ipairs(response.result.tools) do by_name[tool.name] = tool end
+    check(by_name.alias and by_name.alias.description == "from mapping",
+        "a plain backend's tool comes from the mapping under its alias")
+    check((backend_calls["/_vs_backend_map_plain"] or 0) == 0,
+        "the plain backend is never called")
+    check(by_name.egress_tool and backend_calls["/_vs_backend_map_egress"] == 1,
+        "an egress backend is still discovered live")
+    check(by_name.live_tool and backend_calls["/_vs_backend_map_live"] == 1,
+        "a live_discovery backend is still discovered live")
+    check(by_name.denied_tool == nil and (backend_calls["/_vs_backend_map_denied"] or 0) == 0,
+        "a backend whose grant is denied is omitted without a call")
+    check(by_name.bad_header == nil,
+        "a mapped tool with an invalid x-mcp-header annotation is dropped")
+    capture_handler = nil
+end
+
+-- ---------------------------------------------------------------------------
+print("test: tools/list returns an empty list when every backend denies, an error when one fails")
+do
+    reset_backend_list_cache()
+    ngx.var.auth_user = "alice"
+    dict._store["tools_enriched::all_denied:5:alice"] = nil
+    local mapping = { tools = {
+        { name = "a", original_name = "a", backend_location = "/_vs_backend_deny_a",
+          backend_server_path = "/ok", inputSchema = { type = "object" } },
+        { name = "b", original_name = "b", backend_location = "/_vs_backend_deny_b",
+          backend_server_path = "/fine", inputSchema = { type = "object" } },
+    } }
+    capture_handler = function(loc)
+        if loc:find("/_vs_auth_deny_", 1, true) == 1 then return { status = 403 } end
+    end
+    local response = cjson.decode(M._handle_tools_list(1, mapping, "", nil, "all_denied"))
+    check(response.error == nil and #response.result.tools == 0,
+        "every backend denied: empty tools list, not an error")
+    capture_handler = function(loc)
+        if loc == "/_vs_auth_deny_a" then return { status = 403 } end
+        if loc == "/_vs_auth_deny_b" then return { status = 503 } end
+    end
+    response = cjson.decode(M._handle_tools_list(2, mapping, "", nil, "all_denied"))
+    check(response.error ~= nil and response.error.message == "Backend discovery unavailable",
+        "a denial plus an unverifiable grant is still an error")
+    capture_handler = nil
+end
+
+-- ---------------------------------------------------------------------------
+print("test: capabilities advertise resources only for MCP App servers, never prompts")
+do
+    reset_backend_list_cache()
+    dict:set("mapping::caps_app", cjson.encode({ advertise_resources = true, tools = {} }))
+    dict:set("mapping::caps_plain", cjson.encode({ tools = {} }))
+    local app = M._virtual_capabilities("caps_app")
+    local plain = M._virtual_capabilities("caps_plain")
+    local missing = M._virtual_capabilities("caps_missing")
+    check(app.tools ~= nil and app.resources ~= nil and app.prompts == nil,
+        "an MCP App server advertises tools and resources")
+    check(plain.tools ~= nil and plain.resources == nil and plain.prompts == nil,
+        "a tools-only server advertises tools only")
+    check(missing.tools ~= nil and missing.resources == nil,
+        "an unreadable mapping advertises tools only")
+    local discover = cjson.decode(M._handle_discover(1, "caps_plain"))
+    check(discover.result.capabilities.prompts == nil
+        and discover.result.capabilities.resources == nil,
+        "server/discover drops prompts and resources for a tools-only server")
+end
+
+-- ---------------------------------------------------------------------------
+print("test: a partial resource discovery still records the lookup for later reads")
+do
+    reset_backend_list_cache()
+    ngx.var.auth_user = "alice"
+    local cache_key = "resources_lookup::partial:5:alice"
+    dict._store[cache_key] = nil
+    local mapping = { tools = {
+        { name = "r", backend_location = "/_vs_backend_part_ok" },
+        { name = "s", backend_location = "/_vs_backend_part_down" },
+    } }
+    capture_handler = function(loc)
+        if loc == "/_vs_backend_part_ok" then
+            return { status = 200, body = cjson.encode({ result = { resources = {
+                { uri = "ui://app/page", name = "page" } } } }) }
+        end
+        if loc == "/_vs_backend_part_down" then return { status = 503 } end
+    end
+    local items = M._proxy_list_to_backends("resources/list", "resources", mapping, nil, "partial")
+    local lookup = dict:get(cache_key) and cjson.decode(dict:get(cache_key))
+    check(items ~= nil and #items == 1 and lookup ~= nil
+        and lookup["ui://app/page"] == "/_vs_backend_part_ok",
+        "the lookup records the backend that answered while a sibling failed")
+    capture_handler = nil
+end
+
+-- ---------------------------------------------------------------------------
+print("test: resources are asked only of backends with an MCP App tool")
+do
+    reset_backend_list_cache()
+    ngx.var.auth_user = "alice"
+    local calls = {}
+    capture_handler = function(loc)
+        if loc:sub(1, 12) == "/_vs_backend" then
+            calls[loc] = (calls[loc] or 0) + 1
+            return { status = 200, body = cjson.encode({ result = { resources = {
+                { uri = "ui://" .. loc:sub(13) .. "/page", name = "page" } } } }) }
+        end
+    end
+    local tools = {
+        { name = "app", backend_location = "/_vs_backend_res_app", mcp_app = true },
+        { name = "plain", backend_location = "/_vs_backend_res_plain", mcp_app = false },
+    }
+    local items = M._proxy_list_to_backends("resources/list", "resources",
+        { advertise_resources = true, tools = tools }, nil, "res_filter")
+    check(#items == 1 and calls["/_vs_backend_res_app"] == 1
+        and calls["/_vs_backend_res_plain"] == nil,
+        "resources/list asks only the backend with an MCP App tool")
+
+    reset_backend_list_cache()
+    calls = {}
+    items = M._proxy_list_to_backends("resources/list", "resources",
+        { advertise_resources = false, tools = {
+            { name = "plain", backend_location = "/_vs_backend_res_plain", mcp_app = false },
+        } }, nil, "res_none")
+    check(items ~= nil and #items == 0 and next(calls) == nil,
+        "with no MCP App tool, resources/list is empty and asks no backend")
+
+    reset_backend_list_cache()
+    calls = {}
+    items = M._proxy_list_to_backends("prompts/list", "prompts",
+        { advertise_resources = true, tools = tools }, nil, "res_prompts")
+    check(calls["/_vs_backend_res_app"] == 1 and calls["/_vs_backend_res_plain"] == 1,
+        "prompts/list still asks every backend")
+
+    reset_backend_list_cache()
+    calls = {}
+    items = M._proxy_list_to_backends("resources/list", "resources",
+        { tools = tools }, nil, "res_old_mapping")
+    check(#items == 2 and calls["/_vs_backend_res_plain"] == 1,
+        "a mapping written before the flag existed still asks every backend")
     capture_handler = nil
 end
 
