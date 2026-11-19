@@ -15,16 +15,23 @@ https://claude.com/docs/connectors/building/mcp-apps/troubleshooting
 
 import json
 import logging
+import secrets
+from collections.abc import Mapping
 from typing import Any
+from urllib.parse import urlsplit
 
 from registry.common.mcp_apps_ui_domain import (
     CLAUDE_UI_DOMAIN_SUFFIX,
     claude_ui_domain,  # noqa: F401 - re-exported for server.py
-    gateway_public_origins,  # noqa: F401 - re-exported for server.py
 )
+from registry.common.request_origin import origin_of_url
 
 logger = logging.getLogger(__name__)
 
+# Only current nginx templates set this marker and replace the URL header.
+# The ordinary validation marker alone cannot authenticate these newer fields.
+CONNECTOR_BINDING_HEADER: str = "X-Mcp-Connector-Binding"
+CONNECTOR_URL_HEADER: str = "X-Mcp-Connector-URL"
 RESOURCES_READ_METHOD: str = "resources/read"
 SSE_DATA_PREFIX: str = "data:"
 
@@ -133,28 +140,29 @@ def _rewrite_sse_body(
     return "\n".join(out)
 
 
-def connector_url(
-    origin: str,
-    route_path: str,
-    query: str = "",
+def trusted_connector_url(
+    headers: Mapping[str, str],
+    marker_secret: str,
 ) -> str:
-    """Rebuild the URL the client connected to, as Claude hashes it.
+    """Read the exact public URL asserted by the selecting nginx location.
 
-    Claude hashes the exact string, so a trailing slash or a query string
-    changes the result and is kept as the client sent it.
-
-    Args:
-        origin: The gateway's public origin.
-        route_path: The path after the gateway origin, as nginx forwarded it
-            (for example "github/mcp").
-        query: The request's query string, without the "?".
-
-    Returns:
-        The full connector URL.
+    The location joins its configured public origin with the original request
+    URI before nginx rewrites the internal proxy path. Missing or old templates
+    leave the page unchanged rather than guessing a connector URL.
     """
-    url = f"{origin.rstrip('/')}/{route_path.lstrip('/')}"
-    if query:
-        url = f"{url}?{query}"
+    supplied_marker = headers.get(CONNECTOR_BINDING_HEADER, "")
+    if not marker_secret or not secrets.compare_digest(
+        supplied_marker.encode("utf-8"), marker_secret.encode("utf-8")
+    ):
+        return ""
+    url = headers.get(CONNECTOR_URL_HEADER, "")
+    if not url or any(ord(char) <= 32 or ord(char) == 127 for char in url):
+        return ""
+    if not origin_of_url(url):
+        return ""
+    parsed = urlsplit(url)
+    if parsed.fragment or "#" in url or not parsed.path.startswith("/"):
+        return ""
     return url
 
 

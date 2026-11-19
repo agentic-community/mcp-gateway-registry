@@ -197,6 +197,8 @@ RESERVED_CUSTOM_HEADER_NAMES: frozenset[str] = frozenset(
         "x-upstream-url",
         "x-body",
         "x-body-uninspectable",
+        "x-mcp-connector-binding",
+        "x-mcp-connector-url",
     }
 )
 

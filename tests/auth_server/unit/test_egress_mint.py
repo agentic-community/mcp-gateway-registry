@@ -842,6 +842,37 @@ class TestAttachMcpProxyTokenMarker:
         )
         assert "X-Internal-Token" in resp.headers
 
+    @pytest.mark.parametrize("connector_marker", ["s3cret", "wrong", ""])
+    def test_connector_url_requires_its_current_template_marker(
+        self, monkeypatch, connector_marker
+    ):
+        monkeypatch.setattr(server.settings, "auth_server_nginx_marker_secret", "s3cret")
+        response = _FakeResponse()
+        url = "https://gw.example/github-mcp/?x=%2F&x=%2f"
+        server._attach_mcp_proxy_token(
+            _FakeRequest(
+                {
+                    "X-Resolved-Upstream": "https://backend.example/mcp",
+                    "X-Validate-Source-Secret": "s3cret",
+                    "X-Validate-Binding-Secret": "s3cret",
+                    "X-Original-URL": url,
+                    "X-Registered-Server-Path": "/github-mcp",
+                    "X-Registered-Route-Mode": "direct",
+                    "X-Mcp-Connector-URL": url,
+                    "X-Mcp-Connector-Binding": connector_marker,
+                }
+            ),
+            response,
+            subject="alice",
+            scopes=["repo"],
+            server_name="github-mcp",
+        )
+        claims = _decode(response.headers["X-Internal-Token"])
+        if connector_marker == "s3cret":
+            assert claims["connector_url"] == url
+        else:
+            assert "connector_url" not in claims
+
     def test_virtual_nested_server_claim_keeps_full_registered_path(self, monkeypatch):
         monkeypatch.setattr(server.settings, "auth_server_nginx_marker_secret", "s3cret")
         resp = _FakeResponse()
