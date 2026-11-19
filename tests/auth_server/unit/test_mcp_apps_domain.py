@@ -21,9 +21,8 @@ from fastapi.testclient import TestClient  # noqa: E402
 import auth_server.server as server  # noqa: E402
 from auth_server.mcp_apps_domain import (  # noqa: E402
     claude_ui_domain,
-    connector_url,
-    gateway_public_origins,
     rewrite_ui_domains,
+    trusted_connector_url,
 )
 
 pytestmark = pytest.mark.unit
@@ -85,39 +84,49 @@ class TestHelpers:
         """The hash rule reproduces the value draw.io computes for its own URL."""
         assert claude_ui_domain(UPSTREAM_URL) == DRAWIO_DOMAIN
 
-    def test_connector_url_keeps_trailing_slash_and_query(self):
-        """Claude hashes the exact string, so both must survive."""
-        assert connector_url(GATEWAY_URL, "drawio/mcp/") == f"{GATEWAY_URL}/drawio/mcp/"
-        assert connector_url(GATEWAY_URL + "/", "/drawio/mcp", "a=1") == (
-            f"{GATEWAY_URL}/drawio/mcp?a=1"
+    @pytest.mark.parametrize("origin", ["http://gw.example:8080", GATEWAY_URL])
+    @pytest.mark.parametrize("uri", ["/drawio", "/drawio/", "/team/drawio?x=%2F&x=2"])
+    def test_connector_binding_keeps_exact_public_url(self, origin, uri):
+        url = origin + uri
+        assert (
+            trusted_connector_url(
+                {"X-Mcp-Connector-URL": url, "X-Mcp-Connector-Binding": "test-marker"},
+                "test-marker",
+            )
+            == url
         )
 
-    def test_public_origins_prefer_registry_url(self, monkeypatch):
-        """REGISTRY_URL comes first; any path in either setting is dropped."""
-        monkeypatch.setenv("REGISTRY_URL", "https://gw.example.com/registry")
-        monkeypatch.setenv("AUTH_SERVER_EXTERNAL_URL", "http://localhost:8888")
+    @pytest.mark.parametrize("marker", [None, "", "wrong"])
+    def test_original_headers_cannot_replace_connector_binding(self, marker):
+        headers = {
+            "X-Original-URI": "/spoofed",
+            "X-Original-URL": "https://spoofed.example/drawio",
+            "X-Validate-Binding-Secret": "test-marker",
+            "X-Validate-Source-Secret": "test-marker",
+            "X-Mcp-Connector-URL": GATEWAY_URL + "/spoofed",
+        }
+        if marker is not None:
+            headers["X-Mcp-Connector-Binding"] = marker
+        assert trusted_connector_url(headers, "test-marker") == ""
 
-        assert gateway_public_origins() == ["https://gw.example.com", "http://localhost:8888"]
-
-    def test_public_origins_empty_without_settings(self, monkeypatch):
-        """With neither setting there is no origin, so nothing is rewritten."""
-        monkeypatch.delenv("REGISTRY_URL", raising=False)
-        monkeypatch.delenv("AUTH_SERVER_EXTERNAL_URL", raising=False)
-
-        assert gateway_public_origins() == []
-
-    def test_keeps_a_value_already_right_for_a_configured_url(self):
-        """A backend value in keep_domains is not replaced."""
-        body = json.dumps(_page_reply("right.claudemcpcontent.com")).encode()
-
-        result = rewrite_ui_domains(
-            body,
-            is_sse=False,
-            new_domain="other.claudemcpcontent.com",
-            keep_domains=frozenset({"right.claudemcpcontent.com"}),
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://user:pass@gw.example/app",
+            "https://gw.example/app#fragment",
+            "https://gw.example/app\nignored",
+            "https://gw.example:bad/app",
+            "//gw.example/app",
+        ],
+    )
+    def test_invalid_connector_url_is_not_signed(self, url):
+        assert (
+            trusted_connector_url(
+                {"X-Mcp-Connector-URL": url, "X-Mcp-Connector-Binding": "test-marker"},
+                "test-marker",
+            )
+            == ""
         )
-
-        assert result is None
 
     def test_sse_rewrites_past_a_non_json_data_line(self):
         """One unreadable data line is kept and the reply event is still rewritten."""
@@ -210,7 +219,7 @@ def _patch_scope_repo_allow_all():
     return patch("auth_server.server.get_scope_repository", return_value=repo)
 
 
-def _proxy_token_headers() -> dict:
+def _proxy_token_headers(connector: str = "") -> dict:
     """Mint the X-Internal-Token nginx's /validate hop would forward."""
     from auth_server.internal_request_token import mint_mcp_proxy_token
 
@@ -219,6 +228,7 @@ def _proxy_token_headers() -> dict:
         scopes=["admin:all"],
         server_name=SERVER_NAME,
         upstream_url=UPSTREAM_URL,
+        connector_url=connector,
     )
     return {
         "X-Internal-Token": token,
@@ -238,6 +248,8 @@ class TestMcpProxyRewritesUiDomain:
         params: dict | None = None,
         status_code: int = 200,
         path_suffix: str = "/mcp",
+        connector: str | None = None,
+        extra_headers: dict | None = None,
     ):
         with (
             _patch_upstream(_upstream(upstream_body, content_type, status_code)),
@@ -256,7 +268,14 @@ class TestMcpProxyRewritesUiDomain:
                     "method": method,
                     "params": params or {"uri": "ui://drawio/mcp-app.html"},
                 },
-                headers=_proxy_token_headers(),
+                headers={
+                    **_proxy_token_headers(
+                        GATEWAY_URL + "/" + SERVER_NAME + path_suffix
+                        if connector is None
+                        else connector
+                    ),
+                    **(extra_headers or {}),
+                },
             )
 
     @pytest.fixture(autouse=True)
@@ -299,15 +318,6 @@ class TestMcpProxyRewritesUiDomain:
 
         assert response.content == body
 
-    def test_no_public_url_configured_leaves_reply_unchanged(self, monkeypatch):
-        """Without a configured gateway URL there is nothing to hash."""
-        monkeypatch.delenv("REGISTRY_URL", raising=False)
-        body = _sse(_page_reply(DRAWIO_DOMAIN))
-
-        response = self._post(body)
-
-        assert response.content == body
-
     def test_error_reply_is_unchanged(self):
         """A non-2xx resources/read reply is forwarded as the backend sent it."""
         body = json.dumps(_page_reply(DRAWIO_DOMAIN)).encode()
@@ -316,12 +326,70 @@ class TestMcpProxyRewritesUiDomain:
 
         assert response.content == body
 
-    def test_hash_uses_the_forwarded_path_and_query(self):
+    def test_hash_uses_the_signed_path_and_query(self):
         """A trailing slash and a query string are part of the hashed URL."""
         response = self._post(_sse(_page_reply(DRAWIO_DOMAIN)), path_suffix="/mcp/?v=2")
 
         expected = claude_ui_domain(f"{GATEWAY_URL}/{SERVER_NAME}/mcp/?v=2")
         assert _domain_in(response.content) == expected
+
+    @pytest.mark.parametrize("origin", ["http://gw.example:8080", GATEWAY_URL])
+    @pytest.mark.parametrize(
+        "public_uri",
+        [
+            "/drawio",
+            "/drawio/",
+            "/team/drawio",
+            "/team/drawio/?x=%2F&x=%2f",
+            "/team/draw%69o/?",
+        ],
+    )
+    def test_public_connector_survives_internal_route_rewrite(
+        self, origin, public_uri, monkeypatch
+    ):
+        monkeypatch.setenv("REGISTRY_URL", "http://registry.ns.svc.cluster.local:8000")
+        monkeypatch.setenv("AUTH_SERVER_EXTERNAL_URL", GATEWAY_URL)
+        url = origin + public_uri
+        response = self._post(_sse(_page_reply(DRAWIO_DOMAIN)), path_suffix="/", connector=url)
+        assert response.status_code == 200
+        assert _domain_in(response.content) == claude_ui_domain(url)
+
+    def test_bare_connector_domain_is_kept(self):
+        domain = claude_ui_domain(GATEWAY_URL + "/drawio")
+        body = _sse(_page_reply(domain))
+        response = self._post(body, path_suffix="/", connector=GATEWAY_URL + "/drawio")
+        assert response.content == body
+
+    @pytest.mark.parametrize("connector", ["", GATEWAY_URL + "/team/drawio/?x=%2F"])
+    def test_proxy_ignores_unsigned_connector_headers(self, connector):
+        body = _sse(_page_reply(DRAWIO_DOMAIN))
+        response = self._post(
+            body,
+            connector=connector,
+            extra_headers={
+                "X-Original-URI": "/spoofed",
+                "X-Mcp-Connector-URL": GATEWAY_URL + "/spoofed",
+                "X-Mcp-Connector-Binding": "forged-marker",
+            },
+        )
+        assert response.status_code == 200
+        if connector:
+            assert _domain_in(response.content) == claude_ui_domain(connector)
+        else:
+            assert response.content == body
+
+    def test_virtual_token_omits_direct_connector(self):
+        from auth_server.internal_request_token import _decode_internal_token, mint_mcp_proxy_token
+
+        token = mint_mcp_proxy_token(
+            subject="test-user",
+            scopes=["admin:all"],
+            server_name=SERVER_NAME,
+            upstream_url=UPSTREAM_URL,
+            virtual_backend=True,
+            connector_url=GATEWAY_URL + "/drawio",
+        )
+        assert "connector_url" not in _decode_internal_token(token, "mcp-proxy")
 
 
 class TestRewriteGate:

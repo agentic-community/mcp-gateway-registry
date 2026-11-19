@@ -77,6 +77,7 @@ def nginx_service():
             mock_settings.deployment_mode.value = "with-gateway"
             mock_settings.nginx_config_path = "/etc/nginx/conf.d/nginx_rev_proxy.conf"
             mock_settings.auth_server_url = "http://auth-server:8888"
+            mock_settings.registry_url = "https://gateway.example.com"
             mock_settings.auth_server_nginx_marker_secret = (
                 "test-nginx-marker-secret-0123456789abcdef"
             )
@@ -524,6 +525,7 @@ async def test_a2a_blocks_emitted_when_flag_enabled(
         mock_settings.a2a_reverse_proxy_effective = True
         mock_settings.nginx_config_path = "/etc/nginx/conf.d/nginx_rev_proxy.conf"
         mock_settings.auth_server_url = "http://auth-server:8888"
+        mock_settings.registry_url = "https://gateway.example.com"
         mock_settings.auth_server_nginx_marker_secret = "test-nginx-marker-secret-0123456789abcdef"
         with patch.object(nginx_service.nginx_template_path, "exists", return_value=True):
             with patch("builtins.open", mock_open(read_data=template_content)):
@@ -559,6 +561,7 @@ async def test_a2a_blocks_skipped_when_flag_disabled(
         mock_settings.a2a_reverse_proxy_effective = False
         mock_settings.nginx_config_path = "/etc/nginx/conf.d/nginx_rev_proxy.conf"
         mock_settings.auth_server_url = "http://auth-server:8888"
+        mock_settings.registry_url = "https://gateway.example.com"
         mock_settings.auth_server_nginx_marker_secret = "test-nginx-marker-secret-0123456789abcdef"
         with patch.object(nginx_service.nginx_template_path, "exists", return_value=True):
             with patch("builtins.open", mock_open(read_data=template_content)):
@@ -610,6 +613,7 @@ async def test_enabling_agent_changes_rendered_config_hash(
             mock_settings.a2a_reverse_proxy_enabled = True
             mock_settings.nginx_config_path = "/etc/nginx/conf.d/nginx_rev_proxy.conf"
             mock_settings.auth_server_url = "http://auth-server:8888"
+            mock_settings.registry_url = "https://gateway.example.com"
             mock_settings.auth_server_nginx_marker_secret = (
                 "test-nginx-marker-secret-0123456789abcdef"
             )

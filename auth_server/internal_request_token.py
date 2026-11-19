@@ -230,6 +230,7 @@ def mint_mcp_proxy_token(
     version_id: str = "",
     virtual_backend: bool = False,
     obo_subject_sha256: str = "",
+    connector_url: str = "",
 ) -> str:
     """Mint the per-request /mcp-proxy token in /validate's 200 path.
 
@@ -275,6 +276,10 @@ def mint_mcp_proxy_token(
     self-signed, static-credential and non-OBO-IdP callers), which disables the
     cache for that request.
 
+    ``connector_url`` is the exact public URL asserted by a current nginx
+    location under its connector-binding marker. It is absent for virtual
+    backend hops and older templates, which do not rewrite MCP Apps domains.
+
     Raises:
         ValueError: The subject is empty or ``SECRET_KEY`` is unset.
         InternalTokenTooLargeError: The minted token exceeds
@@ -296,6 +301,8 @@ def mint_mcp_proxy_token(
         extra_claims["audit_identity"] = audit_identity
     if obo_subject_sha256:
         extra_claims["obo_subject_sha256"] = obo_subject_sha256
+    if connector_url and not virtual_backend:
+        extra_claims["connector_url"] = connector_url
     return _mint_internal_token(
         audience=MCP_PROXY_AUDIENCE,
         subject=subject,
