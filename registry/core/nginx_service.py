@@ -3413,7 +3413,8 @@ class NginxConfigService:
         # client discovers the per-server resource that matches its connection URL
         # and the Entra App ID URI, not the bare-origin gateway PRM Entra rejects).
         # Override the default global $mcp_resource_metadata in this location only.
-        # Keycloak/Cognito 3LO keeps the global PRM (unchanged working behavior).
+        # Keycloak/Cognito 3LO keeps the global PRM (unchanged working behavior)
+        # unless PER_SERVER_PRM_ALL_PROVIDERS is on, which covers every server.
         # RFC 9728 clients follow the resource_metadata from the 401 header in
         # preference to guessing.
         from registry.api.wellknown_routes import server_needs_per_server_prm

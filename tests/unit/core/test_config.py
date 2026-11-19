@@ -30,6 +30,7 @@ class TestSettingsInstantiation:
         can assert the rest of the defaults.
         """
         monkeypatch.delenv("AUTH_SERVER_URL", raising=False)
+        monkeypatch.delenv("PER_SERVER_PRM_ALL_PROVIDERS", raising=False)
         monkeypatch.setenv("SECRET_KEY", "test-key-for-defaults-at-least-32-bytes-long")
         monkeypatch.chdir(tmp_path)
 
@@ -43,6 +44,17 @@ class TestSettingsInstantiation:
         assert settings.session_cookie_domain is None
         assert settings.auth_server_url == "http://localhost:8888"
         assert settings.auth_server_external_url == "http://localhost:8888"
+        # Opt-in: the per-server PRM stays limited to the historical gating
+        # unless a deployment sets PER_SERVER_PRM_ALL_PROVIDERS.
+        assert settings.per_server_prm_all_providers is False
+
+    def test_per_server_prm_all_providers_reads_env(self, monkeypatch, tmp_path) -> None:
+        """PER_SERVER_PRM_ALL_PROVIDERS=true turns the opt-in on."""
+        monkeypatch.setenv("SECRET_KEY", "test-key-for-defaults-at-least-32-bytes-long")
+        monkeypatch.setenv("PER_SERVER_PRM_ALL_PROVIDERS", "true")
+        monkeypatch.chdir(tmp_path)
+
+        assert Settings().per_server_prm_all_providers is True
 
     def test_settings_embeddings_default_values(self) -> None:
         """Test embeddings-related default values."""
