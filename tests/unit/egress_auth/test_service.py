@@ -1368,3 +1368,127 @@ def _extract_state(authorize_url: str) -> str:
     from urllib.parse import parse_qs, urlparse
 
     return parse_qs(urlparse(authorize_url).query)["state"][0]
+
+
+def _expired(refresh_token: str) -> StoredToken:
+    return StoredToken(
+        access_token="at_old",
+        refresh_token=refresh_token,
+        expires_at="2000-01-01T00:00:00+00:00",
+        client_id="Iv1.testclient",
+        bound_upstreams=[BOUND],
+    )
+
+
+def _rotated() -> StoredToken:
+    return StoredToken(
+        access_token="at_rotated",
+        refresh_token="rt_rotated",
+        expires_at="2999-01-01T00:00:00+00:00",
+        client_id="Iv1.testclient",
+        bound_upstreams=[BOUND],
+    )
+
+
+class _StaleReadStore(_InMemoryStore):
+    """Returns the previous value for a few reads after a rotation, like Secrets Manager."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._stale: StoredToken | None = None
+        self._stale_reads = 0
+
+    def rotate_behind(self, key, token: StoredToken, stale_reads: int) -> None:
+        self._stale = self._data.get(key)
+        self._stale_reads = stale_reads
+        self._data[key] = token
+
+    async def get_token(self, auth_method, user_id, provider, server_path, *, purpose):
+        if self._stale_reads:
+            self._stale_reads -= 1
+            return self._stale
+        return await super().get_token(auth_method, user_id, provider, server_path, purpose=purpose)
+
+
+_KEY = (keys.EGRESS_PURPOSE, "oauth2", "alice", "github", "/github-mcp")
+
+
+class TestDeadRefreshAfterRotation:
+    """A refresher that read a stale entry must not overwrite the rotated one."""
+
+    @pytest.fixture(autouse=True)
+    def _no_backoff(self, monkeypatch):
+        # raising=False: on code without the fix, the tests fail on their assertions.
+        monkeypatch.setattr(service, "_DEAD_REFRESH_REREAD_BACKOFF_BASE", 0, raising=False)
+
+    async def _vend(self, svc, egress_oauth):
+        return await svc.get_valid_token(
+            "oauth2",
+            "alice",
+            "/github-mcp",
+            egress_oauth,
+            requested_upstream=BOUND,
+            purpose=keys.EGRESS_PURPOSE,
+        )
+
+    async def test_keeps_the_entry_another_refresher_rotated(self, svc, egress_oauth, monkeypatch):
+        svc._store._data[_KEY] = _expired("rt_old")
+
+        async def rotated_elsewhere(cfg, data, headers):
+            svc._store._data[_KEY] = _rotated()
+            raise oauth_engine.DeadRefreshTokenError("invalid_grant")
+
+        monkeypatch.setattr(oauth_engine, "_post_token", rotated_elsewhere)
+
+        assert await self._vend(svc, egress_oauth) == "at_rotated"
+        assert svc._store._data[_KEY] == _rotated()
+
+    async def test_waits_out_a_stale_read_of_the_rotated_entry(self, egress_oauth, monkeypatch):
+        store = _StaleReadStore()
+        svc = EgressAuthService(secret_store=store, callback_base_url="https://gw.example")
+        store._data[_KEY] = _expired("rt_old")
+
+        async def rotated_elsewhere(cfg, data, headers):
+            store.rotate_behind(_KEY, _rotated(), stale_reads=3)
+            raise oauth_engine.DeadRefreshTokenError("invalid_grant")
+
+        monkeypatch.setattr(oauth_engine, "_post_token", rotated_elsewhere)
+
+        assert await self._vend(svc, egress_oauth) == "at_rotated"
+        assert store._data[_KEY] == _rotated()
+
+    async def test_marks_failed_when_the_entry_still_holds_the_rejected_token(
+        self, svc, egress_oauth, monkeypatch
+    ):
+        svc._store._data[_KEY] = _expired("rt_dead")
+        reads = []
+        get_token = svc._store.get_token
+
+        async def counting_get(*args, **kwargs):
+            reads.append(1)
+            return await get_token(*args, **kwargs)
+
+        async def dead_post(cfg, data, headers):
+            raise oauth_engine.DeadRefreshTokenError("invalid_grant")
+
+        monkeypatch.setattr(svc._store, "get_token", counting_get)
+        monkeypatch.setattr(oauth_engine, "_post_token", dead_post)
+
+        assert await self._vend(svc, egress_oauth) is None
+        assert svc._store._data[_KEY].status == "refresh_failed"
+        # first read, post-acquire re-read, then every re-read before giving up
+        assert len(reads) == 2 + service._DEAD_REFRESH_REREAD_ATTEMPTS
+
+    async def test_does_not_recreate_an_entry_disconnected_meanwhile(
+        self, svc, egress_oauth, monkeypatch
+    ):
+        svc._store._data[_KEY] = _expired("rt_old")
+
+        async def disconnected(cfg, data, headers):
+            del svc._store._data[_KEY]
+            raise oauth_engine.DeadRefreshTokenError("invalid_grant")
+
+        monkeypatch.setattr(oauth_engine, "_post_token", disconnected)
+
+        assert await self._vend(svc, egress_oauth) is None
+        assert _KEY not in svc._store._data
