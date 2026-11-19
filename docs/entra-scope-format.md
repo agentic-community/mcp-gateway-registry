@@ -55,6 +55,11 @@ ENTRA_APPLICATION_ID_URI=api://mcp-gateway   # your custom URI
 inbound validation path (see below), so setting it keeps the outbound
 advertisement and inbound acceptance aligned.
 
+The auth server also uses `ENTRA_APPLICATION_ID_URI` as the resource for its own client-credentials token request.
+With a registered HTTPS URI, the default M2M scope becomes `https://<gateway-host>/.default`.
+If the setting is absent, it uses `api://<ENTRA_CLIENT_ID>/.default`.
+Calls that override the client ID for another app use that app's `api://<client_id>/.default` unless they supply a scope.
+
 ## Audience acceptance is asymmetric by design
 
 The two directions are deliberately not symmetric:

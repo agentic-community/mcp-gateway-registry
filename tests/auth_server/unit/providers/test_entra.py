@@ -1487,6 +1487,36 @@ class TestAcceptedAudiences:
         assert auds == ["app-guid", "api://app-guid"]
 
 
+class TestM2MDefaultScope:
+    """The default M2M resource follows the configured app, not an unused GUID URI."""
+
+    @pytest.mark.parametrize(
+        ("application_id_uri", "client_id", "scope", "expected"),
+        [
+            ("https://gateway.example.com", None, None, "https://gateway.example.com/.default"),
+            ("api://custom-app/", "app-guid", None, "api://custom-app/.default"),
+            (None, None, None, "api://app-guid/.default"),
+            ("https://gateway.example.com", "other-app", None, "api://other-app/.default"),
+            ("https://gateway.example.com", None, "api://other/.default", "api://other/.default"),
+        ],
+    )
+    def test_token_request_targets_the_selected_resource(
+        self,
+        monkeypatch,
+        application_id_uri,
+        client_id,
+        scope,
+        expected,
+    ):
+        provider = _entra(monkeypatch, application_id_uri=application_id_uri)
+        with patch("auth_server.providers.entra._post_entra_token") as send:
+            send.return_value.json.return_value = {"access_token": "issued"}
+            result = provider.get_m2m_token(client_id=client_id, scope=scope)
+
+        assert result == {"access_token": "issued"}
+        assert send.call_args.args[1]["scope"] == expected
+
+
 class TestCredentialedTokenTransport:
     """Provider token methods cannot send secrets to an unsafe destination."""
 

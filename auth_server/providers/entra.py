@@ -1404,7 +1404,9 @@ class EntraIdProvider(AuthProvider):
         Args:
             client_id: Optional client ID (uses default if not provided)
             client_secret: Optional client secret (uses default if not provided)
-            scope: Optional scope for the token (defaults to .default)
+            scope: Optional scope for the token. Defaults to the configured
+                Application ID URI for this gateway app or ``api://<client_id>``
+                for another app, followed by ``/.default``.
 
         Returns:
             Dictionary containing token response:
@@ -1418,9 +1420,15 @@ class EntraIdProvider(AuthProvider):
         try:
             logger.debug("Requesting M2M token using client credentials")
 
-            # Default scope for Entra ID M2M tokens
+            # Use the gateway's registered resource, which may not be api://<client_id>.
+            # A different client ID must not inherit this gateway's Application ID URI.
             if not scope:
-                scope = f"api://{client_id or self.client_id}/.default"
+                resource = (
+                    self.application_id_uri
+                    if self.application_id_uri and (not client_id or client_id == self.client_id)
+                    else f"api://{client_id or self.client_id}"
+                )
+                scope = f"{resource}/.default"
 
             data = {
                 "grant_type": "client_credentials",
