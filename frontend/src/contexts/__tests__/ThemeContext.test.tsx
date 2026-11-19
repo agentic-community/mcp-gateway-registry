@@ -1,5 +1,7 @@
 import React from 'react';
 import { renderHook, act } from '@testing-library/react';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { ThemeProvider, useTheme } from '../ThemeContext';
 import { BrandingManifest, EMPTY_MANIFEST } from '../../branding/manifest';
 
@@ -13,6 +15,10 @@ const wrapper = ({ children }: { children: React.ReactNode }) => (
 );
 
 const root = () => document.documentElement;
+
+// Execute the actual pre-paint script rather than checking its source text.
+const bootstrap = readFileSync(resolve(__dirname, '../../../index.html'), 'utf8')
+  .match(/<script>([\s\S]*?)<\/script>/)![1];
 
 /** Install a matchMedia stub reporting the given system dark-mode preference. */
 function _mockMatchMedia(prefersDark: boolean) {
@@ -101,7 +107,6 @@ describe('ThemeContext', () => {
 
     act(() => result.current.setPreference('system'));
     expect(result.current.theme).toBe('light');
-    expect(localStorage.getItem('theme')).toBeNull();
 
     act(() => emit(true));
     expect(result.current.theme).toBe('dark');
@@ -117,6 +122,58 @@ describe('ThemeContext', () => {
     expect(result.current.theme).toBe('dark');
   });
 
+
+  it('keeps an explicit System choice over the brand default across reloads', () => {
+    const emit = _mockMatchMedia(true);
+    mockManifest = { ...EMPTY_MANIFEST, defaultMode: 'light' };
+    const first = renderHook(() => useTheme(), { wrapper });
+    expect(first.result.current.theme).toBe('light');
+
+    act(() => first.result.current.setPreference('system'));
+    expect(first.result.current.preference).toBe('system');
+    expect(first.result.current.theme).toBe('dark');
+    first.unmount();
+
+    const restored = renderHook(() => useTheme(), { wrapper });
+    expect(restored.result.current.preference).toBe('system');
+    expect(restored.result.current.theme).toBe('dark');
+    act(() => emit(false));
+    expect(restored.result.current.theme).toBe('light');
+    act(() => emit(true));
+    expect(root().classList.contains('dark')).toBe(true);
+  });
+
+  it('applies a lock while preserving the explicit System choice for its removal', () => {
+    _mockMatchMedia(true);
+    localStorage.setItem('theme', 'system');
+    mockManifest = { ...EMPTY_MANIFEST, defaultMode: 'light', lockMode: 'light' };
+    const { result, rerender } = renderHook(() => useTheme(), { wrapper });
+    expect(result.current.theme).toBe('light');
+    mockManifest = { ...EMPTY_MANIFEST, defaultMode: 'light' };
+    rerender();
+    expect(result.current.preference).toBe('system');
+    expect(result.current.theme).toBe('dark');
+  });
+
+  it.each([
+    { saved: null, locked: false, dark: false },
+    { saved: 'invalid', locked: false, dark: false },
+    { saved: 'system', locked: false, dark: true },
+    { saved: 'system', locked: true, dark: false },
+  ])('matches pre-paint mode for $saved, lock $locked', ({ saved, locked, dark }) => {
+    _mockMatchMedia(true);
+    mockManifest = {
+      ...EMPTY_MANIFEST,
+      defaultMode: 'light',
+      ...(locked ? { lockMode: 'light' as const } : {}),
+    };
+    localStorage.setItem('branding', JSON.stringify(mockManifest));
+    if (saved !== null) localStorage.setItem('theme', saved);
+    window.eval(bootstrap);
+    expect(root().classList.contains('dark')).toBe(dark);
+    const { result } = renderHook(() => useTheme(), { wrapper });
+    expect(result.current.theme).toBe(dark ? 'dark' : 'light');
+  });
   it('lets a branding lock override a saved mode', () => {
     localStorage.setItem('theme', 'dark');
     mockManifest = { ...EMPTY_MANIFEST, lockMode: 'light' };

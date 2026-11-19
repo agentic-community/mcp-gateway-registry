@@ -21,7 +21,11 @@
         try { brand = JSON.parse(read('branding') || '{}') || {}; } catch (e) {}
         var themes = Array.isArray(brand.themes) ? brand.themes : [];
 
-        var mode = brand.lockMode || read('theme') || brand.defaultMode;
+        var savedMode = read('theme');
+        if (savedMode !== 'light' && savedMode !== 'dark' && savedMode !== 'system') {
+          savedMode = null;
+        }
+        var mode = brand.lockMode || savedMode || brand.defaultMode;
         if (mode !== 'light' && mode !== 'dark') {
           mode = window.matchMedia && !window.matchMedia('(prefers-color-scheme: dark)').matches
             ? 'light'

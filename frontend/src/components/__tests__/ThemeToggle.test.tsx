@@ -38,13 +38,16 @@ describe('ThemeToggle', () => {
     expect(localStorage.getItem('theme')).toBe('light');
   });
 
-  it('returns to following the system and forgets the saved choice', () => {
+  it('keeps an explicit System choice over a branding default after remount', () => {
     localStorage.setItem('theme', 'light');
-    renderToggle();
+    mockManifest = { ...EMPTY_MANIFEST, defaultMode: 'light' };
+    const first = renderToggle();
     choose('System');
 
     expect(document.documentElement.classList.contains('dark')).toBe(true);
-    expect(localStorage.getItem('theme')).toBeNull();
+    first.unmount();
+    renderToggle();
+    expect(document.documentElement.classList.contains('dark')).toBe(true);
   });
 
   it('toggles the high-contrast palette without changing the mode', () => {

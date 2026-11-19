@@ -16,9 +16,14 @@ was wrong and how to fix it. An empty ``UI_BRANDING_ARCHIVE_B64`` is a no-op.
 
 import base64
 import binascii
+import fcntl
+import hashlib
 import io
+import json
 import logging
 import os
+import secrets
+import stat
 import sys
 import tarfile
 import zlib
@@ -47,6 +52,8 @@ DEFAULT_BRANDING_DIR: str = "/app/branding"
 
 _FILE_MODE: int = 0o644
 _REGULAR_TYPES: frozenset[bytes] = frozenset({tarfile.REGTYPE, tarfile.AREGTYPE})
+_OWNERSHIP_FILE: str = ".branding-archive.json"
+_OWNERSHIP_MAX_BYTES: int = 16 * 1024
 # The archive root entry written by `tar -C <folder> .` ("./", which tarfile
 # reports as ".").
 _ROOT_ENTRY_NAMES: frozenset[str] = frozenset({".", "./"})
@@ -295,88 +302,225 @@ def _read_validated_members(
     return contents
 
 
-def _check_target_dir(
+def _open_directory_chain(
     target_dir: Path,
-) -> None:
-    """Make sure the target folder exists, is writable and holds no files.
-
-    Hidden entries are ignored: a Kubernetes ConfigMap mount with no keys holds
-    only ``..data`` style entries, and the repo's compose folder holds
-    ``.gitkeep``. Any visible entry means branding files already come from a
-    mounted folder.
-
-    Args:
-        target_dir: The branding folder (UI_BRANDING_DIR).
-
-    Raises:
-        BrandingArchiveError: If the folder cannot be used.
-    """
+) -> int:
+    """Open each component before creating children; never follow untrusted links."""
+    parts = list(target_dir.absolute().parts[1:])
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    fd = os.open("/", flags)
+    links = 0
+    trusted_root = True
     try:
-        target_dir.mkdir(parents=True, exist_ok=True)
-    except OSError as e:
-        raise BrandingArchiveError(
-            f"{DIR_ENV_VAR} ({target_dir}) could not be created ({e.strerror}). Point "
-            f"{DIR_ENV_VAR} at a writable folder or unset {ARCHIVE_ENV_VAR}."
-        ) from e
-    if not target_dir.is_dir():
-        raise BrandingArchiveError(
-            f"{DIR_ENV_VAR} ({target_dir}) is not a directory. Point {DIR_ENV_VAR} at a folder."
-        )
+        while parts:
+            name = parts.pop(0)
+            if name in {".", ""}:
+                continue
+            if name == "..":
+                raise BrandingArchiveError(f"{DIR_ENV_VAR} must not contain parent traversal.")
+            parent = os.fstat(fd)
+            shared = parent.st_mode & 0o022
+            sticky_root = parent.st_uid == 0 and parent.st_mode & stat.S_ISVTX
+            if parent.st_uid not in {0, os.geteuid()} or (shared and not sticky_root):
+                raise BrandingArchiveError(
+                    f"{DIR_ENV_VAR} has an untrusted writable ancestor; use a private folder."
+                )
+            trusted_root = trusted_root and parent.st_uid == 0 and not shared
+            try:
+                info = os.stat(name, dir_fd=fd, follow_symlinks=False)
+            except FileNotFoundError:
+                try:
+                    os.mkdir(name, mode=0o755, dir_fd=fd)
+                except FileExistsError:
+                    # Another startup may create this component before either
+                    # writer acquires the target lock. The no-follow open below
+                    # still rejects a file or symlink in its place.
+                    pass
+            else:
+                if stat.S_ISLNK(info.st_mode):
+                    # macOS /var and /tmp are root-owned aliases. Only the
+                    # root-controlled prefix may contain links; after entering
+                    # a user-owned or shared tree every component is no-follow.
+                    if not trusted_root or info.st_uid != 0 or not parts or links >= 40:
+                        raise BrandingArchiveError(
+                            f"{DIR_ENV_VAR} contains a symlink; use its canonical directory path."
+                        )
+                    linked = Path(os.readlink(name, dir_fd=fd))
+                    if linked.is_absolute():
+                        os.close(fd)
+                        fd = os.open("/", flags)
+                        parts = list(linked.parts[1:]) + parts
+                    else:
+                        parts = list(linked.parts) + parts
+                    links += 1
+                    continue
+            child = os.open(name, flags, dir_fd=fd)
+            os.close(fd)
+            fd = child
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
 
-    existing = sorted(
-        entry.name for entry in target_dir.iterdir() if not entry.name.startswith(".")
+
+def _open_target_dir(
+    target_dir: Path,
+) -> int:
+    """Pin a private, writable target directory and serialize startup writers."""
+    fd = _open_directory_chain(target_dir)
+    try:
+        info = os.fstat(fd)
+        if info.st_uid != os.geteuid() or info.st_mode & 0o022:
+            raise BrandingArchiveError(
+                f"{DIR_ENV_VAR} ({target_dir}) must be owned by the registry user and "
+                "not writable by other users. Use a dedicated writable branding folder."
+            )
+        if not info.st_mode & 0o200 or not os.access(target_dir, os.W_OK):
+            raise BrandingArchiveError(
+                f"{DIR_ENV_VAR} ({target_dir}) is read-only. Use a writable folder or "
+                f"unset {ARCHIVE_ENV_VAR}."
+            )
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _read_owned_file(
+    directory_fd: int,
+    name: str,
+    limit: int,
+    expected_hash: str,
+) -> bytes:
+    """Read a bounded, exclusively owned regular file without following links."""
+    fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory_fd)
+    with os.fdopen(fd, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.geteuid()
+            or info.st_mode & 0o022
+            or info.st_size > limit
+        ):
+            raise BrandingArchiveError(f"Branding ownership cannot be verified for {name}.")
+        data = stream.read(limit + 1)
+        current = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        if len(data) > limit or (info.st_dev, info.st_ino) != (current.st_dev, current.st_ino):
+            raise BrandingArchiveError(f"Branding file changed while being read: {name}.")
+        if info.st_nlink != 1:
+            # A stop between link() and unlink() leaves the complete file and
+            # its private staging name. Only discard that exact verified alias.
+            aliases = [
+                entry
+                for entry in os.listdir(directory_fd)
+                if entry.startswith(".branding-write-")
+                and (alias := os.stat(entry, dir_fd=directory_fd, follow_symlinks=False)).st_ino
+                == info.st_ino
+                and alias.st_dev == info.st_dev
+            ]
+            if (
+                info.st_nlink != 2
+                or len(aliases) != 1
+                or hashlib.sha256(data).hexdigest() != expected_hash
+            ):
+                raise BrandingArchiveError(f"Branding ownership cannot be verified for {name}.")
+            os.unlink(aliases[0], dir_fd=directory_fd)
+            os.fsync(directory_fd)
+        return data
+
+
+def _publish_file(
+    directory_fd: int,
+    name: str,
+    data: bytes,
+    mode: int,
+) -> None:
+    """Publish a complete file atomically, never replacing an existing entry."""
+    temporary = f".branding-write-{secrets.token_hex(16)}"
+    fd = os.open(
+        temporary,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+        0o600,
+        dir_fd=directory_fd,
     )
-    if existing:
-        shown = ", ".join(existing[:5]) + (", ..." if len(existing) > 5 else "")
-        raise BrandingArchiveError(
-            f"Branding is configured twice: {ARCHIVE_ENV_VAR} is set and {DIR_ENV_VAR} "
-            f"({target_dir}) already contains files ({shown}), for example from a "
-            f"mounted ConfigMap or folder. Use one source: unset {ARCHIVE_ENV_VAR}, or "
-            "remove the mounted branding files."
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fchmod(stream.fileno(), mode)
+            os.fsync(stream.fileno())
+        os.link(
+            temporary,
+            name,
+            src_dir_fd=directory_fd,
+            dst_dir_fd=directory_fd,
+            follow_symlinks=False,
         )
-
-    if not os.access(target_dir, os.W_OK):
-        raise BrandingArchiveError(
-            f"{DIR_ENV_VAR} ({target_dir}) is read-only, which means it is a mounted "
-            f"folder. Put the branding files in the mounted folder or unset "
-            f"{ARCHIVE_ENV_VAR}."
-        )
+    finally:
+        os.unlink(temporary, dir_fd=directory_fd)
+    os.fsync(directory_fd)
 
 
 def _write_files(
+    directory_fd: int,
     target_dir: Path,
     contents: dict[str, bytes],
 ) -> None:
-    """Write the validated files, removing any partial output on failure.
-
-    Files are created exclusively (never overwritten, never through a symlink)
-    with mode 0o644.
-
-    Args:
-        target_dir: The branding folder.
-        contents: Mapping of validated file name to contents.
-
-    Raises:
-        BrandingArchiveError: If a file cannot be written.
-    """
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
-    written: list[Path] = []
-    try:
-        for name, data in contents.items():
-            path = target_dir / name
-            fd = os.open(path, flags, _FILE_MODE)
-            written.append(path)
-            with os.fdopen(fd, "wb") as f:
-                os.fchmod(f.fileno(), _FILE_MODE)
-                f.write(data)
-    except OSError as e:
-        for path in written:
-            path.unlink(missing_ok=True)
+    """Verify ownership before resuming an interrupted or completed extraction."""
+    expected = {name: hashlib.sha256(data).hexdigest() for name, data in contents.items()}
+    marker = {"version": 1, "files": expected}
+    marker_bytes = json.dumps(marker, sort_keys=True).encode()
+    entries = os.listdir(directory_fd)
+    visible = {name for name in entries if not name.startswith(".")}
+    if _OWNERSHIP_FILE in entries:
+        try:
+            owned = json.loads(
+                _read_owned_file(
+                    directory_fd,
+                    _OWNERSHIP_FILE,
+                    _OWNERSHIP_MAX_BYTES,
+                    hashlib.sha256(marker_bytes).hexdigest(),
+                )
+            )
+        except (ValueError, UnicodeError) as e:
+            raise BrandingArchiveError(
+                "The branding ownership marker is invalid; use a new empty folder."
+            ) from e
+        if owned != marker:
+            raise BrandingArchiveError(
+                f"{ARCHIVE_ENV_VAR} differs from the archive recorded in {DIR_ENV_VAR} "
+                f"({target_dir}). To change the archive, point {DIR_ENV_VAR} at a new "
+                "empty writable folder; existing branding files are not replaced."
+            )
+        unexpected = visible - expected.keys()
+    else:
+        unexpected = visible
+    if unexpected:
+        shown = ", ".join(sorted(unexpected)[:5])
         raise BrandingArchiveError(
-            f"Could not write branding files to {DIR_ENV_VAR} ({target_dir}): "
-            f"{e.strerror}. Make sure the folder is writable by the registry user, or "
-            f"put the files in a mounted folder and unset {ARCHIVE_ENV_VAR}."
-        ) from e
+            f"Branding is configured twice: {ARCHIVE_ENV_VAR} is set and {DIR_ENV_VAR} "
+            f"({target_dir}) contains files not owned by this archive ({shown}). "
+            f"Use one source: unset {ARCHIVE_ENV_VAR}, or select a new empty folder."
+        )
+    # Verify every existing asset before publishing any missing ones. A marker
+    # alone never authorizes replacing modified, mounted, or symlinked files.
+    for name in visible:
+        data = _read_owned_file(
+            directory_fd, name, MAX_BRANDING_ARCHIVE_TOTAL_BYTES, expected[name]
+        )
+        if hashlib.sha256(data).hexdigest() != expected[name]:
+            raise BrandingArchiveError(
+                f"Branding file {name} differs from its ownership record. "
+                f"Use a new empty {DIR_ENV_VAR} or unset {ARCHIVE_ENV_VAR}."
+            )
+    if _OWNERSHIP_FILE not in entries:
+        _publish_file(directory_fd, _OWNERSHIP_FILE, marker_bytes, 0o600)
+    # The durable marker precedes asset publication. A stopped startup can
+    # safely resume missing files; each visible asset is already complete.
+    for name, data in contents.items():
+        if name not in visible:
+            _publish_file(directory_fd, name, data, _FILE_MODE)
 
 
 def extract_branding_archive(
@@ -390,16 +534,31 @@ def extract_branding_archive(
         target_dir: The branding folder (UI_BRANDING_DIR).
 
     Returns:
-        Sorted names of the files written.
+        Sorted names of the files verified or written.
 
     Raises:
-        BrandingArchiveError: On any rule violation; nothing is left behind.
+        BrandingArchiveError: On invalid input or unverifiable target ownership.
     """
     contents = _read_validated_members(_decode_archive(archive_b64))
     if not contents:
         raise BrandingArchiveError(f"{ARCHIVE_ENV_VAR}: archive contains no files. {_HOW_TO_BUILD}")
-    _check_target_dir(target_dir)
-    _write_files(target_dir, contents)
+    try:
+        directory_fd = _open_target_dir(target_dir)
+        try:
+            _write_files(directory_fd, target_dir, contents)
+            current = target_dir.lstat()
+            pinned = os.fstat(directory_fd)
+            if (current.st_dev, current.st_ino) != (pinned.st_dev, pinned.st_ino):
+                raise BrandingArchiveError(
+                    f"{DIR_ENV_VAR} changed during extraction; use a stable writable folder."
+                )
+        finally:
+            os.close(directory_fd)
+    except OSError as e:
+        raise BrandingArchiveError(
+            f"Could not apply branding to {DIR_ENV_VAR} ({target_dir}): {e.strerror}. "
+            "Use a dedicated writable folder without symlinks; existing files are not replaced."
+        ) from e
     return sorted(contents)
 
 
@@ -421,7 +580,9 @@ def main() -> int:
         logger.error("Branding: %s", e)
         return 1
 
-    logger.info("Branding: wrote %d files to %s: %s", len(names), target_dir, ", ".join(names))
+    logger.info(
+        "Branding: verified or wrote %d files to %s: %s", len(names), target_dir, ", ".join(names)
+    )
     return 0
 
 
