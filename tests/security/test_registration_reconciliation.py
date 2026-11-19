@@ -291,6 +291,84 @@ def test_native_providers_are_required_before_enabling(tmp_path, monkeypatch, pa
 
 
 @pytest.mark.parametrize("path", PROVISIONERS)
+def test_simultaneous_dcr_cimd_is_refused_before_mutation(tmp_path, monkeypatch, path):
+    result, requests, _ = run(
+        tmp_path,
+        monkeypatch,
+        path,
+        'ENABLE_DCR_CONFIG=true\nENABLE_CIMD_CONFIG=true\npreflight_dcr_upgrade "$TOKEN"',
+    )
+    assert result.returncode != 0
+    assert "Enable DCR or CIMD, not both" in result.stderr
+    assert not any(r["method"] in ("POST", "PUT", "DELETE") for r in requests)
+
+
+@pytest.mark.parametrize("path", PROVISIONERS)
+@pytest.mark.parametrize(
+    "attribute",
+    [
+        "request.uris",
+        "jwks.url",
+        "sectorIdentifierUri",
+        "backchannel.logout.url",
+        "ciba.backchannel.client.notification.endpoint",
+    ],
+)
+def test_dcr_guard_refuses_enabled_clients_with_server_fetch_urls(
+    tmp_path, monkeypatch, path, attribute
+):
+    record = client("old-client", "old-client", attributes={attribute: "http://localhost/private"})
+    result, _, state = run(
+        tmp_path,
+        monkeypatch,
+        path,
+        'ENABLE_DCR_CONFIG=true\nENABLE_CIMD_CONFIG=false\nconfigure_registration_security_policy "$TOKEN"',
+        [record],
+    )
+    assert result.returncode != 0
+    assert state["clients"]["old-client"]["enabled"] is True
+
+
+@pytest.mark.parametrize("path", PROVISIONERS)
+def test_cimd_only_removes_dcr_uri_guard_without_removing_unrelated_policies(
+    tmp_path, monkeypatch, path
+):
+    result, _, state = run(
+        tmp_path,
+        monkeypatch,
+        path,
+        "ENABLE_DCR_CONFIG=false\nENABLE_CIMD_CONFIG=true\nDCR_SWEEP_ACKNOWLEDGED=true\n"
+        "CIMD_TRUSTED_DOMAINS='[\"vendor.example\"]'\n"
+        'configure_cimd_client_policy "$TOKEN"',
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not any(p["name"] == "mcp-no-remote-request-objects" for p in state["policies"])
+    assert not any(p["name"] == "mcp-no-remote-request-objects" for p in state["profiles"])
+    assert any(p["name"] == "unrelated-policy" for p in state["policies"])
+
+
+@pytest.mark.parametrize("path", PROVISIONERS)
+def test_dcr_only_guards_each_server_fetch_url_field(tmp_path, monkeypatch, path):
+    result, _, state = run(
+        tmp_path,
+        monkeypatch,
+        path,
+        'ENABLE_DCR_CONFIG=true\nENABLE_CIMD_CONFIG=false\nconfigure_registration_security_policy "$TOKEN"',
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    profile = next(p for p in state["profiles"] if p["name"] == "mcp-no-remote-request-objects")
+    config = profile["executors"][0]["configuration"]
+    assert config["allowed-patterns"] == []
+    assert config["client-uri-fields"] == [
+        "requestUris",
+        "jwksUri",
+        "sectorIdentifierUri",
+        "backchannelLogoutUrl",
+        "cibaClientNotificationEndpoint",
+    ]
+
+
+@pytest.mark.parametrize("path", PROVISIONERS)
 @pytest.mark.parametrize("scenario", ["policy-readback-failed", "policy-readback-expanded"])
 def test_guard_readback_must_match_exact_scopes(tmp_path, monkeypatch, path, scenario):
     result, requests, _ = run(
@@ -315,7 +393,7 @@ def test_guard_catalog_and_both_realm_defaults_follow_allowlist(tmp_path, monkey
         tmp_path,
         monkeypatch,
         path,
-        'ENABLE_DCR_CONFIG=true\nDCR_ALLOWED_SCOPES="openid basic email"\n'
+        'ENABLE_DCR_CONFIG=false\nENABLE_CIMD_CONFIG=true\nDCR_ALLOWED_SCOPES="openid basic email"\n'
         'REGISTRATION_TRUSTED_CLIENT_IDS=\'["reviewed-machine"]\'\nconfigure_cimd_client_policy "$TOKEN"',
         [trusted],
         existing,

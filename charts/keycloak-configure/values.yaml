@@ -49,6 +49,8 @@ registrationTrustedClientIds: []
 # Setup invalidates every kept non-built-in client's registration access token.
 # Existing access tokens remain valid until expiry. To leave a realm managed
 # elsewhere untouched, disable the entire keycloak-configure chart.
+# DCR and CIMD cannot both be enabled on native Keycloak 26.8.2: its URI
+# executor rejects CIMD creation/update contexts. Switch both flags in one upgrade.
 dcr:
   enabled: false
   sweepAcknowledged: false
@@ -72,8 +74,10 @@ dcr:
 # Install deny before removing metadata policy or sweeping; keep it on failure/off.
 # First enable refuses unexpected persisted cache-marked records for admin review.
 # Setup does not delete those records or use a migration receipt.
-# Setup denies all CIMD until metadata policy verification; OIDC DCR is unchanged.
-# Failure or --reconcile-registration alone leaves denial; rerun full setup to recover.
+# Setup denies CIMD until metadata policy verification. Switch dcr.enabled=false
+# and cimd.enabled=true together; the reverse switch disables CIMD clients
+# (review/acknowledge the sweep) before reopening DCR. A failed switch keeps
+# the affected registration path closed until a successful full setup run.
 cimd:
   enabled: false
   trustedDomains:

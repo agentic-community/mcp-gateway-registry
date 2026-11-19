@@ -1,6 +1,9 @@
 {{- if include "keycloak-configure.enabled" . }}
 {{- $globalKeycloak := dig "authProvider" "keycloak" dict .Values.global }}
 {{- $keycloakRealm := include "keycloak-configure.realm" . }}
+{{- if and .Values.dcr.enabled .Values.cimd.enabled }}
+{{- fail "Keycloak 26.8.2 cannot enable dcr.enabled and cimd.enabled together; set one false in the same upgrade" }}
+{{- end }}
 apiVersion: batch/v1
 kind: Job
 metadata:

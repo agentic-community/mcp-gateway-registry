@@ -101,7 +101,7 @@ def _configure(
     client: httpx.Client,
     password: str,
     *,
-    dcr: bool = True,
+    dcr: bool = False,
     cimd: bool = True,
     domains: list[str] | None = None,
     keep: str = "",
@@ -367,6 +367,7 @@ def _client_record(client: httpx.Client, password: str, client_id: str) -> dict:
 @pytest.mark.parametrize("requested_scope", [None, "openid profile email offline_access"])
 def test_dcr_omitted_scopes_are_constrained_and_tokens_refresh(keycloak, requested_scope):
     client, password = keycloak
+    _configure(client, password, dcr=True, cimd=False)
     metadata = {
         "client_name": "policy-test-browser",
         "redirect_uris": [CALLBACK],
@@ -413,6 +414,7 @@ def test_dcr_omitted_scopes_are_constrained_and_tokens_refresh(keycloak, request
 
 def test_dcr_explicit_privileged_scope_is_rejected(keycloak):
     client, _ = keycloak
+    _configure(client, keycloak[1], dcr=True, cimd=False)
     response = client.post(
         f"/realms/{REALM}/clients-registrations/openid-connect",
         json={
@@ -422,6 +424,140 @@ def test_dcr_explicit_privileged_scope_is_rejected(keycloak):
         },
     )
     assert response.status_code in (400, 403)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("request_uris", ["http://127.0.0.1/oidc.jwt"]),
+        ("jwks_uri", "http://127.0.0.1/keys.json"),
+        ("sector_identifier_uri", "http://127.0.0.1/sector.json"),
+        ("backchannel_logout_uri", "http://127.0.0.1/logout"),
+        ("backchannel_client_notification_endpoint", "http://127.0.0.1/ciba"),
+    ],
+)
+def test_dcr_rejects_server_fetch_urls_on_creation_and_update(keycloak, field, value):
+    client, password = keycloak
+    _configure(client, password, dcr=True, cimd=False)
+    metadata = {
+        "redirect_uris": [CALLBACK],
+        "token_endpoint_auth_method": "none",
+        "grant_types": ["authorization_code", "refresh_token"],
+    }
+    if field == "sector_identifier_uri":
+        metadata["subject_type"] = "pairwise"
+    rejected = client.post(
+        f"/realms/{REALM}/clients-registrations/openid-connect",
+        json={**metadata, field: value},
+    )
+    assert rejected.status_code in (400, 403)
+    assert rejected.json().get("error_description") == "invalid_client_metadata"
+
+    created = client.post(f"/realms/{REALM}/clients-registrations/openid-connect", json=metadata)
+    assert created.status_code == 201
+    registration = created.json()
+    headers = {"Authorization": f"Bearer {registration['registration_access_token']}"}
+    try:
+        updated = client.put(
+            registration["registration_client_uri"],
+            headers=headers,
+            json={**metadata, "client_id": registration["client_id"], field: value},
+        )
+        assert updated.status_code in (400, 403)
+        assert updated.json().get("error_description") == "invalid_client_metadata"
+        unchanged = client.get(registration["registration_client_uri"], headers=headers)
+        assert unchanged.status_code == 200
+        assert not unchanged.json().get(field)
+    finally:
+        assert (
+            client.delete(registration["registration_client_uri"], headers=headers).status_code
+            == 204
+        )
+
+
+def test_switching_dcr_and_cimd_in_both_directions(keycloak):
+    client, password = keycloak
+    registrations = []
+    try:
+        _configure(client, password, dcr=True, cimd=False)
+        registration = client.post(
+            f"/realms/{REALM}/clients-registrations/openid-connect",
+            json={
+                "redirect_uris": [CALLBACK],
+                "token_endpoint_auth_method": "none",
+                "grant_types": ["authorization_code", "refresh_token"],
+            },
+        )
+        assert registration.status_code == 201
+        registrations.append(registration.json())
+        assert "access_token" in _code_token(client, password, registrations[0]["client_id"])
+
+        _configure(client, password, dcr=False, cimd=True)
+        policies = _admin(client, password, "GET", "/client-policies/policies").json()["policies"]
+        assert not any(p["name"] == "mcp-no-remote-request-objects" for p in policies)
+        tokens = _code_token(client, password, VENDOR_CLIENT)
+        refreshed = client.post(
+            f"/realms/{REALM}/protocol/openid-connect/token",
+            data={
+                "client_id": VENDOR_CLIENT,
+                "grant_type": "refresh_token",
+                "refresh_token": tokens["refresh_token"],
+            },
+        )
+        assert refreshed.status_code == 200
+
+        _configure(client, password, dcr=True, cimd=False)
+        policies = _admin(client, password, "GET", "/client-policies/policies").json()["policies"]
+        assert any(p["name"] == "mcp-no-remote-request-objects" for p in policies)
+        assert _client_record(client, password, VENDOR_CLIENT)["enabled"] is False
+        registration = client.post(
+            f"/realms/{REALM}/clients-registrations/openid-connect",
+            json={"redirect_uris": [CALLBACK], "token_endpoint_auth_method": "none"},
+        )
+        assert registration.status_code == 201
+        registrations.append(registration.json())
+    finally:
+        for registration in registrations:
+            record = _admin(
+                client,
+                password,
+                "GET",
+                "/clients?clientId=" + quote(registration["client_id"], safe=""),
+            ).json()
+            for entry in record:
+                _admin(client, password, "DELETE", f"/clients/{entry['id']}")
+        _configure(client, password, dcr=False, cimd=True)
+
+
+def test_cimd_metadata_refresh_after_guard_removal(keycloak):
+    client, password = keycloak
+    _configure(client, password, dcr=True, cimd=False)
+    _configure(client, password, dcr=False, cimd=True)
+    records = _admin(
+        client, password, "GET", "/clients?clientId=" + quote(VENDOR_CLIENT, safe="")
+    ).json()
+    if records:
+        # Setup deliberately keeps previously disabled clients disabled.
+        _admin(client, password, "PUT", f"/clients/{records[0]['id']}", {"enabled": True})
+    _code_token(client, password, VENDOR_CLIENT)
+    record = _client_record(client, password, VENDOR_CLIENT)
+    _admin(
+        client,
+        password,
+        "PUT",
+        f"/clients/{record['id']}",
+        {"attributes": {**record["attributes"], "cimd.cache.expiry.time.in.sec": "1"}},
+    )
+    refreshed = _code_token(client, password, VENDOR_CLIENT)
+    assert "access_token" in refreshed
+    assert (
+        int(
+            _client_record(client, password, VENDOR_CLIENT)["attributes"][
+                "cimd.cache.expiry.time.in.sec"
+            ]
+        )
+        > 1
+    )
 
 
 @pytest.mark.parametrize("dcr", [False, True])
@@ -489,6 +625,12 @@ def test_cimd_trust_withdrawal_disables_existing_client(keycloak):
 
 def test_cimd_vendor_login_refresh_and_disable(keycloak):
     client, password = keycloak
+    _configure(client, password, dcr=False, cimd=True)
+    records = _admin(
+        client, password, "GET", "/clients?clientId=" + quote(VENDOR_CLIENT, safe="")
+    ).json()
+    if records:
+        _admin(client, password, "PUT", f"/clients/{records[0]['id']}", {"enabled": True})
     tokens = _code_token(client, password, VENDOR_CLIENT)
     claims = json.loads(base64.urlsafe_b64decode(tokens["access_token"].split(".")[1] + "=="))
     assert "mcp-gateway" in claims["aud"]
@@ -630,6 +772,7 @@ def test_native_cimd_privileged_assignment_blocks_login_and_refresh(keycloak):
 
 def test_dcr_groups_authorize_gateway_and_refresh_removes_revoked_grants(keycloak, monkeypatch):
     client, password = keycloak
+    _configure(client, password, dcr=True, cimd=False)
     response = client.post(
         f"/realms/{REALM}/clients-registrations/openid-connect",
         json={
@@ -759,6 +902,7 @@ def test_native_registration_cannot_forge_cimd_provenance(keycloak):
 @pytest.mark.parametrize("pkce", ["missing", "plain"])
 def test_public_registration_rejects_missing_or_plain_pkce(keycloak, mechanism, pkce):
     client, password = keycloak
+    _configure(client, password, dcr=mechanism == "dcr", cimd=mechanism == "cimd")
     if mechanism == "dcr":
         registered = client.post(
             f"/realms/{REALM}/clients-registrations/openid-connect",
@@ -794,6 +938,7 @@ def test_public_registration_rejects_missing_or_plain_pkce(keycloak, mechanism, 
 @pytest.mark.parametrize("supplied_verifier", [None, "incorrect-verifier-" * 4])
 def test_public_code_exchange_requires_bound_verifier(keycloak, supplied_verifier):
     client, password = keycloak
+    _configure(client, password, dcr=True, cimd=False)
     registered = client.post(
         f"/realms/{REALM}/clients-registrations/openid-connect",
         json={
@@ -921,6 +1066,7 @@ def test_cimd_late_persisted_client_stays_denied_after_disable(keycloak):
             },
         )
         assert response.status_code == 400 or "error=" in response.headers.get("location", "")
+        _configure(client, password, dcr=True, cimd=False)
         # Standard OIDC DCR still works while CIMD is disabled.
         registered = client.post(
             f"/realms/{REALM}/clients-registrations/openid-connect",

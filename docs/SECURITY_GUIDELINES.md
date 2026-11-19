@@ -1002,7 +1002,18 @@ surface.
 - Verify native policy behavior with an issued token, not only HTTP success and configuration readback. Keycloak accepts
   the unsupported scope type `any`, then its condition never matches; the supported enum is `Any`. Preserve exact
   provider enum values and test an actual denied grant alongside the valid login/refresh path.
-- Reject remote OIDC request-object URLs on client creation and update. Callback host restrictions do not cover these URLs, and Keycloak fetches request objects before login. Check existing client metadata before reopening registration.
+- Reject server-side destination URLs from OIDC DCR at creation and update: request objects, JWKS, sector identifiers,
+  backchannel logout, and the CIBA client notification endpoint. Keep the CIBA endpoint blocked even when the feature is disabled so a later feature toggle cannot activate a stored destination. Callback host checks omit these fields. On Keycloak 26.8.2, `secure-client-uris-pattern` rejects
+  CIMD REGISTER/UPDATE context types even when metadata omits the URLs. The official-image deployment must keep DCR and
+  CIMD mutually exclusive. During DCR-to-CIMD switching, close DCR and deny CIMD before removing the DCR URI guard;
+  restore CIMD only after metadata policy readback. During CIMD-to-DCR switching, deny and disable CIMD clients before
+  installing the DCR guard and reopening DCR. Preserve disabled records for review; do not re-enable them on a switch
+  back. Recheck native executor behavior on image upgrades.
+- A stored URL is not proof of a Keycloak server fetch. Probe each URL family with a harmless internal target and
+  observe Keycloak's request: sector identifiers fetch during registration, while JWKS fetches during signed client
+  assertion validation. Frontchannel logout and post-logout redirects go to the browser; logo, policy, and terms links
+  are displayed to users. Review these for unsafe browser navigation separately. Without an egress policy, a native
+  CIMD-only deployment retains its documented outbound risk.
 - Do not infer Keycloak service-account identity from `azp`. Keycloak tokens use signed group claims rather than client-ID-based machine group enrichment.
 - Install and retain runtime deny before removing metadata enforcement or starting a disable sweep. Removing a CIMD
   metadata policy leaves saved clients usable through ordinary login and refresh. The native deny policy must cover
@@ -1013,7 +1024,7 @@ surface.
 - Deny all CIMD during lifecycle changes. Restore exact-host allowance only after verifying the metadata profile and
   policy; allowing surviving hosts before that check can bypass metadata enforcement after a failed enable. Failed
   setup must leave CIMD denied until a full setup run succeeds. `--reconcile-registration` alone must retain denial.
-  This brief maintenance denial must leave OIDC DCR unchanged.
+  This maintenance denial also closes DCR while switching modes; the setup may reopen only the selected registration path after its guards are ready.
 - Scope runtime denial to OAuth events so administrators can still inspect and disable clients. Keycloak's attribute condition also matches Admin API views; combine it with a grant-type condition in STRICT mode, which skips administrative events. Verify a direct Admin API read under denial alongside rejected code and refresh grants.
 - A client-controlled cache-expiry attribute cannot prove registration provenance. Native Keycloak DCR can write
   `cimd.cache.expiry.time.in.sec` and choose a vendor-shaped client ID, causing CIMD to skip metadata fetching.

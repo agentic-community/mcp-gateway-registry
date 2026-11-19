@@ -36,14 +36,22 @@ creation/update and at authorization/token requests, including cached CIMD clien
 the `plain` method. The policy remains installed when registration is disabled so retained public clients cannot
 downgrade their code flows. Confidential M2M client-credentials grants are unchanged.
 
-Dynamic Client Registration (DCR) and Client ID Metadata Documents (CIMD) are separate opt-ins. Set `ENABLE_DCR_CONFIG=true` for registration-based MCP clients, or `ENABLE_CIMD_CONFIG=true` for trusted clients whose `client_id` is an HTTPS metadata URL. The commands below use existing administrator credentials from the environment and a private `KEYCLOAK_ADMIN_URL`:
+Dynamic Client Registration (DCR) and Client ID Metadata Documents (CIMD) are separate opt-ins and cannot be enabled
+together on the official Keycloak 26.8.2 image. Its native URI-pattern executor rejects CIMD registration and update
+contexts even if the vendor has no request-object URL. Set both flags in one setup run when switching modes; the false
+flag applies cleanup before the other mode opens. The commands below use existing administrator credentials from the
+environment and a private `KEYCLOAK_ADMIN_URL`:
 
 ```bash
-ENABLE_DCR_CONFIG=true bash keycloak/setup/upgrade-realm-for-dcr.sh
-ENABLE_CIMD_CONFIG=true bash keycloak/setup/upgrade-realm-for-dcr.sh
+ENABLE_DCR_CONFIG=true ENABLE_CIMD_CONFIG=false bash keycloak/setup/upgrade-realm-for-dcr.sh
+ENABLE_DCR_CONFIG=false ENABLE_CIMD_CONFIG=true bash keycloak/setup/upgrade-realm-for-dcr.sh
 ```
 
-Set both variables when both mechanisms are needed. False applies the corresponding cleanup rather than leaving earlier configuration unchanged. Compose and ECS enable the server's `cimd` feature; realm setup remains opt-in. In Helm, enable the server feature and configure the realm together:
+Switching from CIMD to DCR disables persisted CIMD clients. Review the inventory and set `DCR_SWEEP_ACKNOWLEDGED=true`
+only after approving the disables; returning to CIMD does not re-enable them. Already issued access tokens remain valid
+until expiry. The first setup run after a failed switch must complete before the intended registration path opens.
+Compose and ECS enable the server's `cimd` feature; realm setup remains opt-in. In Helm, enable the server feature and
+configure the realm together:
 
 ```yaml
 keycloak:
@@ -67,6 +75,9 @@ referenced hosts. Setup refuses wildcards. Keycloak 26.8.2 uses the same documen
 `jwks_uri`; loopback callback entries also permit loopback JWKS destinations. The client-ID HTTPS/domain condition
 does not protect that later fetch. This branch preserves native CIMD as an explicit opt-in with that outbound-fetch
 risk unresolved. An operator who cannot accept it must leave CIMD disabled or provide independent outbound protection.
+
+With CIMD off, a native OIDC policy rejects `request_uris`, `jwks_uri`, `sector_identifier_uri`,
+`backchannel_logout_uri`, and `backchannel_client_notification_endpoint` at DCR creation and update. Keycloak fetches a sector identifier during registration and JWKS during client assertion validation; backchannel logout and CIBA callbacks are server-side destinations. CIBA is disabled in the shipped deployments, and the endpoint remains blocked if someone later enables it. Setup inventories existing enabled clients for these attributes before reopening DCR. Disabled clients remain disabled and are not silently re-enabled. Frontchannel logout, post-logout redirects, `logo_uri`, `policy_uri`, and `tos_uri` may still be stored. A browser uses frontchannel logout, post-logout, and display links; they are not proof of a Keycloak server-side fetch. This guard is not an egress firewall, and CIMD-only deployments retain the documented native outbound-fetch risk.
 
 Setup removes scopes outside `DCR_ALLOWED_SCOPES` from both realm-default scope lists; existing first-party client
 assignments remain unchanged. A native client policy rejects token flows using catalog scopes outside the allowlist

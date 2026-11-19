@@ -245,7 +245,11 @@ def test_machine_group_records_control_gateway_and_admin_grants(
 
     gateway = _call_tool(authorization, server="payroll", tool="delete_report")
     registry = _call_admin(authorization)
-    if enabled:
+    if provider_name == "keycloak":
+        _assert_denied(gateway)
+        _assert_denied(registry)
+        authorization.machine_records.find_one.assert_not_awaited()
+    elif enabled:
         assert gateway.status_code == 200, gateway.text
         assert gateway.json()["groups"] == ["registry-admins"]
         assert gateway.json()["scopes"] == [_ADMIN_SCOPE]

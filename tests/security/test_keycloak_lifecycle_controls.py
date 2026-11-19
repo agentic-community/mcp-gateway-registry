@@ -424,12 +424,14 @@ def test_cimd_disable_retains_runtime_guard_and_unrelated_entries(tmp_path, path
         "mcp-registration-scope-guard-policy",
         "mcp-public-pkce-policy",
         "mcp-cimd-runtime-guard-policy",
+        "mcp-no-remote-request-objects",
     }
     assert {profile["name"] for profile in final_profiles} == {
         "unrelated-profile",
         "mcp-registration-scope-guard",
         "mcp-public-pkce",
         "mcp-cimd-runtime-guard",
+        "mcp-no-remote-request-objects",
     }
     assert {"name": "unrelated"} in final_policies
     assert {"name": "unrelated-profile"} in final_profiles

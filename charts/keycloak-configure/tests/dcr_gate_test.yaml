@@ -82,6 +82,13 @@ tests:
           content:
             name: CIMD_TRUSTED_DOMAINS
             value: '["vendor.example","localhost","127.0.0.1"]'
+  - it: rejects simultaneous DCR and CIMD before running the setup Job
+    set:
+      dcr.enabled: true
+      cimd.enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: cannot enable dcr.enabled and cimd.enabled together
   - it: keeps scope trust separate from the DCR cleanup keep list
     set:
       dcr.keepClients: [browser-client]
