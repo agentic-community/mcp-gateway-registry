@@ -122,7 +122,15 @@ def test_non_strict_decrypt_skips_malformed_duplicate_and_unsafe_entries():
 
 @pytest.mark.parametrize(
     "reserved",
-    ["X-Authorization", "X-Internal-Token-Generic", "X-User", "X-Scopes", "X-Upstream-Url"],
+    [
+        "X-Authorization",
+        "X-Internal-Token-Generic",
+        "X-User",
+        "X-Scopes",
+        "X-Upstream-Url",
+        "X-Mcp-Connector-Binding",
+        "x-mcp-connector-url",
+    ],
 )
 def test_non_strict_decrypt_drops_gateway_managed_names(reserved):
     # The carve-out above is Authorization ONLY. A stored entry for any other
@@ -171,6 +179,8 @@ def test_valid_headers_accepted():
         "X-Original-URL",
         "X-Generic-Has-Upstream-Auth",
         "X-Upstream-Url",
+        "X-Mcp-Connector-Binding",
+        "x-mcp-connector-url",
     ],
 )
 def test_reserved_header_rejected(reserved):
