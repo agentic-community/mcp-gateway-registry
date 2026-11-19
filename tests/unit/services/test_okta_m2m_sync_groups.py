@@ -9,7 +9,9 @@ a client_id receives groups ONLY if it is explicitly listed in the operator's
 ``OKTA_M2M_CLIENT_GROUPS`` configuration.
 """
 
-from unittest.mock import MagicMock
+from copy import deepcopy
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -137,3 +139,173 @@ class TestAuth0SyncGroups:
     def test_malformed_json_fails_closed(self, monkeypatch):
         monkeypatch.setenv(AUTH0_M2M_CLIENT_GROUPS_ENV, "{bad json")
         assert _load_auth0_mapping() == {}
+
+
+class _Auth0Collection:
+    """Store documents and apply MongoDB's insert-only update semantics."""
+
+    def __init__(self):
+        self.docs: dict[str, dict] = {}
+
+    async def find_one(self, query):
+        return deepcopy(self.docs.get(query["client_id"]))
+
+    async def insert_one(self, document):
+        self.docs[document["client_id"]] = deepcopy(document)
+        return SimpleNamespace(inserted_id=document["client_id"])
+
+    async def update_one(self, query, update, upsert=False):
+        client_id = query["client_id"]
+        existing = self.docs.get(client_id)
+        if existing is None:
+            if not upsert:
+                return SimpleNamespace(upserted_id=None, matched_count=0)
+            document = deepcopy(query)
+            document.update(deepcopy(update.get("$setOnInsert", {})))
+            self.docs[client_id] = document
+        else:
+            document = existing
+        document.update(deepcopy(update.get("$set", {})))
+        return SimpleNamespace(
+            upserted_id=client_id if existing is None else None,
+            matched_count=0 if existing is None else 1,
+        )
+
+
+@pytest.fixture
+def auth0_sync_store(monkeypatch):
+    monkeypatch.delenv(AUTH0_M2M_CLIENT_GROUPS_ENV, raising=False)
+    db = {
+        "auth0_m2m_clients": _Auth0Collection(),
+        "idp_m2m_clients": _Auth0Collection(),
+    }
+    sync = Auth0M2MSync(
+        db=db,
+        auth0_domain="dev-abc.us.auth0.com",
+        m2m_client_id="mgmt-client",
+        m2m_client_secret="mgmt-secret",  # noqa: S106 - test fixture
+    )
+    sync._get_management_api_token = AsyncMock(return_value="management-token")
+    return sync, db
+
+
+def _auth0_application(is_first_party):
+    return {
+        "client_id": "client-id",
+        "name": "service-account",
+        "app_type": "non_interactive",
+        "is_first_party": is_first_party,
+    }
+
+
+class TestAuth0SyncEnablement:
+    """Consent classification cannot override local enablement."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("is_first_party", [True, False])
+    async def test_new_application_is_enabled_in_both_collections(
+        self, auth0_sync_store, is_first_party
+    ):
+        sync, db = auth0_sync_store
+        sync._get_auth0_clients = AsyncMock(return_value=[_auth0_application(is_first_party)])
+
+        result = await sync.sync_from_auth0()
+
+        assert result["errors"] == []
+        assert result["added_count"] == 1
+        for collection in db.values():
+            assert collection.docs["client-id"]["enabled"] is True
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("is_first_party", [True, False])
+    @pytest.mark.parametrize("force_full_sync", [True, False])
+    @pytest.mark.parametrize("mirror_enabled", [True, False])
+    @pytest.mark.parametrize("idp_enabled", [True, False])
+    async def test_sync_preserves_each_collections_enablement(
+        self, auth0_sync_store, is_first_party, force_full_sync, mirror_enabled, idp_enabled
+    ):
+        sync, db = auth0_sync_store
+        expected = {"auth0_m2m_clients": mirror_enabled, "idp_m2m_clients": idp_enabled}
+        for name, enabled in expected.items():
+            db[name].docs["client-id"] = {
+                "client_id": "client-id",
+                "enabled": enabled,
+                "name": "previous-name",
+            }
+        sync._get_auth0_clients = AsyncMock(return_value=[_auth0_application(is_first_party)])
+
+        result = await sync.sync_from_auth0(force_full_sync=force_full_sync)
+
+        assert result["errors"] == []
+        assert result["updated_count"] == 1
+        for name, enabled in expected.items():
+            assert db[name].docs["client-id"]["enabled"] is enabled
+            assert db[name].docs["client-id"]["name"] == "service-account"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("existing_collection", ["auth0_m2m_clients", "idp_m2m_clients"])
+    @pytest.mark.parametrize("is_first_party", [True, False])
+    @pytest.mark.parametrize("force_full_sync", [True, False])
+    async def test_missing_counterpart_inherits_disabled_state(
+        self, auth0_sync_store, existing_collection, is_first_party, force_full_sync
+    ):
+        sync, db = auth0_sync_store
+        db[existing_collection].docs["client-id"] = {
+            "client_id": "client-id",
+            "enabled": False,
+        }
+        sync._get_auth0_clients = AsyncMock(return_value=[_auth0_application(is_first_party)])
+
+        result = await sync.sync_from_auth0(force_full_sync=force_full_sync)
+
+        assert result["errors"] == []
+        for collection in db.values():
+            assert collection.docs["client-id"]["enabled"] is False
+
+    @pytest.mark.asyncio
+    async def test_legacy_disabled_rows_require_explicit_reconciliation(self, auth0_sync_store):
+        sync, db = auth0_sync_store
+        for collection in db.values():
+            collection.docs["client-id"] = {"client_id": "client-id", "enabled": False}
+        sync._get_auth0_clients = AsyncMock(return_value=[_auth0_application(True)])
+
+        result = await sync.sync_from_auth0(force_full_sync=True)
+
+        assert result["errors"] == []
+        for collection in db.values():
+            assert collection.docs["client-id"]["enabled"] is False
+            await collection.update_one({"client_id": "client-id"}, {"$set": {"enabled": True}})
+
+        result = await sync.sync_from_auth0(force_full_sync=True)
+
+        assert result["errors"] == []
+        for collection in db.values():
+            assert collection.docs["client-id"]["enabled"] is True
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("disabled_collection", ["auth0_m2m_clients", "idp_m2m_clients"])
+    @pytest.mark.parametrize("existing", [True, False])
+    async def test_concurrent_disable_survives_sync_update(
+        self, auth0_sync_store, disabled_collection, existing
+    ):
+        sync, db = auth0_sync_store
+        if existing:
+            for collection in db.values():
+                collection.docs["client-id"] = {"client_id": "client-id", "enabled": True}
+        collection = db[disabled_collection]
+        original_update = collection.update_one
+
+        async def disable_before_update(query, update, upsert=False):
+            await original_update(
+                {"client_id": "client-id"}, {"$set": {"enabled": False}}, upsert=True
+            )
+            return await original_update(query, update, upsert=upsert)
+
+        collection.update_one = disable_before_update
+        sync._get_auth0_clients = AsyncMock(return_value=[_auth0_application(False)])
+
+        result = await sync.sync_from_auth0(force_full_sync=True)
+
+        assert result["errors"] == []
+        assert collection.docs["client-id"]["enabled"] is False
+        assert collection.docs["client-id"]["name"] == "service-account"
