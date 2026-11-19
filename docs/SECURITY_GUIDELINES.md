@@ -1002,6 +1002,8 @@ surface.
 - Verify native policy behavior with an issued token, not only HTTP success and configuration readback. Keycloak accepts
   the unsupported scope type `any`, then its condition never matches; the supported enum is `Any`. Preserve exact
   provider enum values and test an actual denied grant alongside the valid login/refresh path.
+- Reject remote OIDC request-object URLs on client creation and update. Callback host restrictions do not cover these URLs, and Keycloak fetches request objects before login. Check existing client metadata before reopening registration.
+- Do not infer Keycloak service-account identity from `azp`. Keycloak tokens use signed group claims rather than client-ID-based machine group enrichment.
 - Install and retain runtime deny before removing metadata enforcement or starting a disable sweep. Removing a CIMD
   metadata policy leaves saved clients usable through ordinary login and refresh. The native deny policy must cover
   saved and late-arriving clients at authorization, code exchange and refresh, including cleanup failures and CIMD-off.

@@ -111,7 +111,7 @@ if path == "/admin/serverinfo":
     if scenario.startswith("cimd-"):
         body["features"] = [] if scenario == "cimd-feature-missing" else [{"name": "CIMD", "enabled": True}]
         body["componentTypes"]["org.keycloak.services.clientpolicy.condition.ClientPolicyConditionProvider"] = [] if scenario == "cimd-condition-missing" else [{"id": name} for name in ("client-id-uri", "client-scopes", "client-roles", "client-access-type", "client-type", "client-attributes", "grant-type")]
-        body["componentTypes"]["org.keycloak.services.clientpolicy.executor.ClientPolicyExecutorProvider"] = [] if scenario == "cimd-executor-missing" else [{"id": name} for name in ("client-id-metadata-document", "reject-request", "pkce-enforcer")]
+        body["componentTypes"]["org.keycloak.services.clientpolicy.executor.ClientPolicyExecutorProvider"] = [] if scenario == "cimd-executor-missing" else [{"id": name} for name in ("client-id-metadata-document", "reject-request", "pkce-enforcer", "secure-client-uris-pattern")]
 elif path.endswith("/client-policies/policies"):
     body = {"policies": [{"name": "mcp-restrict-token-exchange"}, {"name": "unrelated"}]}
     if scenario.startswith("cimd-"):

@@ -24,7 +24,7 @@ elif path == "/admin/serverinfo":
             "providers": {"client-registration": {"providers": {"openid-connect": {}}}},
             "componentTypes": {
                 "org.keycloak.services.clientpolicy.condition.ClientPolicyConditionProvider": [{"id": name} for name in ("client-scopes", "client-roles", "client-id-uri", "client-access-type", "client-type", "client-attributes", "grant-type")],
-                "org.keycloak.services.clientpolicy.executor.ClientPolicyExecutorProvider": [{"id": name} for name in ("reject-request", "client-id-metadata-document", "pkce-enforcer")],
+                "org.keycloak.services.clientpolicy.executor.ClientPolicyExecutorProvider": [{"id": name} for name in ("reject-request", "client-id-metadata-document", "pkce-enforcer", "secure-client-uris-pattern")],
                 "org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy": [{"id": "default-roles"}]}}
     if scenario == "native-policy-missing":
         body["componentTypes"]["org.keycloak.services.clientpolicy.executor.ClientPolicyExecutorProvider"] = []
@@ -206,12 +206,14 @@ def test_cimd_off_revokes_even_when_dcr_on_or_kept(tmp_path, monkeypatch, path, 
         "unrelated-policy",
         "mcp-registration-scope-guard-policy",
         "mcp-public-pkce-policy",
+        "mcp-no-remote-request-objects",
         "mcp-cimd-runtime-guard-policy",
     }
     assert {p["name"] for p in state["profiles"]} == {
         "unrelated-profile",
         "mcp-registration-scope-guard",
         "mcp-public-pkce",
+        "mcp-no-remote-request-objects",
         "mcp-cimd-runtime-guard",
     }
 

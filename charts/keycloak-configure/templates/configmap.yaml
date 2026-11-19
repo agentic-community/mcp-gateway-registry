@@ -419,6 +419,25 @@ data:
         done
     }
 
+    _configure_request_object_guard() {
+        local token=$1 info clients profile policy
+        info=$(_admin_get "$token" /admin/serverinfo) || return 1
+        jq -e 'any(.componentTypes["org.keycloak.services.clientpolicy.executor.ClientPolicyExecutorProvider"][]?; .id == "secure-client-uris-pattern")
+            and any(.componentTypes["org.keycloak.services.clientpolicy.condition.ClientPolicyConditionProvider"][]?; .id == "client-type")' <<< "$info" >/dev/null || {
+            echo "Remote request-object protection requires the native URI pattern executor." >&2
+            return 1
+        }
+        profile='{"name":"mcp-no-remote-request-objects","executors":[{"executor":"secure-client-uris-pattern","configuration":{"client-uri-fields":["requestUris"],"allowed-patterns":[]}}]}'
+        policy='{"name":"mcp-no-remote-request-objects","enabled":true,"mode":"STRICT","conditions":[{"condition":"client-type","configuration":{"protocol":"openid-connect"}}],"profiles":["mcp-no-remote-request-objects"]}'
+        _registration_policy_write "$token" profiles mcp-no-remote-request-objects "$profile" || return 1
+        _registration_policy_write "$token" policies mcp-no-remote-request-objects "$policy" || return 1
+        clients=$(_list_all_clients "$token") || return 1
+        jq -e 'all(.[]; (.attributes["request.uris"] // "") == "")' <<< "$clients" >/dev/null || {
+            echo "Existing clients have remote request-object URLs. Clear request_uris in Keycloak before reopening registration." >&2
+            return 1
+        }
+    }
+
     configure_registration_security_policy() {
         local token=$1 available allowed scopes forbidden profile policy
         _preflight_registration_security "$token" || return 1
@@ -435,6 +454,7 @@ data:
         configure_dcr_default_roles "$token" || return 1
         _configure_public_pkce_policy "$token" || return 1
         _reconcile_registration_trust_roles "$token" || return 1
+        _configure_request_object_guard "$token" || return 1
         profile='{"name":"mcp-registration-scope-guard","executors":[{"executor":"reject-request","configuration":{}}]}'
         # STRICT is essential: on registration/pre-auth events client-scopes abstains.
         # ScopeParameterContext covers authorization, code/refresh responses, password,

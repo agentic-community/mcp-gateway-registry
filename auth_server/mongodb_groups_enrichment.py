@@ -234,6 +234,11 @@ def should_enrich_groups(validation_result: dict) -> bool:
     if not is_valid or groups or client_id is None:
         return False
 
+    # Keycloak's verified azp identifies the OAuth client, not the grant type.
+    # Use signed service-account group claims; never infer machine identity from azp.
+    if validation_result.get("method") == "keycloak":
+        return False
+
     # A user-generated / user token is not an M2M client. Gate it out both by
     # token_type and by the sentinel client_id, so a token missing one marker is
     # still rejected (fail closed).
