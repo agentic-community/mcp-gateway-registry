@@ -98,6 +98,8 @@ class TestMaskingFunctions:
             "X-Api-Key": "k123456",
             "X-Access-Token": "t123456",
             "Accept": "application/json",
+            "X-Mcp-Connector-Binding": "YOUR_NGINX_MARKER",
+            "x-mcp-connector-url": "https://gateway.example/mcp?key=YOUR_QUERY_SECRET",
         }
 
         masked = mask_headers(headers)
@@ -107,6 +109,8 @@ class TestMaskingFunctions:
         assert masked["Cookie"] == "***MASKED***"
         assert masked["X-Api-Key"] == "***MASKED***"
         assert masked["X-Access-Token"] == "***MASKED***"
+        assert masked["X-Mcp-Connector-Binding"] == "***MASKED***"
+        assert masked["x-mcp-connector-url"] == "***MASKED***"
         assert masked["Authorization"].startswith("Bearer ")
         assert "eyJabc.def.ghi" not in masked["Authorization"]
         # Non-sensitive headers pass through untouched.

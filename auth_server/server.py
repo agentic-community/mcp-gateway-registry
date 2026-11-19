@@ -2224,6 +2224,7 @@ _SENSITIVE_HEADER_SUBSTRINGS: tuple[str, ...] = (
     "token",
     "secret",
     "credential",
+    "x-mcp-connector-",
     "password",
     "api-key",
     "apikey",
