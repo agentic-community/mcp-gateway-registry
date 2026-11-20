@@ -1,5 +1,10 @@
 # Root Module Outputs
 
+output "auth_provider" {
+  description = "Selected authentication provider after applying provider precedence"
+  value       = local.auth_provider
+}
+
 # VPC Outputs
 output "vpc_id" {
   description = "VPC ID"
@@ -106,21 +111,21 @@ output "deployment_summary" {
 
 output "keycloak_url" {
   description = "Keycloak URL"
-  value = var.enable_route53_dns ? "https://${local.keycloak_domain}" : (
-    var.enable_cloudfront ? "https://${aws_cloudfront_distribution.keycloak[0].domain_name}" : "http://${aws_lb.keycloak.dns_name}"
-  )
+  value = local.keycloak_selected ? (var.enable_route53_dns ? "https://${local.keycloak_domain}" : (
+    var.enable_cloudfront ? "https://${aws_cloudfront_distribution.keycloak[0].domain_name}" : "http://${aws_lb.keycloak[0].dns_name}"
+  )) : null
 }
 
 output "keycloak_admin_console" {
   description = "Keycloak admin console URL"
-  value = var.enable_route53_dns ? "https://${local.keycloak_domain}/admin" : (
-    var.enable_cloudfront ? "https://${aws_cloudfront_distribution.keycloak[0].domain_name}/admin" : "http://${aws_lb.keycloak.dns_name}/admin"
-  )
+  value = local.keycloak_selected ? (var.enable_route53_dns ? "https://${local.keycloak_domain}/admin" : (
+    var.enable_cloudfront ? "https://${aws_cloudfront_distribution.keycloak[0].domain_name}/admin" : "http://${aws_lb.keycloak[0].dns_name}/admin"
+  )) : null
 }
 
 output "keycloak_alb_dns" {
   description = "Keycloak ALB DNS name"
-  value       = aws_lb.keycloak.dns_name
+  value       = local.keycloak_selected ? aws_lb.keycloak[0].dns_name : null
 }
 
 output "keycloak_ecr_repository" {
@@ -163,7 +168,7 @@ output "cloudfront_mcp_gateway_url" {
 
 output "cloudfront_keycloak_url" {
   description = "CloudFront URL for Keycloak (when CloudFront is enabled)"
-  value       = var.enable_cloudfront ? "https://${aws_cloudfront_distribution.keycloak[0].domain_name}" : null
+  value       = local.keycloak_selected && var.enable_cloudfront ? "https://${aws_cloudfront_distribution.keycloak[0].domain_name}" : null
 }
 
 output "deployment_mode" {

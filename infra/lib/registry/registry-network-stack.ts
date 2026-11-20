@@ -17,6 +17,8 @@ export class RegistryNetworkStack extends cdk.Stack {
   public readonly privateSubnets: ec2.ISubnet[];
   public readonly publicSubnets: ec2.ISubnet[];
   public readonly vpcEndpointsSg: ec2.SecurityGroup;
+  /** Public IPs of the NAT gateways (egress address of the private ECS tasks) */
+  public readonly natPublicIps: string[];
 
   constructor(scope: Construct, id: string, props: RegistryNetworkStackProps) {
     super(scope, id, props);
@@ -27,6 +29,7 @@ export class RegistryNetworkStack extends cdk.Stack {
     this.privateSubnets = network.privateSubnets;
     this.publicSubnets = network.publicSubnets;
     this.vpcEndpointsSg = network.vpcEndpointsSg;
+    this.natPublicIps = network.natPublicIps;
 
     cdk.Tags.of(this).add('Project', 'mcp-gateway-registry');
     cdk.Tags.of(this).add('Component', 'network');

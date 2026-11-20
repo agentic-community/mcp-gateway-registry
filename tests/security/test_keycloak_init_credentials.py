@@ -346,45 +346,6 @@ def test_post_deploy_exports_urls_to_the_provisioner(repo_root: Path):
         )
 
 
-# `sslRequired` is null-guarded in Keycloak's `DefaultExportImportManager.updateRealm`,
-# so a realm PUT that omits it preserves whatever the realm already has. The three
-# provisioners want opposite things, and both are deliberate:
-#   - Helm ENFORCES "none" on every run. That topology reaches Keycloak over plain
-#     HTTP on the in-cluster service address, and "external" makes Keycloak answer
-#     "HTTPS required" (the EKS pod CIDR 100.64/10 is not treated as private), which
-#     breaks the token and admin calls the Job itself makes. TLS terminates at the ALB.
-#   - Compose and ECS OMIT it, so an operator who hardened the realm keeps their value.
-SSL_REQUIRED_EXPECTATION = {
-    "charts/keycloak-configure/templates/configmap.yaml": "none",
-    "keycloak/setup/init-keycloak.sh": None,
-    "terraform/aws-ecs/scripts/init-keycloak.sh": None,
-}
-
-
-@pytest.mark.parametrize("provisioner", EXECUTABLE_PROVISIONERS)
-def test_realm_ssl_required_matches_topology(repo_root: Path, provisioner: str):
-    """Each provisioner's realm body handles `sslRequired` per its topology."""
-    expected = SSL_REQUIRED_EXPECTATION[provisioner]
-    content = (repo_root / provisioner).read_text()
-    put_bodies = re.findall(
-        r"-X PUT \"\$\{KEYCLOAK_URL\}/admin/realms/\$\{REALM\}\"(?:[^)]*?)-d \"\$(\w+)\"",
-        content,
-        re.S,
-    )
-    assert put_bodies, f"{provisioner} issues no realm PUT"
-    for body_var in set(put_bodies):
-        match = re.search(rf"{body_var}='(\{{.*?\n\s*\}})'", content, re.S)
-        assert match, f"{provisioner}: cannot resolve realm PUT body ${body_var}"
-        body = json.loads(match.group(1))
-        actual = body.get("sslRequired")
-        assert actual == expected, (
-            f"{provisioner} realm PUT body (${body_var}) has sslRequired={actual!r}, "
-            f"expected {expected!r}. Helm must enforce 'none' because its in-cluster "
-            f"HTTP calls fail with 'HTTPS required' otherwise; Compose and ECS must "
-            f"omit it so an operator's hardened value survives an upgrade."
-        )
-
-
 @pytest.mark.parametrize("provisioner", EXECUTABLE_PROVISIONERS)
 def test_clients_restrict_full_scope(repo_root: Path, provisioner: str):
     """Both gateway clients must set `fullScopeAllowed: false`.

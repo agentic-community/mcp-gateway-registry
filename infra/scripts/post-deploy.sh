@@ -1,6 +1,6 @@
 #!/bin/bash
 # Post-deploy automation: configure Keycloak, wire up secrets, restart services.
-# Run by deploy.sh; needs CDK_KEYCLOAK_ADMIN_PASSWORD and cdk-outputs.json.
+# Run by deploy.sh; Keycloak setup needs CDK_KEYCLOAK_ADMIN_PASSWORD.
 
 set -euo pipefail
 
@@ -28,17 +28,20 @@ _read_outputs() {
   # on Keycloak realms blocks admin API calls over plain HTTP, so post-deploy
   # admin ops MUST run against the HTTPS front.
   eval "$(jq -r '@sh "
+    AUTH_PROVIDER=\(."Registry-Service".AuthProvider // "keycloak")
     KEYCLOAK_URL=\(."Registry-Auth".KeycloakUrl // ."Registry-Service".KeycloakUrl // "")
     REGISTRY_URL=\(."Registry-Service".RegistryUrl // "")
     GRADIO_URL=\(."Registry-Service".GradioUiUrl // "")
     GRAFANA_URL=\(."Registry-Service".GrafanaUrl // "")"' "$outputs_file")"
 
-  if [ -z "$KEYCLOAK_URL" ] || [ -z "$REGISTRY_URL" ]; then
-    _log_error "Could not read Keycloak/Registry URLs from cdk-outputs.json"
+  if [ -z "$REGISTRY_URL" ] || { [ "$AUTH_PROVIDER" = "keycloak" ] && [ -z "$KEYCLOAK_URL" ]; }; then
+    _log_error "Could not read required service URLs from cdk-outputs.json"
     exit 1
   fi
 
-  _log_info "Keycloak URL: $KEYCLOAK_URL"
+  if [ "$AUTH_PROVIDER" != "keycloak" ]; then KEYCLOAK_URL=""; fi
+  _log_info "Auth provider: $AUTH_PROVIDER"
+  [ -z "$KEYCLOAK_URL" ] || _log_info "Keycloak URL: $KEYCLOAK_URL"
   _log_info "Registry URL: $REGISTRY_URL"
 }
 
@@ -333,8 +336,8 @@ _validate_endpoints() {
   for url_label in \
     "Registry|${REGISTRY_URL}/health" \
     "Gradio UI|${REGISTRY_URL}/" \
-    "Keycloak|${KEYCLOAK_URL}/" \
-    "Keycloak Realm|${KEYCLOAK_URL}/realms/mcp-gateway/.well-known/openid-configuration"; do
+    "Keycloak|${KEYCLOAK_URL:+${KEYCLOAK_URL}/}" \
+    "Keycloak Realm|${KEYCLOAK_URL:+${KEYCLOAK_URL}/realms/mcp-gateway/.well-known/openid-configuration}"; do
 
     local label="${url_label%%|*}"
     local url="${url_label##*|}"
@@ -417,6 +420,13 @@ main() {
   echo "============================================"
   echo ""
 
+  _read_outputs
+  if [ "$AUTH_PROVIDER" != "keycloak" ]; then
+    _log_info "Skipping Keycloak setup for $AUTH_PROVIDER. Configure that provider outside this script."
+    _validate_endpoints
+    return
+  fi
+
   # Validate required env vars
   KC_ADMIN_USER="admin"
   KC_ADMIN_PASSWORD="${CDK_KEYCLOAK_ADMIN_PASSWORD:-}"
@@ -426,7 +436,6 @@ main() {
     exit 1
   fi
 
-  _read_outputs
   _wait_for_keycloak
 
   # SSM agent on a fresh task takes ~30s to register, so retry.

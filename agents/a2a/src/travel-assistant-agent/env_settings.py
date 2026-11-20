@@ -40,6 +40,8 @@ class EnvSettings:
 
         # Keycloak configuration for M2M authentication and inbound JWT validation.
         self.keycloak_url: str = os.getenv("KEYCLOAK_URL", "http://localhost:8080")
+        # Match Keycloak's pinned public issuer, independently of transport.
+        self.keycloak_external_url: str = os.getenv("KEYCLOAK_EXTERNAL_URL", "")
         self.keycloak_realm: str = os.getenv("KEYCLOAK_REALM", "mcp-gateway")
 
         # Expected audience for inbound bearer tokens. When unset, audience is not

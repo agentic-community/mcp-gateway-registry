@@ -1,0 +1,43 @@
+# Synthetic, non-production inputs for every standalone and stack render.
+# Fresh-install is an intentional test choice, never a deployment default.
+global:
+  domain: helm-ci.example.com
+  generateSecrets: false
+  secretKey: EXAMPLE-ci-signing-key-not-for-production # pragma: allowlist secret
+  ingress:
+    tls: true
+    routingMode: subdomain
+  federation:
+    staticToken: EXAMPLE-ci-federation-token-not-for-production # pragma: allowlist secret
+    encryptionKey: uDOtoabBoVIAIE22RMQOs54YmFiGQDUMCtVrdsXVrxU= # pragma: allowlist secret - synthetic 32-byte Fernet key
+  authProvider:
+    type: keycloak
+    keycloak:
+      clientSecret: EXAMPLE-ci-client-secret-not-for-production # pragma: allowlist secret
+      m2mClientSecret: EXAMPLE-ci-m2m-secret-not-for-production # pragma: allowlist secret
+hostname: ""
+postgres:
+  bootstrap:
+    mode: fresh-install
+keycloak:
+  postgres:
+    bootstrap:
+      mode: fresh-install
+  auth:
+    adminPassword: EXAMPLE-ci-admin-password-not-for-production # pragma: allowlist secret
+  postgresql:
+    auth:
+      password: EXAMPLE-ci-database-password-not-for-production # pragma: allowlist secret
+      postgresPassword: EXAMPLE-ci-postgres-password-not-for-production # pragma: allowlist secret
+app:
+  secretKey: EXAMPLE-ci-signing-key-not-for-production # pragma: allowlist secret
+egressAuth:
+  markerSecret: EXAMPLE-ci-marker-secret-not-for-production # pragma: allowlist secret
+registry:
+  egressAuth:
+    markerSecret: EXAMPLE-ci-marker-secret-not-for-production # pragma: allowlist secret
+mongodb:
+  password: EXAMPLE-ci-mongodb-password-not-for-production # pragma: allowlist secret
+mongodb-configure:
+  mongodb:
+    password: EXAMPLE-ci-mongodb-password-not-for-production # pragma: allowlist secret

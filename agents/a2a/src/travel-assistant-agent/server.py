@@ -56,6 +56,7 @@ app = FastAPI(title="Travel Assistant Agent", lifespan=lifespan)
 install_agent_auth(
     app,
     keycloak_url=env_settings.keycloak_url,
+    keycloak_external_url=env_settings.keycloak_external_url,
     realm=env_settings.keycloak_realm,
     audience=env_settings.agent_audience,
     bind_host=env_settings.host,

@@ -37,6 +37,14 @@ unless you also set `AGENT_AUTH_ALLOW_EXPOSED_PRESENCE_ONLY=true`. Both are TEST
 only — never enable them in a real deployment. See the
 `.env.example` files in this folder for the flag.
 
+For a verified run, set both presence-only flags to `false`. The local Compose
+fallback and ECS test environment enable them for routing tests. Set `KEYCLOAK_URL`
+to the reachable token/JWKS transport and `KEYCLOAK_EXTERNAL_URL` to the canonical
+public issuer base URL. The signed issuer must match
+`<KEYCLOAK_EXTERNAL_URL>/realms/<KEYCLOAK_REALM>`. Obtain a token with the backend's
+configured audience and pass it through the normal credential path. The routing
+examples below use presence-only mode and do not verify backend authentication.
+
 ---
 
 ## Part 1: Local Docker Compose

@@ -265,11 +265,12 @@ spec:
               value: "true"
             {{- end }}
             {{- if eq (.Values.global.authProvider.type | default "keycloak") "keycloak" }}
+            {{- $keycloak := .Values.global.authProvider.keycloak | default dict }}
             - name: KEYCLOAK_ADMIN_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Release.Name }}-keycloak
-                  key: admin-password
+                  name: {{ $keycloak.adminExistingSecret | default (printf "%s-keycloak" .Release.Name) | quote }}
+                  key: {{ $keycloak.adminExistingSecretPasswordKey | default "admin-password" | quote }}
             {{- end }}
             {{- if .Values.entra.clientSecretExistingSecret }}
             - name: ENTRA_CLIENT_SECRET

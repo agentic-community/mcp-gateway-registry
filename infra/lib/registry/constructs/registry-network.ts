@@ -15,11 +15,40 @@ export interface RegistryNetworkProps {
   readonly config: RegistryConfig;
 }
 
+// ec2.PublicSubnet.addNatGateway creates these children (aws-cdk-lib 2.x). The
+// lookup below fails synth if a NAT gateway has no EIP child, so a CDK change
+// cannot silently drop the NAT IPs from the Keycloak admin rules.
+const NAT_GATEWAY_CHILD_ID = 'NATGateway';
+const NAT_EIP_CHILD_ID = 'EIP';
+
+/**
+ * Public IPs of the VPC's NAT gateways (CloudFormation tokens). Private ECS
+ * tasks reach internet-facing endpoints, including the public Keycloak URL,
+ * from these addresses.
+ */
+function _natGatewayPublicIps(publicSubnets: ec2.ISubnet[]): string[] {
+  const ips: string[] = [];
+  for (const subnet of publicSubnets) {
+    if (!subnet.node.tryFindChild(NAT_GATEWAY_CHILD_ID)) continue;
+    const eip = subnet.node.tryFindChild(NAT_EIP_CHILD_ID);
+    if (!(eip instanceof ec2.CfnEIP)) {
+      throw new Error(
+        `NAT gateway in ${subnet.node.path} has no '${NAT_EIP_CHILD_ID}' CfnEIP child; ` +
+        'cannot derive the NAT egress IPs the Keycloak ALB admin rules must allow.',
+      );
+    }
+    ips.push(eip.attrPublicIp);
+  }
+  return ips;
+}
+
 export class RegistryNetwork extends Construct {
   public readonly vpc: ec2.Vpc;
   public readonly privateSubnets: ec2.ISubnet[];
   public readonly publicSubnets: ec2.ISubnet[];
   public readonly vpcEndpointsSg: ec2.SecurityGroup;
+  /** Public IPs of the NAT gateways (egress address of the private ECS tasks) */
+  public readonly natPublicIps: string[];
 
   constructor(scope: Construct, id: string, props: RegistryNetworkProps) {
     super(scope, id);
@@ -66,6 +95,8 @@ export class RegistryNetwork extends Construct {
 
     for (const subnet of this.privateSubnets) cdk.Tags.of(subnet).add('subnet-type', 'private');
     for (const subnet of this.publicSubnets) cdk.Tags.of(subnet).add('subnet-type', 'public');
+
+    this.natPublicIps = _natGatewayPublicIps(this.publicSubnets);
 
     // VPC endpoints SG
     this.vpcEndpointsSg = new ec2.SecurityGroup(this, 'VpcEndpointsSg', {

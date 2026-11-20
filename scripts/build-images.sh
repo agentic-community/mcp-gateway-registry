@@ -135,13 +135,14 @@ fi
 # Parse images from YAML and build array
 declare -A IMAGES
 declare -A BUILD_ARGS
+declare -A IMAGE_TAGS
 declare -a IMAGE_NAMES
 
 # Single pass to parse config and collect image information.
 # Capture the parser output and exit status separately so a failed parse
 # (e.g. missing PyYAML in the active python3) fails loudly instead of
 # silently producing an empty image list.
-PARSED_IMAGES="$(python3 << PYEOF
+PARSED_IMAGES="$(python3 - "$CONFIG_FILE" <<'PYEOF'
 import sys
 
 try:
@@ -156,7 +157,7 @@ except ModuleNotFoundError:
     sys.exit(1)
 
 try:
-    with open('$CONFIG_FILE') as f:
+    with open(sys.argv[1]) as f:
         config = yaml.safe_load(f)
 
     images = config.get('images', {})
@@ -165,15 +166,17 @@ try:
         dockerfile = image_config.get('dockerfile')
         context = image_config.get('context', '.')
         build_args = image_config.get('build_args', {})
+        tags = image_config.get('tags') or ['latest']
 
-        # Skip external images (they don't have dockerfiles, only external_image)
+        # External images have external_image instead of a Dockerfile.
         if not repo_name or not dockerfile:
             continue
 
         # Format build_args as key=value pairs separated by spaces
         build_args_str = ' '.join([f"{k}={v}" for k, v in build_args.items()])
 
-        print(f"{name}|{repo_name}|{dockerfile}|{context}|{build_args_str}")
+        tags_str = ' '.join(str(tag) for tag in tags)
+        print(f"{name}|{repo_name}|{dockerfile}|{context}|{build_args_str}|{tags_str}")
 
 except Exception as e:
     print(f"ERROR: Failed to parse config: {e}", file=sys.stderr)
@@ -187,10 +190,11 @@ if [ "$PARSE_STATUS" -ne 0 ]; then
     exit 1
 fi
 
-while IFS='|' read -r name repo_name dockerfile context build_args; do
+while IFS='|' read -r name repo_name dockerfile context build_args tags; do
     if [ -n "$name" ]; then
         IMAGES["$name"]="$repo_name|$dockerfile|$context"
         BUILD_ARGS["$name"]="$build_args"
+        IMAGE_TAGS["$name"]="$tags"
         IMAGE_NAMES+=("$name")
     fi
 done <<< "$PARSED_IMAGES"
@@ -282,6 +286,12 @@ build_image() {
     local dockerfile="$3"
     local context="$4"
     local build_args="${BUILD_ARGS[$image_name]:-}"
+    local -a tags tag_flags=()
+    read -r -a tags <<< "${IMAGE_TAGS[$image_name]}"
+    local tag
+    for tag in "${tags[@]}"; do
+        tag_flags+=(-t "$repo_name:$tag")
+    done
 
     log_info "Building $image_name..."
 
@@ -314,11 +324,11 @@ build_image() {
     fi
 
     # Build the Docker image using buildx (faster, better caching, future-proof)
-    # Tag with :latest only (ECS will pull fresh images with imagePullPolicy: always)
+    # Publish the tags selected in build-config.yaml.
     docker buildx build \
         --load \
         -f "$REPO_ROOT/$dockerfile" \
-        -t "$repo_name:latest" \
+        "${tag_flags[@]}" \
         $cache_flags \
         $build_arg_flags \
         "$REPO_ROOT/$context" || {
@@ -327,7 +337,7 @@ build_image() {
         return 1
     }
 
-    log_success "Built $repo_name:latest"
+    log_success "Built $repo_name with tags: ${tags[*]}"
 
     # Cleanup A2A agent dependencies after build
     cleanup_a2a_agent "$image_name" "$context"
@@ -340,7 +350,9 @@ push_image() {
     local image_name="$1"
     local repo_name="$2"
 
-    local ecr_uri_latest="${ECR_REGISTRY}/${repo_name}:latest"
+    local -a tags
+    read -r -a tags <<< "${IMAGE_TAGS[$image_name]}"
+    local tag ecr_uri
 
     log_info "Pushing $image_name to ECR..."
 
@@ -364,20 +376,20 @@ push_image() {
         return 1
     }
 
-    # Tag image for ECR (:latest only)
-    docker tag "$repo_name:latest" "$ecr_uri_latest" || {
-        log_error "Failed to tag image for ECR"
-        return 1
-    }
+    for tag in "${tags[@]}"; do
+        ecr_uri="${ECR_REGISTRY}/${repo_name}:$tag"
+        docker tag "$repo_name:$tag" "$ecr_uri" || {
+            log_error "Failed to tag image for ECR"
+            return 1
+        }
 
-    # Push to ECR
-    log_info "Pushing $ecr_uri_latest..."
-    docker push "$ecr_uri_latest" || {
-        log_error "Failed to push image to ECR"
-        return 1
-    }
-
-    log_success "Pushed $ecr_uri_latest"
+        log_info "Pushing $ecr_uri..."
+        docker push "$ecr_uri" || {
+            log_error "Failed to push image to ECR"
+            return 1
+        }
+        log_success "Pushed $ecr_uri"
+    done
 }
 
 # Process images

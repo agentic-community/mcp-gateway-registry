@@ -92,6 +92,7 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
         app: ASGIApp,
         keycloak_url: str,
         realm: str,
+        keycloak_external_url: str,
         audience: str | None = None,
         auth_disabled: bool = False,
         presence_only: bool = False,
@@ -100,7 +101,8 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
 
         Args:
             app: The wrapped ASGI application.
-            keycloak_url: Base URL of the Keycloak server.
+            keycloak_url: Internal Keycloak base URL used to fetch signing keys.
+            keycloak_external_url: Required public base URL for the signed issuer.
             realm: Keycloak realm whose JWKS signs the accepted tokens.
             audience: Expected ``aud`` claim. When None, audience is not checked
                 (Keycloak access tokens often carry ``account``); prefer setting
@@ -119,7 +121,7 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
         self._auth_disabled = auth_disabled
         self._presence_only = presence_only
         self._audience = audience
-        self._issuer = _build_issuer(keycloak_url, realm)
+        self._issuer = _build_issuer(keycloak_external_url, realm)
         self._jwks_client: PyJWKClient | None = None
 
         if auth_disabled:
@@ -138,7 +140,11 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
             )
             return
 
-        jwks_uri = f"{self._issuer}/protocol/openid-connect/certs"
+        if not keycloak_url.strip() or not keycloak_external_url.strip() or not realm.strip():
+            logger.error("JWT auth requires KEYCLOAK_URL, KEYCLOAK_EXTERNAL_URL and KEYCLOAK_REALM")
+            return
+
+        jwks_uri = f"{_build_issuer(keycloak_url, realm)}/protocol/openid-connect/certs"
         try:
             # PyJWKClient caches and rotates signing keys for us.
             self._jwks_client = PyJWKClient(jwks_uri)
@@ -232,13 +238,16 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
 
 
 # Bind addresses that expose the agent beyond the local host.
-_EXPOSED_BIND_ADDRESSES: frozenset[str] = frozenset({"0.0.0.0", "::", "*"})  # nosec B104 - matched, not bound
+_EXPOSED_BIND_ADDRESSES: frozenset[str] = frozenset(
+    {"0.0.0.0", "::", "*"}  # nosec B104 - matched, not bound
+)
 
 
 def install_agent_auth(
     app: ASGIApp,
     keycloak_url: str,
     realm: str,
+    keycloak_external_url: str,
     audience: str | None = None,
     bind_host: str | None = None,
 ) -> None:
@@ -251,7 +260,8 @@ def install_agent_auth(
     Args:
         app: The FastAPI application to protect. Must be called before the app
             starts serving (middleware cannot be added after startup).
-        keycloak_url: Base URL of the Keycloak server.
+        keycloak_url: Internal Keycloak base URL used to fetch signing keys.
+        keycloak_external_url: Required public base URL for the signed issuer.
         realm: Keycloak realm whose JWKS signs accepted tokens.
         audience: Optional expected ``aud`` claim.
         bind_host: The address the server will bind to. When authentication is
@@ -291,6 +301,7 @@ def install_agent_auth(
         JWTAuthMiddleware,
         keycloak_url=keycloak_url,
         realm=realm,
+        keycloak_external_url=keycloak_external_url,
         audience=audience,
         auth_disabled=auth_disabled,
         presence_only=presence_only,

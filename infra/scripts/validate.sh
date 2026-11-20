@@ -21,12 +21,21 @@ OUTPUTS="$INFRA_DIR/cdk-outputs.json"
 [ -f "$OUTPUTS" ] || { _log_error "$OUTPUTS not found — deploy first"; exit 1; }
 
 REGISTRY_URL=$(jq -r '."Registry-Service".RegistryUrl // empty' "$OUTPUTS")
+AUTH_PROVIDER=$(jq -r '."Registry-Service".AuthProvider // "keycloak"' "$OUTPUTS")
 KEYCLOAK_URL=$(jq -r '."Registry-Service".KeycloakUrl // ."Registry-Auth".KeycloakUrl // empty' "$OUTPUTS")
-[ -n "$REGISTRY_URL" ] && [ -n "$KEYCLOAK_URL" ] \
-  || { _log_error "Could not read URLs from $OUTPUTS"; exit 1; }
+[ -n "$REGISTRY_URL" ] \
+  || { _log_error "Could not read Registry URL from $OUTPUTS"; exit 1; }
+if [ "$AUTH_PROVIDER" = "keycloak" ]; then
+  [ -n "$KEYCLOAK_URL" ] || { _log_error "Could not read Keycloak URL from $OUTPUTS"; exit 1; }
+else
+  KEYCLOAK_URL=""
+fi
 
 KC_PW="${CDK_KEYCLOAK_ADMIN_PASSWORD:-}"
-[ -n "$KC_PW" ] || { _log_error "CDK_KEYCLOAK_ADMIN_PASSWORD not set"; exit 1; }
+if [ "$AUTH_PROVIDER" = "keycloak" ] && [ -z "$KC_PW" ]; then
+  _log_error "CDK_KEYCLOAK_ADMIN_PASSWORD not set"
+  exit 1
+fi
 
 PASS=0 FAIL=0
 _check() {
@@ -88,15 +97,17 @@ for svc in mcp-gateway-registry mcp-gateway-auth-server; do
     _check "$svc" 1 "$running/$desired $rollout"
   fi
 done
-kc_status=$(aws ecs describe-services --region "$AWS_REGION" \
-  --cluster keycloak --services keycloak \
-  --query 'services[0].[runningCount,desiredCount,deployments[0].rolloutState]' \
-  --output text 2>/dev/null)
-read -r kr kd kroll <<< "$kc_status"
-if [ "$kr" = "$kd" ] && [ "$kroll" = "COMPLETED" ]; then
-  _check "keycloak ($kr/$kd, $kroll)" 0
-else
-  _check "keycloak" 1 "$kr/$kd $kroll"
+if [ "$AUTH_PROVIDER" = "keycloak" ]; then
+  kc_status=$(aws ecs describe-services --region "$AWS_REGION" \
+    --cluster keycloak --services keycloak \
+    --query 'services[0].[runningCount,desiredCount,deployments[0].rolloutState]' \
+    --output text 2>/dev/null)
+  read -r kr kd kroll <<< "$kc_status"
+  if [ "$kr" = "$kd" ] && [ "$kroll" = "COMPLETED" ]; then
+    _check "keycloak ($kr/$kd, $kroll)" 0
+  else
+    _check "keycloak" 1 "$kr/$kd $kroll"
+  fi
 fi
 
 # ----------------------------------------------------------------------
@@ -109,10 +120,18 @@ _http "Registry /health" "$REGISTRY_URL/health"
 # plain probe endpoint through nginx; it is proxied at /oauth2/* via Service
 # Connect. A successful OAuth token flow (section 4 below) is its real
 # integration test, so there is no standalone auth-server /health probe here.
-_http "Keycloak /" "$KEYCLOAK_URL/" "200 302 303"
-_http "Keycloak realm OIDC" "$KEYCLOAK_URL/realms/mcp-gateway/.well-known/openid-configuration"
+if [ "$AUTH_PROVIDER" = "keycloak" ]; then
+  _http "Keycloak /" "$KEYCLOAK_URL/" "200 302 303"
+  _http "Keycloak realm OIDC" "$KEYCLOAK_URL/realms/mcp-gateway/.well-known/openid-configuration"
+fi
 _http ".well-known/ai-catalog" "$REGISTRY_URL/.well-known/ai-catalog.json"
 _http ".well-known/oauth-auth-server" "$REGISTRY_URL/.well-known/oauth-authorization-server"
+
+if [ "$AUTH_PROVIDER" != "keycloak" ]; then
+  _log_warn "Skipping Keycloak OAuth and authenticated CRUD checks for $AUTH_PROVIDER."
+  echo "$PASS infrastructure checks passed, $FAIL failed. Validate provider login separately."
+  exit "$FAIL"
+fi
 
 # ----------------------------------------------------------------------
 # 4. Keycloak admin OAuth + token claims

@@ -27,6 +27,13 @@ ingress_cidr_blocks = [
   "YOUR.EC2.INSTANCE.IP/32",   # Your EC2 instance or NAT Gateway IP
 ]
 
+# Keycloak ALB admin paths (/admin, /admin/*, /realms/master, /realms/master/*).
+# These source CIDRs plus NAT gateway egress IPs can reach admin paths.
+# Unset (null) uses ingress_cidr_blocks. Include the machine running setup.
+# CloudFront hides the client IP from the ALB, so terraform plan rejects a
+# different admin list when enable_cloudfront is true.
+# keycloak_admin_cidr_blocks = ["YOUR.LAPTOP.IP.ADDR/32"]
+
 # WAFv2 Web ACLs on the ALBs (AWS managed rule sets + WAF-level rate rules) as
 # optional defense-in-depth. NOT required for per-client-IP rate limiting: the
 # container nginx already rate-limits the auth-validation fan-out, and behind an

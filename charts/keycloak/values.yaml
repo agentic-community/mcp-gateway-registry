@@ -1,0 +1,113 @@
+# Keycloak subchart using the official Keycloak and PostgreSQL images.
+
+# Keycloak and its postgres deploy only when `create` is true AND
+# global.authProvider.type is "keycloak" (the default when unset). Set create
+# to false to use an external Keycloak.
+create: true
+
+# Kubernetes identity for Keycloak. PostgreSQL and the admin init Job use separate accounts.
+# Set create: false and name to reuse an existing Keycloak account.
+serviceAccount:
+  create: true
+  name: "" # Defaults to the release-scoped name when created, or default otherwise.
+  annotations: {}
+
+image:
+  repository: quay.io/keycloak/keycloak
+  tag: "26.8.2"
+  pullPolicy: IfNotPresent
+
+replicas: 1
+
+# Bundled Keycloak requires >=26.8.2. Password comes from a pre-created Secret.
+auth:
+  adminUser: user
+  existingSecret: "" # defaults to {{ .Release.Name }}-keycloak
+  existingSecretPasswordKey: admin-password # pragma: allowlist secret
+
+# The admin realm reconciled by the separate SSL initialization Job.
+adminRealm: master
+
+# Comma-separated KC_FEATURES. Empty preserves the server defaults.
+features: ""
+
+# Comma-separated KC_FEATURES_DISABLED.
+disabledFeatures: ""
+
+# Reverse-proxy / HTTP settings (Keycloak runs HTTP behind the registry nginx).
+proxyHeaders: xforwarded
+# Full canonical browser URL for standalone installs; the stack derives this
+# from global ingress, or global.authProvider.keycloak.externalUrl.
+hostname: ""
+httpRelativePath: "/"
+# Management probes remain at /health/* regardless of the public listener prefix.
+cache: local # Single replica only. ispn uses database-backed jdbc-ping discovery.
+
+# Reconcile admin-realm SSL policy in an explicit Helm Job, not pod readiness.
+# Failure stops the Helm operation without restarting healthy Keycloak pods.
+sslInit:
+  # Set create: false to reuse an existing account with this name.
+  serviceAccount:
+    create: true
+    name: "" # Defaults to the release-scoped admin init account.
+    annotations: {}
+  enabled: true
+
+service:
+  httpPort: 80
+  containerPort: 8080
+  managementPort: 9000
+
+# NetworkPolicy admitting only this release's Keycloak pods to postgres:5432.
+# Needs a CNI that enforces NetworkPolicy; without one it has no effect.
+networkPolicy:
+  enabled: true
+
+resources: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}
+extraEnv: []
+
+postgres:
+  # Set create: false to reuse an existing account with this name.
+  serviceAccount:
+    create: true
+    name: "" # Defaults to the release-scoped PostgreSQL account.
+    annotations: {}
+  image:
+    repository: postgres
+    # Pinned minor release of the Bitnami source major (17.x) for a clean
+    # dump/restore. Bump deliberately.
+    tag: "17.12"
+    pullPolicy: IfNotPresent
+  # Configurable target names; 1-63 ASCII letters/digits/_/-, first letter or _.
+  # Preserve them on retained storage: changing values does not rename a role/DB.
+  # The role owns this database and has no superuser, CREATEDB or CREATEROLE grants.
+  database: keycloak
+  username: keycloak
+  existingSecret: "" # defaults to {{ .Release.Name }}-keycloak-postgresql
+  existingSecretPasswordKey: password # pragma: allowlist secret
+  # Key holding the password of the cluster's `postgres` superuser, which
+  # only the first-init script uses. Keycloak never connects with it.
+  existingSecretAdminPasswordKey: postgres-password # pragma: allowlist secret
+  persistence:
+    size: 8Gi
+    storageClass: ""
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  # No inference from DNS, release type, cluster lookup, or PG_VERSION.
+  # Choose once, keep the same intent on normal upgrades:
+  # fresh-install: intentionally empty NEW database.
+  # restore: offline/operator-prepared archive of a quiescent legacy database.
+  # existing: verified prior official-image volume, never initializes empty data.
+  bootstrap:
+    mode: ""
+    existingClaim: "" # Operator-owned PVC containing immutable restore.dump.
+    sha256: "" # Lowercase SHA256 of pg_dump --format=custom output.
+    sourceQuiesced: false # ALL source writers stopped before dump through cutover.
+    existingVerified: false # Required only for adoption via mode=existing.
+    startupFailureThreshold: 8640 # Allow up to 24h for large restores; tune deliberately.

@@ -1,0 +1,201 @@
+suite: explicit Keycloak initialization and snapshot retirement
+release:
+  name: test
+  namespace: default
+set:
+  hostname: https://id.example.com
+  postgres.bootstrap.mode: fresh-install
+tests:
+  - it: keeps admin credentials out of the pod restart lifecycle
+    templates:
+      - templates/keycloak.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: test-keycloak
+      - notExists:
+          path: spec.template.spec.containers[0].lifecycle
+  - it: creates the Keycloak workload account without a mounted API token
+    templates:
+      - templates/serviceaccount.yaml
+    asserts:
+      - isKind:
+          of: ServiceAccount
+      - equal:
+          path: metadata.name
+          value: test-keycloak
+      - equal:
+          path: automountServiceAccountToken
+          value: false
+  - it: applies the configured account name and annotations
+    templates:
+      - templates/serviceaccount.yaml
+    set:
+      serviceAccount.name: custom-keycloak
+      serviceAccount.annotations.owner: platform
+    asserts:
+      - equal:
+          path: metadata.name
+          value: custom-keycloak
+      - equal:
+          path: metadata.annotations.owner
+          value: platform
+  - it: skips account creation when using an existing account
+    templates:
+      - templates/serviceaccount.yaml
+    set:
+      serviceAccount.create: false
+      serviceAccount.name: existing-keycloak
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: uses the existing account without mounting its API token
+    templates:
+      - templates/keycloak.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      serviceAccount.create: false
+      serviceAccount.name: existing-keycloak
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: existing-keycloak
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: false
+  - it: uses the dedicated PostgreSQL account without mounting its API token
+    templates:
+      - templates/postgres.yaml
+    documentSelector:
+      path: kind
+      value: StatefulSet
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: test-keycloak-postgres
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: false
+  - it: creates a separate PostgreSQL account even when Keycloak uses an existing account
+    templates:
+      - templates/postgres-serviceaccount.yaml
+    set:
+      serviceAccount.create: false
+      serviceAccount.name: existing-keycloak
+    asserts:
+      - isKind:
+          of: ServiceAccount
+      - equal:
+          path: metadata.name
+          value: test-keycloak-postgres
+  - it: performs initialization as an explicit hook with a retained result
+    templates:
+      - templates/admin-init.yaml
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: test-keycloak-admin-init
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-install,post-upgrade,post-rollback
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation
+      - equal:
+          path: spec.backoffLimit
+          value: 0
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: false
+  - it: uses an existing admin account independently of the Keycloak account
+    templates: [templates/admin-init.yaml]
+    documentSelector:
+      path: kind
+      value: Job
+    set:
+      sslInit.serviceAccount.create: false
+      sslInit.serviceAccount.name: existing-admin
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: existing-admin
+  - it: skips creating an externally managed PostgreSQL account
+    templates: [templates/postgres-serviceaccount.yaml]
+    set:
+      postgres.serviceAccount.create: false
+      postgres.serviceAccount.name: existing-postgres
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: drops the snapshot mount only after explicit verified existing transition
+    templates:
+      - templates/postgres.yaml
+    documentSelector:
+      path: kind
+      value: StatefulSet
+    set:
+      postgres.bootstrap.mode: existing
+      postgres.bootstrap.existingVerified: true
+    asserts:
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: migration
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: migration
+          any: true
+  - it: retains the read-only snapshot while restore intent remains selected
+    templates:
+      - templates/postgres.yaml
+    documentSelector:
+      path: kind
+      value: StatefulSet
+    set:
+      postgres.bootstrap.mode: restore
+      postgres.bootstrap.existingClaim: verified-snapshot
+      postgres.bootstrap.sourceQuiesced: true
+      postgres.bootstrap.sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: migration
+            persistentVolumeClaim:
+              claimName: verified-snapshot
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: migration
+            mountPath: /migration
+            readOnly: true
+  - it: keeps management probes at root when the public listener has a prefix
+    templates:
+      - templates/keycloak.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      httpRelativePath: /auth
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KC_HTTP_MANAGEMENT_RELATIVE_PATH
+            value: "/"
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /health/ready
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
+          value: /health/live

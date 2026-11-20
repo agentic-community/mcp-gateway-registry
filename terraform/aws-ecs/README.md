@@ -116,7 +116,7 @@ For detailed configuration and troubleshooting, see [Deployment Modes Guide](../
 
 > **Pre-built images vs. building your own — you do NOT need to build anything to use this out of the box.** By default the stack pulls **pre-built public images** with no build step:
 > - registry / auth-server / mcpgw → `public.ecr.aws/p3v1o3c6/...`
-> - Keycloak → `quay.io/keycloak/keycloak` (public)
+> - Keycloak uses `quay.io/keycloak/keycloak:26.8.2` (public).
 > - Grafana → the stock public Grafana image (provisioned at runtime)
 >
 > You only need `make build-push` (and Docker) if you want to run your **own** modified images. If you just want to use the solution as-is, skip building entirely and the defaults below pick up the public images. See [Using Custom Images](#using-custom-images) for the build path.
@@ -307,6 +307,68 @@ If you are running this from an EC2 instance, you may also want to run `curl -s 
 
 **Warning:** Setting `ingress_cidr_blocks` to `["0.0.0.0/0"]` opens access to anyone on the internet. While authentication (username/password) is still required, this is not recommended for production environments.
 
+#### Keycloak ALB path routing
+
+Terraform uses the same provider precedence as `AUTH_PROVIDER`: PingFederate,
+Auth0, Okta, Entra, Cognito, then Keycloak when a Keycloak domain is available.
+CloudFront-only mode supplies that domain from its distribution.
+When another provider wins, Terraform omits the Keycloak ALB, target group,
+listeners, routing rules, public security groups, CloudFront distribution,
+DNS records, certificates and WAF association. It also omits the Keycloak ECS
+task, service and autoscaling resources. Keycloak URL outputs become `null`.
+The gateway receives `KEYCLOAK_ENABLED=false` and empty Keycloak URLs.
+Terraform ignores `keycloak_admin_cidr_blocks` when Keycloak is inactive.
+
+`post-deployment-setup.sh` reads the `auth_provider` output. Other providers skip
+Keycloak DNS, ECS and endpoint checks, initialization and credential loading.
+Registry checks, scopes initialization and service restarts still run.
+`--skip-keycloak` skips only initialization when Keycloak is selected.
+Older output files require a Keycloak URL to identify a Keycloak deployment.
+
+Provider changes retain the Aurora database, RDS proxy, KMS keys, ECR repository,
+credential resources and internal security groups at their existing addresses.
+The empty Keycloak ECS cluster, IAM roles and log groups also remain.
+Keep supplying the existing database and admin passwords: Terraform still
+manages those resources, and the retained database still incurs charges.
+Delete retained resources only through a separate, reviewed data-retirement plan.
+
+The configuration includes `moved` blocks for resources that now use `[0]`.
+Active Keycloak deployments keep their resource identity on upgrade.
+Switching providers removes the unused edge and running Keycloak service.
+
+Run the mocked routing plans with Terraform 1.11 or newer:
+
+```bash
+terraform init -backend=false
+terraform test -filter=tests/keycloak_provider_routing.tftest.hcl -filter=tests/gateway_provider_routing.tftest.hcl
+```
+
+The Keycloak ALB forwards `/realms/mcp-gateway`, `/realms/mcp-gateway/*`,
+`/resources/*` and `/` for any source its security groups admit. Admin paths
+(`/admin`, `/admin/*`, `/realms/master`, `/realms/master/*`) also require an
+approved source IP in direct-ALB mode. All other paths return 404.
+
+`keycloak_admin_cidr_blocks` defaults to `null`, which uses `ingress_cidr_blocks`.
+Set it to your operator networks to restrict the admin console, Admin REST API
+and master-realm token endpoint:
+
+```hcl
+keycloak_admin_cidr_blocks = ["203.0.113.10/32"]
+```
+
+The HTTPS security group admits the union of ordinary ingress and admin CIDRs.
+Include the machine that runs the setup and user-management scripts. Terraform
+adds NAT gateway egress IPs for the registry's own admin calls. With an existing
+VPC, supply those addresses through `existing_nat_public_ips`.
+
+CloudFront hides the client IP from the ALB. In CloudFront modes, admin paths have
+no source-IP condition, and Terraform rejects an admin list that differs from
+`ingress_cidr_blocks`. Each admin rule accepts up to three CIDRs. Terraform
+rejects lists that would exceed the default 100-rule listener quota.
+
+Use the dedicated Keycloak URL for administration. Do not expose admin or
+master-realm routes through the registry gateway.
+
 #### Optional: Use an Existing VPC
 
 By default, this deployment creates a new VPC, public subnets, private subnets, NAT gateways, and VPC endpoints. To deploy into a VPC that is already managed by your organization, set `use_existing_vpc = true` and provide the VPC and subnet IDs.
@@ -390,7 +452,7 @@ session_cookie_domain = ""     # Empty for CloudFront mode
 
 # Container images: NOTHING to set here for a standard deployment. Core services
 # default to pre-built PUBLIC ECR images (public.ecr.aws/p3v1o3c6/...), Keycloak to
-# quay.io/keycloak/keycloak, and Grafana to the stock public image. Only set the
+# quay.io/keycloak/keycloak:26.8.2, and Grafana to the stock public image. Only set the
 # *_image_uri variables if you built your own images (see "Using Custom Images").
 
 # Observability (optional): Amazon Managed Prometheus + ADOT sidecars + Grafana.
@@ -461,8 +523,15 @@ See [Post-Deployment](#post-deployment) section for:
 
 **You do not need to build anything to use the solution out of the box.** By default:
 - registry, auth-server, mcpgw → pre-built images from `public.ecr.aws/p3v1o3c6/`
-- Keycloak → the public `quay.io/keycloak/keycloak` image (run non-optimized; no custom build)
+- Keycloak uses `quay.io/keycloak/keycloak:26.8.2` without an optimized custom build.
 - Grafana (when `enable_observability = true`) → the stock public Grafana image, provisioned at runtime by a sidecar
+
+Keycloak retains Aurora MySQL (`KC_DB=mysql`). The task sets `KC_HOSTNAME` to the
+public HTTPS URL and `KC_HOSTNAME_BACKCHANNEL_DYNAMIC=false`, so discovery and
+tokens use that canonical URL. Registry, auth-server and A2A agents receive it as
+`KEYCLOAK_EXTERNAL_URL`. The task uses `KC_BOOTSTRAP_ADMIN_USERNAME` and
+`KC_BOOTSTRAP_ADMIN_PASSWORD` for initial administrator creation, and `KC_LOG_LEVEL`
+for logging.
 
 The build path below is **only** for when you want to run your **own** modified images (e.g. local code changes). To deploy your own custom-built images instead:
 
@@ -950,7 +1019,7 @@ If `null_resource.dual_ingress_warning` already exists, its trigger change also 
 After the upgrade, `null_resource.dual_ingress_warning` prints the Mode 3 access notice only when Terraform creates it or the domain changes.
 
 Before applying, confirm that the plan contains no service security group or task definition replacements and no changes that would redeploy ECS services.
-In-place updates that change only `tags` and `tags_all` are expected, including on `aws_ecs_service.keycloak` and `aws_ecs_task_definition.keycloak`.
+In-place updates that change only `tags` and `tags_all` are expected, including on `aws_ecs_service.keycloak[0]` and `aws_ecs_task_definition.keycloak[0]` when Keycloak is active.
 
 After applying the upgrade, run `terraform plan -detailed-exitcode` with the same inputs and provider and module versions.
 Exit code `0` means no changes, `2` means changes remain, and `1` means an error occurred.
@@ -958,7 +1027,7 @@ Exit code `0` means no changes, `2` means changes remain, and `1` means an error
 The existing 30-second delay runs when Terraform creates or recreates the wait resource.
 Updating only the bucket policy while keeping the same bucket ID does not rerun the delay.
 
-For a fresh deployment, verify access logging for both the Gateway and Keycloak ALBs.
+For a fresh deployment, verify access logging for the Gateway ALB and, when Keycloak is active, its ALB.
 Check for `ELBAccessLogTestFile` and actual request logs.
 The Gateway ALB uses no extra prefix; the Keycloak ALB uses `keycloak-alb`.
 ALBs [publish access logs for each node every 5 minutes](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-access-logs.html).

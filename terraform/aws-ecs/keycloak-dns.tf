@@ -1,7 +1,7 @@
 #
 # Keycloak DNS and SSL Certificate
 #
-# These resources are only created when enable_route53_dns = true
+# Keycloak DNS and certificates exist only when Keycloak is selected and DNS is enabled.
 #
 
 # Use existing hosted zone for the root domain
@@ -13,7 +13,7 @@ data "aws_route53_zone" "root" {
 
 # Create SSL certificate for Keycloak domain
 resource "aws_acm_certificate" "keycloak" {
-  count             = var.enable_route53_dns ? 1 : 0
+  count             = local.keycloak_selected && var.enable_route53_dns ? 1 : 0
   domain_name       = local.keycloak_domain
   validation_method = "DNS"
 
@@ -31,7 +31,7 @@ resource "aws_acm_certificate" "keycloak" {
 
 # Create DNS validation records
 resource "aws_route53_record" "keycloak_certificate_validation" {
-  for_each = var.enable_route53_dns ? {
+  for_each = local.keycloak_selected && var.enable_route53_dns ? {
     for dvo in aws_acm_certificate.keycloak[0].domain_validation_options : dvo.domain_name => {
       name   = dvo.resource_record_name
       record = dvo.resource_record_value
@@ -49,7 +49,7 @@ resource "aws_route53_record" "keycloak_certificate_validation" {
 
 # Wait for certificate validation
 resource "aws_acm_certificate_validation" "keycloak" {
-  count           = var.enable_route53_dns ? 1 : 0
+  count           = local.keycloak_selected && var.enable_route53_dns ? 1 : 0
   certificate_arn = aws_acm_certificate.keycloak[0].arn
   timeouts {
     create = "5m"
@@ -61,7 +61,7 @@ resource "aws_acm_certificate_validation" "keycloak" {
 # Points to CloudFront when both CloudFront and Route53 are enabled (Mode 3)
 # Points to ALB when only Route53 is enabled (Mode 2)
 resource "aws_route53_record" "keycloak" {
-  count   = var.enable_route53_dns ? 1 : 0
+  count   = local.keycloak_selected && var.enable_route53_dns ? 1 : 0
   zone_id = data.aws_route53_zone.root[0].zone_id
   name    = local.keycloak_domain
   type    = "A"
@@ -69,8 +69,8 @@ resource "aws_route53_record" "keycloak" {
   alias {
     # Mode 3: Route53 → CloudFront (when both enabled)
     # Mode 2: Route53 → ALB (when only Route53 enabled)
-    name                   = var.enable_cloudfront ? aws_cloudfront_distribution.keycloak[0].domain_name : aws_lb.keycloak.dns_name
-    zone_id                = var.enable_cloudfront ? aws_cloudfront_distribution.keycloak[0].hosted_zone_id : aws_lb.keycloak.zone_id
+    name                   = var.enable_cloudfront ? aws_cloudfront_distribution.keycloak[0].domain_name : aws_lb.keycloak[0].dns_name
+    zone_id                = var.enable_cloudfront ? aws_cloudfront_distribution.keycloak[0].hosted_zone_id : aws_lb.keycloak[0].zone_id
     evaluate_target_health = true
   }
 }

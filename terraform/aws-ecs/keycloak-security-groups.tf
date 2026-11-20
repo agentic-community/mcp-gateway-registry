@@ -51,18 +51,20 @@ resource "aws_security_group_rule" "keycloak_ecs_egress_db" {
 
 # ECS Ingress from Load Balancer
 resource "aws_security_group_rule" "keycloak_ecs_ingress_lb" {
+  count = local.keycloak_selected ? 1 : 0
+
   description              = "Ingress from load balancer to Keycloak ECS task"
   type                     = "ingress"
   from_port                = 8080
   to_port                  = 8080
   protocol                 = "tcp"
   security_group_id        = aws_security_group.keycloak_ecs.id
-  source_security_group_id = aws_security_group.keycloak_lb.id
+  source_security_group_id = aws_security_group.keycloak_lb[0].id
 }
 
 # ECS Ingress from CloudFront Load Balancer SG (when CloudFront is enabled)
 resource "aws_security_group_rule" "keycloak_ecs_ingress_lb_cloudfront" {
-  count                    = local.cloudfront_prefix_list_name != "" ? 1 : 0
+  count                    = local.keycloak_selected && local.cloudfront_prefix_list_name != "" ? 1 : 0
   description              = "Ingress from CloudFront LB security group to Keycloak ECS task"
   type                     = "ingress"
   from_port                = 8080
@@ -74,6 +76,8 @@ resource "aws_security_group_rule" "keycloak_ecs_ingress_lb_cloudfront" {
 
 # Load Balancer Security Group
 resource "aws_security_group" "keycloak_lb" {
+  count = local.keycloak_selected ? 1 : 0
+
   name        = "keycloak-lb"
   description = "Security group for Keycloak load balancer"
   vpc_id      = local.selected_vpc_id
@@ -88,6 +92,8 @@ resource "aws_security_group" "keycloak_lb" {
 
 # Load Balancer Ingress from allowed CIDR blocks (HTTP)
 resource "aws_security_group_rule" "keycloak_lb_ingress_http" {
+  count = local.keycloak_selected ? 1 : 0
+
   #checkov:skip=CKV_AWS_260:HTTP ingress is intentional - ALB redirects to HTTPS or CloudFront terminates TLS
   description       = "Ingress from allowed CIDR blocks to load balancer (HTTP)"
   type              = "ingress"
@@ -95,7 +101,7 @@ resource "aws_security_group_rule" "keycloak_lb_ingress_http" {
   to_port           = 80
   protocol          = "tcp"
   cidr_blocks       = var.ingress_cidr_blocks
-  security_group_id = aws_security_group.keycloak_lb.id
+  security_group_id = aws_security_group.keycloak_lb[0].id
 }
 
 # Load Balancer Ingress from prefix list (HTTP) - optional, for CloudFront or other CDN
@@ -104,12 +110,12 @@ resource "aws_security_group_rule" "keycloak_lb_ingress_http" {
 # Note: CloudFront prefix list has ~45 entries which count against SG rules limit,
 # so we create a separate security group to avoid hitting the 60 rules/SG limit
 data "aws_ec2_managed_prefix_list" "cloudfront" {
-  count = local.cloudfront_prefix_list_name != "" ? 1 : 0
+  count = local.keycloak_selected && local.cloudfront_prefix_list_name != "" ? 1 : 0
   name  = local.cloudfront_prefix_list_name
 }
 
 resource "aws_security_group" "keycloak_lb_cloudfront" {
-  count       = local.cloudfront_prefix_list_name != "" ? 1 : 0
+  count       = local.keycloak_selected && local.cloudfront_prefix_list_name != "" ? 1 : 0
   name        = "keycloak-lb-cloudfront"
   description = "Security group for CloudFront access to Keycloak ALB"
   vpc_id      = local.selected_vpc_id
@@ -123,7 +129,7 @@ resource "aws_security_group" "keycloak_lb_cloudfront" {
 }
 
 resource "aws_security_group_rule" "keycloak_lb_cloudfront_ingress" {
-  count             = local.cloudfront_prefix_list_name != "" ? 1 : 0
+  count             = local.keycloak_selected && local.cloudfront_prefix_list_name != "" ? 1 : 0
   description       = "Ingress from prefix list to load balancer (HTTP) - default: CloudFront origin-facing IPs"
   type              = "ingress"
   from_port         = 80
@@ -134,7 +140,7 @@ resource "aws_security_group_rule" "keycloak_lb_cloudfront_ingress" {
 }
 
 resource "aws_security_group_rule" "keycloak_lb_cloudfront_egress" {
-  count                    = local.cloudfront_prefix_list_name != "" ? 1 : 0
+  count                    = local.keycloak_selected && local.cloudfront_prefix_list_name != "" ? 1 : 0
   description              = "Egress from CloudFront SG to Keycloak ECS task"
   type                     = "egress"
   from_port                = 8080
@@ -146,13 +152,18 @@ resource "aws_security_group_rule" "keycloak_lb_cloudfront_egress" {
 
 # Load Balancer Ingress from allowed CIDR blocks (HTTPS)
 resource "aws_security_group_rule" "keycloak_lb_ingress_https" {
-  description       = "Ingress from allowed CIDR blocks to load balancer (HTTPS)"
-  type              = "ingress"
-  from_port         = 443
-  to_port           = 443
-  protocol          = "tcp"
-  cidr_blocks       = var.ingress_cidr_blocks
-  security_group_id = aws_security_group.keycloak_lb.id
+  count = local.keycloak_selected ? 1 : 0
+
+  description = "Ingress from allowed CIDR blocks to load balancer (HTTPS)"
+  type        = "ingress"
+  from_port   = 443
+  to_port     = 443
+  protocol    = "tcp"
+  cidr_blocks = distinct(concat(
+    var.ingress_cidr_blocks,
+    local.keycloak_admin_cidr_blocks,
+  ))
+  security_group_id = aws_security_group.keycloak_lb[0].id
 }
 
 
@@ -160,12 +171,14 @@ resource "aws_security_group_rule" "keycloak_lb_ingress_https" {
 # Note: This rule is for direct VPC traffic. For traffic via NAT gateway,
 # see keycloak_lb_ingress_nat_gateway rule below.
 resource "aws_security_group_rule" "keycloak_lb_ingress_auth_server" {
+  count = local.keycloak_selected ? 1 : 0
+
   description              = "Ingress from MCP Gateway Auth Server to Keycloak load balancer (HTTPS)"
   type                     = "ingress"
   from_port                = 443
   to_port                  = 443
   protocol                 = "tcp"
-  security_group_id        = aws_security_group.keycloak_lb.id
+  security_group_id        = aws_security_group.keycloak_lb[0].id
   source_security_group_id = module.mcp_gateway.ecs_security_group_ids.auth
 }
 
@@ -173,7 +186,7 @@ resource "aws_security_group_rule" "keycloak_lb_ingress_auth_server" {
 # When ECS tasks in private subnets call Keycloak's public DNS name, traffic goes through NAT gateway.
 # The source IP becomes the NAT gateway's public IP, not the ECS task's security group.
 resource "aws_security_group_rule" "keycloak_lb_ingress_nat_gateway" {
-  count = length(local.selected_nat_public_ips) > 0 ? 1 : 0
+  count = local.keycloak_selected && length(local.selected_nat_public_ips) > 0 ? 1 : 0
 
   description       = "Ingress from NAT gateways to Keycloak load balancer (HTTPS)"
   type              = "ingress"
@@ -181,28 +194,32 @@ resource "aws_security_group_rule" "keycloak_lb_ingress_nat_gateway" {
   to_port           = 443
   protocol          = "tcp"
   cidr_blocks       = [for ip in local.selected_nat_public_ips : "${ip}/32"]
-  security_group_id = aws_security_group.keycloak_lb.id
+  security_group_id = aws_security_group.keycloak_lb[0].id
 }
 
 # Load Balancer Ingress from MCP Gateway Registry (HTTPS)
 resource "aws_security_group_rule" "keycloak_lb_ingress_registry" {
+  count = local.keycloak_selected ? 1 : 0
+
   description              = "Ingress from MCP Gateway Registry to Keycloak load balancer (HTTPS)"
   type                     = "ingress"
   from_port                = 443
   to_port                  = 443
   protocol                 = "tcp"
-  security_group_id        = aws_security_group.keycloak_lb.id
+  security_group_id        = aws_security_group.keycloak_lb[0].id
   source_security_group_id = module.mcp_gateway.ecs_security_group_ids.registry
 }
 
 # Load Balancer Egress to ECS
 resource "aws_security_group_rule" "keycloak_lb_egress_ecs" {
+  count = local.keycloak_selected ? 1 : 0
+
   description              = "Egress from load balancer to Keycloak ECS task"
   type                     = "egress"
   from_port                = 8080
   to_port                  = 8080
   protocol                 = "tcp"
-  security_group_id        = aws_security_group.keycloak_lb.id
+  security_group_id        = aws_security_group.keycloak_lb[0].id
   source_security_group_id = aws_security_group.keycloak_ecs.id
 }
 
@@ -240,4 +257,39 @@ resource "aws_security_group_rule" "keycloak_db_ingress_proxy" {
   protocol                 = "tcp"
   security_group_id        = aws_security_group.keycloak_db.id
   source_security_group_id = aws_security_group.keycloak_db.id
+}
+
+moved {
+  from = aws_security_group.keycloak_lb
+  to   = aws_security_group.keycloak_lb[0]
+}
+
+moved {
+  from = aws_security_group_rule.keycloak_ecs_ingress_lb
+  to   = aws_security_group_rule.keycloak_ecs_ingress_lb[0]
+}
+
+moved {
+  from = aws_security_group_rule.keycloak_lb_ingress_http
+  to   = aws_security_group_rule.keycloak_lb_ingress_http[0]
+}
+
+moved {
+  from = aws_security_group_rule.keycloak_lb_ingress_https
+  to   = aws_security_group_rule.keycloak_lb_ingress_https[0]
+}
+
+moved {
+  from = aws_security_group_rule.keycloak_lb_ingress_auth_server
+  to   = aws_security_group_rule.keycloak_lb_ingress_auth_server[0]
+}
+
+moved {
+  from = aws_security_group_rule.keycloak_lb_ingress_registry
+  to   = aws_security_group_rule.keycloak_lb_ingress_registry[0]
+}
+
+moved {
+  from = aws_security_group_rule.keycloak_lb_egress_ecs
+  to   = aws_security_group_rule.keycloak_lb_egress_ecs[0]
 }

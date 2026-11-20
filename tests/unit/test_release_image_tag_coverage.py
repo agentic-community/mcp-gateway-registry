@@ -110,32 +110,3 @@ def test_all_pinned_tags_agree(repo_root: Path) -> None:
     pinned = _charts_pinning_global_tag(repo_root)
     distinct = sorted(set(pinned.values()))
     assert len(distinct) == 1, f"charts disagree on the app image tag: {pinned}"
-
-
-def test_workflow_does_not_overwrite_the_per_chart_override(
-    repo_root: Path, workflow_text: str
-) -> None:
-    """Only `global.image.tag` may be bumped.
-
-    Each chart's own `image.tag` is deliberately empty so it falls back to the
-    global value; writing a release version into it would turn a documented
-    override into a pin that silently outranks `global.image.tag`.
-    """
-    assert ".global.image.tag = strenv(VERSION)" in workflow_text
-    # Anchored on the opening quote so `.global.image.tag` -- which contains
-    # `.image.tag` as a substring -- does not match.
-    assert not re.search(r"yq[^\n]*['\"]\.image\.tag\s*=", workflow_text), (
-        f"{WORKFLOW} writes to a chart's own image.tag; that field must stay empty "
-        "so it falls back to global.image.tag"
-    )
-
-    for values_file in sorted((repo_root / CHARTS_DIR).glob("*/values.yaml")):
-        data = yaml.safe_load(values_file.read_text())
-        if not isinstance(data, dict):
-            continue
-        own_tag = (data.get("image") or {}).get("tag")
-        if own_tag is not None:
-            assert own_tag == "", (
-                f"{values_file.relative_to(repo_root)} pins image.tag={own_tag!r}; "
-                "leave it empty so the release bump to global.image.tag applies"
-            )

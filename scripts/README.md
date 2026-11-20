@@ -271,19 +271,20 @@ docker-compose up -d
 
 ### Overview
 
-The `build-and-push-keycloak.sh` script automates the process of building a Keycloak Docker image and pushing it to AWS ECR (Elastic Container Registry).
+The `build-images.sh` script builds the Keycloak image defined in `build-config.yaml` and pushes its configured tags to Amazon Elastic Container Registry (ECR).
 
 ### Quick Start
 
 ```bash
-# Build and push with defaults (latest tag to us-west-2)
-./scripts/build-and-push-keycloak.sh
+# Activate the project environment and choose the AWS region.
+source .venv/bin/activate
+export AWS_REGION=us-west-2
 
-# Build and push with custom tag
-./scripts/build-and-push-keycloak.sh --image-tag v24.0.1
+# Build and push Keycloak with the configured 26.8.2 tag.
+IMAGE=keycloak ./scripts/build-images.sh build-push
 
-# Build only (don't push)
-./scripts/build-and-push-keycloak.sh --no-push
+# Build without pushing.
+IMAGE=keycloak ./scripts/build-images.sh build
 ```
 
 ### Using with Make
@@ -295,47 +296,32 @@ make build-keycloak
 # Build and push to ECR
 make build-and-push-keycloak
 
-# Deploy to ECS (after push)
-make deploy-keycloak
-
-# Complete workflow: build, push, and deploy
-make update-keycloak
-
-# With custom parameters
-make build-and-push-keycloak AWS_REGION=us-east-1 IMAGE_TAG=v24.0.1
+# Select the AWS region; image tags come from build-config.yaml.
+make build-and-push-keycloak AWS_REGION=us-east-1
 ```
 
-### Options
+The Make target uses the Keycloak entry in `build-config.yaml`. Set its `BASE_IMAGE` and `tags` together for a custom build. The shipped entry uses 26.8.2; the build and image manifest preserve that tag. Configure deployments with an explicit version tag or digest.
 
-- `--aws-region REGION` - AWS region (default: us-west-2)
-- `--image-tag TAG` - Image tag (default: latest)
-- `--aws-profile PROFILE` - AWS profile (default: default)
-- `--dockerfile PATH` - Dockerfile path (default: docker/keycloak/Dockerfile)
-- `--build-context PATH` - Build context (default: docker/keycloak)
-- `--no-push` - Build only, don't push to ECR
-- `--help` - Show help message
+For ECS, update the deployment's image reference before rollout. Terraform uses `keycloak_image_uri`; CDK uses `registry.images.keycloak` in `infra/config.yaml`. Set it to the ECR URI and version tag produced by the build, review the plan or diff, then apply through the deployment's normal Terraform/CDK workflow. This registers a task definition with the new image. A forced restart of a task definition that still names `:latest` cannot deploy the versioned image.
+
+The former `deploy-keycloak` and `update-keycloak` Make targets have been removed because they only restarted the existing task definition. Use `make build-and-push-keycloak`, then apply the image reference through Terraform/CDK.
+
+### Configuration
+
+Use `build`, `push`, or `build-push` as the script's first argument. Set `IMAGE=keycloak` in the environment to select Keycloak, and set `NO_CACHE=true` to rebuild without Docker's cache. `AWS_REGION` is required; `AWS_PROFILE` selects an AWS credentials profile when needed. The Keycloak entry in `build-config.yaml` controls the Dockerfile, build context, base image, and output tags.
 
 ### Prerequisites
 
-- Docker installed and running
-- AWS CLI installed and configured
-- AWS credentials with ECR access
-- Permission to push to ECR repository `keycloak`
-
-### Features
-
-- Color-coded output for easy readability
-- Step-by-step progress tracking
-- Error handling with clear error messages
-- ECR login automation
-- Image verification after push
-- Helpful commands for manual deployment
+- Install Docker with Buildx and start the Docker daemon.
+- Install the AWS CLI and configure credentials with ECR access.
+- Activate a Python virtual environment with PyYAML installed.
+- Set `AWS_REGION` before running the build or push command.
 
 ### Workflow Example
 
 ```bash
 # Build and push image
-./scripts/build-and-push-keycloak.sh --image-tag v24.0.1
+IMAGE=keycloak ./scripts/build-images.sh build-push
 
 # Deploy to ECS
 aws ecs update-service \
@@ -370,5 +356,5 @@ aws ecs describe-services \
 ### Further Reading
 
 - [AWS ECR Documentation](https://docs.aws.amazon.com/ecr/)
-- [Keycloak Docker Image](https://hub.docker.com/r/keycloak/keycloak)
+- [Keycloak Container Guide](https://www.keycloak.org/server/containers)
 - [ECS Service Updates](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/update-service.html)

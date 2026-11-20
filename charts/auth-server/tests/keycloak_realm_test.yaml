@@ -1,0 +1,22 @@
+suite: Keycloak realm validation
+templates:
+  - secret.yaml
+release:
+  name: test
+  namespace: default
+tests:
+  - it: refuses conflicting global and local realms
+    set:
+      global.authProvider.type: keycloak
+      global.authProvider.keycloak.realm: team-realm
+      keycloak.realm: other-realm
+    asserts:
+      - failedTemplate:
+          errorMessage: "keycloak.realm conflicts with global.authProvider.keycloak.realm; use the global realm or leave the local value empty"
+  - it: refuses exposing the master realm
+    set:
+      global.authProvider.type: keycloak
+      global.authProvider.keycloak.realm: master
+    asserts:
+      - failedTemplate:
+          errorMessage: "Keycloak gateway realm must be 1-64 letters, digits, underscores or hyphens and must not be master"
