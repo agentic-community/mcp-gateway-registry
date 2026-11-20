@@ -4,7 +4,7 @@
 
 *Status: all five slices are built on branch `feat/openapi-mcp-servers-2022` (PR #2039), including per-user credentials and uploaded specs.*
 
-Every diagram exists as SVG and PNG in `docs/images/`, named `openapi-mcp-servers-*`.
+Every diagram is an SVG in `docs/images/`, named `openapi-mcp-servers-*`. The threat model, every security control and the open proposals are in [openapi-mcp-servers-security.md](openapi-mcp-servers-security.md).
 
 ## 100-level: what it is and why
 
@@ -16,7 +16,7 @@ Agents reach tools through MCP servers. Most teams already have REST APIs, and m
 
 An admin creates an OpenAPI MCP server in the registry and gives it a name. They then add REST APIs to it, each one given as a spec URL, a base URL and an API key. Every operation in the spec becomes a tool on that server. Agents connect to it the way they connect to any other MCP server, with the same login, the same access rules and the same search. Nobody writes or deploys code for each API.
 
-![The big picture](../images/openapi-mcp-servers-100-overview.png)
+![The big picture](../images/openapi-mcp-servers-100-overview.svg)
 
 ### How it works
 
@@ -28,11 +28,11 @@ Three parts do the work:
 
 When an agent calls a tool, the call goes through the gateway to the container. The container calls the REST API with that API's key and returns the answer. The agent never sees the key.
 
-![What happens when an agent calls a tool](../images/openapi-mcp-servers-100-tool-call.png)
+![What happens when an agent calls a tool](../images/openapi-mcp-servers-100-tool-call.svg)
 
 ### How it stays safe
 
-Only admins can add or change APIs. An admin can enter one shared key for an API, or make it per-user, so that each user adds their own key from the API provider. The registry stores every key encrypted and never shows it again after it is entered. A new server starts private, so only admins can use it until an admin opens it to a group or to everyone. The container can call only the addresses the registry's own network guard allows, so a spec cannot point it at internal services or cloud metadata. It also strips the gateway's identity headers before it calls an outside API.
+Only admins can add or change APIs. An admin can enter one shared key for an API, or make it per-user, so that each user adds their own key from the API provider. The registry stores every key encrypted and never shows it again after it is entered. A new server starts private, so the registry lists it only to admins until an admin opens it to a group or to everyone. Calling its tools is governed by scopes, as for every other server, so a user whose scopes already grant the server can call it while it is private. The container can call only the addresses the registry's own network guard allows, so a spec cannot point it at internal services or cloud metadata. It also strips the gateway's identity headers before it calls an outside API.
 
 ### What this version leaves out
 
@@ -42,7 +42,7 @@ The registry does not fetch API keys for anyone: a user gets a per-user key from
 
 ### Components
 
-![Components](../images/openapi-mcp-servers-200-components.png)
+![Components](../images/openapi-mcp-servers-200-components.svg)
 
 The registry is the control plane. It owns all state and never carries REST traffic. The container is the data plane. It keeps everything in memory and can be rebuilt from the registry at any time.
 
@@ -104,7 +104,7 @@ Agents never see the container's paths. They call `/<slug>/mcp` on the gateway, 
 
 ### Adding a target
 
-![Adding a REST target](../images/openapi-mcp-servers-200-add-target.png)
+![Adding a REST target](../images/openapi-mcp-servers-200-add-target.svg)
 
 Adding a target is how third-party content, the spec, gets into the system, so the registry checks it before it stores anything:
 
@@ -118,7 +118,7 @@ If any step fails, the registry returns an error and stores nothing. If every st
 
 ### A tool call
 
-![A tool call through the gateway](../images/openapi-mcp-servers-200-tool-call.png)
+![A tool call through the gateway](../images/openapi-mcp-servers-200-tool-call.svg)
 
 The gateway treats the server like any other: nginx asks the auth server's `/validate` whether the caller's token and scopes allow this server, then proxies to the container. Inside the container:
 
@@ -139,7 +139,7 @@ A server with a per-user target routes through the auth server's mcp-proxy hop, 
 
 Only the registry starts calls between the two; the container never calls the registry. Each push carries a server's full state, its generation number, and its incarnation (the server's creation time). The container ignores a push that is not newer than the hub it is running for the same incarnation, so two registry replicas pushing at once do no harm. A push with a different incarnation always replaces the hub: a server deleted and created again under the same slug restarts at generation 1, and without the incarnation the container would keep serving the old server's hub and credentials.
 
-![Recovering after the container restarts](../images/openapi-mcp-servers-200-recovery.png)
+![Recovering after the container restarts](../images/openapi-mcp-servers-200-recovery.svg)
 
 A container restart loses every hub. The reconciler checks the container's `/health` every 10 seconds. When the start time changes, it reads the container's status and pushes every server it finds missing or stale. It also runs a full pass at registry startup and every 60 seconds. Until the push lands, calls to those servers return 404. In a load test with 10 servers of 10 targets each, every target was serving again 23 seconds after the restart. The registry does not restart the container itself, because Compose, ECS and Kubernetes each do that their own way.
 
@@ -147,16 +147,20 @@ Every change also starts a background security scan of the server. A scan cut of
 
 ### Security model
 
+This table summarizes the main controls. The full security design, with its trust boundaries, the checks on each backend call and the known limits, is in [openapi-mcp-servers-security.md](openapi-mcp-servers-security.md).
+
 | Risk | Control |
 |------|---------|
 | A non-admin adds an API that spends a stored credential | Every write needs an admin (the same check virtual servers use) and a CSRF token. `can_modify_servers` is not enough |
 | Credentials leak through the API | Credentials are write-only. Responses show only `credential_set: true`. Non-admins do not see spec or base URLs |
 | Someone on the internal network drives the container | Every `/internal/*` call needs a sync token that lasts 60 seconds, works once, and is signed with a key derived from `OPENAPI_MCP_SYNC_SECRET`. The container never holds `SECRET_KEY` |
 | A spec or base URL points at internal services or cloud metadata | The same SSRF guard runs on the spec fetch and on every backend call |
-| An ordinary server registers the container as its backend | The container's hostname is reserved. Only a server whose path and target match `/<slug>` and `<container>/s/<slug>/mcp` exactly gets the built-in profile. That profile reaches only `/s/<slug>/mcp`, never `/internal/*` |
+| A key leaves its approved base URL, or travels in clear | Spec paths with `.` or `..` segments are refused, and the container checks that each final URL stays under the base URL. A target with a key needs HTTPS unless the operator allowlisted its host |
+| One user's backend session reaches another user | The backend clients store no cookies and drop every `Set-Cookie` |
+| An ordinary server registers the container as its backend | The container's hostname is reserved. Only a server whose path and target match `/<slug>` and `<container>/s/<slug>/mcp` exactly gets the built-in profile. That profile reaches only `/s/<slug>/mcp`, never `/internal/*`. The reservation matches the hostname, so the container reached by IP or another name is a known gap; the security design proposes a fix |
 | Gateway headers reach a third-party API | The dispatcher keeps only an allowlist of MCP headers |
 | One user's key is used for another user, or sent to another host | Per-user keys are keyed on the immutable user id, bound to the target's base URL, and delivered per call in a signed, single-use, slug-bound envelope; a missing key is an error, never a fallback to a shared key |
-| A spec that expands into gigabytes, or takes a long time to convert | YAML aliases are refused, specs are capped at 5 MiB, and each conversion has 10 seconds |
+| A spec or response that expands into gigabytes, or a spec that takes a long time to convert | YAML aliases and compressed bodies are refused, specs are capped at 5 MiB and responses at 2 MiB, and each conversion has 10 seconds |
 | A spec carries text aimed at the model | The security scanner runs after every tool change. Admins can replace any description, and can block a single tool with the existing per-tool block |
 
 ### Limits and settings
@@ -178,7 +182,7 @@ In `REGISTRY_ONLY` mode, or when `REGISTRY_MODE` turns MCP servers off, the regi
 
 ### Deployment
 
-![Deployment surfaces](../images/openapi-mcp-servers-200-deployment.png)
+![Deployment surfaces](../images/openapi-mcp-servers-200-deployment.svg)
 
 The container ships as its own image, built from `docker/Dockerfile.openapi-mcp`. Besides its own code, the image holds nine files from the registry: the SSRF guard and its imports, the signing-secret check, and the sync-token module. It holds nothing else from the registry, including the settings class that needs `SECRET_KEY`. One replica runs, because pushes go to one address. The same load test, which included one 4.4 MB spec, peaked at 293 MiB, so ECS and CDK give the container 1024 MiB (the smallest Fargate size for 0.5 vCPU) and Helm limits it to 1 Gi.
 
