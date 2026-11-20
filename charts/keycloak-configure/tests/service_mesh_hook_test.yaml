@@ -1,0 +1,28 @@
+suite: keycloak-configure hook Job joins the service mesh
+templates:
+  - templates/job.yaml
+release:
+  name: test
+  namespace: default
+tests:
+  - it: adds no inject label when the mesh is disabled (non-mesh parity)
+    asserts:
+      - isNull:
+          path: spec.template.metadata.labels["sidecar.istio.io/inject"]
+
+  - it: labels the bootstrap Job for sidecar injection when the mesh is enabled
+    set:
+      global.serviceMesh.enabled: true
+      global.serviceMesh.type: istio
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels["sidecar.istio.io/inject"]
+          value: "true"
+
+  - it: does not label for a non-istio mesh type
+    set:
+      global.serviceMesh.enabled: true
+      global.serviceMesh.type: linkerd
+    asserts:
+      - isNull:
+          path: spec.template.metadata.labels["sidecar.istio.io/inject"]

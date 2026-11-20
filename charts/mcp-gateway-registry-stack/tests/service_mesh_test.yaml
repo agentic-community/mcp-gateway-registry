@@ -1,0 +1,261 @@
+suite: service mesh objects (PeerAuthentication, AuthorizationPolicy, hook exclusion)
+templates:
+  - templates/servicemesh-peerauthentication.yaml
+  - templates/servicemesh-authorizationpolicy.yaml
+release:
+  name: rel
+  namespace: default
+tests:
+  # ---- non-mesh parity: nothing renders when the mesh is off ----
+  - it: renders no PeerAuthentication when the mesh is disabled
+    template: templates/servicemesh-peerauthentication.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders no AuthorizationPolicy when the mesh is disabled
+    template: templates/servicemesh-authorizationpolicy.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # ---- PeerAuthentication ----
+  - it: renders a STRICT PeerAuthentication by default when the mesh is on
+    template: templates/servicemesh-peerauthentication.yaml
+    set:
+      global.serviceMesh.enabled: true
+      global.serviceMesh.type: istio
+    asserts:
+      - isKind:
+          of: PeerAuthentication
+      - equal:
+          path: spec.mtls.mode
+          value: STRICT
+
+  - it: honors PERMISSIVE mtls mode for the first rollout
+    template: templates/servicemesh-peerauthentication.yaml
+    set:
+      global.serviceMesh.enabled: true
+      global.serviceMesh.type: istio
+      global.serviceMesh.mtls.mode: PERMISSIVE
+    asserts:
+      - equal:
+          path: spec.mtls.mode
+          value: PERMISSIVE
+
+  - it: renders no PeerAuthentication for a non-istio mesh type
+    template: templates/servicemesh-peerauthentication.yaml
+    set:
+      global.serviceMesh.enabled: true
+      global.serviceMesh.type: linkerd
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # ---- AuthorizationPolicy ----
+  - it: renders the app-pod policies when the mesh is on (no datastores)
+    template: templates/servicemesh-authorizationpolicy.yaml
+    set:
+      global.serviceMesh.enabled: true
+      global.serviceMesh.type: istio
+      keycloak.create: false
+      mongodb.enabled: false
+      openbao.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 3
+
+  - it: the registry policy opens the public entry ports and limits the vend port to the auth-server
+    template: templates/servicemesh-authorizationpolicy.yaml
+    documentIndex: 0
+    set:
+      global.serviceMesh.enabled: true
+      global.serviceMesh.type: istio
+      keycloak.create: false
+      mongodb.enabled: false
+      openbao.enabled: false
+    asserts:
+      - equal:
+          path: metadata.name
+          value: rel-mcp-gateway-registry-stack-allow-registry
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/name"]
+          value: registry
+      - equal:
+          path: spec.rules[0].to[0].operation.ports
+          value: ["8080", "8443"]
+      - isNull:
+          path: spec.rules[0].from
+      - equal:
+          path: spec.rules[1].from[0].source.principals
+          value: ["cluster.local/ns/default/sa/auth-server"]
+      - equal:
+          path: spec.rules[1].to[0].operation.ports
+          value: ["8091"]
+
+  - it: the mcpgw policy uses the container port, not the Service port
+    template: templates/servicemesh-authorizationpolicy.yaml
+    documentIndex: 2
+    set:
+      global.serviceMesh.enabled: true
+      global.serviceMesh.type: istio
+      keycloak.create: false
+      mongodb.enabled: false
+      openbao.enabled: false
+    asserts:
+      - equal:
+          path: spec.rules[0].to[0].operation.ports
+          value: ["8000"]
+
+  - it: the mongodb policy admits replica-set members, the operator and the setup Job
+    template: templates/servicemesh-authorizationpolicy.yaml
+    documentIndex: 3
+    set:
+      global.serviceMesh.enabled: true
+      global.serviceMesh.type: istio
+      keycloak.create: false
+      mongodb.enabled: true
+      openbao.enabled: false
+    asserts:
+      - equal:
+          path: metadata.name
+          value: rel-mcp-gateway-registry-stack-allow-mongodb
+      - contains:
+          path: spec.rules[0].from[0].source.principals
+          content: cluster.local/ns/default/sa/mongodb-kubernetes-appdb
+      - contains:
+          path: spec.rules[0].from[0].source.principals
+          content: cluster.local/ns/default/sa/setup-mongodb
+      - contains:
+          path: spec.rules[0].from[0].source.principals
+          content: cluster.local/ns/default/sa/mongodb-kubernetes-operator
+
+  - it: renders no AuthorizationPolicy when authz policies are disabled but mesh is on
+    template: templates/servicemesh-authorizationpolicy.yaml
+    set:
+      global.serviceMesh.enabled: true
+      global.serviceMesh.type: istio
+      global.serviceMesh.authorizationPolicies.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: adds the openbao policy only when openbao is enabled
+    template: templates/servicemesh-authorizationpolicy.yaml
+    set:
+      global.serviceMesh.enabled: true
+      global.serviceMesh.type: istio
+      keycloak.create: false
+      mongodb.enabled: false
+      openbao.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: honors a custom trust domain in principals
+    template: templates/servicemesh-authorizationpolicy.yaml
+    documentIndex: 2
+    set:
+      global.serviceMesh.enabled: true
+      global.serviceMesh.type: istio
+      global.serviceMesh.authorizationPolicies.trustDomain: example.org
+      keycloak.create: false
+      mongodb.enabled: false
+      openbao.enabled: false
+    asserts:
+      - equal:
+          path: metadata.name
+          value: rel-mcp-gateway-registry-stack-allow-mcpgw
+      - contains:
+          path: spec.rules[0].from[0].source.principals
+          content: example.org/ns/default/sa/registry
+
+  # ---- STRICT exceptions ----
+  - it: renders no port exceptions in PERMISSIVE mode
+    template: templates/servicemesh-peerauthentication.yaml
+    set:
+      global.serviceMesh.enabled: true
+      global.serviceMesh.mtls.mode: PERMISSIVE
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: keeps the registry entry ports PERMISSIVE under STRICT
+    template: templates/servicemesh-peerauthentication.yaml
+    documentIndex: 1
+    set:
+      global.serviceMesh.enabled: true
+      global.serviceMesh.mtls.mode: STRICT
+    asserts:
+      - equal:
+          path: metadata.name
+          value: rel-mcp-gateway-registry-stack-registry-entrypoint
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/name"]
+          value: registry
+      - equal:
+          path: spec.mtls.mode
+          value: STRICT
+      - equal:
+          path: spec.portLevelMtls
+          value: {8080: {mode: PERMISSIVE}, 8443: {mode: PERMISSIVE}}
+
+  - it: keeps the MongoDB operator webhook port PERMISSIVE under STRICT
+    template: templates/servicemesh-peerauthentication.yaml
+    documentIndex: 2
+    set:
+      global.serviceMesh.enabled: true
+      global.serviceMesh.mtls.mode: STRICT
+    asserts:
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/name"]
+          value: mongodb-kubernetes-operator
+      - equal:
+          path: spec.portLevelMtls
+          value: {1993: {mode: PERMISSIVE}}
+
+  - it: drops the registry exception once an ingress gateway fronts it
+    template: templates/servicemesh-peerauthentication.yaml
+    set:
+      global.serviceMesh.enabled: true
+      global.serviceMesh.mtls.mode: STRICT
+      global.serviceMesh.mtls.strictExceptions.registryEntrypoint: false
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: metadata.name
+          value: rel-mcp-gateway-registry-stack-mongodb-operator-webhook
+        documentIndex: 1
+
+  - it: omits the webhook exception when MongoDB is external
+    template: templates/servicemesh-peerauthentication.yaml
+    set:
+      global.serviceMesh.enabled: true
+      global.serviceMesh.mtls.mode: STRICT
+      mongodb.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 2
+
+  - it: the mongodb policy follows a renamed setup-mongodb ServiceAccount
+    template: templates/servicemesh-authorizationpolicy.yaml
+    documentIndex: 3
+    set:
+      global.serviceMesh.enabled: true
+      keycloak.create: false
+      mongodb.enabled: true
+      openbao.enabled: false
+      mongodb-configure.serviceAccount.name: my-mongo-setup
+    asserts:
+      - contains:
+          path: spec.rules[0].from[0].source.principals
+          content: cluster.local/ns/default/sa/my-mongo-setup
+
+  - it: renders both STRICT exceptions with the defaults
+    template: templates/servicemesh-peerauthentication.yaml
+    set:
+      global.serviceMesh.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 3

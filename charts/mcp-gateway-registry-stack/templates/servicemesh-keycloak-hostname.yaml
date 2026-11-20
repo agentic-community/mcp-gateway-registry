@@ -1,0 +1,39 @@
+{{- /*
+Pin the Bitnami Keycloak's public hostname when the service mesh is on.
+
+With KC_PROXY_HEADERS=xforwarded and no fixed hostname, Keycloak builds its
+issuer and endpoint URLs from the request. A sidecar adds X-Forwarded-Proto to
+every inbound HTTP request, and Keycloak then drops the port and may switch the
+scheme: an internal discovery fetch returns
+"https://<release>-keycloak-headless.<ns>.svc.cluster.local/realms/...". The
+auth-server rewrites internal URLs onto the public one only when they start with
+its exact internal URL (http://...:8080), so the internal host leaks into the
+OAuth protected-resource metadata and MCP clients cannot authenticate.
+
+Setting KC_HOSTNAME to the public URL fixes the issuer and browser-facing URLs
+regardless of forwarded headers; KC_HOSTNAME_BACKCHANNEL_DYNAMIC keeps token,
+JWKS and userinfo calls from inside the cluster on the internal address. These
+are the same three settings the official-image Keycloak chart (#2070) always
+sets, so behavior matches after that migration.
+
+Bitnami only: the ConfigMap is referenced by keycloak.extraEnvVarsCM and exists
+whenever the Bitnami Keycloak is deployed, so the reference always resolves.
+It carries no keys with the mesh off, which leaves Keycloak's settings unchanged.
+*/ -}}
+{{- if and .Values.keycloak.create (eq (include "mcp-gateway-registry-stack.keycloakFlavor" .) "bitnami") }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ printf "%s-keycloak-mesh-hostname" .Release.Name }}
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "mcp-gateway-registry-stack.labels" . | nindent 4 }}
+{{- if include "mcp-gateway-registry-stack.istioEnabled" . }}
+data:
+  KC_HOSTNAME: {{ include "mcp-gateway-registry-stack.keycloakExternalUrl" . | quote }}
+  KC_HOSTNAME_STRICT: "true"
+  KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+{{- else }}
+data: {}
+{{- end }}
+{{- end }}

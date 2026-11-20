@@ -214,3 +214,27 @@ tests:
           content:
             name: OBO_CACHE_ENABLED
             value: "false"
+
+  - it: the init Job joins the mesh when the mesh is enabled
+    documentIndex: 3
+    set:
+      registry: {egressAuth: {enabled: true}}
+      openbao: {enabled: true}
+      global: {serviceMesh: {enabled: true, type: istio}}
+    asserts:
+      - isKind:
+          of: Job
+      - equal:
+          path: spec.template.metadata.labels["sidecar.istio.io/inject"]
+          value: "true"
+
+  - it: the init Job carries no inject label when the mesh is disabled
+    documentIndex: 3
+    set:
+      registry: {egressAuth: {enabled: true}}
+      openbao: {enabled: true}
+    asserts:
+      - isKind:
+          of: Job
+      - isNull:
+          path: spec.template.metadata.labels["sidecar.istio.io/inject"]

@@ -20,6 +20,61 @@ global:
   # stays for standalone installs. Cloud metadata/credential, link-local and
   # multicast addresses are never permitted.
   ssrfAllowedCidrs: ""
+  # Optional service mesh (see the block comment further down near `openbao:`).
+  # Under global so the one setting reaches the subcharts and the stack's own
+  # mesh templates with no second copy. Only "istio" is implemented today.
+  serviceMesh:
+    # Main switch. When false, nothing mesh-related renders and no workload is
+    # annotated for injection: a non-mesh install is byte-for-byte unchanged.
+    enabled: false
+    # Which mesh to render for. The discriminator is a seam for other meshes;
+    # a value other than "istio" renders no Istio objects or annotations.
+    type: istio
+    mtls:
+      # Namespace PeerAuthentication mTLS mode. STRICT (default) rejects
+      # plaintext arriving at any pod in the namespace, so every caller of these
+      # pods must be meshed, apart from the exceptions below. It does not affect
+      # traffic these pods send out (for example to MCP backends elsewhere).
+      # PERMISSIVE accepts both mTLS and plaintext: use it for the first rollout,
+      # before every pod has a sidecar (see docs/service-mesh-deployment.md).
+      mode: STRICT
+      # Ports kept PERMISSIVE when mode is STRICT, for callers that cannot do
+      # mTLS. The AuthorizationPolicies still apply on these ports.
+      strictExceptions:
+        # The load balancer reaching the registry's nginx (8080, 8443). Turn off
+        # once an Istio ingress gateway fronts the registry.
+        registryEntrypoint: true
+        # The Kubernetes API server calling the MongoDB operator's validating
+        # webhook. Port is the operator's MDB_WEBHOOK_PORT (default 1993).
+        mongodbOperatorWebhook: true
+        mongodbOperatorWebhookPort: 1993
+    istio:
+      # On classic sidecars this holds app startup until the Envoy proxy is
+      # ready. Harmless with Kubernetes native sidecars (1.29+), which already
+      # start the sidecar before app containers.
+      holdApplicationUntilProxyStarts: true
+      # Run the registry pods' sidecar in TPROXY interception mode so nginx sees
+      # the caller's real address. Off by default because it needs more pod
+      # privilege: the registry's istio-proxy container then runs as root with
+      # NET_ADMIN, which the "baseline" and "restricted" Pod Security profiles
+      # reject. With it off, the audit log's client_ip is 127.0.0.6 and the end
+      # user is in request.forwarded_for (see docs/service-mesh-deployment.md,
+      # "Client IP in the audit log"). An Istio ingress gateway in front of the
+      # registry fixes client_ip without it.
+      preserveClientIp: false
+    # AuthorizationPolicy set. When true (the default when the mesh is enabled),
+    # the stack renders one ALLOW AuthorizationPolicy per destination workload
+    # listing the source identities and container ports it accepts. A selected
+    # workload denies every request that matches no rule, including plaintext
+    # from pods without a sidecar, so enable this only after every pod in the
+    # namespace has a sidecar (see docs/service-mesh-deployment.md). Set false
+    # to run the mesh for mTLS without the identity layer.
+    authorizationPolicies:
+      enabled: true
+      # Istio trust domain used to build source principals
+      # (<trustDomain>/ns/<namespace>/sa/<serviceaccount>). "cluster.local" is
+      # the Istio default; override only if your mesh sets a custom trust domain.
+      trustDomain: cluster.local
   # Domain configuration - update this to your actual domain
   domain: "DOMAIN"
   # Name the session cookie __Host-mcp_gateway_session (Secure, Path=/, no
@@ -163,6 +218,14 @@ global:
     # KEYCLOAK_EXTERNAL_URL.
     paths:
       registry: /registry
+# Optional service mesh support (global.serviceMesh above). A service mesh is
+# highly encouraged but NOT required: with global.serviceMesh.enabled=false (the
+# default) the chart renders exactly as it does without any mesh awareness. The
+# chart does NOT install a mesh control plane (istiod is a cluster prerequisite);
+# it labels its own pods for sidecar injection and renders namespaced mesh policy
+# (PeerAuthentication, AuthorizationPolicy). Subchart pods it does not template
+# (Keycloak, PostgreSQL, OpenBao, the MongoDB operator) join through the
+# namespace label istio-injection=enabled. See docs/service-mesh-deployment.md.
 openbao:
   enabled: false # This is temporarily set to false as the actual usage is prepared in a different PR
   # NOTE: deliberately NO fullnameOverride here. The subchart's server-binding is
@@ -179,6 +242,11 @@ openbao:
   injector:
     enabled: false
   server:
+    # Extra annotations for the OpenBao server pods. Not needed for the service
+    # mesh: OpenBao joins through the namespace label istio-injection=enabled.
+    # Its StatefulSet uses the OnDelete strategy, so delete the pod to pick up a
+    # sidecar; it boots sealed and the unseal sidecar unseals it.
+    annotations: {}
     # Standalone (NOT dev): file storage on a PVC so vaulted tokens survive pod
     # restarts. Entirely Kubernetes-driven — NO KMS, NO Secrets Manager. The
     # vault starts SEALED on every boot; the openbaoInit Job (stack template)
@@ -327,6 +395,12 @@ keycloak:
       value: edge
     - name: KC_PROXY_HEADERS
       value: xforwarded
+  # Hostname settings rendered by templates/servicemesh-keycloak-hostname.yaml.
+  # Empty with the service mesh off; with it on, pins KC_HOSTNAME so the issuer
+  # does not change when a sidecar adds X-Forwarded-Proto. Bitnami-only: remove
+  # together with extraEnvVars when moving to the official-image Keycloak chart,
+  # which sets the same KC_HOSTNAME* values itself.
+  extraEnvVarsCM: '{{ .Release.Name }}-keycloak-mesh-hostname'
   ingress:
     enabled: false
   nodeSelector: {}

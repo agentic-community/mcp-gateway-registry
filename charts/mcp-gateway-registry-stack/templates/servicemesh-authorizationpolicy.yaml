@@ -1,0 +1,268 @@
+{{- /*
+Istio AuthorizationPolicy set for the stack (service mesh).
+
+One ALLOW policy per destination workload. Each policy selects the destination's
+pods and lists the source identities (ServiceAccount principals) and ports that
+may reach it.
+
+How enforcement works, which shapes every rule below:
+  - The destination's sidecar enforces the policy. Once an ALLOW policy selects a
+    workload, any request that matches no rule is DENIED. That includes
+    plaintext requests from callers without a sidecar: they carry no principal,
+    so a rule that requires a principal never matches them. PERMISSIVE mTLS does
+    not change this.
+  - Ports are the destination CONTAINER ports (what the sidecar sees after
+    Service port translation), not Service ports.
+  - A caller outside the mesh (the load balancer, Prometheus) can only be
+    admitted by a rule with no `from`. Such rules are used only for the public
+    entry point (registry 8080/8443) and the metrics port (9464), which are
+    reachable from those callers today.
+  - No egress policy is placed on any workload: the registry and auth-server
+    proxy to MCP backends registered at runtime.
+
+Rendered only when an Istio mesh is enabled AND
+global.serviceMesh.authorizationPolicies.enabled. Istio source principals are
+"<trustDomain>/ns/<namespace>/sa/<serviceAccount>".
+*/ -}}
+{{- if and (include "mcp-gateway-registry-stack.istioEnabled" .) .Values.global.serviceMesh.authorizationPolicies.enabled }}
+{{- $ns := .Release.Namespace }}
+{{- $td := .Values.global.serviceMesh.authorizationPolicies.trustDomain | default "cluster.local" }}
+{{- $fullname := include "mcp-gateway-registry-stack.fullname" . }}
+{{- $labels := include "mcp-gateway-registry-stack.labels" . }}
+{{- /* ServiceAccount names. App SAs honor the subchart serviceAccount.name. */ -}}
+{{- $registrySa := "registry" }}
+{{- with (dig "serviceAccount" "name" "" (.Values.registry | default dict)) }}{{- $registrySa = . }}{{- end }}
+{{- $authSa := "auth-server" }}
+{{- with (dig "serviceAccount" "name" "" (index .Values "auth-server" | default dict)) }}{{- $authSa = . }}{{- end }}
+{{- $mcpgwSa := "mcpgw-server" }}
+{{- with (dig "serviceAccount" "name" "" (.Values.mcpgw | default dict)) }}{{- $mcpgwSa = . }}{{- end }}
+{{- $p := dict
+  "registry" (printf "%s/ns/%s/sa/%s" $td $ns $registrySa)
+  "auth" (printf "%s/ns/%s/sa/%s" $td $ns $authSa)
+  "mcpgw" (printf "%s/ns/%s/sa/%s" $td $ns $mcpgwSa)
+  "keycloak" (printf "%s/ns/%s/sa/%s" $td $ns (include "mcp-gateway-registry-stack.keycloakServiceAccount" .))
+  "keycloakConfigure" (printf "%s/ns/%s/sa/keycloak-configure-sa" $td $ns)
+  "openbaoInit" (printf "%s/ns/%s/sa/openbao-init" $td $ns)
+  "setupMongodb" (printf "%s/ns/%s/sa/%s" $td $ns (dig "serviceAccount" "name" "" (index .Values "mongodb-configure" | default dict) | default "setup-mongodb"))
+  "mongodbMember" (printf "%s/ns/%s/sa/mongodb-kubernetes-appdb" $td $ns)
+  "mongodbOperator" (printf "%s/ns/%s/sa/mongodb-kubernetes-operator" $td $ns)
+}}
+{{- /* ===================== registry ===================== */ -}}
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: {{ $fullname }}-allow-registry
+  namespace: {{ $ns | quote }}
+  labels:
+    {{- $labels | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: registry
+  action: ALLOW
+  rules:
+    # Public entry point (nginx 8080 HTTP, 8443 HTTPS). The load balancer is
+    # outside the mesh, and every request here is authenticated by the gateway
+    # itself, so any source is admitted on these two ports.
+    - to:
+        - operation:
+            ports: ["8080", "8443"]
+    # Internal egress-token vend listener: only the auth-server.
+    - from:
+        - source:
+            principals:
+              - {{ $p.auth | quote }}
+      to:
+        - operation:
+            ports: ["8091"]
+    # Metrics scrape (Prometheus is outside the mesh).
+    - to:
+        - operation:
+            ports: ["9464"]
+---
+{{- /* ===================== auth-server ===================== */ -}}
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: {{ $fullname }}-allow-auth-server
+  namespace: {{ $ns | quote }}
+  labels:
+    {{- $labels | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: auth-server
+  action: ALLOW
+  rules:
+    # registry (nginx auth_request, token paths) and mcpgw -> auth-server.
+    - from:
+        - source:
+            principals:
+              - {{ $p.registry | quote }}
+              - {{ $p.mcpgw | quote }}
+      to:
+        - operation:
+            ports: ["8888"]
+    - to:
+        - operation:
+            ports: ["9464"]
+---
+{{- /* ===================== mcpgw ===================== */ -}}
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: {{ $fullname }}-allow-mcpgw
+  namespace: {{ $ns | quote }}
+  labels:
+    {{- $labels | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mcpgw-server
+  action: ALLOW
+  rules:
+    # registry (airegistry-tools proxy, health checks) and auth-server
+    # (mcp_proxy) -> mcpgw. Container port is app.port (Service port 8003 maps
+    # to it).
+    - from:
+        - source:
+            principals:
+              - {{ $p.registry | quote }}
+              - {{ $p.auth | quote }}
+      to:
+        - operation:
+            ports: [{{ (.Values.mcpgw.app.port | default 8000) | toString | quote }}]
+    - to:
+        - operation:
+            ports: ["9464"]
+{{- /* ===================== keycloak (in-cluster only) ===================== */ -}}
+{{- if .Values.keycloak.create }}
+{{- $official := eq (include "mcp-gateway-registry-stack.keycloakFlavor" .) "official" }}
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: {{ $fullname }}-allow-keycloak
+  namespace: {{ $ns | quote }}
+  labels:
+    {{- $labels | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "mcp-gateway-registry-stack.keycloakServerSelector" . | nindent 6 }}
+  action: ALLOW
+  rules:
+    # registry (OIDC, and nginx proxying /keycloak for browsers), auth-server
+    # (OIDC, token exchange), mcpgw (M2M token), and the keycloak-configure Job.
+    - from:
+        - source:
+            principals:
+              - {{ $p.registry | quote }}
+              - {{ $p.auth | quote }}
+              - {{ $p.mcpgw | quote }}
+              - {{ $p.keycloakConfigure | quote }}
+              {{- if and $official (dig "sslInit" "enabled" true .Values.keycloak) }}
+              # The official chart's admin-init Job (its own ServiceAccount,
+              # keycloak.sslInit.serviceAccount).
+              - {{ printf "%s/ns/%s/sa/%s" $td $ns (include "mcp-gateway-registry-stack.keycloakAdminInitServiceAccount" .) | quote }}
+              {{- end }}
+      to:
+        - operation:
+            ports: ["8080"]
+    # Keycloak cluster members (JGroups cache and, on the official chart,
+    # failure detection) when scaled past one replica.
+    - from:
+        - source:
+            principals:
+              - {{ $p.keycloak | quote }}
+      to:
+        - operation:
+            ports: {{ ternary (list "7800" "57800") (list "7800") $official | toJson }}
+---
+{{- /* ===================== postgresql (Keycloak's database) ===================== */ -}}
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: {{ $fullname }}-allow-postgresql
+  namespace: {{ $ns | quote }}
+  labels:
+    {{- $labels | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "mcp-gateway-registry-stack.keycloakPostgresSelector" . | nindent 6 }}
+  action: ALLOW
+  rules:
+    # Only Keycloak uses PostgreSQL.
+    - from:
+        - source:
+            principals:
+              - {{ $p.keycloak | quote }}
+      to:
+        - operation:
+            ports: ["5432"]
+{{- end }}
+{{- /* ===================== openbao (in-cluster only) ===================== */ -}}
+{{- if .Values.openbao.enabled }}
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: {{ $fullname }}-allow-openbao
+  namespace: {{ $ns | quote }}
+  labels:
+    {{- $labels | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: openbao
+      component: server
+  action: ALLOW
+  rules:
+    # registry (egress vault), auth-server (OBO cache), and the openbao-init
+    # Job (init, unseal, bootstrap). The unseal sidecar uses localhost, which
+    # the inbound proxy does not see.
+    - from:
+        - source:
+            principals:
+              - {{ $p.registry | quote }}
+              - {{ $p.auth | quote }}
+              - {{ $p.openbaoInit | quote }}
+      to:
+        - operation:
+            ports: ["8200"]
+{{- end }}
+{{- /* ===================== mongodb (in-cluster community operator only) ===================== */ -}}
+{{- if and .Values.mongodb.enabled (not .Values.mongodb.connectionString) }}
+{{- $mongoName := .Values.mongodb.host | default "mcp-registry-mongodb" }}
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: {{ $fullname }}-allow-mongodb
+  namespace: {{ $ns | quote }}
+  labels:
+    {{- $labels | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      # The operator labels mongod pods app=<resource>-svc.
+      app: {{ printf "%s-svc" $mongoName | quote }}
+  action: ALLOW
+  rules:
+    # registry (primary datastore), auth-server (sessions, M2M group
+    # enrichment), the setup-mongodb Job, the other replica-set members
+    # (replication and heartbeats), and the operator. mcpgw has no MongoDB edge.
+    - from:
+        - source:
+            principals:
+              - {{ $p.registry | quote }}
+              - {{ $p.auth | quote }}
+              - {{ $p.setupMongodb | quote }}
+              - {{ $p.mongodbMember | quote }}
+              - {{ $p.mongodbOperator | quote }}
+      to:
+        - operation:
+            ports: ["27017"]
+{{- end }}
+{{- end }}

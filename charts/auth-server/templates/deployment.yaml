@@ -86,6 +86,14 @@ spec:
       labels:
         app.kubernetes.io/name: {{ .Values.app.name }}
         app.kubernetes.io/component: {{ .Values.app.name }}
+        {{- with include "auth-server.meshPodLabels" . }}
+        {{- . | nindent 8 }}
+        {{- end }}
+      {{- $podAnn := include "auth-server.podAnnotations" . }}
+      {{- if $podAnn }}
+      annotations:
+        {{- $podAnn | nindent 8 }}
+      {{- end }}
     spec:
       serviceAccountName: {{ include "auth-server.serviceAccountName" . }}
       {{- with .Values.nodeSelector }}

@@ -138,6 +138,12 @@ spec:
     metadata:
       labels:
         {{- include "mcp-gateway-registry-stack.labels" . | nindent 8 }}
+        {{- if include "mcp-gateway-registry-stack.istioEnabled" . }}
+        # Join the mesh so the OpenBao AuthorizationPolicy can identify this Job
+        # by its ServiceAccount (openbao-init). Native sidecars (Kubernetes
+        # 1.29+) stop the proxy when the container exits, so the Job completes.
+        sidecar.istio.io/inject: "true"
+        {{- end }}
     spec:
       restartPolicy: Never
       serviceAccountName: openbao-init

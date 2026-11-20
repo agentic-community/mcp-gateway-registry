@@ -260,6 +260,18 @@ helm upgrade mcp-stack ./charts/mcp-gateway-registry-stack \
 - **Subdomain mode:** Configure DNS A/CNAME records for each subdomain pointing to your ingress
 - **Path mode:** Configure a single DNS A/CNAME record for your domain pointing to your ingress
 
+## Service Mesh (optional)
+
+The stack chart can run inside an Istio service mesh. A mesh is highly encouraged but not required: with
+`global.serviceMesh.enabled=false` (the default) the chart renders exactly as it does without a mesh. When enabled, the
+chart labels its pods (including the bootstrap Jobs and the MongoDB members) for sidecar injection and renders a
+namespaced `PeerAuthentication` (STRICT mTLS by default, with the load balancer and MongoDB webhook ports exempt) plus an `AuthorizationPolicy` per destination workload.
+Label the namespace `istio-injection=enabled` and follow the two-stage rollout in the guide. The chart does not install
+the Istio control plane, which is a cluster prerequisite.
+
+See [Service Mesh Deployment](../docs/service-mesh-deployment.md) for the full guide and the `global.serviceMesh.*`
+parameters.
+
 ## Deployment Options: Kubernetes vs AWS ECS
 
 This project supports two deployment methods:

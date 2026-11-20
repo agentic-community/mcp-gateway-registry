@@ -76,6 +76,14 @@ spec:
       labels:
         app.kubernetes.io/name: {{ .Values.app.name }}
         app.kubernetes.io/component: {{ .Values.app.name }}
+        {{- with include "registry.meshPodLabels" . }}
+        {{- . | nindent 8 }}
+        {{- end }}
+      {{- $podAnn := include "registry.podAnnotations" . }}
+      {{- if $podAnn }}
+      annotations:
+        {{- $podAnn | nindent 8 }}
+      {{- end }}
     spec:
       # Run as the chart's ServiceAccount so attached roles apply (e.g. OpenBao
       # kubernetes-auth for the egress vault).

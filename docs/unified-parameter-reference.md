@@ -983,6 +983,25 @@ Extends gateway reverse-proxying to non-MCP entities (skills, agents, custom ent
 
 ---
 
+## Group 34 — Service Mesh (Helm / EKS only)
+
+Optional Istio service mesh support for the Helm stack chart. Helm only: there is no Docker or Terraform surface, because the mesh is a Kubernetes construct. Off by default, so a non-mesh install is unchanged. The chart labels its pods for injection and renders mesh policy, but does not install the Istio control plane, and the namespace must be labeled `istio-injection=enabled`. See [service mesh deployment](service-mesh-deployment.md).
+
+| Parameter | Docker (`.env`) | Terraform (`.tfvars`) | Helm (`values.yaml`) | Purpose                                                                                                                                                                                                  |
+|-----------|-----------------|-----------------------|----------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Mesh enabled | — (n/a) | — (n/a) | `global.serviceMesh.enabled` | Main switch. `false` (default) renders no mesh objects and annotates no workloads.                                                                                                                         |
+| Mesh type | — (n/a) | — (n/a) | `global.serviceMesh.type` | Mesh implementation. Only `istio` is implemented; any other value renders nothing (safe no-op). Default `istio`.                                                                                         |
+| mTLS mode | — (n/a) | — (n/a) | `global.serviceMesh.mtls.mode` | Namespace `PeerAuthentication` mode: `STRICT` (default, rejects plaintext apart from the exceptions below) or `PERMISSIVE` (accepts mTLS and plaintext; for the first rollout or a rollback). |
+| STRICT exception: registry entry point | — (n/a) | — (n/a) | `global.serviceMesh.mtls.strictExceptions.registryEntrypoint` | With STRICT, keep the registry's 8080 and 8443 PERMISSIVE for the load balancer. Default `true`; turn off once an ingress gateway fronts the registry.                                                   |
+| STRICT exception: MongoDB operator webhook | — (n/a) | — (n/a) | `global.serviceMesh.mtls.strictExceptions.mongodbOperatorWebhook` | With STRICT, keep the MongoDB operator's webhook port PERMISSIVE for the Kubernetes API server. Default `true`.                                                                                          |
+| MongoDB operator webhook port | — (n/a) | — (n/a) | `global.serviceMesh.mtls.strictExceptions.mongodbOperatorWebhookPort` | The operator's `MDB_WEBHOOK_PORT`. Default `1993`.                                                                                                                                                       |
+| Hold app until proxy starts | — (n/a) | — (n/a) | `global.serviceMesh.istio.holdApplicationUntilProxyStarts` | Sets `proxy.istio.io/config` holdApplicationUntilProxyStarts on app pods. Avoids the startup race on classic sidecars; inert with native sidecars (K8s 1.29+). Default `true`.                           |
+| Preserve client IP | — (n/a) | — (n/a) | `global.serviceMesh.istio.preserveClientIp` | Run the registry pods' sidecar in TPROXY mode so nginx and the audit log's `client_ip` see the real caller instead of `127.0.0.6`; required for `registry.app.trustedRealIpCidrs` under the mesh. Opt-in because it runs the registry's `istio-proxy` as root with `NET_ADMIN`, which the `baseline` and `restricted` Pod Security profiles reject. With it off, the end user is the entry left of `127.0.0.6` in `request.forwarded_for`. Default `false`. |
+| AuthorizationPolicies enabled | — (n/a) | — (n/a) | `global.serviceMesh.authorizationPolicies.enabled` | Render the ALLOW `AuthorizationPolicy` set (one per destination workload). A selected workload denies any request that matches no rule, including plaintext from pods without a sidecar. Default `true`. |
+| Trust domain | — (n/a) | — (n/a) | `global.serviceMesh.authorizationPolicies.trustDomain` | Istio trust domain used to build source principals (`<trustDomain>/ns/<ns>/sa/<sa>`). Default `cluster.local`.                                                                                           |
+
+---
+
 ## Checklist for new parameters
 
 When you add a new configuration parameter:

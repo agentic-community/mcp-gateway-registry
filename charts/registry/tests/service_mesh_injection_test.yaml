@@ -1,0 +1,92 @@
+suite: registry service mesh sidecar injection annotations
+templates:
+  - templates/deployment.yaml
+release:
+  name: test
+  namespace: default
+tests:
+  - it: adds no annotations block when the mesh is disabled (non-mesh parity)
+    set:
+      app.secretKey: test-key-32-bytes-aaaaaaaaaaaaaaaaaa # pragma: allowlist secret
+    asserts:
+      - isNull:
+          path: spec.template.metadata.annotations
+
+  - it: annotates for Istio injection when the mesh is enabled
+    set:
+      app.secretKey: test-key-32-bytes-aaaaaaaaaaaaaaaaaa # pragma: allowlist secret
+      global.serviceMesh.enabled: true
+      global.serviceMesh.type: istio
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels["sidecar.istio.io/inject"]
+          value: "true"
+
+  - it: adds the holdApplicationUntilProxyStarts proxy config when requested
+    set:
+      app.secretKey: test-key-32-bytes-aaaaaaaaaaaaaaaaaa # pragma: allowlist secret
+      global.serviceMesh.enabled: true
+      global.serviceMesh.type: istio
+      global.serviceMesh.istio.holdApplicationUntilProxyStarts: true
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["proxy.istio.io/config"]
+          value: '{"holdApplicationUntilProxyStarts": true}'
+
+  - it: adds no inject label when the mesh is disabled
+    set:
+      app.secretKey: test-key-32-bytes-aaaaaaaaaaaaaaaaaa # pragma: allowlist secret
+    asserts:
+      - isNull:
+          path: spec.template.metadata.labels["sidecar.istio.io/inject"]
+
+  - it: does not inject for a non-istio mesh type
+    set:
+      app.secretKey: test-key-32-bytes-aaaaaaaaaaaaaaaaaa # pragma: allowlist secret
+      global.serviceMesh.enabled: true
+      global.serviceMesh.type: linkerd
+    asserts:
+      - isNull:
+          path: spec.template.metadata.annotations
+      - isNull:
+          path: spec.template.metadata.labels["sidecar.istio.io/inject"]
+
+  - it: merges operator podAnnotations under the mesh annotations
+    set:
+      app.secretKey: test-key-32-bytes-aaaaaaaaaaaaaaaaaa # pragma: allowlist secret
+      global.serviceMesh.enabled: true
+      global.serviceMesh.type: istio
+      podAnnotations:
+        example.com/team: platform
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels["sidecar.istio.io/inject"]
+          value: "true"
+      - equal:
+          path: spec.template.metadata.annotations["example.com/team"]
+          value: platform
+
+  - it: leaves the default interception mode by default (no extra pod privilege)
+    set:
+      app.secretKey: test-key-32-bytes-aaaaaaaaaaaaaaaaaa # pragma: allowlist secret
+      global.serviceMesh.enabled: true
+    asserts:
+      - isNull:
+          path: spec.template.metadata.annotations["sidecar.istio.io/interceptionMode"]
+
+  - it: runs the sidecar in TPROXY mode when preserveClientIp is true
+    set:
+      app.secretKey: test-key-32-bytes-aaaaaaaaaaaaaaaaaa # pragma: allowlist secret
+      global.serviceMesh.enabled: true
+      global.serviceMesh.istio.preserveClientIp: true
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["sidecar.istio.io/interceptionMode"]
+          value: TPROXY
+
+  - it: sets no interception mode with the mesh off
+    set:
+      app.secretKey: test-key-32-bytes-aaaaaaaaaaaaaaaaaa # pragma: allowlist secret
+    asserts:
+      - isNull:
+          path: spec.template.metadata.annotations

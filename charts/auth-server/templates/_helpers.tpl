@@ -182,3 +182,49 @@ Call as: {{ include "auth-server.sessionSetting" (list . "sessionMaxAgeSeconds" 
 {{- end -}}
 {{- toJson $result -}}
 {{- end -}}
+
+{{/*
+Pod annotations for this workload, including optional service-mesh sidecar
+injection. Mesh-agnostic: the only mesh wired today is Istio, gated on the
+stack's global.serviceMesh passthrough (global.serviceMesh.enabled AND
+global.serviceMesh.type == "istio"). When active, this long-running workload is
+annotated for sidecar injection and (optionally)
+holdApplicationUntilProxyStarts. Operator-supplied .Values.podAnnotations merge
+on top. Additive: with the mesh off, only .Values.podAnnotations (default {})
+renders, so a non-mesh install is byte-for-byte unchanged.
+
+Call as: {{- include "auth-server.podAnnotations" . | nindent 8 }}
+(renders nothing when there are no annotations).
+*/}}
+{{- define "auth-server.podAnnotations" -}}
+{{- $ann := dict -}}
+{{- $sm := .Values.global.serviceMesh | default dict -}}
+{{- if and $sm.enabled (eq ($sm.type | default "istio") "istio") -}}
+{{- $istio := $sm.istio | default dict -}}
+{{- if $istio.holdApplicationUntilProxyStarts -}}
+{{- $_ := set $ann "proxy.istio.io/config" "{\"holdApplicationUntilProxyStarts\": true}" -}}
+{{- end -}}
+{{- end -}}
+{{- with .Values.podAnnotations -}}
+{{- $ann = merge (deepCopy .) $ann -}}
+{{- end -}}
+{{- if $ann -}}
+{{- toYaml $ann -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Pod labels for service-mesh sidecar injection. Istio's injector webhook selects
+pods by the LABEL sidecar.istio.io/inject (its objectSelector reads labels, not
+annotations), so the opt-in is a label. Emitted only when global.serviceMesh is
+enabled with type "istio"; renders nothing otherwise, so a non-mesh install is
+unchanged.
+
+Call as: {{- include "auth-server.meshPodLabels" . | nindent 8 }}
+*/}}
+{{- define "auth-server.meshPodLabels" -}}
+{{- $sm := .Values.global.serviceMesh | default dict -}}
+{{- if and $sm.enabled (eq ($sm.type | default "istio") "istio") -}}
+sidecar.istio.io/inject: "true"
+{{- end -}}
+{{- end -}}
