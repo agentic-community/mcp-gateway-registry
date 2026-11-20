@@ -39,6 +39,15 @@ from registry.secrets.interfaces import SecretStoreBase
 
 logger = logging.getLogger(__name__)
 
+# A refresh token the provider rejects is not always dead: another refresher may
+# have just rotated it, and a Secrets Manager read can return the previous version
+# for a few seconds after a write (#1875), so this refresher used the replaced
+# token. Re-read the entry with a short backoff before marking it failed
+# (0.1 + 0.2 + 0.4 + 0.8 + 1.6 = 3.1s of sleeps at most), as the store does when
+# it verifies its own writes.
+_DEAD_REFRESH_REREAD_ATTEMPTS = 6
+_DEAD_REFRESH_REREAD_BACKOFF_BASE = 0.1
+
 # auth_method values that represent a real per-user identity and may own a vault
 # bucket (canonical values; cookie users are "oauth2", not
 # "session_cookie"). The denylist below is authoritative; this set is the
@@ -809,18 +818,15 @@ class EgressAuthService:
                     refresh_token_value=current.refresh_token,
                 )
             except oauth_engine.DeadRefreshTokenError:
-                # Dead refresh token: mark the entry failed so the next vend
-                # returns None -> consent URL, rather than retrying forever.
-                failed = current.model_copy(update={"status": "refresh_failed"})
-                await self._store.put_token(
-                    auth_method, user_id, provider, server_path, failed, purpose=purpose
-                )
-                logger.warning(
-                    "egress refresh failed (dead refresh token) for %s/%s; marked refresh_failed",
-                    provider,
+                return await self._handle_dead_refresh(
+                    auth_method,
+                    user_id,
                     server_path,
+                    egress_oauth,
+                    requested_upstream,
+                    purpose,
+                    current,
                 )
-                return None
             # Carry the consent-time bindings forward. The refreshed token is written
             # back to the address it was read from, so a refresh cannot move an entry
             # between purposes -- the failure mode that existed while purpose was a
@@ -837,6 +843,75 @@ class EgressAuthService:
             return new
         finally:
             await self._lease.release(key, self._holder)
+
+    async def _reread_until_rotated(
+        self,
+        auth_method: str,
+        user_id: str,
+        provider: str,
+        server_path: str,
+        purpose: str,
+        used_refresh_token: str,
+    ) -> StoredToken | None:
+        """Re-read the entry until its refresh token differs from the one used.
+
+        Returns the last entry read: one with a new refresh token when another
+        refresher rotated it, the same one when nobody did, None when it is gone.
+        """
+        latest = None
+        for attempt in range(_DEAD_REFRESH_REREAD_ATTEMPTS):
+            if attempt:
+                await asyncio.sleep(_DEAD_REFRESH_REREAD_BACKOFF_BASE * (2 ** (attempt - 1)))
+            latest = await self._store.get_token(
+                auth_method, user_id, provider, server_path, purpose=purpose
+            )
+            if latest is None or latest.refresh_token != used_refresh_token:
+                break
+        return latest
+
+    async def _handle_dead_refresh(
+        self,
+        auth_method: str,
+        user_id: str,
+        server_path: str,
+        egress_oauth: dict,
+        requested_upstream: str,
+        purpose: str,
+        current: StoredToken,
+    ) -> StoredToken | None:
+        """Mark the entry failed, unless another refresher already rotated it.
+
+        Writing a ``refresh_failed`` copy of ``current`` over a rotated entry would
+        discard the pair the provider just issued and force the user to reconnect.
+        """
+        provider = egress_oauth["provider"]
+        latest = await self._reread_until_rotated(
+            auth_method, user_id, provider, server_path, purpose, current.refresh_token
+        )
+        if latest is None:
+            return None  # disconnected meanwhile: nothing to mark
+        if latest.refresh_token != current.refresh_token:
+            logger.info(
+                "egress refresh: refresh token for %s/%s was already rotated by another "
+                "refresher; keeping the stored entry",
+                provider,
+                server_path,
+            )
+            if not self._vendable(latest, egress_oauth, requested_upstream, server_path):
+                return None
+            return latest
+        # Dead refresh token: mark the entry failed so the next vend
+        # returns None -> consent URL, rather than retrying forever.
+        failed = current.model_copy(update={"status": "refresh_failed"})
+        await self._store.put_token(
+            auth_method, user_id, provider, server_path, failed, purpose=purpose
+        )
+        logger.warning(
+            "egress refresh failed (dead refresh token) for %s/%s; marked refresh_failed",
+            provider,
+            server_path,
+        )
+        return None
 
     # -- list / disconnect ---------------------------------------------------- #
 
