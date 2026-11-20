@@ -147,6 +147,24 @@ The registry keeps the exact spec it checked. A change to the spec at its URL re
 
 The registry must reach `raw.githubusercontent.com` to fetch the spec (upload the file if it cannot), and the openapi-mcp container must reach `api.nasa.gov` to call the API.
 
+## Try it with the Hugging Face example
+
+[`docs/examples/openapi/huggingface.json`](examples/openapi/huggingface.json) tests a per-user bearer token. It keeps 12 read-only operations of the Hugging Face Hub API: your own account (`whoami`) and repositories, paper and Space search, collections, and model tags, branches and likers. Each user needs a free access token from [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens).
+
+Upload the file rather than pointing the registry at Hugging Face's own spec. FastMCP refuses the full spec, because of inline `$schema` keys and some response schemas, so the example drops both. [`huggingface-overrides.json`](examples/openapi/huggingface-overrides.json) gives the tools short names such as `hf_whoami`; the spec has no `operationId`s, so the file keys each name by `"METHOD /path"`.
+
+```bash
+uv run python api/registry_management.py openapi-server-create --name "Hugging Face" \
+    --description "Hugging Face Hub; each user adds their own access token"
+uv run python api/registry_management.py openapi-target-add --slug hugging-face --name hf \
+    --spec-file docs/examples/openapi/huggingface.json \
+    --overrides-file docs/examples/openapi/huggingface-overrides.json \
+    --base-url https://huggingface.co \
+    --auth-scheme bearer --credential-mode per_user
+```
+
+Each user then adds their token with `openapi-key-set --slug hugging-face --name hf --key-env HF_TOKEN`, or in the UI. `hf_whoami` returns the account the token belongs to, which shows that the gateway sent that user's own token. `hf_my_repositories` and `hf_get_collection` need permissions that some tokens lack; Hugging Face then answers `403`, as it does when you call those endpoints directly with the same token.
+
 ## Who can use a server
 
 A new server is `private`: the registry lists it only to admins. Visibility controls who sees the server in the registry; the gateway decides who may call it from scopes alone, as for every other server, so a user whose scopes grant the server (for example through a wildcard) can call it even while it is private. Check your scope grants before you add a shared key. This differs from `POST /api/servers/register`, where the default is `public`. Every caller spends the targets' shared credentials, so open a server with shared targets to a group (`group-restricted`) or to everyone (`public`) only when it is ready. A server whose targets are all per-user spends no one's key but the caller's. The server is an ordinary registry server, so scopes, the gateway's access check, search and the per-tool block all apply to it unchanged.

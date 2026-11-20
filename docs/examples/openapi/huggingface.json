@@ -1,0 +1,696 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Hugging Face Hub API (read-only subset)",
+    "version": "0.0.1",
+    "description": "A read-only subset of the Hugging Face Hub OpenAPI spec (https://huggingface.co/.well-known/openapi.json, fetched 2026-11-20), for testing OpenAPI MCP servers with a per-user bearer token. It keeps 12 GET operations, drops the response schemas and the inline $schema keys, because FastMCP refuses the full spec, and keeps the bearerAuth security scheme. Register it with huggingface-overrides.json; see docs/openapi-mcp-servers.md."
+  },
+  "servers": [
+    {
+      "url": "https://huggingface.co",
+      "description": "Hub"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "paths": {
+    "/api/whoami-v2": {
+      "get": {
+        "description": "Get information about the user and auth method used",
+        "summary": "Get user info",
+        "tags": [
+          "auth"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/settings/repositories": {
+      "get": {
+        "summary": "List user repositories",
+        "tags": [
+          "users"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "schema": {
+              "description": "Filter repositories by name (case-insensitive substring match)",
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "schema": {
+              "description": "Filter by repository type",
+              "type": "string",
+              "enum": [
+                "dataset",
+                "model",
+                "space",
+                "bucket",
+                "kernel",
+                "container"
+              ]
+            },
+            "required": false
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "description": "Max number of repositories to return",
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "required": false
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "schema": {
+              "default": "storage",
+              "description": "Sort field (default: storage)",
+              "type": "string",
+              "enum": [
+                "storage",
+                "updatedAt"
+              ]
+            },
+            "required": false
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "schema": {
+              "default": "desc",
+              "description": "Sort direction (default: desc)",
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ]
+            },
+            "required": false
+          }
+        ]
+      }
+    },
+    "/api/papers/search": {
+      "get": {
+        "description": "Perform a hybrid semantic / full-text-search on papers",
+        "summary": "Search papers",
+        "tags": [
+          "papers"
+        ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "default": "",
+              "type": "string",
+              "maxLength": 250
+            },
+            "required": false
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 120
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/papers/{paperId}": {
+      "get": {
+        "summary": "Get a paper",
+        "tags": [
+          "papers"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "parameters": [
+          {
+            "name": "paperId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "field",
+            "in": "query",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "enum": [
+                    "submissionDeadline",
+                    "comments"
+                  ]
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "submissionDeadline",
+                      "comments"
+                    ]
+                  }
+                }
+              ]
+            },
+            "required": false
+          }
+        ]
+      }
+    },
+    "/api/daily_papers": {
+      "get": {
+        "summary": "Get Daily Papers",
+        "tags": [
+          "papers"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "parameters": [
+          {
+            "name": "p",
+            "in": "query",
+            "schema": {
+              "default": 0,
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "required": false
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "default": 50,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "required": false
+          },
+          {
+            "name": "date",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+            },
+            "required": false
+          },
+          {
+            "name": "week",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-W(0[1-9]|[1-4][0-9]|5[0-2])$"
+            },
+            "required": false
+          },
+          {
+            "name": "month",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-(0[1-9]|1[0-2])$"
+            },
+            "required": false
+          },
+          {
+            "name": "submitter",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "schema": {
+              "default": "publishedAt",
+              "type": "string",
+              "enum": [
+                "publishedAt",
+                "trending"
+              ]
+            },
+            "required": false
+          }
+        ]
+      }
+    },
+    "/api/spaces/semantic-search": {
+      "get": {
+        "summary": "Semantic search",
+        "tags": [
+          "spaces"
+        ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 250
+            },
+            "required": false
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "image-generation",
+                "video-generation",
+                "text-generation",
+                "language-translation",
+                "speech-synthesis",
+                "voice-cloning",
+                "face-recognition",
+                "object-detection",
+                "pose-estimation",
+                "text-analysis",
+                "sentiment-analysis",
+                "question-answering",
+                "code-generation",
+                "data-visualization",
+                "3d-modeling",
+                "image-editing",
+                "background-removal",
+                "image-upscaling",
+                "ocr",
+                "document-analysis",
+                "visual-qa",
+                "image-captioning",
+                "chatbots",
+                "text-summarization",
+                "music-generation",
+                "medical-imaging",
+                "financial-analysis",
+                "game-ai",
+                "model-benchmarking",
+                "fine-tuning-tools",
+                "dataset-creation",
+                "anomaly-detection",
+                "recommendation-systems",
+                "character-animation",
+                "style-transfer",
+                "agent-environment",
+                "image",
+                "other"
+              ]
+            },
+            "required": false
+          },
+          {
+            "name": "includeNonRunning",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            },
+            "required": false
+          },
+          {
+            "name": "sdk",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "gradio",
+                  "docker",
+                  "static",
+                  "streamlit"
+                ]
+              }
+            },
+            "required": false
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "required": false
+          },
+          {
+            "name": "agents",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/spaces/featured": {
+      "get": {
+        "summary": "Featured spaces",
+        "tags": [
+          "spaces"
+        ],
+        "parameters": [
+          {
+            "name": "date",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/collections": {
+      "get": {
+        "summary": "Get collections",
+        "tags": [
+          "collections"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "parameters": [
+          {
+            "name": "item",
+            "in": "query",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^spaces|models|datasets|papers\\/.*"
+                  }
+                },
+                {
+                  "type": "string",
+                  "pattern": "^spaces|models|datasets|papers\\/.*"
+                }
+              ]
+            },
+            "required": false
+          },
+          {
+            "name": "owner",
+            "in": "query",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              ]
+            },
+            "required": false
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "schema": {
+              "default": "trending",
+              "type": "string",
+              "enum": [
+                "upvotes",
+                "lastModified",
+                "trending"
+              ]
+            },
+            "required": false
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "expand",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "default": 10,
+              "type": "number",
+              "minimum": 1,
+              "maximum": 10000
+            },
+            "required": false
+          }
+        ]
+      }
+    },
+    "/api/collections/{namespace}/{slug}": {
+      "get": {
+        "summary": "Get a collection",
+        "tags": [
+          "collections"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "parameters": [
+          {
+            "name": "namespace",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/models-tags-by-type": {
+      "get": {
+        "description": "Get all possible tags used for models, grouped by tag type. Optionally restrict to only one tag type",
+        "summary": "Get model tags",
+        "tags": [
+          "models"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "parameters": [
+          {
+            "name": "type",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pipeline_tag",
+                "library",
+                "dataset",
+                "bucket",
+                "language",
+                "license",
+                "arxiv",
+                "doi",
+                "region",
+                "deploy",
+                "other"
+              ]
+            },
+            "required": false
+          }
+        ]
+      }
+    },
+    "/api/models/{namespace}/{repo}/refs": {
+      "get": {
+        "summary": "List references",
+        "tags": [
+          "models"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "parameters": [
+          {
+            "name": "namespace",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "include_prs",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ]
+      }
+    },
+    "/api/models/{namespace}/{repo}/likers": {
+      "get": {
+        "summary": "List likers",
+        "tags": [
+          "models"
+        ],
+        "parameters": [
+          {
+            "name": "namespace",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "expand",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "likedAt"
+                ]
+              }
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    }
+  }
+}
