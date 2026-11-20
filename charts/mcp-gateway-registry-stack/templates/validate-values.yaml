@@ -3,3 +3,19 @@ Render-time checks that span subcharts. This template renders no manifest; it
 only fails the render when the values disagree across charts.
 */ -}}
 {{- include "mcp-gateway-registry-stack.validateSessionSettings" . -}}
+{{- if include "mcp-gateway-registry-stack.keycloakDeployed" . -}}
+{{- $kc := .Values.global.authProvider.keycloak -}}
+{{- $local := .Values.keycloak.auth -}}
+{{- if and $local.existingSecret (ne $local.existingSecret ($kc.adminExistingSecret | default "")) -}}
+{{- fail "set global.authProvider.keycloak.adminExistingSecret to keycloak.auth.existingSecret so the server and configure Job use the same admin credential" -}}
+{{- end -}}
+{{- if and $local.existingSecret (ne $local.existingSecretPasswordKey ($kc.adminExistingSecretPasswordKey | default "admin-password")) -}}
+{{- fail "keycloak.auth.existingSecretPasswordKey must match global.authProvider.keycloak.adminExistingSecretPasswordKey" -}}
+{{- end -}}
+{{- if and (not $kc.adminExistingSecret) (or (ne ($local.existingSecretPasswordKey | default "admin-password") "admin-password") (ne ($kc.adminExistingSecretPasswordKey | default "admin-password") "admin-password")) -}}
+{{- fail "a custom admin secret key requires global.authProvider.keycloak.adminExistingSecret; generated credentials use admin-password" -}}
+{{- end -}}
+{{- if and (not .Values.keycloak.postgres.existingSecret) (or (ne .Values.keycloak.postgres.existingSecretPasswordKey "password") (ne .Values.keycloak.postgres.existingSecretAdminPasswordKey "postgres-password")) -}}
+{{- fail "custom PostgreSQL secret keys require keycloak.postgres.existingSecret; generated credentials use password and postgres-password" -}}
+{{- end -}}
+{{- end -}}

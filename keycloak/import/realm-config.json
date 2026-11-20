@@ -134,10 +134,10 @@
           "protocolMapper": "oidc-group-membership-mapper",
           "consentRequired": false,
           "config": {
-            "full.path": "false",
+            "full.path": "true",
             "id.token.claim": "true",
             "access.token.claim": "true",
-            "claim.name": "groups",
+            "claim.name": "mcpgw_group_paths",
             "userinfo.token.claim": "true"
           }
         },

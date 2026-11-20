@@ -112,6 +112,7 @@ except ImportError:
 from providers.base import normalize_groups_claim
 from providers.cognito import resolve_cognito_domain_prefix
 from providers.factory import get_auth_provider
+from providers.keycloak import _extract_keycloak_groups
 from pydantic import (
     BaseModel,
     Field,
@@ -5097,7 +5098,7 @@ async def validate_request(request: Request):
                     logger.error(f"Error processing request payload for tool extraction: {e}")
 
         # Validate scope-based access if we have server/tool information
-        # For providers that use groups (Keycloak, Entra ID, Cognito, Okta, Auth0), map groups to scopes
+        # Map verified IdP memberships, including PingFederate, to registry grants.
         user_groups = validation_result.get("groups", [])
         auth_method = validation_result.get("method", "")
         _refuse_cross_origin_cookie_request(
@@ -5109,9 +5110,14 @@ async def validate_request(request: Request):
             server_name_from_url,
         )
         existing_scopes = validation_result.get("scopes", []) or []
-        if user_groups and auth_method in ["keycloak", "entra", "cognito", "okta", "auth0"]:
+        if entra_graph_groups_resolved or (
+            user_groups
+            and auth_method in ["keycloak", "entra", "cognito", "okta", "auth0", "pingfederate"]
+        ):
             # Map IdP groups to scopes using the group mappings (query DocumentDB)
-            user_scopes = await map_groups_to_scopes(user_groups)
+            user_scopes = await map_groups_to_scopes(user_groups) if user_groups else []
+            # A confirmed empty Graph membership is authoritative too: delegated
+            # scope strings must not restore access after group removal.
             # Log counts only: group names are organizational PII (Entra groups
             # often encode org units / cost centers) and scope lists reveal the
             # authz model.
@@ -7446,6 +7452,7 @@ async def oauth2_callback(
                             safe_identity_summary(id_token_claims),
                         )
 
+                        keycloak_claims = id_token_claims
                         # Extract user info from ID token claims
                         mapped_user = {
                             "username": id_token_claims.get("preferred_username")
@@ -7454,7 +7461,6 @@ async def oauth2_callback(
                             "name": id_token_claims.get("name")
                             or id_token_claims.get("given_name"),
                             "subject": id_token_claims.get("sub"),
-                            "groups": id_token_claims.get("groups", []),
                         }
                         logger.info(
                             "User extracted from Keycloak ID token: %s",
@@ -7483,6 +7489,10 @@ async def oauth2_callback(
                     safe_identity_summary(user_info),
                 )
                 mapped_user = map_user_info(user_info, provider_config)
+                if provider == "keycloak":
+                    # Keep the authenticated source intact: generic mapping can
+                    # coerce malformed claims and cannot identify path provenance.
+                    keycloak_claims = user_info
                 logger.info(
                     "User mapped from %s userInfo: %s",
                     provider,
@@ -7745,6 +7755,16 @@ async def oauth2_callback(
                 provider,
                 safe_identity_summary(mapped_user),
             )
+
+        if provider == "keycloak":
+            # Select from the same verified ID token or authenticated userInfo
+            # response before storing normalized groups in the session.
+            try:
+                mapped_user["groups"] = _extract_keycloak_groups(
+                    keycloak_claims, source="keycloak login groups"
+                )
+            except ValueError as e:
+                raise HTTPException(status_code=401, detail="Invalid Keycloak groups claim") from e
 
         _require_login_subject(provider, mapped_user, token_data)
 

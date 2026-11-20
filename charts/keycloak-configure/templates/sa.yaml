@@ -1,6 +1,8 @@
+{{- if include "keycloak-configure.enabled" . }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: keycloak-configure-sa
   namespace: {{ .Release.Namespace | quote }}
 automountServiceAccountToken: true
+{{- end }}

@@ -1,0 +1,151 @@
+suite: bundled Keycloak follows the auth provider
+release:
+  name: test
+  namespace: default
+set:
+  keycloak.postgres.bootstrap.mode: fresh-install
+tests:
+  # With another provider nothing Keycloak-shaped renders, even though
+  # keycloak.create and keycloak-configure.enabled keep their `true` defaults.
+  - it: deploys no Keycloak or Keycloak postgres when the provider is not keycloak
+    set:
+      global:
+        authProvider:
+          type: entra
+    templates:
+      - charts/keycloak/templates/keycloak.yaml
+      - charts/keycloak/templates/postgres.yaml
+      - charts/keycloak/templates/postgres-init.yaml
+      - charts/keycloak/templates/networkpolicy.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders no Keycloak password Secrets when the provider is not keycloak
+    set:
+      global:
+        authProvider:
+          type: okta
+    templates:
+      - templates/keycloak-admin-secret.yaml
+      - templates/keycloak-pg-secret.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: runs no realm setup Job when the provider is not keycloak
+    set:
+      global:
+        authProvider:
+          type: entra
+    templates:
+      - charts/keycloak-configure/templates/job.yaml
+      - charts/keycloak-configure/templates/configmap.yaml
+      - charts/keycloak-configure/templates/secret.yaml
+      - charts/keycloak-configure/templates/sa.yaml
+      - charts/keycloak-configure/templates/role.yaml
+      - charts/keycloak-configure/templates/rolebinding.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # keycloak.create=false means "use an external Keycloak": the bundled
+  # resources, Secrets and bundled validation are inactive; the realm setup
+  # Job still runs when enabled for the external server.
+  - it: renders no bundled-Keycloak Secrets when create is false
+    set:
+      keycloak:
+        create: false
+    templates:
+      - templates/keycloak-admin-secret.yaml
+      - templates/keycloak-pg-secret.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders the realm setup Job for a keycloak provider with an external Keycloak
+    set:
+      keycloak:
+        create: false
+    templates:
+      - charts/keycloak-configure/templates/job.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Job
+
+  - it: deploys Keycloak and its postgres for the default keycloak provider
+    templates:
+      - charts/keycloak/templates/keycloak.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: metadata.name
+          value: test-keycloak
+
+  - it: renders both Keycloak password Secrets for the default keycloak provider
+    templates:
+      - templates/keycloak-admin-secret.yaml
+      - templates/keycloak-pg-secret.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+  - it: ignores inactive Keycloak values with Entra
+    templates: &inactiveTemplates
+      - charts/keycloak/templates/keycloak.yaml
+      - charts/keycloak/templates/admin-init.yaml
+      - charts/keycloak-configure/templates/job.yaml
+    set:
+      keycloak: &unusedKeycloak
+        replicaCount: 2
+        image:
+          tag: "25.0"
+          registry: legacy.example.com
+        auth:
+          passwordSecretKey: legacy # pragma: allowlist secret - Secret data key
+        postgres:
+          bootstrap:
+            mode: ""
+        extraEnv:
+          - name: KC_HOSTNAME
+            value: unused
+      global.authProvider.type: entra
+    asserts: &inactiveAssertions
+      - hasDocuments:
+          count: 0
+  - it: ignores inactive Keycloak values with Okta
+    templates: *inactiveTemplates
+    set:
+      keycloak: *unusedKeycloak
+      global.authProvider.type: okta
+    asserts: *inactiveAssertions
+  - it: ignores inactive Keycloak values with Auth0
+    templates: *inactiveTemplates
+    set:
+      keycloak: *unusedKeycloak
+      global.authProvider.type: auth0
+    asserts: *inactiveAssertions
+  - it: ignores inactive Keycloak values with Cognito
+    templates: *inactiveTemplates
+    set:
+      keycloak: *unusedKeycloak
+      global.authProvider.type: cognito
+    asserts: *inactiveAssertions
+  - it: ignores inactive Keycloak values with PingFederate
+    templates: *inactiveTemplates
+    set:
+      keycloak: *unusedKeycloak
+      global.authProvider.type: pingfederate
+    asserts: *inactiveAssertions
+  - it: rejects the same legacy values for active bundled Keycloak
+    templates:
+      - charts/keycloak/templates/validate-values.yaml
+    set:
+      keycloak: *unusedKeycloak
+      global.authProvider.type: keycloak
+    asserts:
+      - failedTemplate:
+          errorPattern: legacy Bitnami

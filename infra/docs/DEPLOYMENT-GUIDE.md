@@ -23,6 +23,25 @@ export CDK_GRAFANA_ADMIN_PASSWORD="<...>"   # required while enableObservability
 - Node.js 18+, npm, `jq`
 - Container images pushed to ECR (configured in [`config.yaml`](../config.yaml) under `images:`)
 
+Keycloak defaults to the official `quay.io/keycloak/keycloak:26.8.2` image and
+retains Aurora MySQL. Set `images.keycloak` to an explicit fixed tag or digest for
+a custom image. The ECS task supplies database and hostname settings at startup.
+It uses `KC_BOOTSTRAP_ADMIN_USERNAME` and `KC_BOOTSTRAP_ADMIN_PASSWORD` for initial
+administrator creation, and `KC_LOG_LEVEL` for logging.
+
+CDK selects PingFederate, then Auth0, Okta, Entra, Cognito and Keycloak from the existing provider settings, matching Terraform's precedence.
+When another provider wins, CDK omits Keycloak ECS, ALB listeners and rules, CloudFront, DNS and certificates.
+Registry and auth-server receive `KEYCLOAK_ENABLED=false`, blank Keycloak URLs and no Keycloak secrets.
+Inactive Keycloak HTTPS and admin-CIDR settings do not block synth.
+
+Provider changes keep Aurora, its proxy and rotation, bootstrap SSM parameters,
+and application credentials at their existing resource addresses. Keep supplying
+the Keycloak admin and database passwords because those retained resources still
+use them. Post-deploy setup skips Keycloak for other providers; `validate.sh`
+checks infrastructure and skips Keycloak login and authenticated CRUD checks.
+
+For an existing Keycloak deployment, remove cross-stack consumers before their producers. Under the new provider configuration, deploy `Registry-Service` with `--exclusively`, then `Registry-Auth` with `--exclusively`, then all stacks. The first step releases the service stack's imports from Auth; the second releases Auth's NAT-IP imports from Network. Inspect the synthesized diff first. A single dependency-ordered deployment can fail because CloudFormation cannot delete an export that a deployed consumer still imports.
+
 ## Service URLs
 
 After deploy, run `./scripts/deploy.sh --endpoints` (reads `cdk-outputs.json`).
@@ -33,6 +52,28 @@ Standard mapping:
 | Registry UI / API / Health | `<registry-alb>/`, `/api/v1`, `/health` |
 | Keycloak / Admin Console | `<keycloak-alb>/`, `/admin` |
 | Grafana, Gradio | `<registry-alb>/grafana/`, `/gradio/` |
+
+### Keycloak ALB path routing
+
+The Keycloak ALB forwards `/realms/mcp-gateway`, `/realms/mcp-gateway/*`,
+`/resources/*` and `/` for any source its security groups admit. In direct-ALB
+mode, admin and master-realm paths also require an approved source IP. Other
+paths return 404.
+
+`keycloakAdminCidrBlocks` in [`config.yaml`](../config.yaml) defaults to `null`,
+which uses `ingressCidrBlocks`. Set it to your operator networks to restrict
+`/admin`, `/admin/*`, `/realms/master` and `/realms/master/*`. Include the machine
+that runs setup and user-management scripts. CDK adds the VPC NAT gateway egress
+IPs for the registry's admin calls. The HTTPS security group admits the union of
+ordinary ingress and admin CIDRs.
+
+CloudFront hides the client IP from the ALB. In CloudFront mode, admin paths have
+no source-IP condition, and synth rejects an admin list that differs from
+`ingressCidrBlocks`. Each admin rule accepts up to three CIDRs. CDK rejects lists
+that would exceed the default 100-rule listener quota.
+
+Use the dedicated Keycloak URL for administration. Do not expose admin or
+master-realm routes through the registry gateway.
 
 ## Credentials
 
@@ -129,7 +170,7 @@ Realm not created — re-run `post-deploy.sh` (which calls `keycloak/setup/init-
 ### Keycloak ECS tasks restart in a loop
 Check `aws logs tail /ecs/keycloak --since 30m`. Usual suspects:
 - DB connectivity: SG ingress from Keycloak ECS to Aurora on 3306
-- HTTPS strict mode with HTTP ALB: ensure `KC_HOSTNAME_STRICT_HTTPS=false`, `KC_HTTP_ENABLED=true`
+- For an HTTP ALB upstream, keep `KC_HTTP_ENABLED=true` and the public Keycloak URL on HTTPS. CDK pins `KC_HOSTNAME` and sets `KC_HOSTNAME_BACKCHANNEL_DYNAMIC=false`, so tokens and discovery use the canonical URL. Registry, auth-server and A2A agents receive it as `KEYCLOAK_EXTERNAL_URL`.
 - Admin password contains forbidden chars
 
 ### DocumentDB / RDS password validation failure

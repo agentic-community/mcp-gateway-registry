@@ -1,0 +1,63 @@
+{{- if and (include "keycloak.enabled" .) .Values.sslInit.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "keycloak.fullname" . }}-admin-init
+  namespace: {{ .Release.Namespace | quote }}
+data:
+  initialize-admin.py: |
+{{ .Files.Get "files/initialize-admin.py" | indent 4 }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "keycloak.fullname" . }}-admin-init
+  namespace: {{ .Release.Namespace | quote }}
+  annotations:
+    # Explicit reconciliation, separate from pod readiness and restart paths.
+    # Keep the completed Job as a readback receipt until the next operation.
+    "helm.sh/hook": post-install,post-upgrade,post-rollback
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 660
+  template:
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: initialize-admin
+          image: public.ecr.aws/docker/library/python:3.14.9-slim
+          command: ["python3", "-B", "/app/initialize-admin.py"]
+          securityContext:
+            {{- include "keycloak.containerSecurityContext" . | nindent 12 }}
+          env:
+            - name: KEYCLOAK_ADMIN_URL
+              value: {{ printf "http://%s:%v%s" (include "keycloak.headlessName" .) .Values.service.containerPort (trimSuffix "/" .Values.httpRelativePath) | quote }}
+            - name: KEYCLOAK_ADMIN_REALM
+              value: {{ .Values.adminRealm | quote }}
+            - name: KEYCLOAK_HOSTNAME
+              value: {{ include "keycloak.hostname" . | quote }}
+            - name: KEYCLOAK_ADMIN_USERNAME
+              value: {{ include "keycloak.adminUsername" . | quote }}
+            - name: KEYCLOAK_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "keycloak.adminSecretName" . }}
+                  key: {{ include "keycloak.adminSecretKey" . }}
+          volumeMounts:
+            - name: script
+              mountPath: /app
+              readOnly: true
+      volumes:
+        - name: script
+          configMap:
+            name: {{ include "keycloak.fullname" . }}-admin-init
+{{- end }}

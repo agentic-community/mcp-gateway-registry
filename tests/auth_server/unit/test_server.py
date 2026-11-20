@@ -3801,6 +3801,219 @@ class TestOAuth2PkceAndNonce:
         assert kwargs.get("code_verifier") == "the-code-verifier"
 
 
+class TestKeycloakLoginGroupPaths:
+    """Keycloak login normalizes full-path group claims before session storage.
+
+    The dedicated ``mcpgw_group_paths`` claim emits full paths. One leading ``/``
+    is stripped, so the top-level ``/registry-admins`` keeps admin while a
+    subgroup ``/x/registry-admins`` stays ``x/registry-admins`` and is dropped
+    by the scope-derived group filter instead of colliding with the admin group.
+    """
+
+    _MAPPED_GROUPS = frozenset({"registry-admins", "mcp-registry-user"})
+
+    def _login(
+        self,
+        token_data: dict,
+        id_token_claims: dict | None = None,
+        user_info: dict | None = None,
+    ):
+        """Drive the Keycloak callback. Returns (response, filter_input, session_kwargs)."""
+        from auth_server import server as srv
+        from auth_server.server import app, signer
+
+        temp_cookie = signer.dumps(
+            {
+                "state": "test-state",
+                "provider": "keycloak",
+                "callback_uri": "http://localhost:8888/oauth2/callback/keycloak",
+                "nonce": "expected-nonce",
+                "code_verifier": "the-code-verifier",
+            }
+        )
+        session_kwargs: dict = {}
+        filter_input: dict = {}
+
+        async def _fake_create_session(**kwargs):
+            session_kwargs.update(kwargs)
+            return "fake-session-id"
+
+        async def _mapped_group_names():
+            filter_input["called"] = True
+            return self._MAPPED_GROUPS
+
+        fake_provider = MagicMock()
+        fake_provider.validate_id_token.return_value = id_token_claims
+
+        patched_config = dict(srv.OAUTH2_CONFIG)
+        patched_config["providers"] = dict(patched_config.get("providers", {}))
+        patched_config["providers"]["keycloak"] = {
+            "client_id": "gateway-web",
+            "user_info_url": "https://idp.example.com/userinfo",
+            "username_claim": "preferred_username",
+            "email_claim": "email",
+            "name_claim": "name",
+            "groups_claim": "groups",
+        }
+
+        client = TestClient(app, raise_server_exceptions=False)
+        with (
+            patch.object(srv, "OAUTH2_CONFIG", patched_config),
+            patch.object(srv, "IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS", []),
+            patch(
+                "auth_server.server.exchange_code_for_token",
+                AsyncMock(return_value=token_data),
+            ),
+            patch("auth_server.server.get_user_info", AsyncMock(return_value=user_info)),
+            patch("auth_server.server.get_auth_provider", return_value=fake_provider),
+            patch("group_filter.ALLOWED_IDP_GROUPS", []),
+            patch("group_filter._get_mapped_group_names", _mapped_group_names),
+            patch("session_store.create_session", _fake_create_session),
+        ):
+            response = client.get(
+                "/oauth2/callback/keycloak",
+                params={"code": "test-code", "state": "test-state"},
+                cookies={"oauth2_temp_session": temp_cookie},
+                follow_redirects=False,
+            )
+        return response, filter_input, session_kwargs
+
+    @staticmethod
+    def _id_token_claims(groups, *, claim_name="mcpgw_group_paths") -> dict:
+        return {
+            "sub": "alice-sub",
+            "preferred_username": "alice",
+            "email": "alice@example.com",
+            claim_name: groups,
+        }
+
+    def test_id_token_full_path_admin_group_kept_and_subgroup_dropped(self):
+        from registry.auth.privileged_constants import ADMIN_GROUP_MARKERS
+
+        response, filter_input, session_kwargs = self._login(
+            {"access_token": "at", "id_token": "it"},
+            id_token_claims=self._id_token_claims(
+                ["/registry-admins", "/x/registry-admins", "/mcp-registry-user"]
+            ),
+        )
+
+        assert response.status_code == 302
+        assert filter_input.get("called") is True
+        assert session_kwargs["groups"] == ["registry-admins", "mcp-registry-user"]
+        assert ADMIN_GROUP_MARKERS.intersection(session_kwargs["groups"]) == {"registry-admins"}
+
+    def test_id_token_admin_named_subgroup_alone_grants_no_admin(self):
+        from registry.auth.privileged_constants import ADMIN_GROUP_MARKERS
+
+        response, _filter_input, session_kwargs = self._login(
+            {"access_token": "at", "id_token": "it"},
+            id_token_claims=self._id_token_claims(["/x/registry-admins", "/mcp-registry-user"]),
+        )
+
+        assert response.status_code == 302
+        assert session_kwargs["groups"] == ["mcp-registry-user"]
+        assert not ADMIN_GROUP_MARKERS.intersection(session_kwargs["groups"])
+
+    def test_id_token_legacy_plain_group_names_unchanged(self):
+        response, _filter_input, session_kwargs = self._login(
+            {"access_token": "at", "id_token": "it"},
+            id_token_claims=self._id_token_claims(
+                ["registry-admins", "mcp-registry-user"], claim_name="groups"
+            ),
+        )
+
+        assert response.status_code == 302
+        assert session_kwargs["groups"] == ["registry-admins", "mcp-registry-user"]
+
+    def test_userinfo_fallback_groups_are_normalized(self):
+        response, _filter_input, session_kwargs = self._login(
+            {"access_token": "at"},
+            user_info={
+                "sub": "alice-sub",
+                "preferred_username": "alice",
+                "email": "alice@example.com",
+                "mcpgw_group_paths": ["/registry-admins", "/x/registry-admins"],
+            },
+        )
+
+        assert response.status_code == 302
+        assert session_kwargs["groups"] == ["registry-admins"]
+
+    def test_malformed_id_token_groups_claim_denies_login(self):
+        response, _filter_input, session_kwargs = self._login(
+            {"access_token": "at", "id_token": "it"},
+            id_token_claims=self._id_token_claims({"/registry-admins": True}),
+        )
+
+        assert response.status_code == 401
+        assert session_kwargs == {}
+
+    @pytest.mark.parametrize("use_id_token", [True, False])
+    def test_double_leading_slash_does_not_gain_admin_on_login(self, use_id_token):
+        claims = self._id_token_claims(["//registry-admins", "/mcp-registry-user"])
+        token_data = {"access_token": "at"}
+        if use_id_token:
+            token_data["id_token"] = "it"
+        response, _, session_kwargs = self._login(
+            token_data,
+            id_token_claims=claims if use_id_token else None,
+            user_info=None if use_id_token else claims,
+        )
+        assert response.status_code == 302
+        assert session_kwargs["groups"] == ["mcp-registry-user"]
+
+    def test_malformed_userinfo_groups_claim_denies_login(self):
+        response, _, session_kwargs = self._login(
+            {"access_token": "at"},
+            user_info=self._id_token_claims({"/registry-admins": True}),
+        )
+        assert response.status_code == 401
+        assert session_kwargs == {}
+
+    @pytest.mark.parametrize("use_id_token", [True, False])
+    @pytest.mark.parametrize(
+        ("group_claims", "expected"),
+        [
+            ({"groups": ["/registry-admins", "mcp-registry-user"]}, ["mcp-registry-user"]),
+            ({"groups": ["registry-admins"], "mcpgw_group_paths": []}, []),
+            (
+                {"groups": ["registry-admins"], "mcpgw_group_paths": ["/x/registry-admins"]},
+                [],
+            ),
+            (
+                {"groups": ["/registry-admins"], "mcpgw_group_paths": ["/registry-admins"]},
+                ["registry-admins"],
+            ),
+            (
+                {"groups": {"registry-admins": True}, "mcpgw_group_paths": ["/mcp-registry-user"]},
+                ["mcp-registry-user"],
+            ),
+        ],
+    )
+    def test_claim_cutover_preserves_provenance(self, use_id_token, group_claims, expected):
+        claims = {"sub": "alice-sub", "preferred_username": "alice", **group_claims}
+        response, _, session_kwargs = self._login(
+            {"access_token": "at", **({"id_token": "it"} if use_id_token else {})},
+            id_token_claims=claims if use_id_token else None,
+            user_info=None if use_id_token else claims,
+        )
+        assert response.status_code == 302
+        assert session_kwargs["groups"] == expected
+
+    @pytest.mark.parametrize("use_id_token", [True, False])
+    @pytest.mark.parametrize("malformed", [None, "/registry-admins", {}, [True], ["/ok", 1]])
+    def test_malformed_new_claim_cannot_fall_back_to_legacy_admin(self, use_id_token, malformed):
+        claims = self._id_token_claims(malformed)
+        claims["groups"] = ["registry-admins"]
+        response, _, session_kwargs = self._login(
+            {"access_token": "at", **({"id_token": "it"} if use_id_token else {})},
+            id_token_claims=claims if use_id_token else None,
+            user_info=self._id_token_claims(["/registry-admins"]) if use_id_token else claims,
+        )
+        assert response.status_code == 401
+        assert session_kwargs == {}
+
+
 # =============================================================================
 # MULTI-KEY STATIC TOKEN PARSER TESTS (issue #779)
 # =============================================================================

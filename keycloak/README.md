@@ -32,6 +32,8 @@ curl -f http://localhost:8080/health/ready || echo "Keycloak not ready yet"
 ./keycloak/setup/init-keycloak.sh
 ```
 
+Realm setup uses the official Keycloak 26.8.2 image. DCR and CIMD are off by default. See [registration controls and group-path migration](../docs/keycloak-mcp-clients.md#enable-registration-and-migrate-an-existing-realm) for scope restrictions, independent CIMD cleanup and native CIMD outbound-fetch limits. Deploy matching auth-server/registry group readers before switching mappers to full paths, and review the cleanup inventory before acknowledging client disables.
+
 ### Step 4: Create Service Accounts for Your Agents
 
 **Option A: Production Setup (Individual Agents)**

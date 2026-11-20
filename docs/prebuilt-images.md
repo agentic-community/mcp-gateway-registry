@@ -23,8 +23,12 @@ The following external images are pulled from their original sources:
 | Prometheus | `prom/prometheus:latest` | Docker Hub Official | Metrics collection and time-series database | 9090 |
 | Grafana | `grafana/grafana:latest` | Docker Hub Official | Metrics visualization and dashboards | 3000 |
 | PostgreSQL | `postgres:16-alpine` | Docker Hub Official | Database for Keycloak | 5432 (internal) |
-| Keycloak | `quay.io/keycloak/keycloak:25.0` | Quay.io | Identity and access management service | 8080 |
+| Keycloak | `quay.io/keycloak/keycloak:26.8.2` | Quay.io | Identity and access management service | 8080 |
 | MongoDB CE | `mongo:8.2` | Docker Hub Official | MongoDB Community Edition 8.2 with replica set support for local development | 27017 (internal) |
+
+Compose defaults `KEYCLOAK_VERSION` to `26.8.2`. The custom Keycloak Dockerfile also defaults `BASE_IMAGE` to `quay.io/keycloak/keycloak:26.8.2`. Its build configuration and image manifest use the `26.8.2` tag. Set `BASE_IMAGE` and `tags` together in `build-config.yaml` when changing the custom image version.
+
+Set `KEYCLOAK_EXTERNAL_URL` to the public URL for browser redirects, discovery metadata, and the signed token issuer. Compose passes this URL as `KC_HOSTNAME` and disables dynamic backchannel URLs. `KEYCLOAK_URL` remains the internal address for token and JWKS requests. `KEYCLOAK_ADMIN_URL` selects the setup scripts' admin REST endpoint without changing the public issuer.
 
 ## Manual Download Commands
 
@@ -44,7 +48,7 @@ docker pull alpine:latest
 docker pull prom/prometheus:latest
 docker pull grafana/grafana:latest
 docker pull postgres:16-alpine
-docker pull quay.io/keycloak/keycloak:25.0
+docker pull quay.io/keycloak/keycloak:26.8.2
 docker pull mongo:8.2
 ```
 

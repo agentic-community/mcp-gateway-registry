@@ -1,0 +1,14 @@
+{{- if include "keycloak.enabled" . }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "keycloak.postgresInitName" . }}
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "keycloak.commonLabels" . | nindent 4 }}
+data:
+  bootstrap.sh: |
+{{ .Files.Get "files/bootstrap.sh" | indent 4 }}
+  complete.sql: |
+{{ .Files.Get "files/complete.sql" | indent 4 }}
+{{- end }}

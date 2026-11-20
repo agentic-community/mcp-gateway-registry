@@ -5,12 +5,12 @@
 locals {
   # Determine Keycloak hostname based on deployment mode
   # CloudFront mode: use CloudFront domain, Custom DNS mode: use keycloak_domain
-  keycloak_hostname = var.enable_cloudfront && !var.enable_route53_dns ? (
-    var.enable_cloudfront ? aws_cloudfront_distribution.keycloak[0].domain_name : local.keycloak_domain
-  ) : local.keycloak_domain
+  keycloak_hostname = local.keycloak_selected ? (
+    var.enable_cloudfront && !var.enable_route53_dns ? aws_cloudfront_distribution.keycloak[0].domain_name : local.keycloak_domain
+  ) : ""
 
-  # Full HTTPS URL for Keycloak (required for KC_HOSTNAME_URL and KC_HOSTNAME_ADMIN_URL)
-  keycloak_hostname_url = "https://${local.keycloak_hostname}"
+  # Canonical frontend URL for hostname v2, including the public HTTPS scheme.
+  keycloak_hostname_url = local.keycloak_selected ? "https://${local.keycloak_hostname}" : ""
 
   keycloak_container_env = [
     {
@@ -27,15 +27,17 @@ locals {
       value = "xforwarded"
     },
     {
-      # Issue #1122: Keycloak 25 introduced "Hostname v2" config. The KC23
-      # variables KC_HOSTNAME_URL, KC_HOSTNAME_ADMIN_URL, KC_HOSTNAME_STRICT,
-      # and KC_HOSTNAME_STRICT_HTTPS are all deprecated and IGNORED on KC25.
-      # Replaced with a single KC_HOSTNAME pointing at the full public URL.
-      # When KC_HOSTNAME is a full https:// URL, KC25 derives the canonical
-      # scheme from it and trusts X-Forwarded-Proto via KC_PROXY_HEADERS.
-      # See https://www.keycloak.org/server/hostname for hostname v2 docs.
+      # Pin generated links and token issuers independently of request headers.
       name  = "KC_HOSTNAME"
       value = local.keycloak_hostname_url
+    },
+    {
+      name  = "KC_HOSTNAME_STRICT"
+      value = "true"
+    },
+    {
+      name  = "KC_HOSTNAME_BACKCHANNEL_DYNAMIC"
+      value = "false"
     },
     {
       # Issue #1122: KC25 listens HTTPS-only (8443) by default; KC23 listened
@@ -56,31 +58,37 @@ locals {
       value = "true"
     },
     {
-      name  = "KEYCLOAK_LOGLEVEL"
+      name  = "KC_LOG_LEVEL"
       value = var.keycloak_log_level
     },
     {
-      # Public-image support: the official quay.io/keycloak image is NOT pre-built
-      # with our options (the custom image baked these via `kc.sh build`). Running a
-      # non-optimized `start` (see command below) makes Keycloak build from these at
-      # startup. KC_DB must be the Aurora vendor (mysql); KC_FEATURES matches the
-      # custom Dockerfile's token-exchange feature.
+      # Public and custom images apply these options during non-optimized start.
+      # KC_DB must match Aurora MySQL; token-exchange supports existing M2M flows.
       name  = "KC_DB"
       value = "mysql"
     },
     {
       name  = "KC_FEATURES"
-      value = "token-exchange"
+      value = "token-exchange,cimd"
+    },
+    {
+      # Native registration accepts arbitrary attributes; retain only OIDC DCR.
+      name  = "KC_SPI_CLIENT_REGISTRATION__DEFAULT__ENABLED"
+      value = "false"
+    },
+    {
+      name  = "KC_FEATURES_DISABLED"
+      value = "device-flow,ciba"
     }
   ]
 
   keycloak_container_secrets = [
     {
-      name      = "KEYCLOAK_ADMIN"
+      name      = "KC_BOOTSTRAP_ADMIN_USERNAME"
       valueFrom = aws_ssm_parameter.keycloak_admin.arn
     },
     {
-      name      = "KEYCLOAK_ADMIN_PASSWORD"
+      name      = "KC_BOOTSTRAP_ADMIN_PASSWORD"
       valueFrom = aws_ssm_parameter.keycloak_admin_password.arn
     },
     {
@@ -276,6 +284,8 @@ resource "aws_iam_role_policy" "keycloak_task_ssm_policy" {
 
 # ECS Task Definition
 resource "aws_ecs_task_definition" "keycloak" {
+  count = local.keycloak_selected ? 1 : 0
+
   family                   = "keycloak"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
@@ -347,9 +357,11 @@ resource "aws_ecs_task_definition" "keycloak" {
 
 # ECS Service
 resource "aws_ecs_service" "keycloak" {
+  count = local.keycloak_selected ? 1 : 0
+
   name            = "keycloak"
   cluster         = aws_ecs_cluster.keycloak.id
-  task_definition = aws_ecs_task_definition.keycloak.arn
+  task_definition = aws_ecs_task_definition.keycloak[0].arn
   desired_count   = 1
   launch_type     = "FARGATE"
 
@@ -360,13 +372,15 @@ resource "aws_ecs_service" "keycloak" {
   }
 
   load_balancer {
-    target_group_arn = aws_lb_target_group.keycloak.arn
+    target_group_arn = aws_lb_target_group.keycloak[0].arn
     container_name   = "keycloak"
     container_port   = 8080
   }
 
   depends_on = [
     aws_lb_listener.keycloak_https,
+    aws_lb_listener.keycloak_http,
+    aws_lb_listener_rule.keycloak_routing,
     aws_iam_role_policy.keycloak_task_exec_ssm_policy,
     aws_iam_role_policy.keycloak_task_exec_logs_policy
   ]
@@ -376,9 +390,11 @@ resource "aws_ecs_service" "keycloak" {
 
 # Auto Scaling Target
 resource "aws_appautoscaling_target" "keycloak" {
+  count = local.keycloak_selected ? 1 : 0
+
   max_capacity       = 4
   min_capacity       = 1
-  resource_id        = "service/${aws_ecs_cluster.keycloak.name}/${aws_ecs_service.keycloak.name}"
+  resource_id        = "service/${aws_ecs_cluster.keycloak.name}/${aws_ecs_service.keycloak[0].name}"
   scalable_dimension = "ecs:service:DesiredCount"
   service_namespace  = "ecs"
 
@@ -387,11 +403,13 @@ resource "aws_appautoscaling_target" "keycloak" {
 
 # Auto Scaling Policy - CPU
 resource "aws_appautoscaling_policy" "keycloak_cpu" {
+  count = local.keycloak_selected ? 1 : 0
+
   name               = "keycloak-cpu-autoscaling"
   policy_type        = "TargetTrackingScaling"
-  resource_id        = aws_appautoscaling_target.keycloak.resource_id
-  scalable_dimension = aws_appautoscaling_target.keycloak.scalable_dimension
-  service_namespace  = aws_appautoscaling_target.keycloak.service_namespace
+  resource_id        = aws_appautoscaling_target.keycloak[0].resource_id
+  scalable_dimension = aws_appautoscaling_target.keycloak[0].scalable_dimension
+  service_namespace  = aws_appautoscaling_target.keycloak[0].service_namespace
 
   target_tracking_scaling_policy_configuration {
     predefined_metric_specification {
@@ -403,11 +421,13 @@ resource "aws_appautoscaling_policy" "keycloak_cpu" {
 
 # Auto Scaling Policy - Memory
 resource "aws_appautoscaling_policy" "keycloak_memory" {
+  count = local.keycloak_selected ? 1 : 0
+
   name               = "keycloak-memory-autoscaling"
   policy_type        = "TargetTrackingScaling"
-  resource_id        = aws_appautoscaling_target.keycloak.resource_id
-  scalable_dimension = aws_appautoscaling_target.keycloak.scalable_dimension
-  service_namespace  = aws_appautoscaling_target.keycloak.service_namespace
+  resource_id        = aws_appautoscaling_target.keycloak[0].resource_id
+  scalable_dimension = aws_appautoscaling_target.keycloak[0].scalable_dimension
+  service_namespace  = aws_appautoscaling_target.keycloak[0].service_namespace
 
   target_tracking_scaling_policy_configuration {
     predefined_metric_specification {
@@ -432,4 +452,29 @@ resource "aws_ssm_parameter" "keycloak_admin_password" {
   key_id = aws_kms_key.rds.id
   value  = var.keycloak_admin_password
   tags   = local.common_tags
+}
+
+moved {
+  from = aws_ecs_task_definition.keycloak
+  to   = aws_ecs_task_definition.keycloak[0]
+}
+
+moved {
+  from = aws_ecs_service.keycloak
+  to   = aws_ecs_service.keycloak[0]
+}
+
+moved {
+  from = aws_appautoscaling_target.keycloak
+  to   = aws_appautoscaling_target.keycloak[0]
+}
+
+moved {
+  from = aws_appautoscaling_policy.keycloak_cpu
+  to   = aws_appautoscaling_policy.keycloak_cpu[0]
+}
+
+moved {
+  from = aws_appautoscaling_policy.keycloak_memory
+  to   = aws_appautoscaling_policy.keycloak_memory[0]
 }

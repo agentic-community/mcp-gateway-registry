@@ -1,3 +1,9 @@
+{{- if include "keycloak-configure.enabled" . }}
+{{- $globalKeycloak := dig "authProvider" "keycloak" dict .Values.global }}
+{{- $keycloakRealm := include "keycloak-configure.realm" . }}
+{{- if and .Values.dcr.enabled .Values.cimd.enabled }}
+{{- fail "Keycloak 26.8.2 cannot enable dcr.enabled and cimd.enabled together; set one false in the same upgrade" }}
+{{- end }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -25,13 +31,33 @@ spec:
             - secretRef:
                 name: {{ .Values.global.existingKeycloakClientSecret | default "keycloak-client-secret" }}
           env:
+            - name: REALM
+              value: {{ $keycloakRealm | quote }}
+            {{- if not .Values.keycloak.existingSecret }}
+            - name: KEYCLOAK_ADMIN
+              value: {{ $globalKeycloak.adminUsername | default .Values.keycloak.adminUser | quote }}
+            {{- end }}
             - valueFrom:
                 secretKeyRef:
-                  key: admin-password
-                  name: {{ .Release.Name}}-keycloak
+                  key: {{ $globalKeycloak.adminExistingSecretPasswordKey | default .Values.keycloak.adminExistingSecretPasswordKey | quote }}
+                  name: {{ $globalKeycloak.adminExistingSecret | default .Values.keycloak.adminExistingSecret | default (printf "%s-keycloak" .Release.Name) | quote }}
               name: KEYCLOAK_ADMIN_PASSWORD
             - name: ENABLE_DCR_CONFIG
               value: {{ .Values.dcr.enabled | default false | toString | quote }}
+            - name: DCR_SWEEP_ACKNOWLEDGED
+              value: {{ .Values.dcr.sweepAcknowledged | default false | toString | quote }}
+            - name: CIMD_SWEEP_ACKNOWLEDGED
+              value: {{ .Values.cimd.sweepAcknowledged | default false | toString | quote }}
+            - name: DCR_ALLOWED_SCOPES
+              value: {{ required "keycloak-configure.dcr.allowedScopes must list at least one scope" (join " " (.Values.dcr.allowedScopes | default list)) | quote }}
+            - name: DCR_KEEP_CLIENTS
+              value: {{ join " " (.Values.dcr.keepClients | default list) | quote }}
+            - name: REGISTRATION_TRUSTED_CLIENT_IDS
+              value: {{ .Values.registrationTrustedClientIds | toJson | quote }}
+            - name: ENABLE_CIMD_CONFIG
+              value: {{ .Values.cimd.enabled | default false | toString | quote }}
+            - name: CIMD_TRUSTED_DOMAINS
+              value: {{ .Values.cimd.trustedDomains | toJson | quote }}
           volumeMounts:
             - mountPath: /app/script.sh
               name: script
@@ -43,3 +69,4 @@ spec:
             name: setup-keycloak
       serviceAccountName: keycloak-configure-sa
   backoffLimit: 4
+{{- end }}

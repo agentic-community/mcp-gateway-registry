@@ -53,6 +53,13 @@ def _service_environment(compose_path: Path, service: str) -> dict[str, str]:
 
 
 @pytest.mark.parametrize("compose_filename", COMPOSE_FILES)
+def test_keycloak_disables_native_registration(repo_root: Path, compose_filename: str):
+    env = _service_environment(repo_root / compose_filename, "keycloak")
+    assert env["KC_SPI_CLIENT_REGISTRATION__DEFAULT__ENABLED"] == "false"
+    assert env.get("KC_SPI_CLIENT_REGISTRATION__OPENID_CONNECT__ENABLED") != "false"
+
+
+@pytest.mark.parametrize("compose_filename", COMPOSE_FILES)
 @pytest.mark.parametrize("service", DISCOVERY_SERVICES)
 def test_discovery_service_receives_keycloak_external_url(
     repo_root: Path,

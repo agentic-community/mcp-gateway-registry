@@ -77,6 +77,19 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
+"true" when the stack deploys its bundled Keycloak: keycloak.create is true
+AND global.authProvider.type is "keycloak" (the default when unset). Mirrors
+the keycloak subchart's own "keycloak.enabled" gate, so the Secrets this stack
+renders for that Keycloak exist exactly when it does.
+*/}}
+{{- define "mcp-gateway-registry-stack.keycloakDeployed" -}}
+{{- $authType := dig "authProvider" "type" "keycloak" (.Values.global | default dict) -}}
+{{- if and .Values.keycloak.create (eq $authType "keycloak") -}}
+true
+{{- end -}}
+{{- end }}
+
+{{/*
 Validate generic-proxy cross-chart parity and egress prerequisites. The stack
 owns both consumers, so it can reject a split-brain switch configuration before
 subcharts render.

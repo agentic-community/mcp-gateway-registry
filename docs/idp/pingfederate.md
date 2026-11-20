@@ -352,6 +352,8 @@ PingFederate's default user store (Simple PCV) has no groups concept. Even after
 
 The registry handles this with a fallback: it consults the `idp_user_groups` MongoDB collection (per-username group mappings) when an enabled IdP returns an empty groups claim. Set `IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS=pingfederate` (already the default) to enable the fallback for PingFederate. Then use the registry's **IAM > User Groups** page to map usernames to groups.
 
+When a verified bearer token has groups, including groups recovered from this fallback, `/validate` derives registry scopes from the group mappings. Token `scope` strings do not add grants to those memberships. Scope-only tokens retain direct-scope authorization when no groups are available.
+
 For production deployments using LDAP or AD as the user store, you can populate groups inside PingFederate directly via the ATM's attribute mapping (step 3 above) and bypass the fallback. See your PingFederate documentation on Password Credential Validators for the full set of user-store options (LDAP, AD, JDBC, PingDirectory, etc.).
 
 ## TLS / Self-Signed Certificate Handling

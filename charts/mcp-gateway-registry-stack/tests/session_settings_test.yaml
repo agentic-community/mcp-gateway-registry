@@ -6,6 +6,8 @@ release:
 # SESSION_COOKIE_SECURE and SESSION_COOKIE_DOMAIN. global.sessionMaxAgeSeconds,
 # global.sessionCookieSecure and global.sessionCookieDomain are the one place
 # to set them.
+set:
+  keycloak.postgres.bootstrap.mode: fresh-install
 tests:
   - it: renders the default lifetime and a Secure cookie in both secrets, even with TLS off
     templates:
@@ -16,6 +18,7 @@ tests:
         domain: example.com
         ingress:
           tls: false
+          allowPlaintext: true
     asserts:
       - equal:
           path: data.SESSION_COOKIE_SECURE

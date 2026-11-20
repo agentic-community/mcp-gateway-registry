@@ -309,7 +309,7 @@ Single URL; disables itself when unset.
 
 | Parameter | Docker (`.env`) | Terraform (`.tfvars`) | Helm (`values.yaml`) | Purpose |
 |-----------|-----------------|-----------------------|----------------------|---------|
-| Provider type | `AUTH_PROVIDER` | Derived from `entra_enabled` / `okta_enabled` / `auth0_enabled` flags | `global.authProvider.type` | `keycloak`, `cognito`, `entra`, `okta`, `auth0`. |
+| Provider type | `AUTH_PROVIDER` | Derived from `pingfederate_enabled`, `auth0_enabled`, `okta_enabled`, `entra_enabled`, then `cognito_enabled`; otherwise Keycloak when a domain or CloudFront endpoint exists, or `default` | `global.authProvider.type` | Selecting another provider removes Keycloak-specific nginx locations and ingress paths. Terraform/CDK omit Keycloak public routing and runtime resources while retaining database and credential resources. No separate routing flag is required. |
 | IDE OAuth client id | `IDE_OAUTH_CLIENT_ID` | `ide_oauth_client_id` | `registry.ideOauthClientId` | Registry-wide **default** pre-registered **public** OAuth client_id that IDEs (Cursor, Claude Code, Codex) use to start the gateway login flow. When set, a server's Connect config advertises this client_id and omits the static gateway token, so the IDE shows a login button and runs the OAuth/PKCE flow. A per-server `oauth_client_id` (see below) overrides this default. Use when anonymous Dynamic Client Registration is disabled and a fixed public client is registered instead. Empty (default) keeps the static-token Connect config. Not a secret. |
 | IDE OAuth callback port | `IDE_OAUTH_CALLBACK_PORT` | `ide_oauth_callback_port` | `registry.ideOauthCallbackPort` | Fixed loopback callback port the IDE uses for the OAuth login redirect (`http://localhost:<port>/callback`). Needed for IdPs that match the redirect_uri literally including the port (Okta, Entra, Cognito): register that exact URI on the public client and set the same port here so the Connect dialog emits `--callback-port` (Claude Code). `0` (default) lets the IDE pick a port, which is correct for Keycloak (wildcard loopback redirect). Note: Codex/Cursor cannot pin the port, so this only fully helps Claude Code. |
 | Claude Code connect scope | `IDE_CONNECT_SCOPE` | `ide_connect_scope` | `registry.ideConnectScope` | Optional install scope for the Claude Code Connect snippet: `local`, `project`, or `user`. When set, the generated `claude mcp add` command emits `--scope <value>` so the server installs at that scope — e.g. `user` makes it available in every project instead of only the current directory (Claude Code's `local` default). Empty (default) omits the flag. Invalid values are ignored (flag omitted). Only affects the displayed Claude Code snippet; no effect on Cursor/Codex configs or gateway behaviour. |
@@ -337,16 +337,19 @@ that server's Connect dialog:
 
 ### 12a — Keycloak
 
+Keycloak nginx routes use the resolved `AUTH_PROVIDER` setting, including configuration loaded from `.env`. Stale Keycloak URLs do not enable routes when another provider is selected. In Helm, the provider selects login routing independently of `keycloak.create`, which controls only the bundled server. Terraform and CDK retain persistent Keycloak database and credential resources when switching providers; their existing credential inputs remain required. Review the infrastructure plan before applying a provider switch because it removes the Keycloak public endpoints.
+
 | Parameter | Docker (`.env`) | Terraform (`.tfvars`) | Helm (`values.yaml`) | Purpose |
 |-----------|-----------------|-----------------------|----------------------|---------|
-| Internal URL | `KEYCLOAK_URL` | — (templated) | `auth-server.keycloak.externalUrl` + Helm service DNS | Inside container network. |
-| External URL | `KEYCLOAK_EXTERNAL_URL` | — (from `keycloak_domain` / `base_domain`) | — (templated from `global.domain`) | Browser-reachable URL. |
+| Internal URL | `KEYCLOAK_URL` | Templated from the Keycloak service | Helm service DNS | Transport address for signing-key and token requests. It does not choose the public issuer. |
+| External URL | `KEYCLOAK_EXTERNAL_URL` | From `keycloak_domain` / `base_domain` | `global.authProvider.keycloak.externalUrl`, or the ingress-derived URL | Canonical browser URL and token issuer. Keycloak hostname configuration and every consumer must agree. |
 | Admin URL | `KEYCLOAK_ADMIN_URL` | — | — | Used by setup scripts. |
 | Realm | `KEYCLOAK_REALM` | — | `global.authProvider.keycloak.realm` / `auth-server.keycloak.realm` | e.g. `mcp-gateway`. |
 | Admin username | `KEYCLOAK_ADMIN` | `keycloak_admin` | `global.authProvider.keycloak.adminUsername` | — |
-| Admin password **(secret)** | `KEYCLOAK_ADMIN_PASSWORD` | `keycloak_admin_password` | `keycloak.auth.adminPassword` | Helm renders it into the `<release>-keycloak` Secret. Empty generates one on first install and keeps it on upgrade (see `global.generateSecrets`). Keycloak bootstraps its admin user once, so changing it on an existing install does not change the password in the realm. |
-| DB password **(secret)** | `KEYCLOAK_DB_PASSWORD` | `keycloak_database_password` | `keycloak.postgresql.auth.password` / `.postgresPassword` | Helm renders both into the `<release>-keycloak-postgresql` Secret, generating them when empty. Set them at first install only: PostgreSQL creates its roles from them once, and a later change against a retained PVC breaks Keycloak's database login. |
-| DB username | — | `keycloak_database_username` | — | — |
+| Admin password **(secret)** | `KEYCLOAK_ADMIN_PASSWORD` | `keycloak_admin_password` | `keycloak.auth.adminPassword` | Helm generates the administrator Secret on first install and preserves it on upgrade. Bootstrap creates the administrator once; changing the Secret does not rotate an existing realm password. |
+| DB password **(secret)** | `KEYCLOAK_DB_PASSWORD` | `keycloak_database_password` | `keycloak.postgresql.auth.password` / `.postgresPassword` | The Helm stack retains these password inputs for its generated PostgreSQL Secret. The official-image subchart uses `keycloak.postgres.existingSecret` for an operator-owned Secret. Changing either password against retained data does not rotate the database role. |
+| DB username | Not exposed | `keycloak_database_username` | `keycloak.postgres.username` | Dedicated non-superuser PostgreSQL role. Helm defaults to `keycloak`; choose and pin the name before initialization. |
+| DB name | Not exposed | Not exposed | `keycloak.postgres.database` | Keycloak's PostgreSQL database. Helm defaults to `keycloak`; it can differ from the role name. |
 | Web client id | `KEYCLOAK_CLIENT_ID` | — | — | Populated by `init-keycloak.sh`. |
 | Web client secret **(secret)** | `KEYCLOAK_CLIENT_SECRET` |  | `global.authProvider.keycloak.clientSecret` | Secret of the `mcp-gateway-web` client. Helm renders it into `keycloak-client-secret`, and the setup-keycloak Job writes it into the realm and fails if the realm holds a different value. Empty generates one on first install and keeps it on upgrade. |
 | M2M client id | `KEYCLOAK_M2M_CLIENT_ID` | — | `auth-server.keycloak.m2mClientId` | — |
@@ -358,6 +361,54 @@ that server's Connect dialog:
 | Log level | — | `keycloak_log_level` | — | Keycloak container log level. |
 | DB min ACU | — | `keycloak_database_min_acu` | — | Aurora Serverless floor. |
 | DB max ACU | — | `keycloak_database_max_acu` | — | Aurora Serverless ceiling. |
+| Keycloak image | `KEYCLOAK_VERSION` | `keycloak_image_uri` | `keycloak.image.repository` / `.tag` | Shipped Keycloak version is 26.8.2. Uses the official image without custom providers or a local build. CDK uses `images.keycloak`. |
+| Bundled deployment | Compose service selection | Stack resource selection | `keycloak.create` and `global.authProvider.type` | Helm deploys bundled Keycloak and PostgreSQL only when create is true and the active provider is Keycloak. |
+| Administrator Secret | Environment value | Secrets Manager | `global.authProvider.keycloak.adminExistingSecret` / `.adminExistingSecretPasswordKey` | Select one administrator credential for Keycloak, its initialization/configuration Jobs, and the registry. Standalone subcharts expose their corresponding local Secret settings. |
+| PostgreSQL Secret | Not used by this chart | Not used by this chart | `keycloak.postgres.existingSecret`, `.existingSecretPasswordKey`, `.existingSecretAdminPasswordKey` | Supply an operator-owned Secret for the dedicated Keycloak role and bootstrap administrator. The Helm PostgreSQL image is 17.12; Compose and ECS retain their own database engines. |
+| Database bootstrap intent | Not used | Not used | `keycloak.postgres.bootstrap.mode` | Required: `fresh-install` for intentionally empty storage, `restore` for a verified legacy snapshot, or `existing` for verified official-image data. Helm/GitOps never infers intent from release type or database reachability. |
+| Restore snapshot | Not used | Not used | `keycloak.postgres.bootstrap.existingClaim`, `.sha256`, `.sourceQuiesced` | Restore requires an operator-owned PVC containing `restore.dump`, its checksum, and confirmation that all source writers have stopped. Keep the source stopped until the new deployment is verified. |
+| Existing database acknowledgement | Not used | Not used | `keycloak.postgres.bootstrap.existingVerified` | Required for `existing` mode after checking retained official-image data. It cannot bypass an incomplete restore. |
+| Administrator initialization | Setup script | Setup script | `keycloak.sslInit.enabled` | Default true. A separate Helm Job verifies administrator-realm initialization before realm configuration. Pod readiness does not depend on repeated bootstrap authentication. |
+| Keycloak cache | Deployment configuration | Deployment configuration | `keycloak.cache` | `local` supports one replica. Multiple replicas require `ispn`, using JDBC discovery through the shared database. |
+| Administrator ingress CIDRs | Private local admin listener | `keycloak_admin_cidr_blocks` | Private cluster administration | Terraform/CDK default to the general ingress CIDRs; CDK uses `registry.keycloakAdminCidrBlocks`. A narrower list restricts Keycloak admin/master paths and includes the gateway's NAT addresses. CloudFront cannot enforce a distinct client-IP list at the ALB, so that combination is rejected. |
+| A2A issuer URL | `KEYCLOAK_EXTERNAL_URL` in the sample agents | Passed to the sample agents | Not used by these sample deployments | The sample A2A middleware validates the public issuer while fetching signing keys through its internal `KEYCLOAK_URL`. Both inputs are required for verified JWT authentication. |
+| DCR realm policy | `ENABLE_DCR_CONFIG` | Setup-script environment | `keycloak-configure.dcr.enabled` | Default false. True permits constrained registration; false disables anonymous registration and inventories existing clients for cleanup. |
+| DCR cleanup acknowledgement | `DCR_SWEEP_ACKNOWLEDGED` | Setup-script environment | `keycloak-configure.dcr.sweepAcknowledged` | Default true. Set false to stop for review before disabling enabled clients during DCR-off cleanup. |
+| CIMD cleanup acknowledgement | `CIMD_SWEEP_ACKNOWLEDGED` | Setup-script environment | `keycloak-configure.cimd.sweepAcknowledged` | Default false. Set true after reviewing enabled clients affected by CIMD disablement or vendor withdrawal. Does not bypass first-enable refusal of unexpected cached records. |
+| DCR preserved clients | `DCR_KEEP_CLIENTS` | Setup-script environment | `keycloak-configure.dcr.keepClients` | Extra exact client IDs to keep during DCR-off cleanup. Shell accepts spaces or commas; Helm accepts a list. Non-built-in registration tokens are still invalidated. |
+| Registration scope allowlist | `DCR_ALLOWED_SCOPES` | Setup-script environment | `keycloak-configure.dcr.allowedScopes` | Default `openid basic profile email roles web-origins acr offline_access`. Restricts both realm-default scope sets and token flows using existing catalog scopes. Historical ambiguous assignments require operator review. Rerun setup after scope catalog changes. Parameterized/dynamic scopes are rejected before enabling registration. Gateway privilege scopes and `kc-admin-api` remain forbidden. |
+| Trusted operator clients | `REGISTRATION_TRUSTED_CLIENT_IDS` | Setup-script environment | `keycloak-configure.registrationTrustedClientIds` | JSON array for shell, list for Helm, default empty. Extra operator-provisioned client IDs allowed to retain non-registration scopes. Separate from the cleanup keep-list; do not include self-registered clients. |
+| CIMD realm policy | `ENABLE_CIMD_CONFIG` | Setup-script environment | `keycloak-configure.cimd.enabled` | Default false. Requires the pinned official Keycloak 26.8.2 image and `KC_FEATURES=cimd`. First enable refuses unexpected persisted cache-marked records for administrator review without deleting them. False keeps runtime deny, removes its managed metadata policy/profile and disables persisted CIMD clients after any required cleanup acknowledgement. Independent of DCR and the registry's CIMD publisher. |
+| CIMD trusted hosts | `CIMD_TRUSTED_DOMAINS` | Setup-script environment | `keycloak-configure.cimd.trustedDomains` | JSON array for shell, list for Helm. Exact hosts only; setup refuses wildcards. Defaults to `vscode.dev`, `code.visualstudio.com`, `claude.ai`, `127.0.0.1`, `localhost`. Native Keycloak shares this list between callbacks and JWKS URLs; loopback entries retain the accepted outbound-fetch risk without independent outbound protection. Vendor removal also revokes affected persisted clients. |
+| Keycloak server features | Shipped `KC_FEATURES` includes `cimd` | Shipped ECS task includes `cimd`; CDK matches | `keycloak.features` | Helm defaults to the server's feature defaults; set `cimd` to enable its provider. The realm policy remains a separate opt-in. |
+| Disabled server features | Shipped `KC_FEATURES_DISABLED=device-flow,ciba` | Shipped ECS task; CDK matches | `keycloak.disabledFeatures` | Disable device authorization and CIBA. |
+| Native client registration provider | Shipped `KC_SPI_CLIENT_REGISTRATION__DEFAULT__ENABLED=false` | Shipped ECS task; CDK matches | Fixed managed environment variable, reserved from `extraEnv` | Disable the unrestricted native registration format while preserving standard OIDC DCR. External Keycloak must use the same startup setting. No custom image is required. |
+
+Keycloak group mappers emit the reserved `mcpgw_group_paths` claim. Readers normalize one leading slash only on that claim. Public OIDC code flows require S256 through the managed PKCE policy.
+
+CIMD has never been enabled in these deployments. Setup uses no one-time deletion or migration receipt. Runtime detection depends on the pinned image's source-generated `display.on.consent.screen` and `consent.screen.text` markers, which vendors cannot control through metadata. Reassess this contract before changing the image version.
+
+Setup denies all CIMD at authorization, code exchange and refresh during lifecycle changes. It restores exact-host allowance only after verifying the metadata profile and policy. Failed setup leaves CIMD denied; rerun full setup to recover. `--reconcile-registration` alone leaves CIMD denied until full setup completes. OIDC DCR remains unchanged.
+
+The persistent runtime deny policy covers saved and late-arriving CIMD outside current trust. Setup installs deny before removing metadata enforcement or sweeping clients and keeps it when CIMD is off. DCR keep-list entries cannot override CIMD trust withdrawal. Setup preserves unrelated policies and never re-enables disabled clients. The gateway can accept already issued JWT access tokens until expiry.
+
+The persistent runtime deny policy covers saved and late-arriving CIMD outside current trust. Setup installs deny before removing metadata enforcement or sweeping clients and keeps it when CIMD is off. DCR keep-list entries cannot override CIMD trust withdrawal. Setup preserves unrelated policies and never re-enables disabled clients. The gateway can accept already issued JWT access tokens until expiry.
+
+The Helm role and database names must be strings of 1-63 ASCII characters matching `[A-Za-z_][A-Za-z0-9_-]*`. The chart preserves their case and exact spelling. It rejects roles `postgres` and `public` and any `pg_` role prefix, plus databases `postgres`, `template0`, and `template1`, regardless of case. Passwords remain in the existing Secret references.
+
+Choose both names once in the reviewed `upgrade-values.yaml`, for example:
+
+```yaml
+keycloak:
+  postgres:
+    username: "sso_runtime"
+    database: "sso_catalog"
+```
+
+These are fictional target identities. The backup client's `PGUSER` and `PGDATABASE` select the source connection and do not set either target name. Keep names out of the restore and existing-mode overlays so those overlays cannot override the reviewed base values. Verify the rendered target names before each upgrade and stop if they differ from the names on the retained database. Changing values after initialization does not rename an existing role or database; that requires a planned migration.
+
+For the command sequence, snapshot PVC/client manifests, same-PVC source preservation, verification, and removal of the restore mount, follow the [Keycloak backup, restore, and existing-mode runbook](../charts/mcp-gateway-registry-stack/README.md#keycloak-database-cutover).
+
 
 ### 12b — Amazon Cognito
 
@@ -387,7 +438,7 @@ that server's Connect dialog:
 | Group recovery enabled | `ENTRA_GROUP_RECOVERY_ENABLED` | `entra_group_recovery_enabled` | `auth-server.entra.groupRecoveryEnabled` | Auth-server only. Default `true` for eligible delegated bearer tokens; browser Graph lookup still requires a login request for `User.Read`. `false` skips Graph and drops unreliable inline groups on overage, which can return users to 403. |
 | Group result cache TTL (seconds) | `ENTRA_GROUP_CACHE_TTL_SECONDS` | `entra_group_cache_ttl_seconds` | `auth-server.entra.groupCacheTtlSeconds` | Auth-server only. Positive Graph membership cache lifetime, default `300`, allowed `30` to `3600`. Group removal may remain effective until expiry; stable per-token failures use a separate fixed 30-second denial cache. |
 | PRM scope format | `ENTRA_SCOPE_FORMAT` | `entra_scope_format` | `auth-server.entra.scopeFormat` / `registry.entra.scopeFormat` | `v1` or `v2` (default `v2`). Controls the form of custom resource scopes advertised in the OAuth PRM `scopes_supported` array. `v1` emits `api://<app-id>/<scope>` (required by apps exposing v1-style scopes; fixes AADSTS650053 at IDE login); `v2` emits the bare fragment. Standard OIDC scopes are always advertised bare. See [Entra v1 vs v2 scope format](entra-scope-format.md). |
-| Application ID URI | `ENTRA_APPLICATION_ID_URI` | `entra_application_id_uri` | `auth-server.entra.applicationIdUri` / `registry.entra.applicationIdUri` | Application ID URI (e.g. `api://<app-id>`) registered on the Entra app. Used as the v1 scope prefix and accepted as a token audience. Defaults to `api://<ENTRA_CLIENT_ID>`. |
+| Application ID URI | `ENTRA_APPLICATION_ID_URI` | `entra_application_id_uri` | `auth-server.entra.applicationIdUri` / `registry.entra.applicationIdUri` | Application ID URI (for example `api://<app-id>` or a registered HTTPS URI) for the gateway app. Used as the v1 scope prefix, accepted as a token audience, and used with `/.default` for the auth-server's M2M token request. When unset, the M2M request uses `api://<ENTRA_CLIENT_ID>/.default`. An explicit `client_id` override for another app uses that app's `api://<client_id>/.default` unless the caller supplies `scope`. |
 | Admin group id | `ENTRA_GROUP_ADMIN_ID` | — | `global.authProvider.entra.adminGroupId` | — |
 | Users group id | `ENTRA_GROUP_USERS_ID` | — | — | — |
 
@@ -928,6 +979,7 @@ These have no `.env` equivalent because they describe the infrastructure, not th
 | `global.ingress.className`, `tls`, `routingMode`, `paths.*`, `inboundCidrs` | ALB ingress shape. |
 | `keycloak.create` | Deploy Keycloak in-chart vs external. |
 | `keycloak.httpRelativePath` | Keycloak base path. |
+| `keycloak.postgres.username`, `.database` | Dedicated PostgreSQL role and database, each defaulting to `keycloak`. Use the name rules in the Keycloak section above; pin both names before initialization and retain them on upgrades. |
 | `keycloakIngress.enabled` | Create a Keycloak ingress. |
 | `<subchart>.service.type`, `.service.port` | K8s service shape. |
 | `<subchart>.resources.{requests,limits}` | Pod resource sizing. |

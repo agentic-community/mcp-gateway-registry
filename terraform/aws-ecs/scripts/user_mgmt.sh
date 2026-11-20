@@ -6,6 +6,12 @@ set -e
 
 # Configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+source "$SCRIPT_DIR/../../../keycloak/setup/group-path-preflight.sh"
+
+_realm_fresh_token() {
+    _account_admin_token "$ADMIN_URL" "$ADMIN_USER" "$ADMIN_PASS"
+}
 TERRAFORM_OUTPUTS="$SCRIPT_DIR/terraform-outputs.json"
 
 # Load configuration from environment variables or terraform outputs
@@ -265,19 +271,76 @@ get_client_secret() {
 }
 
 
-# Function to add groups mapper to client
+kc_get() {
+    local url="$1"
+    local response
+    response=$(realm_curl -s -w "\n%{http_code}" -H "Authorization: Bearer $TOKEN" "$url" || true)
+    local http_code="${response##*$'\n'}"
+    KC_BODY="${response%$'\n'*}"
+    if [ "$http_code" != "200" ]; then
+        echo -e "${RED}Keycloak Admin API request failed (HTTP $http_code): ${url#"$ADMIN_URL"}${NC}"
+        exit 1
+    fi
+}
+
+
+# Keep the groups mapper identity while migrating to the dedicated path claim.
+# Reject conflicting emitters rather than allowing arbitrary path injection.
 add_groups_mapper() {
     local client_uuid="$1"
 
-    echo "Adding groups mapper to client..."
+    _check_group_paths "$ADMIN_URL" "$REALM" "$TOKEN" || return 1
+    _check_client_group_path_mappers "$ADMIN_URL" "$REALM" "$TOKEN" "$client_uuid" || return 1
+    TOKEN=$(_realm_fresh_token) || return 1
 
-    # Check if groups mapper already exists
-    EXISTING_MAPPER=$(curl -s -H "Authorization: Bearer $TOKEN" \
-        "$ADMIN_URL/admin/realms/$REALM/clients/$client_uuid/protocol-mappers/models" 2>/dev/null | \
-        jq -r 'if type == "array" then (.[] | select(.name=="groups") | .id) else empty end' 2>/dev/null)
+    echo "Configuring groups mapper on client..."
 
-    if [ -n "$EXISTING_MAPPER" ] && [ "$EXISTING_MAPPER" != "null" ]; then
-        echo -e "${GREEN}✓ Groups mapper already exists${NC}"
+    local mappers_url="$ADMIN_URL/admin/realms/$REALM/clients/$client_uuid/protocol-mappers/models"
+    kc_get "$mappers_url"
+    local mappers="$KC_BODY"
+
+    local foreign_mappers
+    foreign_mappers=$(echo "$mappers" | jq -r 'if type == "array" then
+            [.[] | select(((.config // {})["claim.name"] // "") == "mcpgw_group_paths" and .name != "groups") | .name] | join(", ")
+        else error("unexpected response") end') || {
+        echo -e "${RED}Unexpected response while reading protocol mappers${NC}"
+        exit 1
+    }
+    if [ -n "$foreign_mappers" ]; then
+        echo -e "${RED}Error: client has conflicting 'mcpgw_group_paths' mapper(s): $foreign_mappers${NC}"
+        echo "Remove them in Keycloak (or delete the client) before re-running."
+        exit 1
+    fi
+
+    local existing_mapper
+    existing_mapper=$(echo "$mappers" | jq -c '[.[] | select(.name == "groups")] |
+        if length > 1 then error("duplicate groups mappers") else .[0] // empty end') || return 1
+
+    if [ -n "$existing_mapper" ]; then
+        if ! echo "$existing_mapper" | jq -e '.protocol == "openid-connect" and
+            .protocolMapper == "oidc-group-membership-mapper" and
+            (.config["claim.name"] == "groups" or .config["claim.name"] == "mcpgw_group_paths")' > /dev/null; then
+            echo -e "${RED}Error: existing 'groups' mapper is incompatible; refusing to repurpose it${NC}"
+            exit 1
+        fi
+        if echo "$existing_mapper" | jq -e '.config["full.path"] == "true" and
+            .config["claim.name"] == "mcpgw_group_paths"' > /dev/null; then
+            echo -e "${GREEN}Groups mapper already exists (full.path=true)${NC}"
+            return 0
+        fi
+
+        local mapper_id
+        mapper_id=$(echo "$existing_mapper" | jq -r '.id')
+        RESPONSE=$(realm_curl -s -o /dev/null -w "%{http_code}" \
+            -X PUT "$mappers_url/$mapper_id" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$(echo "$existing_mapper" | jq -c '.config = ((.config // {}) + {"full.path": "true", "claim.name": "mcpgw_group_paths"})')" || true)
+        if [ "$RESPONSE" != "204" ]; then
+            echo -e "${RED}Failed to update groups mapper. HTTP: $RESPONSE${NC}"
+            exit 1
+        fi
+        echo -e "${GREEN}Groups mapper updated to full.path=true${NC}"
         return 0
     fi
 
@@ -287,27 +350,29 @@ add_groups_mapper() {
         "protocolMapper": "oidc-group-membership-mapper",
         "consentRequired": false,
         "config": {
-            "full.path": "false",
+            "full.path": "true",
             "id.token.claim": "true",
             "access.token.claim": "true",
-            "claim.name": "groups",
+            "claim.name": "mcpgw_group_paths",
             "userinfo.token.claim": "true"
         }
     }'
 
-    RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
-        -X POST "$ADMIN_URL/admin/realms/$REALM/clients/$client_uuid/protocol-mappers/models" \
+    RESPONSE=$(realm_curl -s -o /dev/null -w "%{http_code}" \
+        -X POST "$mappers_url" \
         -H "Authorization: Bearer $TOKEN" \
         -H "Content-Type: application/json" \
         -d "$GROUPS_MAPPER")
 
-    if [ "$RESPONSE" = "201" ] || [ "$RESPONSE" = "409" ]; then
-        echo -e "${GREEN}✓ Groups mapper configured${NC}"
+    if [ "$RESPONSE" = "201" ]; then
+        echo -e "${GREEN}Groups mapper configured${NC}"
     else
         echo -e "${RED}Failed to add groups mapper. HTTP: $RESPONSE${NC}"
         exit 1
     fi
 }
+
+
 
 
 # Function to get service account user ID

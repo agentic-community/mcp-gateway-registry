@@ -5,15 +5,12 @@ against the guarded agent (only valid, correctly-issued tokens succeed; health
 probes stay open; misconfiguration fails closed).
 """
 
+import importlib.util
 import time
+from pathlib import Path
 
 import jwt
 import pytest
-from auth_middleware import (
-    AuthConfigurationError,
-    JWTAuthMiddleware,
-    install_agent_auth,
-)
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import FastAPI
@@ -22,6 +19,20 @@ from starlette.testclient import TestClient
 KEYCLOAK_URL = "https://keycloak.example.com"
 REALM = "mcp-gateway"
 ISSUER = f"{KEYCLOAK_URL}/realms/{REALM}"
+
+
+def _load_auth_module(agent_name):
+    path = Path(__file__).parents[3] / "agents" / "a2a" / "src" / agent_name / "auth_middleware.py"
+    spec = importlib.util.spec_from_file_location(f"sample_auth_{agent_name}", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_travel_auth = _load_auth_module("travel-assistant-agent")
+AuthConfigurationError = _travel_auth.AuthConfigurationError
+JWTAuthMiddleware = _travel_auth.JWTAuthMiddleware
+install_agent_auth = _travel_auth.install_agent_auth
 
 
 @pytest.fixture(scope="module")
@@ -71,6 +82,7 @@ def _build_app(rsa_keypair, monkeypatch, audience=None, auth_disabled=False, pre
     app.add_middleware(
         JWTAuthMiddleware,
         keycloak_url=KEYCLOAK_URL,
+        keycloak_external_url=KEYCLOAK_URL,
         realm=REALM,
         audience=audience,
         auth_disabled=auth_disabled,
@@ -86,7 +98,8 @@ def _build_app(rsa_keypair, monkeypatch, audience=None, auth_disabled=False, pre
             return _FakeSigningKey()
 
         monkeypatch.setattr(
-            "auth_middleware.PyJWKClient.get_signing_key_from_jwt",
+            jwt.PyJWKClient,
+            "get_signing_key_from_jwt",
             _fake_get_key,
         )
 
@@ -162,13 +175,13 @@ def test_fails_closed_when_jwks_unavailable(rsa_keypair, monkeypatch):
     # Simulate a JWKS client that could not be built (fail-closed path): the
     # validation call raises AuthConfigurationError, which must produce a 503
     # denial rather than falling open.
-    import auth_middleware
 
     def _raise(self, _token):
-        raise auth_middleware.AuthConfigurationError("no jwks")
+        raise AuthConfigurationError("no jwks")
 
     monkeypatch.setattr(
-        "auth_middleware.PyJWKClient.get_signing_key_from_jwt",
+        jwt.PyJWKClient,
+        "get_signing_key_from_jwt",
         _raise,
     )
     client = TestClient(app)
@@ -193,6 +206,7 @@ def test_refuses_to_start_when_auth_disabled_and_bound_to_all_interfaces(monkeyp
         install_agent_auth(
             app,
             keycloak_url=KEYCLOAK_URL,
+            keycloak_external_url=KEYCLOAK_URL,
             realm=REALM,
             bind_host="0.0.0.0",  # nosec B104 - test asserts this is rejected
         )
@@ -202,7 +216,16 @@ def test_auth_disabled_on_loopback_is_permitted(monkeypatch):
     """Disabling auth on loopback is allowed (trusted local sandbox)."""
     monkeypatch.setenv("AGENT_AUTH_DISABLED", "true")
     app = FastAPI()
-    install_agent_auth(app, keycloak_url=KEYCLOAK_URL, realm=REALM, bind_host="127.0.0.1")
+    app.add_api_route("/api/book", lambda: {"booked": True}, methods=["POST"])
+    install_agent_auth(
+        app,
+        keycloak_url=KEYCLOAK_URL,
+        keycloak_external_url=KEYCLOAK_URL,
+        realm=REALM,
+        bind_host="127.0.0.1",
+    )
+    with TestClient(app) as client:
+        assert client.post("/api/book").json() == {"booked": True}
 
 
 def test_presence_only_accepts_any_nonempty_bearer(rsa_keypair, monkeypatch):
@@ -231,6 +254,7 @@ def test_presence_only_on_all_interfaces_refused_without_optin(monkeypatch):
         install_agent_auth(
             app,
             keycloak_url=KEYCLOAK_URL,
+            keycloak_external_url=KEYCLOAK_URL,
             realm=REALM,
             bind_host="0.0.0.0",  # nosec B104 - test asserts this is rejected
         )
@@ -241,13 +265,20 @@ def test_presence_only_on_all_interfaces_permitted_with_optin(monkeypatch):
     monkeypatch.setenv("AGENT_AUTH_PRESENCE_ONLY", "true")
     monkeypatch.setenv("AGENT_AUTH_ALLOW_EXPOSED_PRESENCE_ONLY", "true")
     app = FastAPI()
-    # Must not raise: operator has explicitly acknowledged the exposed test mode.
+    app.add_api_route("/api/book", lambda: {"booked": True}, methods=["POST"])
     install_agent_auth(
         app,
         keycloak_url=KEYCLOAK_URL,
+        keycloak_external_url=KEYCLOAK_URL,
         realm=REALM,
         bind_host="0.0.0.0",  # nosec B104 - test asserts opt-in permits this
     )
+    with TestClient(app) as client:
+        assert client.post("/api/book").status_code == 401
+        assert client.post(
+            "/api/book",
+            headers={"Authorization": "Bearer passthrough-test"},
+        ).json() == {"booked": True}
 
 
 def test_presence_only_on_loopback_is_permitted(monkeypatch):
@@ -255,4 +286,73 @@ def test_presence_only_on_loopback_is_permitted(monkeypatch):
     monkeypatch.setenv("AGENT_AUTH_PRESENCE_ONLY", "true")
     monkeypatch.delenv("AGENT_AUTH_ALLOW_EXPOSED_PRESENCE_ONLY", raising=False)
     app = FastAPI()
-    install_agent_auth(app, keycloak_url=KEYCLOAK_URL, realm=REALM, bind_host="127.0.0.1")
+    app.add_api_route("/api/book", lambda: {"booked": True}, methods=["POST"])
+    install_agent_auth(
+        app,
+        keycloak_url=KEYCLOAK_URL,
+        keycloak_external_url=KEYCLOAK_URL,
+        realm=REALM,
+        bind_host="127.0.0.1",
+    )
+    with TestClient(app) as client:
+        assert client.post("/api/book").status_code == 401
+        assert client.post(
+            "/api/book",
+            headers={"Authorization": "Bearer passthrough-test"},
+        ).json() == {"booked": True}
+
+
+@pytest.fixture(params=["travel-assistant-agent", "flight-booking-agent"])
+def auth_module(request):
+    return _load_auth_module(request.param)
+
+
+@pytest.mark.parametrize("external_url", [KEYCLOAK_URL, "", "   "])
+def test_public_issuer_with_internal_signing_keys(
+    auth_module,
+    rsa_keypair,
+    monkeypatch,
+    external_url,
+):
+    private_pem, public_key = rsa_keypair
+    internal_url = "http://keycloak:8080"
+    jwk = jwt.algorithms.RSAAlgorithm.to_jwk(public_key, as_dict=True)
+    jwk.update({"kid": "sample-key", "use": "sig", "alg": "RS256"})
+
+    def fetch_keys(client):
+        assert client.uri == f"{internal_url}/realms/{REALM}/protocol/openid-connect/certs"
+        return {"keys": [jwk]}
+
+    monkeypatch.setattr(auth_module.PyJWKClient, "fetch_data", fetch_keys)
+    app = FastAPI()
+
+    @app.post("/api/book")
+    def book():
+        return {"booked": True}
+
+    @app.get("/ping")
+    def ping():
+        return {"status": "healthy"}
+
+    app.add_middleware(
+        auth_module.JWTAuthMiddleware,
+        keycloak_url=internal_url,
+        keycloak_external_url=external_url,
+        realm=REALM,
+    )
+    with TestClient(app) as client:
+        for issuer, valid_status in (
+            (ISSUER, 200),
+            (f"{internal_url}/realms/{REALM}", 401),
+        ):
+            token = jwt.encode(
+                {"iss": issuer, "exp": int(time.time()) + 300},
+                private_pem,
+                algorithm="RS256",
+                headers={"kid": "sample-key"},
+            )
+            response = client.post("/api/book", headers={"Authorization": f"Bearer {token}"})
+            assert response.status_code == (valid_status if external_url.strip() else 503)
+            if response.status_code == 200:
+                assert response.json() == {"booked": True}
+        assert client.get("/ping").status_code == 200

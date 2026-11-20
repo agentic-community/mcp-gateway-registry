@@ -28,30 +28,62 @@ global:
 # Keycloak configuration
 keycloak:
   adminUser: user
-  realm: mcp-gateway
-  existingSecret: ""  # If set, use this existing secret instead of creating one
+  realm: "" # Inherit the global realm; set explicitly when using existingSecret.
+  existingSecret: "" # Config Secret. Set realm to the Secret's REALM value.
+  adminExistingSecret: "" # Standalone admin password Secret; the stack uses the global value.
+  adminExistingSecretPasswordKey: admin-password # pragma: allowlist secret
 
-# Dynamic Client Registration (RFC 7591) realm setup.
-#
-# When true, the Job applies the four MCP-DCR enabling changes:
-#   - Groups protocol mapper on the `basic` client-scope (so DCR'd clients'
-#     tokens carry the user's groups)
-#   - Audience mapper on `basic` (so tokens carry aud="mcp-gateway" for
-#     RFC 8707 audience binding at the gateway)
-#   - "Allowed Client Scopes" client-registration policy widened to all
-#     realm scopes (anonymous + authenticated subTypes)
-#   - "Trusted Hosts" policy relaxed (IP check off, URI check on, with
-#     localhost/claude.ai trusted) for cloud-egress MCP clients
-#
-# Disable when:
-#   - Using a pre-configured external Keycloak that already has DCR set up
-#   - Operating a closed deployment that doesn't need MCP clients to
-#     dynamically self-register (no Claude Code / Claude.ai / Cursor users)
-#   - The realm has DCR locked down by org policy and you don't want the
-#     Job to touch it
-#
-# Default true matches the chart's primary use case (bundled Keycloak +
-# Claude Code DCR) and aligns with the registry's default
-# MCP_ADVERTISED_SCOPES value.
+# Extra operator-provisioned clients allowed to retain scopes outside the DCR
+# allowlist. Exact IDs only; this grants scope trust, not a DCR-off exemption.
+registrationTrustedClientIds: []
+
+# DCR is opt-in and requires Keycloak 26.8.2.
+# The native registration/default provider must be disabled at server startup.
+# Public OIDC code flows require S256, including cached CIMD clients.
+# Both registration subtypes use an explicit scope allowlist, reject client
+# mappers and default roles, and enforce the realm's device-grant restriction.
+# With DCR off, setup disables anonymous registration and unlisted clients.
+# The sweep runs by default. Set sweepAcknowledged=false to require review.
+# Built-ins, the web client, verified public PKCE IDE clients, explicit keep
+# entries, and client-secret service accounts without browser flows survive.
+# Setup invalidates every kept non-built-in client's registration access token.
+# Existing access tokens remain valid until expiry. To leave a realm managed
+# elsewhere untouched, disable the entire keycloak-configure chart.
+# DCR and CIMD cannot both be enabled on native Keycloak 26.8.2: its URI
+# executor rejects CIMD creation/update contexts. Switch both flags in one upgrade.
 dcr:
-  enabled: true
+  enabled: false
+  sweepAcknowledged: true
+  allowedScopes:
+    - openid
+    - basic
+    - profile
+    - email
+    - roles
+    - web-origins
+    - acr
+    - offline_access
+  keepClients: []
+
+# CIMD requires the pinned official Keycloak 26.8.2 image and KC_FEATURES=cimd.
+# Use exact vendor hosts; setup refuses wildcards.
+# Native Keycloak shares callback and JWKS hosts; protect outbound fetches separately.
+# Off/trust withdrawal requires cimd.sweepAcknowledged for reviewed enabled targets,
+# independently of DCR and keep-lists. Setup never re-enables disabled clients.
+# Runtime deny covers saved and late-arriving CIMD at authorization/code/refresh.
+# Install deny before removing metadata policy or sweeping; keep it on failure/off.
+# First enable refuses unexpected persisted cache-marked records for admin review.
+# Setup does not delete those records or use a migration receipt.
+# Setup denies CIMD until metadata policy verification. Switch dcr.enabled=false
+# and cimd.enabled=true together; the reverse switch disables CIMD clients
+# (review/acknowledge the sweep) before reopening DCR. A failed switch keeps
+# the affected registration path closed until a successful full setup run.
+cimd:
+  enabled: false
+  sweepAcknowledged: false
+  trustedDomains:
+    - vscode.dev
+    - code.visualstudio.com
+    - claude.ai
+    - "127.0.0.1"
+    - localhost

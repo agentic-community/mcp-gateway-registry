@@ -55,6 +55,7 @@ if (config.enabled) {
     vpc: networkStack.vpc,
     privateSubnets: networkStack.privateSubnets,
     publicSubnets: networkStack.publicSubnets,
+    natPublicIps: networkStack.natPublicIps,
     keycloakDbSg: dataStack.keycloakDbSg,
     rdsKmsKey: dataStack.rdsKmsKey,
     keycloakDbSecretArn: dataStack.keycloakDbSecret.secretArn,

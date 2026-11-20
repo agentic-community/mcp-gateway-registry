@@ -1,18 +1,10 @@
-FROM quay.io/keycloak/keycloak:25.0 as builder
+ARG BASE_IMAGE=quay.io/keycloak/keycloak:26.8.2
+FROM ${BASE_IMAGE}
 
 ENV KC_HEALTH_ENABLED=true
 ENV KC_METRICS_ENABLED=true
 ENV KC_FEATURES=token-exchange
 ENV KC_DB=mysql
-
-WORKDIR /opt/keycloak
-
-RUN keytool -genkeypair -storepass password -storetype PKCS12 -keyalg RSA -keysize 2048 -dname "CN=server" -alias server -ext "SAN:c=DNS:localhost,IP:127.0.0.1" -keystore conf/server.keystore
-RUN /opt/keycloak/bin/kc.sh build
-
-FROM quay.io/keycloak/keycloak:25.0
-
-COPY --from=builder /opt/keycloak/ /opt/keycloak/
 
 WORKDIR /opt/keycloak
 
@@ -29,5 +21,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
 # Switch to keycloak user (provided by base image, UID 1000)
 USER keycloak
 
-# configuring email listener to send emails for specific events
-ENTRYPOINT ["/opt/keycloak/bin/kc.sh", "start", "--optimized"]
+# Match the official image entrypoint so ECS/CDK can supply the start command.
+# Non-optimized startup applies the deployment's build-time KC_* settings.
+ENTRYPOINT ["/opt/keycloak/bin/kc.sh"]
+CMD ["start"]

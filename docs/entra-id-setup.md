@@ -415,12 +415,9 @@ recovery. Inline verified groups remain usable when there is no overage marker. 
 claims, validation has no group-derived scopes; when overage is marked, it discards unreliable inline groups but keeps
 verified app roles. This may restore a 403 for users who need Graph memberships.
 
-Entra reads bearer scopes from signed `scp` or, for older tokens, signed `scope`. Both classify a delegated user token,
-so neither can inherit M2M client-group mappings. A token with no groups is authorized by its signed direct scopes.
-When the user has inline or Graph-recovered groups, registry scopes come only from the group mappings, and the token's
-`scp` values do not add to them. An app registration defines `scp` names and users grant them by consent, so they must
-not stand in for the group membership an administrator controls. A successful Graph result, including zero groups,
-takes precedence over local `idp_user_groups` fallback.
+Entra reads bearer scopes from signed `scp` or, for older tokens, signed `scope`. Both classify a delegated user token, so neither can inherit M2M client-group mappings. Without authoritative Graph recovery, a token with no groups can use its signed direct scopes. With inline or Graph-recovered groups, registry scopes come only from group mappings. A successful Graph result with zero memberships also suppresses direct-scope grants and local user-group fallback; removing all memberships must not restore access from the token's `scp` values.
+
+Group claims are type-validated before falling back to app `roles`. An absent, null or empty group array permits that fallback; malformed falsy values reject the token rather than selecting roles.
 
 The scope-derived group mapping set has a 30-second per-process cache. Changes to the registry's group-to-scope mappings
 can take up to 30 seconds to affect recovered bearer groups; lookup errors or absent mappings deny validation rather

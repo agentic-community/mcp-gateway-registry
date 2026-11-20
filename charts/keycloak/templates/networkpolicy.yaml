@@ -1,0 +1,26 @@
+{{- if and (include "keycloak.enabled" .) .Values.networkPolicy.enabled }}
+---
+# Only Keycloak reaches its database.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "keycloak.postgresName" . }}
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "keycloak.commonLabels" . | nindent 4 }}
+    {{- include "keycloak.postgresSelectorLabels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "keycloak.postgresSelectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "keycloak.serverSelectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 5432
+{{- end }}

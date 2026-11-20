@@ -49,9 +49,9 @@ images:
     context: "docker/keycloak"
     description: "Keycloak identity provider"
     tags:
-      - latest
+      - "26.8.2"
     build_args:
-      BASE_IMAGE: "quay.io/keycloak/keycloak:latest"
+      BASE_IMAGE: "quay.io/keycloak/keycloak:26.8.2"
 
   # Metrics Collection and Monitoring Service
   metrics_service:

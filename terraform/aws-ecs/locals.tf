@@ -7,6 +7,10 @@ locals {
   keycloak_domain = var.use_regional_domains ? "kc.${var.aws_region}.${var.base_domain}" : var.keycloak_domain
   root_domain     = var.use_regional_domains ? "${var.aws_region}.${var.base_domain}" : var.root_domain
 
+  # Keep provider precedence aligned with the gateway module's AUTH_PROVIDER.
+  auth_provider     = var.pingfederate_enabled ? "pingfederate" : (var.auth0_enabled ? "auth0" : (var.okta_enabled ? "okta" : (var.entra_enabled ? "entra" : (var.cognito_enabled ? "cognito" : ((var.enable_cloudfront && !var.enable_route53_dns) || local.keycloak_domain != "" ? "keycloak" : "default")))))
+  keycloak_selected = local.auth_provider == "keycloak"
+
   # Hosted zone domain - the actual Route53 hosted zone to look up
   # When using regional domains, this is the base domain (e.g., mycorp.click)
   # When not using regional domains, this is the root_domain

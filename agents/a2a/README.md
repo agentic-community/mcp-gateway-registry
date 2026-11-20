@@ -28,6 +28,26 @@ Run agents locally with full FastAPI server including custom API endpoints.
 - AWS credentials configured (via AWS_PROFILE, EC2 IAM role, or ~/.aws/credentials)
 - `uv sync --extra dev` to install main dependencies and development ones
 
+For JWT verification, set `KEYCLOAK_URL` to the internal Keycloak transport address
+used for token and JWKS requests. Set `KEYCLOAK_EXTERNAL_URL` to Keycloak's canonical
+public base URL. The expected issuer is
+`<KEYCLOAK_EXTERNAL_URL>/realms/<KEYCLOAK_REALM>`, even for tokens obtained through
+the internal address. Without the public URL, JWT verification denies protected
+requests. Do not enable presence-only authentication to bypass an issuer mismatch.
+
+```bash
+KEYCLOAK_URL=http://keycloak:8080
+KEYCLOAK_EXTERNAL_URL=https://login.example.com
+KEYCLOAK_REALM=mcp-gateway
+AGENT_AUTH_PRESENCE_ONLY=false
+AGENT_AUTH_ALLOW_EXPOSED_PRESENCE_ONLY=false
+```
+
+These settings enable signature, issuer and expiry checks. Set `AGENT_AUDIENCE` to
+also check the audience. The local Compose fallback and ECS test environment still
+enable presence-only mode for routing tests; set both flags to `false` for JWT
+verification.
+
 **Deploy:**
 ```bash
 # 1. Get AWS credentials (for Isengard users)

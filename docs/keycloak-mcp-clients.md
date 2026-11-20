@@ -1,4 +1,4 @@
-# Keycloak: MCP Client Guide (DCR + OAuth)
+# Keycloak: MCP Client Guide (DCR, CIMD and OAuth)
 
 > **Scope of this doc**: How a spec-compliant MCP client (Claude Code,
 > Claude.ai connectors, Cursor) authenticates against the gateway via
@@ -20,6 +20,127 @@ code path that participates).
 The goal is that a future engineer can read level 100 in 30 seconds, get a
 working mental model from level 200, debug their way through level 300, and
 make changes with confidence at level 400.
+
+## Enable registration and migrate an existing realm
+
+Realm setup uses the official Keycloak 26.8.2 image without custom providers or a local image build. Deploy the matching auth-server and registry group readers first. Back up the realm and review existing client and group names.
+
+The shipped deployments set `KC_SPI_CLIENT_REGISTRATION__DEFAULT__ENABLED=false`. This disables Keycloak's native
+`/clients-registrations/default` format, which accepts arbitrary client attributes. Standard OIDC DCR at
+`/clients-registrations/openid-connect` remains available. External Keycloak deployments must set the same option and
+restart before enabling DCR or CIMD; setup checks the running provider inventory. Use the authenticated Admin API for
+operator provisioning instead of the native registration endpoint.
+
+Public OIDC clients must use S256 PKCE for authorization-code grants. The `mcp-public-pkce` profile applies at client
+creation/update and at authorization/token requests, including cached CIMD clients. It rejects a missing challenge or
+the `plain` method. The policy remains installed when registration is disabled so retained public clients cannot
+downgrade their code flows. Confidential M2M client-credentials grants are unchanged.
+
+Dynamic Client Registration (DCR) and Client ID Metadata Documents (CIMD) are separate opt-ins and cannot be enabled
+together on the official Keycloak 26.8.2 image. Its native URI-pattern executor rejects CIMD registration and update
+contexts even if the vendor has no request-object URL. Set both flags in one setup run when switching modes; the false
+flag applies cleanup before the other mode opens. The commands below use existing administrator credentials from the
+environment and a private `KEYCLOAK_ADMIN_URL`:
+
+```bash
+ENABLE_DCR_CONFIG=true ENABLE_CIMD_CONFIG=false bash keycloak/setup/upgrade-realm-for-dcr.sh
+ENABLE_DCR_CONFIG=false ENABLE_CIMD_CONFIG=true bash keycloak/setup/upgrade-realm-for-dcr.sh
+```
+
+Switching from CIMD to DCR disables persisted CIMD clients. Review the inventory and set `CIMD_SWEEP_ACKNOWLEDGED=true`
+only after approving the disables; returning to CIMD does not re-enable them. Already issued access tokens remain valid
+until expiry. The first setup run after a failed switch must complete before the intended registration path opens.
+Compose and ECS enable the server's `cimd` feature; realm setup remains opt-in. In Helm, enable the server feature and
+configure the realm together:
+
+```yaml
+keycloak:
+  features: "cimd"
+keycloak-configure:
+  dcr:
+    enabled: false
+    sweepAcknowledged: false
+  cimd:
+    enabled: true
+    trustedDomains:
+      - vscode.dev
+      - code.visualstudio.com
+      - claude.ai
+      - 127.0.0.1
+      - localhost
+```
+
+`CIMD_TRUSTED_DOMAINS` accepts a JSON array for shell setup. Use exact vendor metadata hosts and the document's
+referenced hosts. Setup refuses wildcards. Keycloak 26.8.2 uses the same document-host allowlist for callbacks and
+`jwks_uri`; loopback callback entries also permit loopback JWKS destinations. The client-ID HTTPS/domain condition
+does not protect that later fetch. This branch preserves native CIMD as an explicit opt-in with that outbound-fetch
+risk unresolved. An operator who cannot accept it must leave CIMD disabled or provide independent outbound protection.
+
+With CIMD off, a native OIDC policy rejects `request_uris`, `jwks_uri`, `sector_identifier_uri`,
+`backchannel_logout_uri`, and `backchannel_client_notification_endpoint` at DCR creation and update. Keycloak fetches a sector identifier during registration and JWKS during client assertion validation; backchannel logout and CIBA callbacks are server-side destinations. CIBA is disabled in the shipped deployments, and the endpoint remains blocked if someone later enables it. Setup inventories existing enabled clients for these attributes before reopening DCR. Disabled clients remain disabled and are not silently re-enabled. Frontchannel logout, post-logout redirects, `logo_uri`, `policy_uri`, and `tos_uri` may still be stored. A browser uses frontchannel logout, post-logout, and display links; they are not proof of a Keycloak server-side fetch. This guard is not an egress firewall, and CIMD-only deployments retain the documented native outbound-fetch risk.
+
+Setup removes scopes outside `DCR_ALLOWED_SCOPES` from both realm-default scope lists; existing first-party client
+assignments remain unchanged. A native client policy rejects token flows using catalog scopes outside the allowlist
+unless the client has the administrator-managed `mcp-registration-trusted` role. This also covers CIMD, whose metadata
+persistence bypasses DCR registration policies. Rerun setup whenever the realm scope catalog changes.
+
+Registration setup refuses parameterized/dynamic client scopes because the native scope condition matches exact names,
+not parameter values. Use ordinary client scopes in this realm.
+
+Keycloak's Admin API does not expose registration-token provenance for historical clients. Setup stops when an
+unrecognized client retains disallowed scopes. Review those assignments before removing them or granting an exemption
+through `REGISTRATION_TRUSTED_CLIENT_IDS`, a JSON array (Helm: `keycloak-configure.registrationTrustedClientIds`). This
+scope exemption is separate from the DCR cleanup keep-list; never use it for self-registered clients. Setup removes the
+trusted role when the client leaves the approved list and never assigns it to a CIMD client.
+
+CIMD has never been enabled in these deployments. On first enable, setup refuses unexpected persisted records with
+CIMD cache markers and leaves them for administrator review. It does not delete them or use a migration receipt to
+declare them trusted. Review their origin and resolve them through the Admin API before retrying.
+
+Runtime CIMD detection depends on the pinned official Keycloak 26.8.2 image. Its native metadata path generates
+`display.on.consent.screen` and `consent.screen.text`; vendors cannot set these markers through CIMD metadata.
+The cache-expiry attribute alone does not prove origin. Keep unrestricted native DCR disabled and reassess the marker
+contract before changing the image version.
+
+Disabling CIMD or removing vendor trust inventories persisted CIMD clients independently of DCR. If the inventory
+includes enabled clients to disable, review it and set `CIMD_SWEEP_ACKNOWLEDGED=true` (Helm:
+`cimd.sweepAcknowledged=true`). A `DCR_KEEP_CLIENTS` entry does not override withdrawn CIMD trust.
+
+Setup first installs a native runtime policy that denies all CIMD authorization, authorization-code exchange and
+refresh during the lifecycle change. It restores exact-host allowance only after verifying the metadata profile and
+policy. This creates a brief CIMD maintenance denial; OIDC DCR remains unchanged. If setup fails, CIMD stays denied.
+Rerun full setup to recover. `--reconcile-registration` alone leaves CIMD denied until full setup completes.
+
+The runtime deny policy remains installed when CIMD is off and blocks saved and late-arriving clients outside current
+trust. Setup installs deny before removing metadata enforcement or sweeping clients. It preserves unrelated policies
+and profiles and never re-enables disabled client records; an administrator must review and re-enable each client.
+The gateway can still accept already issued JWT access tokens until expiry.
+
+CIMD clients use their metadata URL as a stable client ID and have their own cleanup inventory. DCR-off cleanup does
+not require a CIMD keep-list entry. Disabling CIMD or removing its trusted host still revokes the client regardless of
+`DCR_KEEP_CLIENTS`.
+
+With DCR off, setup inventories enabled clients and sweeps unlisted clients by default. Add exact IDs to `DCR_KEEP_CLIENTS` (Helm: `dcr.keepClients`) before upgrading to preserve custom clients. Set `DCR_SWEEP_ACKNOWLEDGED=false` (Helm: `dcr.sweepAcknowledged=false`) to stop for review if the sweep would disable an enabled client. Built-in clients remain intact; the keep-list also recognizes the configured
+first-party web client and validated service-account or IDE client shapes. It invalidates registration access tokens for
+non-built-in clients. Disabled clients cannot start new grants or refresh tokens, but the gateway can accept an already
+issued access token until its expiry.
+
+Group mappers emit full paths in the signed `mcpgw_group_paths` claim. The gateway selects that claim by presence and
+removes exactly one leading slash: `/registry-admins` becomes `registry-admins`, while `/team/registry-admins` remains
+`team/registry-admins` and grants no top-level administrator role. An empty new claim grants nothing; an invalid one
+denies authentication without falling back to `groups`. Tokens without the new claim retain their legacy `groups`
+strings unchanged, including any leading slash. This prevents an old token for a literal group named `/registry-admins`
+from gaining privileges during migration.
+
+Setup refuses mapper changes if two different groups would emit the same path, including collisions between literal
+slash names and nested groups. Rename the conflicting groups before retrying. Existing tokens retain their prior access
+until expiry; changing a mapper does not revoke a token or end a gateway session. To retire prior flat-group grants, end
+existing gateway sessions and stop accepting old signed tokens through an operator-controlled signing-key cutover or
+wait for their maximum lifetime before restoring traffic.
+
+Realm setup preserves stricter operator password, lockout and retention settings. It limits standard token exchange to
+the gateway web client with a STRICT grant-type policy, reserves the gateway audience client ID, and disables device
+authorization and CIBA in the shipped deployments.
 
 ---
 
@@ -94,8 +215,7 @@ start an OAuth flow.
     <access_token>`
 12. Gateway's nginx forwards the request through `auth_request /validate` to
     the auth_server
-13. auth_server fetches Keycloak's JWKS, verifies the JWT signature, extracts
-    the `groups` claim (`["mcp-registry-admin", "registry-admins", ...]`)
+13. auth_server fetches Keycloak's JWKS, verifies the JWT signature and normalizes `mcpgw_group_paths` (`["/mcp-registry-admin", "/registry-admins", ...]`), or preserves legacy `groups` when the new claim is absent
 14. auth_server calls `map_groups_to_scopes(groups)` against DocumentDB to
     translate IdP groups to registry scopes
 15. auth_server checks whether any scope in the result allows access to
@@ -105,17 +225,14 @@ start an OAuth flow.
 
 ### What makes the flow Keycloak-specific
 
-Three Keycloak-specific configurations that have to be in place:
+The `basic` client scope supplies server-managed groups and audience mappers. Both anonymous and authenticated
+registration policies allow only the configured OIDC scope list and refuse client-supplied protocol mappers or writes to
+the deprecated `defaultRoles` field. Gateway authorization scopes, administrator scopes and `kc-admin-api` are forbidden
+even if an operator adds them to the allowlist.
 
-- **Groups protocol mapper on the `basic` client-scope**: without this, tokens
-  for DCR'd clients have no `groups` claim → step 13 above fails
-- **`Allowed Client Scopes` policy includes all realm scopes**: without this,
-  DCR rejects registrations referencing any non-OIDC scope → step 5 fails
-- **`Trusted Hosts` policy with IP check off + `localhost` allowed**: without
-  this, DCR rejects clients on cloud egress IPs → step 5 fails
-
-Both `init-keycloak.sh` (fresh installs) and `upgrade-realm-for-dcr.sh`
-(existing installs) now apply these.
+When DCR is enabled, Trusted Hosts permits registration from cloud egress addresses while restricting client URI hosts.
+Setup verifies the built-in consent, full-scope, client-limit and mapper policies before permitting registration. Both
+initialization and upgrade scripts apply these controls.
 
 ---
 
@@ -272,7 +389,7 @@ Content-Type: application/json
   "token_endpoint_auth_method": "none",
   "grant_types": ["authorization_code", "refresh_token"],
   "response_types": ["code", "none"],
-  "scope": "address phone offline_access microprofile-jwt",
+  "scope": "profile email offline_access",
   "subject_type": "public",
   "client_id_issued_at": 1779641813,
   "registration_client_uri": "https://mcpgateway.ddns.net/realms/mcp-gateway/clients-registrations/openid-connect/2cb00b3f-...",
@@ -361,7 +478,7 @@ grant_type=authorization_code
   "scope": "profile email offline_access basic",
   "email_verified": true,
   "name": "Admin User",
-  "groups": ["mcp-registry-admin", "mcp-servers-unrestricted", "registry-admins"],
+  "mcpgw_group_paths": ["/mcp-registry-admin", "/mcp-servers-unrestricted", "/registry-admins"],
   "preferred_username": "admin",
   "given_name": "Admin",
   "family_name": "User",
@@ -369,11 +486,9 @@ grant_type=authorization_code
 }
 ```
 
-The `groups` claim is the load-bearing one for per-user authorization. It
-appears here only because the **groups protocol mapper is attached to the
-`basic` client-scope** (see level 400). Without that, `groups` is absent and
-the gateway falls back to `scope` for authorization, which contains only OIDC
-standards and doesn't unlock any registry servers.
+The server-managed `groups` protocol mapper on `basic` emits `mcpgw_group_paths` for authorization. The auth-server
+converts these paths to gateway group names before resolving scope mappings. Legacy tokens without this claim use their
+unchanged `groups` values.
 
 #### Validated MCP request (Claude Code → gateway)
 
@@ -426,24 +541,20 @@ Created on-the-fly by Claude Code's first POST to
 - A UUID `client_id` (e.g., `2cb00b3f-87bd-45bb-bcec-41cca5238790`)
 - `redirect_uris: ["http://localhost:<port>/callback"]`
 - `token_endpoint_auth_method: "none"` (public client, no `client_secret`)
-- The realm's default-default client-scopes auto-attached, which is just
-  `basic` for DCR'd clients
-- Optional client-scopes attached: `profile`, `email`, `offline_access`,
-  `address`, `phone`, `microprofile-jwt`
+- Server-managed default scopes, including `basic` with the groups and audience mappers
+- Only scopes allowed by the registration policy; the shipped allowlist is `openid basic profile email roles web-origins acr offline_access`
 
 Claude Code re-runs DCR every time the user re-authenticates, producing a new
 `client_id` each time. Old `client_id`s remain in the realm and accumulate.
 Run `bash keycloak/setup/cleanup-stale-dcr-clients.sh` on demand to delete
 DCR'd clients with no active sessions; pre-defined clients (mcp-gateway-web,
-mcp-gateway-m2m, etc.) are never touched. The script is idempotent and
-supports `--dry-run` to preview before deleting. CIMD adoption (Keycloak
-26.6+, sub-issue #993) eventually eliminates this entire problem.
+mcp-gateway-m2m, etc.) are never touched. Use `--dry-run` to preview before deleting. CIMD clients use their metadata URL instead of creating a new client ID for each registration.
 
 #### Client-scopes used in this flow
 
 | Scope | Type for DCR'd clients | Mappers attached | Purpose |
 | --- | --- | --- | --- |
-| `basic` | default-default | `sub`, `auth_time`, **`groups`** + **`mcp-gateway-audience`** (both added by us) | Always attached. Hosts the groups mapper AND the audience mapper, so every DCR'd-client token carries both `groups` (for per-user authorization) and `aud="mcp-gateway"` (for strict RFC 8707 audience binding). |
+| `basic` | default-default | `sub`, `auth_time`, **`groups`** + **`mcp-gateway-audience`** (both added by us) | The groups mapper emits `mcpgw_group_paths` for authorization; the audience mapper emits `aud="mcp-gateway"` for RFC 8707 binding. |
 | `profile` | optional | `given_name`, `family_name`, `preferred_username`, etc. | Standard OIDC profile claims |
 | `email` | optional | `email`, `email_verified` | Standard OIDC email claims |
 | `offline_access` | optional | (no mappers) | Allows refresh tokens |
@@ -453,13 +564,9 @@ scope, not on `profile` or `roles`**. Detail at the bottom of this section.
 
 #### Anonymous DCR policies (in `Realm Settings → Client Registration`)
 
-Three policies gate every DCR registration request:
+The following controls apply to registration:
 
-1. **Allowed Client Scopes** (`allowed-client-templates`) — checks that every
-   scope name the client requests in its registration is in the allowlist.
-   Configured by `configure_dcr_allowed_scopes()` to include all realm scopes.
-   Without this, DCR fails for any client that includes registry-internal
-   scope names in its request.
+1. **Allowed Client Scopes** (`allowed-client-templates`) checks every requested scope against `DCR_ALLOWED_SCOPES`. Both registration subtypes use the same allowlist; registry privilege scopes are never requestable.
 
 2. **Trusted Hosts** (`trusted-hosts`) — gates by client IP and/or redirect
    URI host. Configured by `configure_dcr_trusted_hosts()` with
@@ -480,6 +587,9 @@ Three policies gate every DCR registration request:
    on first OAuth flow. Default-on; unchanged by us. The "Grant Access to
    Claude Code" page the user sees is from this policy.
 
+Both subtypes deny client-supplied protocol mappers and `defaultRoles` writes that could alter realm default roles.
+Setup verifies the required built-in policies and fails on missing support or unsuccessful readback.
+
 #### The groups protocol mapper
 
 Configured by `setup_dcr_groups_mapper()`. JSON sent to Keycloak:
@@ -491,10 +601,10 @@ Configured by `setup_dcr_groups_mapper()`. JSON sent to Keycloak:
   "protocolMapper": "oidc-group-membership-mapper",
   "consentRequired": false,
   "config": {
-    "full.path": "false",
+    "full.path": "true",
     "id.token.claim": "true",
     "access.token.claim": "true",
-    "claim.name": "groups",
+    "claim.name": "mcpgw_group_paths",
     "userinfo.token.claim": "true"
   }
 }
@@ -508,8 +618,7 @@ scope assignment depends on a different code path that doesn't run for DCR.
 Putting the mapper on `basic` is the only reliable way to get groups into
 DCR'd-client tokens.
 
-`full.path: false` means group names appear as flat strings (`"mcp-admin"`,
-not `"/mcp-admin"`).
+The auth-server normalizes `mcpgw_group_paths` from the same verified bearer, ID token or authenticated userinfo response before filtering, enrichment and session storage. Legacy `groups` values are type-validated without path conversion, and the two claims are never merged. The stored session uses gateway group names and is not normalized again.
 
 #### The audience protocol mapper
 
@@ -636,26 +745,29 @@ Run `bash keycloak/setup/init-keycloak.sh`. The script:
 4. Creates Keycloak groups + maps them to scopes
 5. Creates the realm admin user (password from `INITIAL_ADMIN_PASSWORD`, set temporary)
 6. Sets up groups mappers on the pre-defined clients (web-UI flow)
-7. **Sets up DCR-specific config (added by PR #1115)**:
-   - Groups mapper on `basic` client-scope (covers DCR'd clients, emits `groups` claim)
-   - Audience mapper on `basic` client-scope (emits `aud="mcp-gateway"` for strict RFC 8707 binding)
-   - Allowed Client Scopes policy widened
-   - Trusted Hosts policy relaxed
+7. Applies realm registration controls:
+   - The groups mapper on `basic` emits `mcpgw_group_paths` for DCR and CIMD clients
+   - The audience mapper emits `aud="mcp-gateway"` for RFC 8707 binding
+   - Both DCR subtypes receive the scope allowlist and mapper/default-role restrictions
+   - Anonymous DCR is enabled only when selected; otherwise setup inventories the cleanup targets
+   - CIMD is enabled only when selected and supported by the server
 
 #### Existing installs
 
-Run `bash keycloak/setup/upgrade-realm-for-dcr.sh`. The script applies steps 7
-above and is idempotent — re-running is safe. Use when the realm was created
-before PR #1115 landed.
+Run `bash keycloak/setup/upgrade-realm-for-dcr.sh` with the registration options described
+in [migration controls](#enable-registration-and-migrate-an-existing-realm). Review the keep-list before repeating
+DCR-off setup. CIMD clients have a separate cleanup inventory and need no DCR keep-list entry. `--preflight` performs
+the capability and inventory checks without applying realm changes.
 
-### What is NOT yet production-safe
+### Registration lifecycle limits
 
-Captured here so future hardening passes have a checklist:
+DCR creates persistent client records. The configured Max Clients Limit bounds registration; operators should still
+review stale clients before deleting them. Use `bash keycloak/setup/cleanup-stale-dcr-clients.sh --dry-run` to preview
+that separate cleanup.
 
-| Issue | Risk | Fix path |
-| --- | --- | --- |
-| Anonymous DCR for MCP clients | A caller already inside the network perimeter can mint unlimited DCR records (no escalation; gated by IdP login + per-user scopes), polluting the realm's clients table | nginx `limit_req_zone` on the registration endpoint as a stopgap, OR migrate to CIMD on Keycloak 26.6+ which eliminates DCR entirely |
-| Old DCR'd clients accumulate in the realm | DB bloat, no security impact (public clients with no `client_secret` and no privileged scopes) | Run `bash keycloak/setup/cleanup-stale-dcr-clients.sh` (idempotent; `--dry-run` previews). Use `--dry-run` first to see what would be deleted. CIMD adoption (Keycloak 26.6+, sub-issue #993) eventually obviates the issue entirely. |
+CIMD uses a vendor metadata URL as a stable client ID and creates a persisted Keycloak client. Its runtime deny policy
+enforces the current mechanism and vendor trust settings even for clients that arrive after the cleanup inventory.
+Retain the existing network and rate-limit controls on registration endpoints.
 
 ### Pointers when something breaks
 
@@ -664,8 +776,8 @@ Captured here so future hardening passes have a checklist:
 | Claude Code says "Incompatible auth server: does not support DCR" | Gateway's AS metadata endpoint isn't returning `registration_endpoint`. Confirm Keycloak's underlying OIDC config has it, then check `auth_server/providers/keycloak.py::authorization_server_metadata()` |
 | Claude Code says "Got new credentials, but ai-registry-tools rejected them on reconnect" | Token exchange succeeded but gateway-side validation failed. Tail `docker logs mcp-gateway-registry-auth-server-1` and look for `Token validation failed:` or `Access denied:` |
 | Auth-server log says `Token validation failed: Token is missing the "aud" claim` | The Keycloak audience mapper isn't attached to the `basic` client-scope. Run `bash keycloak/setup/upgrade-realm-for-dcr.sh` to attach it, then have the user re-authenticate to get a fresh token. Existing tokens issued before the mapper was attached will keep failing until they expire (~5min default). |
-| Auth-server log says `Access denied ... for user scopes: ['profile', 'email', 'offline_access']` | Token has no `groups` claim. Run `bash keycloak/setup/upgrade-realm-for-dcr.sh` to re-attach the groups mapper. Have the user re-authenticate to get a fresh token |
-| DCR returns 403 with `Policy 'Allowed Client Scopes' rejected` | Allowed-scopes policy wasn't widened. Run the upgrade script, OR check the rejected scope name in Keycloak logs |
+| Auth-server denies access with only OIDC scopes | Check whether the token has `mcpgw_group_paths` or legacy `groups`, then inspect the corresponding registry group mappings. Rerun the upgrade with the intended registration settings if a mapper is missing and obtain a new token. |
+| DCR returns 403 with `Policy 'Allowed Client Scopes' rejected` | Check the requested scopes against the explicit allowlist. Registry privilege scopes cannot be requested; authorization comes from the user's group memberships. |
 | DCR returns 403 with `Policy 'Trusted Hosts' rejected` | Either the IP check is still on, or the client's redirect URI host isn't in `trusted-hosts`. Run the upgrade script. The current allowlist is `localhost`, `127.0.0.1`, `claude.ai` — adjust if you're integrating a client whose callback host isn't one of those (e.g. `claude.com`, `cursor.sh`) |
 | Browser shows `temporarily_unavailable: authentication_expired` | User's Keycloak session went stale. Have them log out at `https://<gateway>/realms/mcp-gateway/protocol/openid-connect/logout`, then re-authenticate |
 | Browser shows `localhost:<port> refused to connect` | Claude Code's listener and the browser are on different machines; the OAuth callback to `localhost:<port>` doesn't reach the listener. Either run Claude Code on the same machine as the browser, or open an SSH tunnel `-L <port>:localhost:<port>` between them |

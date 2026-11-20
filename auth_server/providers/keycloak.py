@@ -24,6 +24,10 @@ JWT_AUDIENCE = os.environ.get("JWT_AUDIENCE", "mcp-registry")
 # raises if it is missing rather than silently using a known-bad value.
 SECRET_KEY = os.environ.get("SECRET_KEY")
 
+# Only this dedicated claim identifies Keycloak full paths. Legacy ``groups``
+# may contain literal leading slashes and must never be interpreted as paths.
+KEYCLOAK_GROUP_PATHS_CLAIM = "mcpgw_group_paths"
+
 # Characters that can legally follow an origin in a URL. Used to anchor the
 # internal-URL rewrite at a boundary so an internal base of
 # "http://keycloak:8080" cannot also match "http://keycloak:80801".
@@ -67,6 +71,38 @@ def _unverified_subject(token: str) -> str:
     if not isinstance(subject, str) or not subject:
         raise IdTokenVerificationError("subject token carries no 'sub' claim")
     return subject
+
+
+def _normalize_keycloak_groups(
+    value: Any,
+    *,
+    source: str,
+) -> list[str]:
+    """Validate the dedicated full-path claim and remove exactly one prefix.
+
+    Top-level ``/registry-admins`` maps to ``registry-admins``; the subgroup
+    ``/team/registry-admins`` keeps its namespace. Empty names are omitted.
+
+    Raises:
+        ValueError: The claim is not an array of strings.
+    """
+    groups = normalize_groups_claim(value, source=source)
+    normalized: list[str] = []
+    for group in groups:
+        name = group[1:] if group.startswith("/") else group
+        if name:
+            normalized.append(name)
+    return normalized
+
+
+def _extract_keycloak_groups(claims: dict[str, Any], *, source: str) -> list[str]:
+    """Prefer the dedicated path claim by presence; never merge or downgrade."""
+    if KEYCLOAK_GROUP_PATHS_CLAIM in claims:
+        value = claims[KEYCLOAK_GROUP_PATHS_CLAIM]
+        if value is None:
+            raise ValueError(f"{source}: {KEYCLOAK_GROUP_PATHS_CLAIM} must be an array of strings")
+        return _normalize_keycloak_groups(value, source=source)
+    return normalize_groups_claim(claims.get("groups"), source=source)
 
 
 class KeycloakProvider(AuthProvider):
@@ -176,8 +212,8 @@ class KeycloakProvider(AuthProvider):
                 f"Token validation successful for user: {claims.get('preferred_username', 'unknown')}"
             )
 
-            # Extract user info from claims
-            groups = normalize_groups_claim(claims.get("groups"), source="keycloak groups")
+            # Keep subgroup names distinct from top-level authorization groups.
+            groups = _extract_keycloak_groups(claims, source="keycloak groups")
             return {
                 "valid": True,
                 "username": claims.get("preferred_username", claims.get("sub")),

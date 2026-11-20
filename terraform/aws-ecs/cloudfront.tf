@@ -119,7 +119,7 @@ resource "aws_cloudfront_distribution" "keycloak" {
   #checkov:skip=CKV2_AWS_32:Response headers policy managed at application level
   #checkov:skip=CKV2_AWS_46:Origin failover not required for this distribution
   #checkov:skip=CKV2_AWS_47:WAF integration managed separately
-  count = var.enable_cloudfront ? 1 : 0
+  count = local.keycloak_selected && var.enable_cloudfront ? 1 : 0
 
   enabled     = true
   comment     = "${var.name} Keycloak CloudFront Distribution"
@@ -136,7 +136,7 @@ resource "aws_cloudfront_distribution" "keycloak" {
   aliases = var.enable_route53_dns ? [local.keycloak_domain] : []
 
   origin {
-    domain_name = aws_lb.keycloak.dns_name
+    domain_name = aws_lb.keycloak[0].dns_name
     origin_id   = "keycloak-alb"
 
     custom_origin_config {

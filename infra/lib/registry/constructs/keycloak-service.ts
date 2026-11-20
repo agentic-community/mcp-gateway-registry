@@ -4,7 +4,7 @@
  * Translates the following Terraform resources into CDK:
  *   - keycloak-ecr.tf     (ECR repository + lifecycle policy)
  *   - keycloak-ecs.tf     (ECS cluster, task definition, service, autoscaling, SSM, IAM)
- *   - keycloak-alb.tf     (ALB, target group, HTTP/HTTPS listeners)
+ *   - keycloak-alb.tf     (ALB, target group, HTTP/HTTPS listeners, path routing rules)
  *   - keycloak-dns.tf     (Route53 hosted zone lookup, ACM certificate, A record)
  *   - keycloak-security-groups.tf (ECS SG, ALB SG, CloudFront SG, DB SG rules)
  */
@@ -24,10 +24,116 @@ import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import { Construct } from 'constructs';
-import { RegistryConfig } from '../registry-config';
+import { RegistryConfig, resolveAuthProvider, resolveKeycloakAdminCidrBlocks } from '../registry-config';
 import { putSecureSsmParam } from './_lib';
 import { CloudFrontOriginDistribution } from './cloudfront-distribution';
 import { WafRules } from './waf-rules';
+
+// ---------------------------------------------------------------------------
+// Keycloak ALB path routing (mirrors the listener rules in keycloak-alb.tf)
+// ---------------------------------------------------------------------------
+
+const KEYCLOAK_GATEWAY_REALM = 'mcp-gateway';
+
+// Forwarded from any source the security groups admit.
+const KEYCLOAK_PUBLIC_PATHS = [
+  `/realms/${KEYCLOAK_GATEWAY_REALM}`,
+  `/realms/${KEYCLOAK_GATEWAY_REALM}/*`,
+  '/resources/*',
+];
+
+// Forwarded only from keycloakAdminCidrBlocks plus the NAT gateway egress IPs
+// (except behind CloudFront).
+const KEYCLOAK_ADMIN_PATH_GROUPS = [
+  ['/admin', '/admin/*'],
+  ['/realms/master', '/realms/master/*'],
+];
+
+// ALB rules allow at most 3 values per condition and 5 per rule; each admin
+// rule has a 2-value path pattern, so it takes at most 3 source CIDRs.
+const ALB_MAX_SOURCE_IPS_PER_RULE = 3;
+
+// Default quota of rules per ALB listener: the public and root rules plus one
+// admin rule per path group per CIDR chunk must fit.
+const ALB_MAX_RULES_PER_LISTENER = 100;
+
+function _chunk<T>(items: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  return chunks;
+}
+
+/**
+ * Forward only the gateway realm, /resources/*, the root path and the admin
+ * paths to Keycloak; the listener's default action answers everything else.
+ *
+ * In direct-ALB mode the admin rules allow keycloakAdminCidrBlocks plus the
+ * NAT gateway egress IPs: the registry calls the Keycloak admin API through
+ * the public Keycloak URL from those addresses. The NAT IPs are tokens, so
+ * they are chunked separately from the operator list instead of deduplicated
+ * with it. Behind CloudFront the ALB sees CloudFront edge IPs, not the client,
+ * so the admin paths carry no source-ip condition there (the config loader
+ * rejects a narrowed keycloakAdminCidrBlocks in that mode). In direct-ALB mode
+ * an empty CIDR list produces no admin rules, so those paths get the 404.
+ */
+function _addKeycloakRoutingRules(
+  listener: elbv2.ApplicationListener,
+  targetGroup: elbv2.ApplicationTargetGroup,
+  config: RegistryConfig,
+  natPublicIps: string[],
+): void {
+  const natCidrs = natPublicIps.map((ip) => `${ip}/32`);
+  const cidrChunks: string[][] = config.cloudfront.enabled
+    ? [[]]
+    : [
+      ..._chunk(resolveKeycloakAdminCidrBlocks(config), ALB_MAX_SOURCE_IPS_PER_RULE),
+      ..._chunk(natCidrs, ALB_MAX_SOURCE_IPS_PER_RULE),
+    ];
+
+  if (2 + KEYCLOAK_ADMIN_PATH_GROUPS.length * cidrChunks.length > ALB_MAX_RULES_PER_LISTENER) {
+    throw new Error(
+      `keycloakAdminCidrBlocks needs more than the ${ALB_MAX_RULES_PER_LISTENER} rules an ALB listener holds by default. ` +
+      'Use fewer, wider CIDR blocks.',
+    );
+  }
+
+  listener.addAction('KeycloakPublicPaths', {
+    priority: 10,
+    conditions: [elbv2.ListenerCondition.pathPatterns(KEYCLOAK_PUBLIC_PATHS)],
+    action: elbv2.ListenerAction.forward([targetGroup]),
+  });
+
+  // Keycloak answers "/" with a redirect to /admin/; readiness probes such as
+  // infra/scripts/post-deploy.sh use it.
+  listener.addAction('KeycloakRootPath', {
+    priority: 20,
+    conditions: [elbv2.ListenerCondition.pathPatterns(['/'])],
+    action: elbv2.ListenerAction.forward([targetGroup]),
+  });
+
+  KEYCLOAK_ADMIN_PATH_GROUPS.forEach((paths, groupIndex) => {
+    cidrChunks.forEach((cidrs, chunkIndex) => {
+      const conditions = [elbv2.ListenerCondition.pathPatterns(paths)];
+      if (cidrs.length > 0) {
+        conditions.push(elbv2.ListenerCondition.sourceIps(cidrs));
+      }
+      listener.addAction(`KeycloakAdminPaths${groupIndex}x${chunkIndex}`, {
+        priority: 100 + groupIndex * 50 + chunkIndex,
+        conditions,
+        action: elbv2.ListenerAction.forward([targetGroup]),
+      });
+    });
+  });
+}
+
+function _keycloakNotFoundAction(): elbv2.ListenerAction {
+  return elbv2.ListenerAction.fixedResponse(404, {
+    contentType: 'text/plain',
+    messageBody: 'Not Found',
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Construct props
@@ -38,6 +144,11 @@ export interface KeycloakServiceProps {
   readonly vpc: ec2.IVpc;
   readonly privateSubnets: ec2.ISubnet[];
   readonly publicSubnets: ec2.ISubnet[];
+  /**
+   * Public IPs of the VPC NAT gateways. The registry reaches the public
+   * Keycloak URL from these addresses, so the admin rules always allow them.
+   */
+  readonly natPublicIps: string[];
   /** Keycloak database security group from the data stack */
   readonly keycloakDbSg: ec2.ISecurityGroup;
   /** KMS key used for RDS / SSM encryption from the data stack */
@@ -52,30 +163,45 @@ export interface KeycloakServiceProps {
 
 export class KeycloakService extends Construct {
   /** ECR repository for Keycloak container images */
-  public readonly ecrRepo: ecr.Repository;
+  public readonly ecrRepo?: ecr.Repository;
 
   /** ECS cluster running Keycloak */
-  public readonly ecsCluster: ecs.Cluster;
+  public readonly ecsCluster?: ecs.Cluster;
 
   /** Security group attached to Keycloak ECS tasks */
-  public readonly ecsSg: ec2.SecurityGroup;
+  public readonly ecsSg?: ec2.SecurityGroup;
 
   /** Security group attached to the Keycloak ALB */
-  public readonly albSg: ec2.SecurityGroup;
+  public readonly albSg?: ec2.SecurityGroup;
 
   /** Application Load Balancer fronting Keycloak */
-  public readonly alb: elbv2.ApplicationLoadBalancer;
+  public readonly alb?: elbv2.ApplicationLoadBalancer;
 
   /** Resolved Keycloak domain name */
-  public readonly keycloakDomain: string;
+  public readonly keycloakDomain?: string;
 
   /** Full HTTPS URL for Keycloak */
-  public readonly keycloakUrl: string;
+  public readonly keycloakUrl?: string;
 
   constructor(scope: Construct, id: string, props: KeycloakServiceProps) {
     super(scope, id);
 
-    const { config, vpc, privateSubnets, publicSubnets, keycloakDbSg, rdsKmsKey, keycloakDbSecretArn } = props;
+    const {
+      config, vpc, privateSubnets, publicSubnets, natPublicIps, keycloakDbSg, rdsKmsKey, keycloakDbSecretArn,
+    } = props;
+
+    // ------------------------------------------------------------------
+    // SSM Parameters (SecureString - Keycloak admin credentials)
+    // SecureString uses an SDK custom resource because CFN lacks native support.
+    // The database SSM parameters are created by the data stack.
+    // ------------------------------------------------------------------
+
+    putSecureSsmParam(this, 'SsmKeycloakAdmin', '/keycloak/admin', config.keycloak.adminUser, rdsKmsKey);
+    putSecureSsmParam(this, 'SsmKeycloakAdminPassword', '/keycloak/admin_password', config.keycloak.adminPassword, rdsKmsKey);
+
+    // Keep bootstrap credentials at their existing resource paths when the
+    // provider changes. Aurora and its credentials remain in Registry-Data.
+    if (resolveAuthProvider(config) !== 'keycloak') return;
 
     // Import the DB secret by ARN to avoid cross-stack cyclic dependency
     const keycloakDbSecret = secretsmanager.Secret.fromSecretCompleteArn(this, 'ImportedDbSecret', keycloakDbSecretArn);
@@ -185,15 +311,6 @@ export class KeycloakService extends Construct {
       retention: logs.RetentionDays.ONE_WEEK,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
-
-    // ------------------------------------------------------------------
-    // SSM Parameters (SecureString - Keycloak admin credentials)
-    // Note: CfnParameter is used because CDK L2 does not support SecureString
-    // The database SSM parameters are created by the data stack.
-    // ------------------------------------------------------------------
-
-    putSecureSsmParam(this, 'SsmKeycloakAdmin', '/keycloak/admin', config.keycloak.adminUser, rdsKmsKey);
-    putSecureSsmParam(this, 'SsmKeycloakAdminPassword', '/keycloak/admin_password', config.keycloak.adminPassword, rdsKmsKey);
 
     // Build ARNs for Keycloak SSM parameters (admin creds + DB URL)
     // DB username/password now come from Secrets Manager (rotation-safe)
@@ -307,6 +424,27 @@ export class KeycloakService extends Construct {
       for (const port of [80, 443]) {
         this.albSg.addIngressRule(ec2.Peer.ipv4(cidr), ec2.Port.tcp(port), `Ingress from ${cidr}`);
       }
+    }
+
+    // Admin operators can use a separate CIDR set from ordinary realm callers.
+    const adminCidrs = resolveKeycloakAdminCidrBlocks(config)
+      .filter((cidr) => !config.ingressCidrBlocks.includes(cidr));
+    for (const cidr of adminCidrs) {
+      this.albSg.addIngressRule(
+        ec2.Peer.ipv4(cidr),
+        ec2.Port.tcp(443),
+        'HTTPS ingress from Keycloak administrator CIDRs',
+      );
+    }
+
+    // Public Keycloak requests from private tasks leave through these NAT IPs.
+    // Match Terraform's HTTPS rule; plain-HTTP mode uses port 80 instead.
+    for (const ip of natPublicIps) {
+      this.albSg.addIngressRule(
+        ec2.Peer.ipv4(`${ip}/32`),
+        ec2.Port.tcp(config.enableRoute53Dns || config.cloudfront.enabled ? 443 : 80),
+        'Ingress from NAT gateways to Keycloak public URL',
+      );
     }
 
     // ALB egress: port 8080 to ECS SG (application traffic)
@@ -441,10 +579,13 @@ export class KeycloakService extends Construct {
       taskRole,
     });
 
-    // Determine container image
-    const containerImage = config.images.keycloak
-      ? ecs.ContainerImage.fromRegistry(config.images.keycloak)
-      : ecs.ContainerImage.fromEcrRepository(this.ecrRepo, 'latest');
+    // Require an explicit image so custom builds never select a mutable fallback.
+    if (!config.images.keycloak.trim()) {
+      throw new Error(
+        'images.keycloak must name an explicit image with a fixed tag or digest.',
+      );
+    }
+    const containerImage = ecs.ContainerImage.fromRegistry(config.images.keycloak);
 
     const container = taskDef.addContainer('keycloak', {
       containerName: 'keycloak',
@@ -459,24 +600,29 @@ export class KeycloakService extends Construct {
       environment: {
         AWS_REGION: region,
         KC_DB: 'mysql',
-        // Enable token-exchange for M2M flows. Baked into the TF custom image
-        // via `kc.sh build`; the public quay.io image requires runtime enable.
-        KC_FEATURES: 'token-exchange',
+        // Both public and custom images apply these settings at startup.
+        KC_FEATURES: 'token-exchange,cimd',
+        KC_FEATURES_DISABLED: 'device-flow,ciba',
+        // Native registration accepts arbitrary attributes; retain only OIDC DCR.
+        KC_SPI_CLIENT_REGISTRATION__DEFAULT__ENABLED: 'false',
         KC_PROXY_HEADERS: 'xforwarded',
         KC_HOSTNAME: this.keycloakUrl,
         KC_HOSTNAME_ADMIN: this.keycloakUrl,
+        KC_HOSTNAME_STRICT: 'true',
+        // Runtime and browser callers use the same public URL.
+        KC_HOSTNAME_BACKCHANNEL_DYNAMIC: 'false',
         KC_HTTP_ENABLED: 'true',
         KC_HEALTH_ENABLED: 'true',
         KC_METRICS_ENABLED: 'true',
-        KEYCLOAK_LOGLEVEL: config.keycloak.logLevel,
+        KC_LOG_LEVEL: config.keycloak.logLevel,
       },
       secrets: {
-        KEYCLOAK_ADMIN: ecs.Secret.fromSsmParameter(
+        KC_BOOTSTRAP_ADMIN_USERNAME: ecs.Secret.fromSsmParameter(
           ssm.StringParameter.fromSecureStringParameterAttributes(this, 'SsmRefAdmin', {
             parameterName: '/keycloak/admin',
           }),
         ),
-        KEYCLOAK_ADMIN_PASSWORD: ecs.Secret.fromSsmParameter(
+        KC_BOOTSTRAP_ADMIN_PASSWORD: ecs.Secret.fromSsmParameter(
           ssm.StringParameter.fromSecureStringParameterAttributes(this, 'SsmRefAdminPw', {
             parameterName: '/keycloak/admin_password',
           }),
@@ -577,19 +723,22 @@ export class KeycloakService extends Construct {
       });
       cdk.Tags.of(certificate).add('Name', 'keycloak-cert');
 
-      // HTTPS listener (port 443)
-      this.alb.addListener('HttpsListener', {
+      // HTTPS listener (port 443). Paths not matched by a routing rule get a 404.
+      const httpsListener = this.alb.addListener('HttpsListener', {
         port: 443,
+        open: false,
         protocol: elbv2.ApplicationProtocol.HTTPS,
         sslPolicy: elbv2.SslPolicy.RECOMMENDED_TLS,
         certificates: [certificate],
-        defaultTargetGroups: [targetGroup],
+        defaultAction: _keycloakNotFoundAction(),
       });
+      _addKeycloakRoutingRules(httpsListener, targetGroup, config, natPublicIps);
 
-      // HTTP listener: Mode 2 redirects, Mode 3 forwards (CloudFront terminates TLS)
+      // HTTP listener: Mode 2 redirects, Mode 3 routes (CloudFront terminates TLS)
       if (!config.cloudfront.enabled) {
         this.alb.addListener('HttpListener', {
           port: 80,
+          open: false,
           protocol: elbv2.ApplicationProtocol.HTTP,
           defaultAction: elbv2.ListenerAction.redirect({
             port: '443',
@@ -598,19 +747,23 @@ export class KeycloakService extends Construct {
           }),
         });
       } else {
-        this.alb.addListener('HttpListener', {
+        const httpListener = this.alb.addListener('HttpListener', {
           port: 80,
+          open: false,
           protocol: elbv2.ApplicationProtocol.HTTP,
-          defaultTargetGroups: [targetGroup],
+          defaultAction: _keycloakNotFoundAction(),
         });
+        _addKeycloakRoutingRules(httpListener, targetGroup, config, natPublicIps);
       }
     } else {
-      // No Route53: HTTP listener forwards directly (CloudFront or plain HTTP)
-      this.alb.addListener('HttpListener', {
+      // No Route53: HTTP listener routes directly (CloudFront or plain HTTP)
+      const httpListener = this.alb.addListener('HttpListener', {
         port: 80,
+        open: false,
         protocol: elbv2.ApplicationProtocol.HTTP,
-        defaultTargetGroups: [targetGroup],
+        defaultAction: _keycloakNotFoundAction(),
       });
+      _addKeycloakRoutingRules(httpListener, targetGroup, config, natPublicIps);
       // Without Route53, the configured keycloakDomain is unreachable via DNS.
       // Fall back to the ALB DNS so downstream services can connect (Mode 1
       // will overwrite this again with the CloudFront domain below).
@@ -686,7 +839,9 @@ export class KeycloakService extends Construct {
       circuitBreaker: { enable: true, rollback: true },
     });
 
-    // Register service with ALB target group
+    // CDK also makes the service depend on targetGroup.loadBalancerAttached:
+    // ListenerAction.forward registers each forwarding rule in that dependency
+    // group. A fixed-response listener alone does not attach the target group.
     fargateService.attachToApplicationTargetGroup(targetGroup);
 
     // ------------------------------------------------------------------

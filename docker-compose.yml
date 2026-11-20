@@ -1179,7 +1179,7 @@ services:
 
   # Keycloak Identity Provider
   keycloak:
-    image: quay.io/keycloak/keycloak:25.0
+    image: quay.io/keycloak/keycloak:${KEYCLOAK_VERSION:-26.8.2}
     command: start-dev  # Use 'start' for production with proper SSL
     environment:
       # Database configuration
@@ -1191,21 +1191,24 @@ services:
       # Admin credentials. No default password: this bootstraps the Keycloak
       # master-realm admin, so an empty/guessable value would be a full
       # takeover of the IdP. Set KEYCLOAK_ADMIN_PASSWORD in .env.
-      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
-      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?Set KEYCLOAK_ADMIN_PASSWORD in .env}
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?Set KEYCLOAK_ADMIN_PASSWORD in .env}
 
       # HTTP configuration
       KC_HTTP_ENABLED: 'true'
       KC_HTTP_PORT: 8080
-      KC_HOSTNAME_STRICT: 'false'
-      KC_HOSTNAME_STRICT_HTTPS: 'false'
-      KC_PROXY: edge  # Running behind nginx
+      KC_HOSTNAME_STRICT: 'true'
+      KC_PROXY_HEADERS: xforwarded
 
-      # Frontend URL for external JWT issuer
-      KC_FRONTEND_URL: ${KEYCLOAK_EXTERNAL_URL:-http://localhost:8080}
+      # Pin browser links, discovery metadata, and token issuers to the public URL.
+      KC_HOSTNAME: ${KEYCLOAK_EXTERNAL_URL:-http://localhost:8080}
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: 'false'
 
       # Features
-      KC_FEATURES: token-exchange,admin-api
+      KC_FEATURES: token-exchange,admin-api,hostname:v2,cimd
+      KC_FEATURES_DISABLED: device-flow,ciba
+      # Native registration accepts arbitrary attributes; retain only OIDC DCR.
+      KC_SPI_CLIENT_REGISTRATION__DEFAULT__ENABLED: 'false'
 
       # Logging
       KC_LOG_LEVEL: INFO
