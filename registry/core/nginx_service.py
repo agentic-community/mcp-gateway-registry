@@ -17,6 +17,10 @@ import httpx
 from registry.auth.proxied_token import _api_auth_request_enabled
 from registry.auth.resource_binding import INVALID_VERSION_SENTINEL
 from registry.common.log_redaction import redact_url
+from registry.common.mcp_apps_ui_domain import (
+    claude_ui_domain,
+    gateway_public_origins,
+)
 from registry.constants import (
     REGISTRY_CONSTANTS,
     RESERVED_CUSTOM_HEADER_NAMES,
@@ -627,6 +631,32 @@ def _render_real_ip_config() -> str:
     if len(valid_cidrs) > 1:
         lines.append("real_ip_recursive on;")
     return "\n".join(lines)
+
+
+def _virtual_mcp_app_ui_domains(
+    virtual_server_path: str,
+) -> dict[str, list[str]]:
+    """The Claude ui.domain each connector path of a virtual server must declare.
+
+    An MCP App backend computes ``_meta.ui.domain`` from its own URL, but the
+    client connected to the virtual server, so Claude refuses the page. The
+    auth server corrects this on direct routes; a virtual server's backend hop
+    does not pass through it, and the Lua router has no SHA-256. So the
+    registry computes the values here and the router replaces the backend's on
+    ``resources/read`` (see registry/common/mcp_apps_ui_domain.py).
+
+    Returns:
+        ``{request path: [domain for the preferred public origin, then one per
+        other configured origin]}``, for the paths a client can connect at. An
+        empty dict when no public origin is configured.
+    """
+    origins = gateway_public_origins()
+    if not origins:
+        return {}
+    root_path = os.environ.get("ROOT_PATH", "").rstrip("/")
+    base = root_path + "/" + virtual_server_path.strip("/")
+    paths = [base, base + "/", base + "/mcp", base + "/mcp/"]
+    return {path: [claude_ui_domain(origin + path) for origin in origins] for path in paths}
 
 
 def _vs_backend_header_clears(
@@ -2985,6 +3015,10 @@ class NginxConfigService:
                     "serve_tools_from_mapping": settings.tool_refresh_enabled,
                     "advertise_resources": has_mcp_app_tool,
                 }
+                if has_mcp_app_tool:
+                    # The router corrects each page's Claude sandbox domain to
+                    # the virtual server's own connector URL.
+                    mapping_data["mcp_app_ui_domains"] = _virtual_mcp_app_ui_domains(vs.path)
 
                 # Atomic, so virtual_router.lua never reads a half-written file.
                 # Compact: the router copies the file into a shared dict.
