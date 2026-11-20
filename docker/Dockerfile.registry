@@ -24,6 +24,7 @@ ENV PYTHONUNBUFFERED=1 \
 # apt-get upgrade pulls in security patches against the base image's
 # already-installed packages (e.g. libc6 / glibc CVE updates) that would
 # otherwise stay at whatever version was baked into python:3.14-slim.
+ARG APT_CACHE_EPOCH
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     build-essential \
     git \
@@ -67,6 +68,7 @@ RUN . .venv/bin/activate && uv pip install --no-deps -e .
 # runtime resolves to a cjson that honors empty_array_mt.
 FROM python:3.14.9-slim AS cjson-builder
 ENV DEBIAN_FRONTEND=noninteractive
+ARG APT_CACHE_EPOCH
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git build-essential libluajit-5.1-dev lua5.1 \
  && git clone --depth 1 https://github.com/openresty/lua-cjson /tmp/lua-cjson \
@@ -101,15 +103,13 @@ ENV PYTHONUNBUFFERED=1 \
 # because their /etc/hosts has no IPv6 dual entries to compare against.
 RUN echo 'precedence ::ffff:0:0/96  100' >> /etc/gai.conf
 
-# Build argument for version
-ARG BUILD_VERSION="1.0.0"
-
 # Install runtime dependencies including nginx with lua module.
 # logrotate is used by the entrypoint's daily rotation loop for nginx logs
 # at /var/log/containers/ai-registry/nginx-*.log (issue #987).
 # apt-get upgrade pulls in security patches against the base image's
 # already-installed packages (e.g. libc6 / glibc CVE updates) that would
 # otherwise stay at whatever version was baked into python:3.14-slim.
+ARG APT_CACHE_EPOCH
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     nginx \
     nginx-extras \
