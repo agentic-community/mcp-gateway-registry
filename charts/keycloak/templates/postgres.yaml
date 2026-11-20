@@ -58,6 +58,8 @@ spec:
         {{- include "keycloak.commonLabels" . | nindent 8 }}
         {{- include "keycloak.postgresSelectorLabels" . | nindent 8 }}
     spec:
+      serviceAccountName: {{ .Values.postgres.serviceAccount.name | default (include "keycloak.postgresName" .) | quote }}
+      automountServiceAccountToken: false
       securityContext:
         fsGroup: 999
         runAsUser: 999

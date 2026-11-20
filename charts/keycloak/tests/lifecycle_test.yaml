@@ -68,6 +68,31 @@ tests:
       - equal:
           path: spec.template.spec.automountServiceAccountToken
           value: false
+  - it: uses the dedicated PostgreSQL account without mounting its API token
+    templates:
+      - templates/postgres.yaml
+    documentSelector:
+      path: kind
+      value: StatefulSet
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: test-keycloak-postgres
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: false
+  - it: creates a separate PostgreSQL account even when Keycloak uses an existing account
+    templates:
+      - templates/postgres-serviceaccount.yaml
+    set:
+      serviceAccount.create: false
+      serviceAccount.name: existing-keycloak
+    asserts:
+      - isKind:
+          of: ServiceAccount
+      - equal:
+          path: metadata.name
+          value: test-keycloak-postgres
   - it: performs initialization as an explicit hook with a retained result
     templates:
       - templates/admin-init.yaml
@@ -75,6 +100,9 @@ tests:
       path: kind
       value: Job
     asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: test-keycloak-admin-init
       - equal:
           path: metadata.annotations["helm.sh/hook"]
           value: post-install,post-upgrade,post-rollback
@@ -87,6 +115,26 @@ tests:
       - equal:
           path: spec.template.spec.automountServiceAccountToken
           value: false
+  - it: uses an existing admin account independently of the Keycloak account
+    templates: [templates/admin-init.yaml]
+    documentSelector:
+      path: kind
+      value: Job
+    set:
+      sslInit.serviceAccount.create: false
+      sslInit.serviceAccount.name: existing-admin
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: existing-admin
+  - it: skips creating an externally managed PostgreSQL account
+    templates: [templates/postgres-serviceaccount.yaml]
+    set:
+      postgres.serviceAccount.create: false
+      postgres.serviceAccount.name: existing-postgres
+    asserts:
+      - hasDocuments:
+          count: 0
   - it: drops the snapshot mount only after explicit verified existing transition
     templates:
       - templates/postgres.yaml

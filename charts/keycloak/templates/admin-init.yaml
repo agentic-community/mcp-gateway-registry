@@ -1,4 +1,19 @@
 {{- if and (include "keycloak.enabled" .) .Values.sslInit.enabled }}
+{{- $account := .Values.sslInit.serviceAccount }}
+{{- $accountName := $account.name | default (printf "%s-admin-init" (include "keycloak.fullname" .)) }}
+{{- if $account.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $accountName | quote }}
+  {{- with $account.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  namespace: {{ .Release.Namespace | quote }}
+automountServiceAccountToken: false
+---
+{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -24,6 +39,7 @@ spec:
   activeDeadlineSeconds: 660
   template:
     spec:
+      serviceAccountName: {{ $accountName | quote }}
       automountServiceAccountToken: false
       restartPolicy: Never
       securityContext:

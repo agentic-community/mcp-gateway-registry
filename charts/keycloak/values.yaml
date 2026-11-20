@@ -5,7 +5,8 @@
 # to false to use an external Keycloak.
 create: true
 
-# Kubernetes identity for the Keycloak server. Set create: false and name to reuse an existing account.
+# Kubernetes identity for Keycloak. PostgreSQL and the admin init Job use separate accounts.
+# Set create: false and name to reuse an existing Keycloak account.
 serviceAccount:
   create: true
   name: "" # Defaults to the release-scoped name when created, or default otherwise.
@@ -45,6 +46,11 @@ cache: local # Single replica only. ispn uses database-backed jdbc-ping discover
 # Reconcile admin-realm SSL policy in an explicit Helm Job, not pod readiness.
 # Failure stops the Helm operation without restarting healthy Keycloak pods.
 sslInit:
+  # Set create: false to reuse an existing account with this name.
+  serviceAccount:
+    create: true
+    name: "" # Defaults to the release-scoped admin init account.
+    annotations: {}
   enabled: true
 
 service:
@@ -65,6 +71,11 @@ podAnnotations: {}
 extraEnv: []
 
 postgres:
+  # Set create: false to reuse an existing account with this name.
+  serviceAccount:
+    create: true
+    name: "" # Defaults to the release-scoped PostgreSQL account.
+    annotations: {}
   image:
     repository: postgres
     # Pinned minor release of the Bitnami source major (17.x) for a clean
