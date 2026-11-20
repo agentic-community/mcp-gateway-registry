@@ -1,0 +1,226 @@
+suite: Istio ingress gateway in front of the registry
+templates:
+  - templates/servicemesh-ingress-gateway.yaml
+  - templates/servicemesh-authorizationpolicy.yaml
+  - templates/servicemesh-peerauthentication.yaml
+  - charts/registry/templates/ingress.yaml
+  - charts/registry/templates/secret.yaml
+  - charts/registry/templates/deployment.yaml
+release:
+  name: rel
+  namespace: default
+set:
+  global.domain: example.com
+  global.serviceMesh.enabled: true
+tests:
+  # ---- off by default ----
+  - it: renders no gateway by default
+    template: templates/servicemesh-ingress-gateway.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: points the ALB Ingress at the registry over HTTP by default
+    template: charts/registry/templates/ingress.yaml
+    asserts:
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service
+          value: {name: registry, port: {name: http}}
+      - notExists:
+          path: metadata.annotations["alb.ingress.kubernetes.io/backend-protocol"]
+
+  - it: refuses routeIngress without the gateway
+    template: templates/servicemesh-ingress-gateway.yaml
+    set:
+      global.serviceMesh.ingressGateway.routeIngress: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "routeIngress requires global.serviceMesh.ingressGateway.enabled: true"
+
+  # ---- gateway rendered, traffic not moved ----
+  - it: renders the gateway from plain resources
+    template: templates/servicemesh-ingress-gateway.yaml
+    set:
+      global.serviceMesh.ingressGateway.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 9
+      - isKind:
+          of: Deployment
+        documentIndex: 3
+      - equal:
+          path: spec.template.metadata.annotations["inject.istio.io/templates"]
+          value: gateway
+        documentIndex: 3
+      - equal:
+          path: spec.template.metadata.annotations["proxy.istio.io/config"]
+          value: '{"gatewayTopology": {"numTrustedProxies": 1}}'
+        documentIndex: 3
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: mcp-ingress-gateway
+        documentIndex: 3
+
+  - it: lets only istiod's check read Secrets for the gateway (list, no API token)
+    template: templates/servicemesh-ingress-gateway.yaml
+    set:
+      global.serviceMesh.ingressGateway.enabled: true
+    asserts:
+      - equal:
+          path: automountServiceAccountToken
+          value: false
+        documentIndex: 0
+      - equal:
+          path: rules
+          value: [{apiGroups: [""], resources: ["secrets"], verbs: ["list"]}]
+        documentIndex: 1
+      - equal:
+          path: subjects
+          value: [{kind: ServiceAccount, name: mcp-ingress-gateway, namespace: default}]
+        documentIndex: 2
+
+  - it: exposes the gateway only as a ClusterIP Service
+    template: templates/servicemesh-ingress-gateway.yaml
+    documentIndex: 4
+    set:
+      global.serviceMesh.ingressGateway.enabled: true
+    asserts:
+      - equal:
+          path: spec.type
+          value: ClusterIP
+      - equal:
+          path: spec.ports[0]
+          value: {name: https, port: 443, targetPort: https, protocol: TCP}
+
+  - it: generates a self-signed TLS Secret for the gateway
+    template: templates/servicemesh-ingress-gateway.yaml
+    documentIndex: 5
+    set:
+      global.serviceMesh.ingressGateway.enabled: true
+    asserts:
+      - isKind:
+          of: Secret
+      - equal:
+          path: type
+          value: kubernetes.io/tls
+      - exists:
+          path: data["tls.crt"]
+      - exists:
+          path: data["tls.key"]
+
+  - it: serves HTTPS with the generated certificate and routes to the registry
+    template: templates/servicemesh-ingress-gateway.yaml
+    set:
+      global.serviceMesh.ingressGateway.enabled: true
+    asserts:
+      - equal:
+          path: spec.servers[0].tls
+          value: {mode: SIMPLE, credentialName: mcp-ingress-gateway-tls}
+        documentIndex: 6
+      - equal:
+          path: spec.http[0].route[0].destination
+          value: {host: registry.default.svc.cluster.local, port: {number: 8000}}
+        documentIndex: 7
+
+  - it: uses an existing TLS Secret instead of generating one
+    template: templates/servicemesh-ingress-gateway.yaml
+    set:
+      global.serviceMesh.ingressGateway.enabled: true
+      global.serviceMesh.ingressGateway.tls.existingSecret: my-gateway-cert # pragma: allowlist secret
+    asserts:
+      - hasDocuments:
+          count: 8
+      - equal:
+          path: spec.servers[0].tls.credentialName
+          value: my-gateway-cert
+        documentIndex: 5
+
+  - it: refuses to generate the certificate when secret generation is off
+    template: templates/servicemesh-ingress-gateway.yaml
+    set:
+      global.serviceMesh.ingressGateway.enabled: true
+      global.generateSecrets: false
+    asserts:
+      - failedTemplate:
+          errorPattern: "the ingress gateway TLS certificate has no value"
+
+  - it: leaves the ALB pointed at the registry until routeIngress is set
+    template: charts/registry/templates/ingress.yaml
+    set:
+      global.serviceMesh.ingressGateway.enabled: true
+    asserts:
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service.name
+          value: registry
+
+  # ---- traffic routed through the gateway ----
+  - it: points the ALB Ingress at the gateway over HTTPS
+    template: charts/registry/templates/ingress.yaml
+    set:
+      global.serviceMesh.ingressGateway.enabled: true
+      global.serviceMesh.ingressGateway.routeIngress: true
+    asserts:
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service
+          value: {name: mcp-ingress-gateway, port: {name: https}}
+      - equal:
+          path: metadata.annotations["alb.ingress.kubernetes.io/backend-protocol"]
+          value: HTTPS
+      - equal:
+          path: metadata.annotations["alb.ingress.kubernetes.io/healthcheck-protocol"]
+          value: HTTPS
+
+  - it: narrows the registry entry ports to the gateway, auth-server and mcpgw
+    template: templates/servicemesh-authorizationpolicy.yaml
+    documentIndex: 0
+    set:
+      global.serviceMesh.ingressGateway.enabled: true
+      global.serviceMesh.ingressGateway.routeIngress: true
+    asserts:
+      - equal:
+          path: spec.rules[0].from[0].source.principals
+          value:
+            - cluster.local/ns/default/sa/mcp-ingress-gateway
+            - cluster.local/ns/default/sa/auth-server
+            - cluster.local/ns/default/sa/mcpgw-server
+      - equal:
+          path: spec.rules[0].to[0].operation.ports
+          value: ["8080", "8443"]
+
+  - it: drops the registry STRICT exception
+    template: templates/servicemesh-peerauthentication.yaml
+    set:
+      global.serviceMesh.ingressGateway.enabled: true
+      global.serviceMesh.ingressGateway.routeIngress: true
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: metadata.name
+          value: rel-mcp-gateway-registry-stack-mongodb-operator-webhook
+        documentIndex: 1
+
+  - it: trusts the sidecar address in nginx so client_ip shows the end user
+    template: charts/registry/templates/secret.yaml
+    set:
+      global.serviceMesh.ingressGateway.enabled: true
+      global.serviceMesh.ingressGateway.routeIngress: true
+      registry.app.trustedRealIpCidrs: "10.1.2.0/24, 10.1.3.0/24"
+    asserts:
+      - equal:
+          path: data.TRUSTED_REAL_IP_CIDRS
+          value: 10.1.2.0/24,10.1.3.0/24,127.0.0.6/32
+          decodeBase64: true
+        documentSelector:
+          path: metadata.name
+          value: registry-secret
+
+  - it: does not use TPROXY behind the gateway even when preserveClientIp is set
+    template: charts/registry/templates/deployment.yaml
+    set:
+      global.serviceMesh.istio.preserveClientIp: true
+      global.serviceMesh.ingressGateway.enabled: true
+      global.serviceMesh.ingressGateway.routeIngress: true
+    asserts:
+      - notExists:
+          path: spec.template.metadata.annotations["sidecar.istio.io/interceptionMode"]

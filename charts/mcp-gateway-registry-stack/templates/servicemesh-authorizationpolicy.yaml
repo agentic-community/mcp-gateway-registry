@@ -29,6 +29,8 @@ global.serviceMesh.authorizationPolicies.enabled. Istio source principals are
 {{- $td := .Values.global.serviceMesh.authorizationPolicies.trustDomain | default "cluster.local" }}
 {{- $fullname := include "mcp-gateway-registry-stack.fullname" . }}
 {{- $labels := include "mcp-gateway-registry-stack.labels" . }}
+{{- $igw := .Values.global.serviceMesh.ingressGateway | default dict }}
+{{- $routed := and $igw.enabled $igw.routeIngress }}
 {{- /* ServiceAccount names. App SAs honor the subchart serviceAccount.name. */ -}}
 {{- $registrySa := "registry" }}
 {{- with (dig "serviceAccount" "name" "" (.Values.registry | default dict)) }}{{- $registrySa = . }}{{- end }}
@@ -61,12 +63,26 @@ spec:
       app.kubernetes.io/name: registry
   action: ALLOW
   rules:
+    {{- if $routed }}
+    # Entry point behind the Istio ingress gateway: only the gateway and the
+    # in-namespace callers of the registry API (auth-server, mcpgw) reach nginx.
+    - from:
+        - source:
+            principals:
+              - {{ printf "%s/ns/%s/sa/%s" $td $ns ($igw.name | default "mcp-ingress-gateway") | quote }}
+              - {{ $p.auth | quote }}
+              - {{ $p.mcpgw | quote }}
+      to:
+        - operation:
+            ports: ["8080", "8443"]
+    {{- else }}
     # Public entry point (nginx 8080 HTTP, 8443 HTTPS). The load balancer is
     # outside the mesh, and every request here is authenticated by the gateway
     # itself, so any source is admitted on these two ports.
     - to:
         - operation:
             ports: ["8080", "8443"]
+    {{- end }}
     # Internal egress-token vend listener: only the auth-server.
     - from:
         - source:

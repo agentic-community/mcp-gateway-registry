@@ -266,8 +266,9 @@ The stack chart can run inside an Istio service mesh. A mesh is highly encourage
 `global.serviceMesh.enabled=false` (the default) the chart renders exactly as it does without a mesh. When enabled, the
 chart labels its pods (including the bootstrap Jobs and the MongoDB members) for sidecar injection and renders a
 namespaced `PeerAuthentication` (STRICT mTLS by default, with the load balancer and MongoDB webhook ports exempt) plus an `AuthorizationPolicy` per destination workload.
-Label the namespace `istio-injection=enabled` and follow the two-stage rollout in the guide. The chart does not install
-the Istio control plane, which is a cluster prerequisite.
+Label the namespace `istio-injection=enabled` and follow the two-stage rollout in the guide. An optional Istio ingress
+gateway (`global.serviceMesh.ingressGateway`) can front the registry so every hop from the load balancer is encrypted.
+The chart does not install the Istio control plane, which is a cluster prerequisite.
 
 See [Service Mesh Deployment](../docs/service-mesh-deployment.md) for the full guide and the `global.serviceMesh.*`
 parameters.

@@ -62,6 +62,32 @@ global:
       # "Client IP in the audit log"). An Istio ingress gateway in front of the
       # registry fixes client_ip without it.
       preserveClientIp: false
+    # Istio ingress gateway in front of the registry, rendered from plain
+    # resources (no Gateway API CRDs, no extra Helm install). Two switches so
+    # the gateway can be checked in-cluster before traffic moves to it.
+    ingressGateway:
+      # Render the gateway: ServiceAccount, Deployment (Istio injects the
+      # gateway Envoy), ClusterIP Service, HTTPS Gateway, VirtualService to the
+      # registry, and a TLS certificate. Traffic does not use it until
+      # routeIngress is true.
+      enabled: false
+      # Point the ALB Ingress at the gateway over HTTPS instead of at the
+      # registry over HTTP. Also narrows the registry's entry ports to the
+      # gateway, auth-server and mcpgw identities, makes the registry fully
+      # STRICT, and lets nginx trust the sidecar address so client_ip shows the
+      # end user without TPROXY. Requires enabled: true.
+      routeIngress: false
+      # Name of the gateway's Deployment, Service and ServiceAccount.
+      name: mcp-ingress-gateway
+      replicas: 2
+      resources: {}
+      tls:
+        # Kubernetes TLS Secret (tls.crt, tls.key) the gateway serves. Empty
+        # generates a self-signed certificate on first install and reuses it on
+        # upgrade. The ALB does not validate the target certificate, so
+        # self-signed still encrypts the ALB hop. With global.generateSecrets
+        # false (ArgoCD), set this to a Secret you manage.
+        existingSecret: ""
     # AuthorizationPolicy set. When true (the default when the mesh is enabled),
     # the stack renders one ALLOW AuthorizationPolicy per destination workload
     # listing the source identities and container ports it accepts. A selected

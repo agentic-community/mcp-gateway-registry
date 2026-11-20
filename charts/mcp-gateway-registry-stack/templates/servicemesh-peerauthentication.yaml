@@ -21,6 +21,9 @@ enabled (global.serviceMesh.enabled && global.serviceMesh.type == "istio").
 {{- $mtls := .Values.global.serviceMesh.mtls | default dict }}
 {{- $mode := $mtls.mode | default "STRICT" }}
 {{- $ex := $mtls.strictExceptions | default dict }}
+{{- $igw := .Values.global.serviceMesh.ingressGateway | default dict }}
+{{- /* Behind the ingress gateway nothing outside the mesh reaches the registry. */ -}}
+{{- $registryException := and $ex.registryEntrypoint (not (and $igw.enabled $igw.routeIngress)) }}
 {{- $labels := include "mcp-gateway-registry-stack.labels" . }}
 {{- $fullname := include "mcp-gateway-registry-stack.fullname" . }}
 apiVersion: security.istio.io/v1
@@ -34,7 +37,7 @@ spec:
   mtls:
     mode: {{ $mode }}
 {{- if eq $mode "STRICT" }}
-{{- if $ex.registryEntrypoint }}
+{{- if $registryException }}
 ---
 apiVersion: security.istio.io/v1
 kind: PeerAuthentication

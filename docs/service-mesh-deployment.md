@@ -99,8 +99,8 @@ cannot present a mesh identity, so the chart keeps their ports `PERMISSIVE` with
 | Registry entry point     | the load balancer         | 8080, 8443 on the registry pods                         | `mtls.strictExceptions.registryEntrypoint`     |
 | MongoDB operator webhook | the Kubernetes API server | `mongodbOperatorWebhookPort` (1993) on the operator pod | `mtls.strictExceptions.mongodbOperatorWebhook` |
 
-The AuthorizationPolicies still apply on those ports. Turn off `registryEntrypoint` once an Istio ingress gateway fronts
-the registry.
+The AuthorizationPolicies still apply on those ports. With `ingressGateway.routeIngress` on, the registry exception is
+dropped automatically: only the gateway reaches the registry then, so the registry is fully STRICT.
 
 ### Switching to PERMISSIVE
 
@@ -183,11 +183,40 @@ Where a sidecar still handles HTTP (the registry's inbound from the load balance
 - The request path is normalized (`.` and `..` segments) before nginx sees it, and request headers are capped at 60 KiB
   in total.
 
-A sidecar in its default interception mode hands every connection to the application from `127.0.0.6`, its local
-address, instead of the caller's. The registry can avoid this with TPROXY (next section). The auth-server and mcpgw
+A sidecar in its default interception mode hands every connection to the application from `127.0.0.6`, its local address, instead of the caller's. The registry can avoid this with TPROXY or the ingress gateway (see Client IP in the audit log). The auth-server and mcpgw
 still see `127.0.0.6` as their peer, but they take the caller's address from the `X-Real-IP` header the registry's nginx
 sets, so their logs are unaffected. The auth-server's uvicorn trusts forwarded headers only from `127.0.0.1` and `::1`,
 which never included the registry's pod IP, so its trust decision is unchanged.
+
+## Ingress gateway
+
+The chart can put an Istio ingress gateway between the load balancer and the registry. It renders it from plain
+resources, so it needs no Gateway API CRDs and no separate Helm install: istiod turns a placeholder Deployment into the
+gateway Envoy through its `gateway` injection template. Two switches let you check the gateway before traffic moves to
+it:
+
+| Value                                            | Effect                                                                                                                                                                                                                                                                                                                                                                           |
+|--------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `global.serviceMesh.ingressGateway.enabled`      | Renders the gateway: ServiceAccount, Deployment, ClusterIP Service, an HTTPS `Gateway`, a `VirtualService` to the registry, a TLS Secret, and an AuthorizationPolicy admitting the load balancer on 8443. Traffic still goes to the registry.                                                                                                                                    |
+| `global.serviceMesh.ingressGateway.routeIngress` | Points the ALB Ingress at the gateway over HTTPS (`backend-protocol` and `healthcheck-protocol: HTTPS`). It also narrows the registry's entry ports to the gateway, auth-server and mcpgw identities, drops the registry STRICT exception, and adds `127.0.0.6/32` to nginx's trusted proxies so `client_ip` shows the end user. Requires `enabled`; the render fails otherwise. |
+
+With both on, every hop is encrypted: client to ALB (TLS, the ACM certificate), ALB to gateway (TLS, the gateway's
+certificate), gateway to registry (mTLS).
+
+The gateway's certificate is a Kubernetes TLS Secret. With `ingressGateway.tls.existingSecret` empty, the chart
+generates a self-signed certificate for the public hostname on first install and reuses it on upgrade; with
+`global.generateSecrets: false` (ArgoCD) the render fails until you name a Secret you manage. The ALB encrypts to the
+target but does not validate its certificate, so a self-signed certificate protects the hop on the wire without
+authenticating the gateway to the ALB.
+
+istiod serves the gateway its certificate only if the gateway's ServiceAccount may `list` Secrets in the namespace, so
+the chart creates that Role and RoleBinding. The gateway pod mounts no Kubernetes API token, so the grant is only used
+by istiod's check.
+
+The gateway parses HTTP, so Envoy's limits (60 KiB of request headers in total) apply before a request reaches nginx.
+
+Roll out in order: enable the gateway and check it from inside the cluster (health, login, an MCP call), then set
+`routeIngress`. The load balancer re-registers its targets on the gateway pods. To roll back, set `routeIngress: false`.
 
 ## Client IP in the audit log
 
@@ -226,13 +255,9 @@ container runs as root with the `NET_ADMIN` capability instead of as an unprivil
 were compromised, it could change that pod's iptables rules and stop its traffic going through the sidecar. The
 `baseline` and `restricted` Pod Security profiles reject this configuration.
 
-### The fix without extra privilege: an Istio ingress gateway
+### Behind the ingress gateway: `routeIngress: true`
 
-Put an Istio ingress gateway between the load balancer and the registry, and restrict the registry's AuthorizationPolicy
-on 8080 and 8443 from any source to the gateway's ServiceAccount only. Only the gateway can then reach nginx, so
-trusting the forwarded header from the sidecar is safe again: configure the gateway with `numTrustedProxies: 1` so it
-accepts the load balancer's entry, and nginx can take the client from the header. `client_ip` shows the real client with
-`preserveClientIp: false`. Remove the registry's strict exception if using an ingress gateway.
+With the ingress gateway routing the load balancer's traffic (see [Ingress gateway](#ingress-gateway)), `client_ip` shows the end user without TPROXY. The gateway runs with `numTrustedProxies: 1`, so it keeps the load balancer's `X-Forwarded-For` entry and appends the load balancer's address. Only the gateway, auth-server and mcpgw can reach nginx, so the chart adds `127.0.0.6/32` to nginx's trusted proxies; with the load balancer's subnets in `registry.app.trustedRealIpCidrs`, nginx walks the chain back to the client. A caller that reaches the gateway directly with a forged `X-Forwarded-For` is recorded with its own address, because that address is not trusted. `preserveClientIp` has no effect in this mode.
 
 ## Keycloak chart compatibility
 
@@ -294,8 +319,7 @@ a reply.
 
 ## Limits of this version
 
-**The mesh is not the external-traffic boundary.** Traffic from the load balancer, to external identity providers, to
-SaaS MCP servers, and to an external MongoDB or DocumentDB crosses the mesh edge. Under PERMISSIVE mTLS and Istio's
+**The mesh is not the external-traffic boundary.** Traffic to external identity providers, to SaaS MCP servers, and to an external MongoDB or DocumentDB crosses the mesh edge. Without `ingressGateway.routeIngress`, the load balancer's hop to the registry is plain HTTP inside the VPC. Under PERMISSIVE mTLS and Istio's
 default outbound policy, these work with no extra configuration. Locking them down with `ServiceEntry` objects is a
 later step.
 

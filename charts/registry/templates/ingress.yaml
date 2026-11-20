@@ -5,6 +5,11 @@
 {{- $additionalHostnames := fromYamlArray (include "registry.additionalHostnames" .) }}
 {{- $globalPaths := .Values.global.ingress.paths | default dict }}
 {{- $pathPrefix := (get $globalPaths "registry") | default .Values.ingress.path | default "/registry" }}
+{{- /* With the Istio ingress gateway routed in, every rule targets the gateway's
+       HTTPS port instead of the registry's HTTP port. */ -}}
+{{- $gateway := include "registry.meshIngressGateway" . }}
+{{- $backendName := $gateway | default .Values.app.name }}
+{{- $backendPort := ternary "https" "http" (ne $gateway "") }}
 {{- /*
 In path routing mode the registry pod's in-cluster nginx reverse proxy
 fronts auth-server and Keycloak for browser traffic (see
@@ -32,6 +37,12 @@ metadata:
     alb.ingress.kubernetes.io/ssl-redirect: '443'
     alb.ingress.kubernetes.io/target-type: ip
     alb.ingress.kubernetes.io/success-codes: 200,302
+    {{- if $gateway }}
+    # The gateway serves HTTPS, so the ALB re-encrypts to it and health-checks
+    # over HTTPS. The ALB does not validate the target certificate.
+    alb.ingress.kubernetes.io/backend-protocol: HTTPS
+    alb.ingress.kubernetes.io/healthcheck-protocol: HTTPS
+    {{- end }}
     {{- if .Values.global.ingress.inboundCidrs }}
     alb.ingress.kubernetes.io/inbound-cidrs: {{ .Values.global.ingress.inboundCidrs }}
     {{- end }}
@@ -49,37 +60,37 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: {{ .Values.app.name }}
+                name: {{ $backendName }}
                 port:
-                  name: http
+                  name: {{ $backendPort }}
           - path: /oauth2
             pathType: Prefix
             backend:
               service:
-                name: {{ .Values.app.name }}
+                name: {{ $backendName }}
                 port:
-                  name: http
+                  name: {{ $backendPort }}
           - path: /keycloak
             pathType: Prefix
             backend:
               service:
-                name: {{ .Values.app.name }}
+                name: {{ $backendName }}
                 port:
-                  name: http
+                  name: {{ $backendPort }}
           - path: /realms
             pathType: Prefix
             backend:
               service:
-                name: {{ .Values.app.name }}
+                name: {{ $backendName }}
                 port:
-                  name: http
+                  name: {{ $backendPort }}
           - path: /resources
             pathType: Prefix
             backend:
               service:
-                name: {{ .Values.app.name }}
+                name: {{ $backendName }}
                 port:
-                  name: http
+                  name: {{ $backendPort }}
     {{- range $hostname := $additionalHostnames }}
     {{- if $hostname }}
     - host: {{ $hostname | quote }}
@@ -89,37 +100,37 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: {{ $.Values.app.name }}
+                name: {{ $backendName }}
                 port:
-                  name: http
+                  name: {{ $backendPort }}
           - path: /oauth2
             pathType: Prefix
             backend:
               service:
-                name: {{ $.Values.app.name }}
+                name: {{ $backendName }}
                 port:
-                  name: http
+                  name: {{ $backendPort }}
           - path: /keycloak
             pathType: Prefix
             backend:
               service:
-                name: {{ $.Values.app.name }}
+                name: {{ $backendName }}
                 port:
-                  name: http
+                  name: {{ $backendPort }}
           - path: /realms
             pathType: Prefix
             backend:
               service:
-                name: {{ $.Values.app.name }}
+                name: {{ $backendName }}
                 port:
-                  name: http
+                  name: {{ $backendPort }}
           - path: /resources
             pathType: Prefix
             backend:
               service:
-                name: {{ $.Values.app.name }}
+                name: {{ $backendName }}
                 port:
-                  name: http
+                  name: {{ $backendPort }}
     {{- end }}
     {{- end }}
     {{- else }}
@@ -130,9 +141,9 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: {{ .Values.app.name }}
+                name: {{ $backendName }}
                 port:
-                  name: http
+                  name: {{ $backendPort }}
     {{- range $hostname := $additionalHostnames }}
     {{- if $hostname }}
     - host: {{ $hostname | quote }}
@@ -142,9 +153,9 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: {{ $.Values.app.name }}
+                name: {{ $backendName }}
                 port:
-                  name: http
+                  name: {{ $backendPort }}
     {{- end }}
     {{- end }}
     {{- end }}

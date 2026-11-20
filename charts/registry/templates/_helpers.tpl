@@ -216,7 +216,9 @@ Call as: {{- include "registry.podAnnotations" . | nindent 8 }}
 {{- /* Opt-in (global.serviceMesh.istio.preserveClientIp): TPROXY keeps the
        caller's source address, so nginx (and the audit log's client_ip) sees
        the real peer instead of 127.0.0.6. Needs a root, NET_ADMIN sidecar. */ -}}
-{{- if eq (toString (dig "preserveClientIp" false $istio)) "true" -}}
+{{- /* Not needed once the ingress gateway fronts the registry: only the gateway
+       reaches nginx then, so nginx can trust the sidecar address instead. */ -}}
+{{- if and (eq (toString (dig "preserveClientIp" false $istio)) "true") (not (include "registry.meshIngressGateway" .)) -}}
 {{- $_ := set $ann "sidecar.istio.io/interceptionMode" "TPROXY" -}}
 {{- end -}}
 {{- end -}}
@@ -241,5 +243,19 @@ Call as: {{- include "registry.meshPodLabels" . | nindent 8 }}
 {{- $sm := .Values.global.serviceMesh | default dict -}}
 {{- if and $sm.enabled (eq ($sm.type | default "istio") "istio") -}}
 sidecar.istio.io/inject: "true"
+{{- end -}}
+{{- end -}}
+
+{{/*
+Name of the Istio ingress gateway Service when the stack routes the ALB through
+it (global.serviceMesh: Istio enabled, ingressGateway.enabled and
+ingressGateway.routeIngress); empty otherwise. Drives the Ingress backend, the
+TPROXY switch and the nginx trusted-proxy list.
+*/}}
+{{- define "registry.meshIngressGateway" -}}
+{{- $sm := .Values.global.serviceMesh | default dict -}}
+{{- $gw := $sm.ingressGateway | default dict -}}
+{{- if and $sm.enabled (eq ($sm.type | default "istio") "istio") $gw.enabled $gw.routeIngress -}}
+{{- $gw.name | default "mcp-ingress-gateway" -}}
 {{- end -}}
 {{- end -}}
