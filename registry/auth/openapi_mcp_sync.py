@@ -295,3 +295,47 @@ def verify_credential_envelope(
     if not seen_jtis.consume(f"env:{jti}", float(claims["exp"]) + SYNC_LEEWAY_SECONDS):
         raise SyncTokenError("credential envelope rejected: jti already used")
     return _check_envelope_credentials(claims.get("credentials"))
+
+
+# ------------------------------------------------------------- admission marker
+#
+# Every legitimate route into a hub (the server's own nginx location, the
+# auth server's per-user hop, the registry's health checks, tool refreshes and
+# scans) adds this header. The container refuses a hub call without it, so an
+# ordinary registration pointed at the container's IP or another DNS name
+# cannot reach a hub: the gateway location that serves it sets no marker, and
+# a client cannot compute one without the sync secret.
+
+ADMISSION_HEADER: str = "X-OpenAPI-MCP-Admission"
+ADMISSION_KEY_INFO: bytes = b"openapi-mcp-admission-v1"
+
+
+def admission_marker(
+    secret: str,
+    server_slug: str,
+) -> str:
+    """The marker for one server's hub: HMAC-SHA256 of the slug, hex-encoded.
+
+    Raises:
+        SyncTokenError: If the sync secret is unset.
+    """
+    key = hmac.new(_require_secret(secret).encode(), ADMISSION_KEY_INFO, hashlib.sha256).digest()
+    return hmac.new(key, server_slug.encode(), hashlib.sha256).hexdigest()
+
+
+def admission_marker_matches(
+    secret: str,
+    server_slug: str,
+    presented: str | None,
+) -> bool:
+    """True only when the presented marker is the one for this slug.
+
+    Fails closed: a missing marker, an unset secret or any mismatch is False.
+    """
+    if not presented:
+        return False
+    try:
+        expected = admission_marker(secret, server_slug)
+    except SyncTokenError:
+        return False
+    return hmac.compare_digest(expected, presented.strip())

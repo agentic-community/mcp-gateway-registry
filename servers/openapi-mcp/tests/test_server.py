@@ -12,12 +12,17 @@ from conftest import (
     parse_mcp_response,
 )
 
-from registry.auth.openapi_mcp_sync import mint_sync_token
+from registry.auth.openapi_mcp_sync import (
+    admission_marker,
+    mint_sync_token,
+)
 
 MCP_HEADERS: dict = {
     "content-type": "application/json",
     "accept": "application/json, text/event-stream",
     "mcp-protocol-version": "2025-11-25",
+    # What the gateway route that serves /demo adds to every call.
+    "x-openapi-mcp-admission": admission_marker(SYNC_SECRET, "demo"),
 }
 # Headers nginx adds to a proxied MCP request. None may reach a third-party API.
 GATEWAY_HEADERS: dict = {
@@ -277,6 +282,7 @@ class TestToolCalls:
         sent = backend.requests[0].headers
         leaked = {k for k, v in GATEWAY_HEADERS.items() if sent.get(k) == v}
         assert leaked == set()
+        assert "x-openapi-mcp-admission" not in sent
         assert sent["x-api-key"] == "k1"
 
     async def test_unknown_argument_rejected(self, items_spec, backend):
@@ -347,3 +353,40 @@ class TestAuthSchemes:
 
         assert check(backend.requests[0])
         assert str(backend.requests[0].url).startswith("https://api.example.com/v1/items/7")
+
+
+class TestAdmissionMarker:
+    """A hub call must come through a route that serves that slug (security review #2)."""
+
+    @pytest.mark.parametrize(
+        "marker",
+        [None, "", "0" * 64, admission_marker(SYNC_SECRET, "other")],
+        ids=["missing", "empty", "made-up", "another-slugs-marker"],
+    )
+    async def test_call_without_this_slugs_marker_is_refused(self, items_spec, backend, marker):
+        headers = {k: v for k, v in MCP_HEADERS.items() if k != "x-openapi-mcp-admission"}
+        if marker is not None:
+            headers["x-openapi-mcp-admission"] = marker
+        async with _client() as client:
+            await _put(client, _state([_target(items_spec)]))
+            response = await client.post(
+                "/s/demo/mcp", content=mcp_post_body("tools/list", {}), headers=headers
+            )
+
+        assert (response.status_code, backend.requests) == (401, [])
+
+    async def test_unknown_slug_without_marker_looks_the_same_as_a_known_one(self):
+        headers = {k: v for k, v in MCP_HEADERS.items() if k != "x-openapi-mcp-admission"}
+        async with _client() as client:
+            response = await client.post("/s/nope/mcp", content="{}", headers=headers)
+
+        assert response.status_code == 401
+
+    def test_marker_depends_on_slug_and_secret(self):
+        markers = {
+            admission_marker(SYNC_SECRET, "demo"),
+            admission_marker(SYNC_SECRET, "demo2"),
+            admission_marker(SYNC_SECRET + "x", "demo"),
+        }
+
+        assert len(markers) == 3
