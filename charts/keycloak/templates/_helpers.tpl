@@ -8,6 +8,10 @@ port are a hard contract. Keycloak connects to postgres at a NEW service name
 {{- printf "%s-keycloak" .Release.Name -}}
 {{- end -}}
 
+{{- define "keycloak.serviceAccountName" -}}
+{{- .Values.serviceAccount.name | default (ternary (include "keycloak.fullname" .) "default" .Values.serviceAccount.create) -}}
+{{- end -}}
+
 {{- define "keycloak.headlessName" -}}
 {{- printf "%s-keycloak-headless" .Release.Name -}}
 {{- end -}}

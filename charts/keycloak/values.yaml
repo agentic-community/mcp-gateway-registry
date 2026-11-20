@@ -5,6 +5,12 @@
 # to false to use an external Keycloak.
 create: true
 
+# Kubernetes identity for the Keycloak server. Set create: false and name to reuse an existing account.
+serviceAccount:
+  create: true
+  name: "" # Defaults to the release-scoped name when created, or default otherwise.
+  annotations: {}
+
 image:
   repository: quay.io/keycloak/keycloak
   tag: "26.8.2"

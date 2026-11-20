@@ -13,8 +13,61 @@ tests:
       path: kind
       value: Deployment
     asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: test-keycloak
       - notExists:
           path: spec.template.spec.containers[0].lifecycle
+  - it: creates the Keycloak workload account without a mounted API token
+    templates:
+      - templates/serviceaccount.yaml
+    asserts:
+      - isKind:
+          of: ServiceAccount
+      - equal:
+          path: metadata.name
+          value: test-keycloak
+      - equal:
+          path: automountServiceAccountToken
+          value: false
+  - it: applies the configured account name and annotations
+    templates:
+      - templates/serviceaccount.yaml
+    set:
+      serviceAccount.name: custom-keycloak
+      serviceAccount.annotations.owner: platform
+    asserts:
+      - equal:
+          path: metadata.name
+          value: custom-keycloak
+      - equal:
+          path: metadata.annotations.owner
+          value: platform
+  - it: skips account creation when using an existing account
+    templates:
+      - templates/serviceaccount.yaml
+    set:
+      serviceAccount.create: false
+      serviceAccount.name: existing-keycloak
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: uses the existing account without mounting its API token
+    templates:
+      - templates/keycloak.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      serviceAccount.create: false
+      serviceAccount.name: existing-keycloak
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: existing-keycloak
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: false
   - it: performs initialization as an explicit hook with a retained result
     templates:
       - templates/admin-init.yaml
