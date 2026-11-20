@@ -59,9 +59,8 @@ from jsonrpc_body import (
 from jwt.api_jwk import PyJWK
 from mcp_apps_domain import RESOURCES_READ_METHOD as MCP_APPS_RESOURCES_READ_METHOD
 from mcp_apps_domain import claude_ui_domain as mcp_apps_claude_ui_domain
-from mcp_apps_domain import connector_url as mcp_apps_connector_url
-from mcp_apps_domain import gateway_public_origins as mcp_apps_gateway_public_origins
 from mcp_apps_domain import rewrite_ui_domains as mcp_apps_rewrite_ui_domains
+from mcp_apps_domain import trusted_connector_url as mcp_apps_trusted_connector_url
 from metrics_middleware import add_auth_metrics_middleware
 from starlette.background import BackgroundTask
 
@@ -1046,6 +1045,13 @@ def _attach_mcp_proxy_token(
             obo_subject_sha256=obo_subject_sha256,
             version_id=version_id,
             virtual_backend=virtual_backend,
+            connector_url=(
+                mcp_apps_trusted_connector_url(
+                    request.headers, settings.auth_server_nginx_marker_secret
+                )
+                if route_mode == "direct"
+                else ""
+            ),
         )
     except ValueError as exc:
         logger.error(f"/validate: could not mint mcp-proxy token: {exc}")
@@ -2211,6 +2217,7 @@ _SENSITIVE_HEADER_SUBSTRINGS: tuple[str, ...] = (
     "token",
     "secret",
     "credential",
+    "x-mcp-connector-",
     "password",
     "api-key",
     "apikey",
@@ -8421,6 +8428,7 @@ _PROXY_CONTEXT_HEADERS: frozenset[str] = frozenset(
         "x-forwarded-prefix",
         "x-original-uri",
         "x-original-url",
+        "x-mcp-connector-url",
     }
 )
 
@@ -8444,6 +8452,7 @@ _INTERNAL_HOP_TOKEN_HEADERS: frozenset[str] = frozenset(
         "x-internal-token",
         "x-internal-token-generic",
         "x-internal-token-registry",
+        "x-mcp-connector-binding",
     }
 )
 
@@ -10581,8 +10590,7 @@ async def mcp_proxy(
         body_bytes = _rewrite_mcp_apps_ui_domain(
             body_bytes,
             is_sse_response,
-            server_name,
-            request.url.query,
+            claims.get("connector_url", ""),
         )
 
     if not should_filter:
@@ -10670,37 +10678,31 @@ def _should_rewrite_mcp_apps_ui_domain(
 def _rewrite_mcp_apps_ui_domain(
     body_bytes: bytes,
     is_sse: bool,
-    route_path: str,
-    query: str,
+    connector_url: str,
 ) -> bytes:
     """Point a resources/read page's Claude ui.domain at the gateway URL.
 
-    Returns the body unchanged when no public gateway URL is configured or the
-    reply has no Claude-format ui.domain. See auth_server/mcp_apps_domain.py.
+    Returns the body unchanged without an exact, trusted public connector URL
+    bound into the proxy token, or when the reply has no Claude-format ui.domain.
 
     Args:
         body_bytes: The upstream reply body.
         is_sse: True when the reply is text/event-stream.
-        route_path: The path after the gateway origin, as nginx forwarded it.
-        query: The request's query string.
+        connector_url: Exact public URL from the selecting nginx location.
 
     Returns:
         The body to forward.
     """
-    origins = mcp_apps_gateway_public_origins()
-    if not origins:
+    if not connector_url:
         return body_bytes
-    urls = [mcp_apps_connector_url(origin, route_path, query) for origin in origins]
-    keep_domains = frozenset(mcp_apps_claude_ui_domain(url) for url in urls)
     rewritten = mcp_apps_rewrite_ui_domains(
         body_bytes,
         is_sse,
-        mcp_apps_claude_ui_domain(urls[0]),
-        keep_domains,
+        mcp_apps_claude_ui_domain(connector_url),
     )
     if rewritten is None:
         return body_bytes
-    logger.info(f"mcp_proxy: rewrote MCP Apps ui.domain for {redact_url(urls[0])}")
+    logger.info("mcp_proxy: rewrote MCP Apps ui.domain for %s", redact_url(connector_url))
     return rewritten
 
 

@@ -16,8 +16,10 @@ https://claude.com/docs/connectors/building/mcp-apps/troubleshooting
 import hashlib
 import json
 import logging
-import os
+import secrets
+from collections.abc import Mapping
 from typing import Any
+from urllib.parse import urlsplit
 
 from registry.common.request_origin import origin_of_url
 
@@ -25,15 +27,10 @@ logger = logging.getLogger(__name__)
 
 CLAUDE_UI_DOMAIN_SUFFIX: str = ".claudemcpcontent.com"
 CLAUDE_UI_DOMAIN_HASH_CHARS: int = 32
-# Deployment settings that may hold the gateway's public URL, in order of
-# preference. Never the request's Host or forwarded headers. REGISTRY_URL comes
-# first: MCP routes are served by nginx on the registry's host, while
-# AUTH_SERVER_EXTERNAL_URL can name the auth server itself (the .env.example
-# default is http://localhost:8888). server.py's _GATEWAY_ORIGIN_URL_ENV_VARS
-# lists the same two for a different purpose (trusted origins, where order
-# does not matter), so it is not reused here. settings.registry_url is not
-# used: on the auth server it can be the internal cluster URL.
-GATEWAY_PUBLIC_URL_ENV_VARS: tuple[str, ...] = ("REGISTRY_URL", "AUTH_SERVER_EXTERNAL_URL")
+# Only current nginx templates set this marker and replace the URL header.
+# The ordinary validation marker alone cannot authenticate these newer fields.
+CONNECTOR_BINDING_HEADER: str = "X-Mcp-Connector-Binding"
+CONNECTOR_URL_HEADER: str = "X-Mcp-Connector-URL"
 RESOURCES_READ_METHOD: str = "resources/read"
 SSE_DATA_PREFIX: str = "data:"
 
@@ -41,15 +38,12 @@ SSE_DATA_PREFIX: str = "data:"
 def _rewrite_payload(
     payload: Any,
     new_domain: str,
-    keep_domains: frozenset[str],
 ) -> int:
     """Replace Claude-format ui.domain values in one JSON-RPC reply, in place.
 
     Args:
         payload: A decoded JSON-RPC reply.
         new_domain: The domain Claude expects for the gateway URL.
-        keep_domains: Values already right for one of the gateway's configured
-            URLs. A backend that already emits one of these is left alone.
 
     Returns:
         How many values were replaced.
@@ -64,14 +58,13 @@ def _rewrite_payload(
         return 0
     replaced = 0
     for item in contents:
-        replaced += _rewrite_content_item(item, new_domain, keep_domains)
+        replaced += _rewrite_content_item(item, new_domain)
     return replaced
 
 
 def _rewrite_content_item(
     item: Any,
     new_domain: str,
-    keep_domains: frozenset[str],
 ) -> int:
     """Replace one resource item's ui.domain when it is in Claude's format."""
     if not isinstance(item, dict):
@@ -85,7 +78,7 @@ def _rewrite_content_item(
     domain = ui.get("domain")
     if not isinstance(domain, str) or not domain.endswith(CLAUDE_UI_DOMAIN_SUFFIX):
         return 0
-    if domain == new_domain or domain in keep_domains:
+    if domain == new_domain:
         return 0
     ui["domain"] = new_domain
     return 1
@@ -94,11 +87,10 @@ def _rewrite_content_item(
 def _rewrite_json_body(
     body_text: str,
     new_domain: str,
-    keep_domains: frozenset[str],
 ) -> str | None:
     """Rewrite a plain JSON reply. Returns None when nothing changed."""
     payload = json.loads(body_text)
-    if _rewrite_payload(payload, new_domain, keep_domains) == 0:
+    if _rewrite_payload(payload, new_domain) == 0:
         return None
     return json.dumps(payload)
 
@@ -106,7 +98,6 @@ def _rewrite_json_body(
 def _rewrite_sse_body(
     body_text: str,
     new_domain: str,
-    keep_domains: frozenset[str],
 ) -> str | None:
     """Rewrite each SSE data line that carries a reply. Returns None when nothing changed.
 
@@ -130,7 +121,7 @@ def _rewrite_sse_body(
         except json.JSONDecodeError:
             out.append(line)
             continue
-        count = _rewrite_payload(payload, new_domain, keep_domains)
+        count = _rewrite_payload(payload, new_domain)
         if count == 0:
             out.append(line)
             continue
@@ -142,43 +133,29 @@ def _rewrite_sse_body(
     return "\n".join(out)
 
 
-def gateway_public_origins() -> list[str]:
-    """Return the gateway's configured public origins, most preferred first.
-
-    Returns:
-        Distinct origins such as "https://gateway.example.com". Empty when
-        neither setting holds an absolute http or https URL.
-    """
-    origins: list[str] = []
-    for name in GATEWAY_PUBLIC_URL_ENV_VARS:
-        origin = origin_of_url(os.environ.get(name, ""))
-        if origin and origin not in origins:
-            origins.append(origin)
-    return origins
-
-
-def connector_url(
-    origin: str,
-    route_path: str,
-    query: str = "",
+def trusted_connector_url(
+    headers: Mapping[str, str],
+    marker_secret: str,
 ) -> str:
-    """Rebuild the URL the client connected to, as Claude hashes it.
+    """Read the exact public URL asserted by the selecting nginx location.
 
-    Claude hashes the exact string, so a trailing slash or a query string
-    changes the result and is kept as the client sent it.
-
-    Args:
-        origin: The gateway's public origin.
-        route_path: The path after the gateway origin, as nginx forwarded it
-            (for example "github/mcp").
-        query: The request's query string, without the "?".
-
-    Returns:
-        The full connector URL.
+    The location joins its configured public origin with the original request
+    URI before nginx rewrites the internal proxy path. Missing or old templates
+    leave the page unchanged rather than guessing a connector URL.
     """
-    url = f"{origin.rstrip('/')}/{route_path.lstrip('/')}"
-    if query:
-        url = f"{url}?{query}"
+    supplied_marker = headers.get(CONNECTOR_BINDING_HEADER, "")
+    if not marker_secret or not secrets.compare_digest(
+        supplied_marker.encode("utf-8"), marker_secret.encode("utf-8")
+    ):
+        return ""
+    url = headers.get(CONNECTOR_URL_HEADER, "")
+    if not url or any(ord(char) <= 32 or ord(char) == 127 for char in url):
+        return ""
+    if not origin_of_url(url):
+        return ""
+    parsed = urlsplit(url)
+    if parsed.fragment or "#" in url or not parsed.path.startswith("/"):
+        return ""
     return url
 
 
@@ -194,7 +171,6 @@ def rewrite_ui_domains(
     body_bytes: bytes,
     is_sse: bool,
     new_domain: str,
-    keep_domains: frozenset[str] = frozenset(),
 ) -> bytes | None:
     """Rewrite Claude-format ui.domain values in a resources/read reply.
 
@@ -206,8 +182,6 @@ def rewrite_ui_domains(
         body_bytes: The upstream reply body.
         is_sse: True when the reply is text/event-stream.
         new_domain: The domain Claude expects for the gateway URL.
-        keep_domains: Values already right for another configured gateway URL;
-            a backend value in this set is not replaced.
 
     Returns:
         The rewritten body, or None when nothing was rewritten.
@@ -215,9 +189,9 @@ def rewrite_ui_domains(
     try:
         body_text = body_bytes.decode("utf-8")
         if is_sse:
-            rewritten = _rewrite_sse_body(body_text, new_domain, keep_domains)
+            rewritten = _rewrite_sse_body(body_text, new_domain)
         else:
-            rewritten = _rewrite_json_body(body_text, new_domain, keep_domains)
+            rewritten = _rewrite_json_body(body_text, new_domain)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         logger.warning(f"MCP Apps ui.domain rewrite skipped: reply is not readable ({exc})")
         return None

@@ -79,12 +79,17 @@ A virtual server does not support MCP Apps yet:
 
 A page can set `_meta.ui.domain` to get a stable sandbox origin. Claude accepts only `<hash>.claudemcpcontent.com`, where `<hash>` is the first 32 hex characters of the SHA-256 of the connector URL ([Claude's troubleshooting guide](https://claude.com/docs/connectors/building/mcp-apps/troubleshooting)). A backend computes the value from its own URL, but behind the gateway the user connects to the gateway's URL, so Claude would refuse the page with "There was a problem displaying content".
 
-On direct routes the gateway fixes this. When a `resources/read` reply carries a `ui.domain` ending in `.claudemcpcontent.com`, the auth server's proxy replaces it with the value for the URL the client connected to: the gateway's public origin, then the route path as nginx forwarded it (a trailing slash counts), then any query string. Values in any other format are left alone, and so is every other method. If the reply cannot be parsed, it is forwarded unchanged.
+For direct MCP routes, nginx joins the registry's configured public `REGISTRY_URL` origin with the exact request URI.
+The auth server signs this connector URL into the internal hop token and uses it to rewrite `resources/read` replies with a `.claudemcpcontent.com` domain.
+The URL keeps bare paths, trailing slashes, `ROOT_PATH` prefixes, escaped bytes, and query strings as sent.
+The registry's `REGISTRY_URL` must name the public origin; an internal registry service URL on the auth server does not select this origin.
 
-The public origin comes from configuration, never from request headers: `REGISTRY_URL`, then `AUTH_SERVER_EXTERNAL_URL`. If neither is set, the gateway does not rewrite the value. A backend value that already matches either configured origin is left alone. Only direct routes are rewritten; on a virtual server the client connected to the virtual URL. Two cases are not covered:
-
-- A deployment reachable under more than one host name: the value matches `REGISTRY_URL` (or `AUTH_SERVER_EXTERNAL_URL` when `REGISTRY_URL` is unset) only.
-- A deployment that serves MCP routes under a path prefix: the origin drops the path, so the hash does not match.
+Client-supplied Host or connector headers cannot select the URL.
+The proxy requires the new nginx binding marker before signing a connector URL, so deploy the updated templates and regenerate nginx configuration with the auth-server change.
+The auth server masks the connector binding and connector URL headers in debug logs. If you ran an earlier build that logged these headers, rotate the nginx marker secret and review access to those logs.
+With an old template or no trusted connector claim, the backend reply stays unchanged.
+Virtual routes, other domain formats, other MCP methods, and unparseable replies remain unchanged.
+Additional public hostnames use the configured canonical origin, and a backend domain matching that exact connector URL needs no rewrite.
 
 Claude keeps a copy of each page it has fetched. A user who saw "There was a problem displaying content" before this rewrite was deployed may keep seeing it, because Claude shows the stored copy without asking the gateway for the page again. To make Claude fetch a fresh copy, remove the connector and add it again, and if that is not enough, add it under a URL Claude has not seen, for example with `?v=2` appended. The auth-server log line `mcp_proxy: rewrote MCP Apps ui.domain` confirms that a fresh copy went out.
 

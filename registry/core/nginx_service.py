@@ -17,6 +17,7 @@ import httpx
 from registry.auth.proxied_token import _api_auth_request_enabled
 from registry.auth.resource_binding import INVALID_VERSION_SENTINEL
 from registry.common.log_redaction import redact_url
+from registry.common.request_origin import origin_of_url
 from registry.constants import (
     REGISTRY_CONSTANTS,
     RESERVED_CUSTOM_HEADER_NAMES,
@@ -2732,6 +2733,8 @@ class NginxConfigService:
         proxy_set_header X-Resolved-Upstream $backend_url;
         proxy_set_header X-Validate-Source-Secret "{self._sanitize_for_nginx_set(settings.auth_server_nginx_marker_secret)}";
         proxy_set_header X-Validate-Binding-Secret "{self._sanitize_for_nginx_set(settings.auth_server_nginx_marker_secret)}";
+        proxy_set_header X-Mcp-Connector-Binding "";
+        proxy_set_header X-Mcp-Connector-URL "";
         proxy_set_header X-Body $http_x_body;
         proxy_set_header X-Body-Uninspectable $http_x_body_uninspectable;
         proxy_set_header X-Registry-Api-Auth "";
@@ -2768,6 +2771,8 @@ class NginxConfigService:
         proxy_set_header X-Internal-Token $http_x_internal_token;
         proxy_set_header X-Registered-Server-Path "{safe_backend_path}";
         proxy_set_header X-Registered-Route-Mode "virtual";
+        proxy_set_header X-Mcp-Connector-Binding "";
+        proxy_set_header X-Mcp-Connector-URL "";
         proxy_set_header X-Upstream-Url "";
         proxy_set_header X-User $http_x_user;
         proxy_set_header X-Username $http_x_username;
@@ -3406,6 +3411,15 @@ class NginxConfigService:
         # escaping here means legacy data persisted before validation existed
         # still cannot break out of a quoted directive context.
         safe_registered_path = self._sanitize_for_nginx_set(path.rstrip("/"))
+        # The registry's URL is public on every deployment surface; the auth
+        # server's REGISTRY_URL may instead name an internal Helm service.
+        connector_value = ""
+        if origin_of_url(settings.registry_url):
+            public_url = urlparse(settings.registry_url)
+            public_origin = self._sanitize_for_nginx_set(
+                f"{public_url.scheme}://{public_url.netloc}"
+            )
+            connector_value = f"{public_origin}$request_uri"
 
         # For servers that need a per-server PRM (obo_exchange on any provider,
         # oauth_user on Entra only -- see server_needs_per_server_prm), the 401
@@ -3526,6 +3540,8 @@ class NginxConfigService:
         # client-supplied registered-resource or route-mode headers.
         set $registered_server_path "{safe_registered_path}";
         set $registered_route_mode "direct";
+        # $request_uri retains ROOT_PATH, escapes, a bare path and its query.
+        set $mcp_connector_url "{connector_value}";
 
         # Authenticate request - pass entire request to auth server
         auth_request /validate;
@@ -3587,6 +3603,8 @@ class NginxConfigService:
         proxy_set_header X-Internal-Token $auth_internal_token;
         proxy_set_header X-Registered-Server-Path "{safe_registered_path}";
         proxy_set_header X-Registered-Route-Mode "direct";
+        proxy_set_header X-Mcp-Connector-Binding "";
+        proxy_set_header X-Mcp-Connector-URL "";
 
         # Pass all original client headers
         proxy_pass_request_headers on;

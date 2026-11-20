@@ -1066,51 +1066,29 @@ class TestGenerateVirtualBackendLocations:
 
     @pytest.mark.asyncio
     async def test_plain_backend_clears_every_reserved_header(self, mock_server_repository):
-        """Every reserved header except framing and re-set identity is cleared."""
+        """The plain backend clears reserved headers except framing and trusted identity."""
+        from registry.constants import RESERVED_CUSTOM_HEADER_NAMES
+        from registry.core.nginx_service import (
+            _VS_BACKEND_FRAMING_HEADERS,
+            _VS_BACKEND_RESET_IDENTITY_HEADERS,
+            NginxConfigService,
+        )
+
         mock_server_repository.get.return_value = {
             "is_enabled": True,
             "proxy_pass_url": "https://backend.example.com/mcp",
+            "egress_auth_mode": "none",
         }
-        from registry.core.nginx_service import NginxConfigService
 
         result = await NginxConfigService()._generate_virtual_backend_locations([_make_vs_config()])
         block = _location_block(result, "/_vs_backend_github")
 
         cleared = {name.lower() for name in re.findall(r'proxy_set_header (\S+) "";', block)}
-        assert cleared == {
-            "authorization",
-            "x-authorization",
-            "proxy-authorization",
-            "cookie",
-            "set-cookie",
-            "x-forwarded-for",
-            "x-forwarded-proto",
-            "x-forwarded-host",
-            "x-real-ip",
-            "x-scopes",
-            "x-auth-method",
-            "x-groups",
-            "x-client-id",
-            "x-user-pool-id",
-            "x-region",
-            "x-original-url",
-            "x-server-name",
-            "x-tool-name",
-            "x-entity-path",
-            "x-original-method",
-            "x-internal-token",
-            "x-internal-token-generic",
-            "x-internal-token-registry",
-            "x-generic-proxy-kind",
-            "x-generic-streaming",
-            "x-generic-has-upstream-auth",
-            "x-resolved-upstream",
-            "x-resolved-generic-upstream",
-            "x-upstream-url",
-            "x-body",
-            "x-body-uninspectable",
-        }
-        # Identity is re-set from the validated values, never cleared or passed through.
+        assert cleared == (
+            RESERVED_CUSTOM_HEADER_NAMES
+            - _VS_BACKEND_FRAMING_HEADERS
+            - _VS_BACKEND_RESET_IDENTITY_HEADERS
+        )
         assert "proxy_set_header X-User $http_x_user;" in block
         assert "proxy_set_header X-Username $http_x_username;" in block
 
