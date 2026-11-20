@@ -10,6 +10,7 @@ ENV PYTHONUNBUFFERED=1 \
 # apt-get upgrade pulls in security patches against the base image's
 # already-installed packages (e.g. libc6 / glibc CVE updates) that would
 # otherwise stay at whatever version was baked into python:3.14-slim.
+ARG APT_CACHE_EPOCH
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     build-essential \
     git \
@@ -47,6 +48,7 @@ RUN echo 'precedence ::ffff:0:0/96  100' >> /etc/gai.conf
 # apt-get upgrade pulls in security patches against the base image's
 # already-installed packages (e.g. libc6 / glibc CVE updates) that would
 # otherwise stay at whatever version was baked into python:3.14-slim.
+ARG APT_CACHE_EPOCH
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
