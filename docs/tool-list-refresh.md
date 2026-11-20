@@ -66,7 +66,7 @@ Tool refresh on: every 3 health cycles (at least 900s), at most 5 concurrent fet
 
 The period is a lower bound. The registry sleeps `HEALTH_CHECK_INTERVAL_SECONDS` after each round of checks finishes, so a cycle lasts the interval plus however long the checks took. On a Compose stack with about 60 servers and a 30 s interval, one cycle took about 44 s, so 3 cycles came to about 2 minutes 15 seconds.
 
-Turning refresh on also changes how virtual servers answer `tools/list`. The virtual router answers each backing server from this stored copy instead of asking the backend on every connect, so a virtual server with many backends answers in well under a second. Backends with egress authentication are still asked live. See [How a Virtual Server Answers Discovery](virtual-server-operations.md#how-a-virtual-server-answers-discovery).
+Turning refresh on also changes how virtual servers answer `tools/list`. The virtual router answers each backing server from this stored copy instead of asking the backend on every connect, so a virtual server with many backends answers in well under a second. Backends with egress authentication, and backends with an MCP App tool, are still asked live. See [How a Virtual Server Answers Discovery](virtual-server-operations.md#how-a-virtual-server-answers-discovery).
 
 The registry does not listen for the MCP `notifications/tools/list_changed` message. It keeps no open connection to a server, and the 2026-07-28 revision of MCP moves change notifications to `subscriptions/listen`, which the gateway does not support yet (see [MCP 2026-07-28 migration](mcp-2026-07-28-migration.md)).
 

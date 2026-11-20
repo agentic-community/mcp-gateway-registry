@@ -23,7 +23,10 @@ from registry.constants import (
     DeploymentType,
     HealthStatus,
 )
-from registry.core.mcp_apps import stored_ui_resource_uri
+from registry.core.mcp_apps import (
+    count_mcp_app_tools,
+    stored_ui_resource_uri,
+)
 from registry.egress_auth.upstream_binding import registered_versions, selected_upstream
 from registry.exceptions import UrlValidationError
 from registry.schemas.proxy_mixin import _assert_egress_allowed, build_proxy_client_path
@@ -2948,11 +2951,14 @@ class NginxConfigService:
                             "egress_auth_mode": egress_mode,
                             # The router always discovers these backends live: an
                             # egress backend's list can depend on the user's
-                            # credential, and the bundled registry tools filter
-                            # their list per caller (issue #2079).
+                            # credential, the bundled registry tools filter their
+                            # list per caller (issue #2079), and an MCP App
+                            # backend's tools carry _meta (the ui:// page) and
+                            # execution, which the stored tool list does not keep.
                             "live_discovery": _virtual_backend_uses_mcp_proxy(
                                 egress_mode, base_path, server_info.get("proxy_pass_url")
-                            ),
+                            )
+                            or count_mcp_app_tools(server_info.get("tool_list")) > 0,
                             # Only backends with an MCP App tool are asked for
                             # resources, since only their pages are advertised.
                             "mcp_app": is_mcp_app_tool,
