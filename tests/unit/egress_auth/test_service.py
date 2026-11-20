@@ -1457,6 +1457,22 @@ class TestDeadRefreshAfterRotation:
         assert await self._vend(svc, egress_oauth) == "at_rotated"
         assert store._data[_KEY] == _rotated()
 
+    async def test_does_not_vend_a_rotated_entry_bound_to_another_client(
+        self, svc, egress_oauth, monkeypatch
+    ):
+        svc._store._data[_KEY] = _expired("rt_old")
+        rebound = _rotated().model_copy(update={"client_id": "another-client"})
+
+        async def rotated_elsewhere(cfg, data, headers):
+            svc._store._data[_KEY] = rebound
+            raise oauth_engine.DeadRefreshTokenError("invalid_grant")
+
+        monkeypatch.setattr(oauth_engine, "_post_token", rotated_elsewhere)
+
+        assert await self._vend(svc, egress_oauth) is None
+        # the entry another consent wrote is left as it is, not marked failed
+        assert svc._store._data[_KEY] == rebound
+
     async def test_marks_failed_when_the_entry_still_holds_the_rejected_token(
         self, svc, egress_oauth, monkeypatch
     ):
