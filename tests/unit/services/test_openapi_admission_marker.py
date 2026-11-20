@@ -8,6 +8,7 @@ another name must never get one.
 
 from types import SimpleNamespace
 from unittest.mock import (
+    AsyncMock,
     MagicMock,
     patch,
 )
@@ -157,3 +158,36 @@ class TestRegistryProbes:
 
     def test_scanner_shim_turns_the_variable_into_a_header_flag(self):
         assert f"'--header',{ADMISSION_HEADER + ': '!r}" in security_scanner._SCANNER_SHIM
+
+
+class TestHealthPingFallback:
+    """The no-auth fallback ping must still prove its route.
+
+    Without the marker the hub answers 401, which the fallback counts as
+    reachable, so a hub the container does not have (404) read as healthy.
+    """
+
+    async def test_fallback_ping_carries_the_marker(self):
+        client = MagicMock()
+        client.post = AsyncMock(return_value=MagicMock(status_code=404))
+
+        reachable = await HealthMonitoringService()._try_ping_without_auth(
+            client, HUB_URL, _managed()
+        )
+
+        assert (client.post.call_args.kwargs["headers"][ADMISSION_HEADER], reachable) == (
+            MARKER,
+            False,
+        )
+
+    async def test_fallback_ping_for_an_ordinary_server_carries_none(self):
+        client = MagicMock()
+        client.post = AsyncMock(return_value=MagicMock(status_code=200))
+
+        await HealthMonitoringService()._try_ping_without_auth(
+            client,
+            "https://example.com/mcp",
+            {"path": "/x", "proxy_pass_url": "https://example.com/mcp"},
+        )
+
+        assert ADMISSION_HEADER not in client.post.call_args.kwargs["headers"]
