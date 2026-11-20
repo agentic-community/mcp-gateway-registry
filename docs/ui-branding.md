@@ -38,7 +38,7 @@ File names must start with a letter or digit and contain only letters, digits, `
 | `logo.alt` | Alt text for the logo. Leave it out when the logo only repeats the UI title next to it. |
 | `favicon` | Browser tab icon, as a file name in the folder. |
 | `themeColor` | Hex color of the browser's address bar and title bar on mobile, per mode. |
-| `defaultMode` | `light`, `dark` or `system`. Applies until a user picks a mode in the Appearance menu. |
+| `defaultMode` | `light`, `dark` or `system`. Applies until a user picks Light, Dark or System in the Appearance menu. System follows live OS changes and overrides this default across reloads. |
 | `lockMode` | `light` or `dark` forces that mode and hides the mode choices. `null` (the default) leaves the choice to the user. |
 | `themes` | Up to 8 named themes the Appearance menu offers next to Default. An `id` uses lowercase letters, digits and `-`, starts with a letter, is at most 32 characters, and is not `default`, `light`, `dark` or `high-contrast`. A `label` is at most 40 characters. |
 | `defaultTheme` | `default`, or one of the theme ids. Applies until a user picks a theme. |
@@ -196,7 +196,13 @@ ECS has no ConfigMaps, so you pass the folder as a base64-encoded `.tar.gz` in t
 tar -czf - -C ./branding . | base64 | tr -d '\n'
 ```
 
-The archive must contain only regular files at its top level, at most 32 of them and at most 2 MiB uncompressed. macOS metadata entries (`._*`, `.DS_Store`) are skipped, but every entry counts toward a limit of 128 entries in total. The decoded archive and the tar stream inside it are each limited to 4 MiB. Any other problem stops the container at startup with a message that says what to fix. Changing the archive takes a new task deployment. You can set `UI_BRANDING_ARCHIVE_B64` on other surfaces too, but not together with a mounted folder: the container refuses to start when both are present.
+The archive must contain only regular files at its top level, at most 32 of them and at most 2 MiB uncompressed. The writer skips macOS metadata entries (`._*`, `.DS_Store`), but counts every entry toward a limit of 128. The decoded archive and the tar stream inside it are each limited to 4 MiB. Invalid input stops the container before it writes any files.
+
+The writer records file names and SHA-256 hashes in `.branding-archive.json`, with mode `0600`, before publishing complete assets with mode `0644`. Restarting with the same files and contents verifies existing assets without replacing them and restores missing files after an interrupted startup. A directory lock serializes writers. Keep the marker with the assets; it is a local ownership record, not a signature.
+
+Archive extraction requires a writable folder owned by the registry user, with no group or other write access. The writer refuses symlinked destinations, untrusted writable ancestors, modified files and extra visible files. It leaves those files untouched and stops startup. Hidden files such as `.gitkeep` can remain in the folder. These requirements apply to archive extraction; read-only ConfigMap and Compose mounts still work when `UI_BRANDING_ARCHIVE_B64` is unset.
+
+To change an archive's files or contents, deploy a new task with a fresh empty `UI_BRANDING_DIR`. The writer refuses to replace or remove files from a different archive, even when it owns them. Folders populated by older versions without an ownership marker also need a fresh destination. Do not remove the marker to force an update. Unsetting `UI_BRANDING_ARCHIVE_B64` skips extraction and leaves existing files in place.
 
 ## Path-based routing
 

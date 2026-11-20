@@ -1,8 +1,8 @@
 """Tests for the UI branding archive writer (python -m registry.utils.branding_writer).
 
 The writer reads UI_BRANDING_ARCHIVE_B64 / UI_BRANDING_DIR from the environment,
-validates every tar member, and writes the files with mode 0o644. Any violation
-must exit non-zero and leave the target folder untouched.
+validates every tar member, and publishes complete assets with mode 0o644.
+Unverifiable existing files must remain untouched, including on restart.
 """
 
 import base64
@@ -94,7 +94,7 @@ class TestBrandingWriterSuccess:
 
         assert _run(monkeypatch, archive) == 0
 
-        assert sorted(p.name for p in target_dir.iterdir()) == [
+        assert sorted(p.name for p in target_dir.iterdir() if not p.name.startswith(".")) == [
             "Inter.woff2",
             "logo-light.svg",
             "manifest.json",
@@ -102,7 +102,8 @@ class TestBrandingWriterSuccess:
         ]
         assert (target_dir / "manifest.json").read_bytes() == b'{"version": 1}'
         for path in target_dir.iterdir():
-            assert stat.S_IMODE(path.stat().st_mode) == 0o644
+            expected_mode = 0o600 if path.name == branding_writer._OWNERSHIP_FILE else 0o644
+            assert stat.S_IMODE(path.stat().st_mode) == expected_mode
 
     def test_missing_target_dir_is_created(
         self,
@@ -114,6 +115,40 @@ class TestBrandingWriterSuccess:
 
         assert _run(monkeypatch, _archive_b64([("theme.css", b"a{}")])) == 0
         assert (folder / "theme.css").read_bytes() == b"a{}"
+
+    @pytest.mark.parametrize("replacement", ["directory", "symlink", "file"])
+    def test_concurrent_target_creation_remains_nofollow(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        replacement: str,
+    ) -> None:
+        folder = tmp_path / "branding"
+        external = tmp_path / "external"
+        external.mkdir()
+        real_mkdir = os.mkdir
+
+        def _create_after_peer(name, mode=0o777, *, dir_fd=None):
+            if name == "branding":
+                if replacement == "directory":
+                    real_mkdir(name, mode, dir_fd=dir_fd)
+                elif replacement == "symlink":
+                    os.symlink(external, name, dir_fd=dir_fd)
+                else:
+                    folder.write_bytes(b"operator file")
+            return real_mkdir(name, mode, dir_fd=dir_fd)
+
+        monkeypatch.setattr(branding_writer.os, "mkdir", _create_after_peer)
+        archive = _archive_b64([("theme.css", b"a{}")])
+        if replacement == "directory":
+            branding_writer.extract_branding_archive(archive, folder)
+            assert (folder / "theme.css").read_bytes() == b"a{}"
+        else:
+            with pytest.raises(branding_writer.BrandingArchiveError):
+                branding_writer.extract_branding_archive(archive, folder)
+            assert list(external.iterdir()) == []
+            if replacement == "file":
+                assert folder.read_bytes() == b"operator file"
 
     def test_hidden_entries_in_target_do_not_block(
         self,
@@ -134,7 +169,9 @@ class TestBrandingWriterSuccess:
         members = [(f"f{i}.png", b"\0" * per_file) for i in range(MAX_BRANDING_ARCHIVE_FILES)]
 
         assert _run(monkeypatch, _archive_b64(members)) == 0
-        assert len(list(target_dir.iterdir())) == MAX_BRANDING_ARCHIVE_FILES
+        assert {p.name for p in target_dir.iterdir() if not p.name.startswith(".")} == {
+            name for name, _ in members
+        }
 
     def test_archive_of_folder_root_is_accepted(
         self,
@@ -158,7 +195,10 @@ class TestBrandingWriterSuccess:
         archive = base64.b64encode(buffer.getvalue()).decode("ascii")
 
         assert _run(monkeypatch, archive) == 0
-        assert sorted(p.name for p in target_dir.iterdir()) == ["logo.svg", "theme.css"]
+        assert sorted(p.name for p in target_dir.iterdir() if not p.name.startswith(".")) == [
+            "logo.svg",
+            "theme.css",
+        ]
         assert (target_dir / "theme.css").read_bytes() == b"a{}"
 
     def test_dot_slash_prefixed_members_are_accepted(
@@ -175,7 +215,10 @@ class TestBrandingWriterSuccess:
         )
 
         assert _run(monkeypatch, archive) == 0
-        assert sorted(p.name for p in target_dir.iterdir()) == ["manifest.json", "theme.css"]
+        assert sorted(p.name for p in target_dir.iterdir() if not p.name.startswith(".")) == [
+            "manifest.json",
+            "theme.css",
+        ]
 
     @pytest.mark.parametrize(
         "metadata_name",
@@ -193,7 +236,7 @@ class TestBrandingWriterSuccess:
         with caplog.at_level(logging.INFO):
             assert _run(monkeypatch, archive) == 0
 
-        assert sorted(p.name for p in target_dir.iterdir()) == ["logo.svg"]
+        assert (target_dir / "logo.svg").read_bytes() == b"<svg/>"
         skip_logs = [r.getMessage() for r in caplog.records if "skipped" in r.getMessage()]
         assert skip_logs == ["Branding: skipped 1 archive root and macOS metadata entries"]
 
@@ -219,7 +262,73 @@ class TestBrandingWriterSuccess:
         padded = raw + b"\0" * (10240 - len(raw))
 
         assert _run(monkeypatch, base64.b64encode(padded).decode("ascii")) == 0
-        assert sorted(p.name for p in target_dir.iterdir()) == ["logo.svg", "theme.css"]
+        assert (target_dir / "logo.svg").read_bytes() == b"<svg/>"
+        assert (target_dir / "theme.css").read_bytes() == b"a{}"
+
+    def test_same_archive_restart_verifies_output_and_recovers_missing_files(
+        self,
+        target_dir: Path,
+    ) -> None:
+        archive = _archive_b64([("manifest.json", b"{}"), ("theme.css", b"a{}")])
+        assert branding_writer.extract_branding_archive(archive, target_dir) == [
+            "manifest.json",
+            "theme.css",
+        ]
+        original_inode = (target_dir / "theme.css").stat().st_ino
+        branding_writer.extract_branding_archive(archive, target_dir)
+        assert (target_dir / "theme.css").stat().st_ino == original_inode
+        (target_dir / "manifest.json").unlink()
+        branding_writer.extract_branding_archive(archive, target_dir)
+        assert (target_dir / "manifest.json").read_bytes() == b"{}"
+        assert (target_dir / "theme.css").read_bytes() == b"a{}"
+
+    def test_interrupted_publication_resumes_without_partial_visible_files(
+        self,
+        target_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        archive = _archive_b64([("manifest.json", b"{}"), ("theme.css", b"a{}")])
+        link = os.link
+
+        def stop_before_asset_link(
+            src: str,
+            dst: str,
+            *,
+            src_dir_fd: int,
+            dst_dir_fd: int,
+            follow_symlinks: bool,
+        ) -> None:
+            if dst == "theme.css":
+                raise OSError("interrupted publication")
+            link(
+                src,
+                dst,
+                src_dir_fd=src_dir_fd,
+                dst_dir_fd=dst_dir_fd,
+                follow_symlinks=follow_symlinks,
+            )
+
+        with monkeypatch.context() as patch:
+            patch.setattr(branding_writer.os, "link", stop_before_asset_link)
+            with pytest.raises(branding_writer.BrandingArchiveError):
+                branding_writer.extract_branding_archive(archive, target_dir)
+        assert (target_dir / "manifest.json").read_bytes() == b"{}"
+        assert not (target_dir / "theme.css").exists()
+        branding_writer.extract_branding_archive(archive, target_dir)
+        assert (target_dir / "theme.css").read_bytes() == b"a{}"
+
+    @pytest.mark.parametrize("name", [".branding-archive.json", "theme.css"])
+    def test_interrupted_link_cleanup_is_recovered(
+        self,
+        target_dir: Path,
+        name: str,
+    ) -> None:
+        archive = _archive_b64([("theme.css", b"a{}")])
+        branding_writer.extract_branding_archive(archive, target_dir)
+        temporary = target_dir / ".branding-write-0123456789abcdef0123456789abcdef"
+        os.link(target_dir / name, temporary)
+        branding_writer.extract_branding_archive(archive, target_dir)
+        assert not temporary.exists()
         assert (target_dir / "theme.css").read_bytes() == b"a{}"
 
 
@@ -379,7 +488,7 @@ class TestBrandingWriterRejects:
         members += [(f"._f{i}.css", b"") for i in range(MAX_BRANDING_ARCHIVE_ENTRIES - 1)]
 
         assert _run(monkeypatch, _archive_b64(members)) == 0
-        assert [p.name for p in target_dir.iterdir()] == ["logo.svg"]
+        assert (target_dir / "logo.svg").read_bytes() == b"<svg/>"
 
     def test_rejects_gzip_bomb_before_parsing(
         self,
@@ -505,3 +614,139 @@ class TestBrandingWriterRejects:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         assert _run(monkeypatch, _archive_b64([])) != 0
+
+    def test_changed_archive_requires_an_explicit_empty_destination(
+        self,
+        target_dir: Path,
+    ) -> None:
+        original = _archive_b64([("theme.css", b"old{}"), ("old-logo.svg", b"<svg/>")])
+        updated = _archive_b64([("theme.css", b"new{}")])
+        branding_writer.extract_branding_archive(original, target_dir)
+        with pytest.raises(branding_writer.BrandingArchiveError, match="new empty"):
+            branding_writer.extract_branding_archive(updated, target_dir)
+        assert (target_dir / "theme.css").read_bytes() == b"old{}"
+        assert (target_dir / "old-logo.svg").read_bytes() == b"<svg/>"
+        replacement = target_dir.parent / "replacement"
+        branding_writer.extract_branding_archive(updated, replacement)
+        assert (replacement / "theme.css").read_bytes() == b"new{}"
+        assert not (replacement / "old-logo.svg").exists()
+
+    @pytest.mark.parametrize("kind", ["modified", "symlink", "hardlink", "extra", "marker"])
+    def test_restart_refuses_unverifiable_ownership_without_repairing_other_files(
+        self,
+        target_dir: Path,
+        kind: str,
+    ) -> None:
+        archive = _archive_b64([("theme.css", b"a{}"), ("manifest.json", b"{}")])
+        branding_writer.extract_branding_archive(archive, target_dir)
+        (target_dir / "manifest.json").unlink()
+        external = target_dir.parent / "external.css"
+        external.write_bytes(b"a{}")
+        if kind == "modified":
+            (target_dir / "theme.css").write_bytes(b"changed{}")
+        elif kind == "symlink":
+            (target_dir / "theme.css").unlink()
+            (target_dir / "theme.css").symlink_to(external)
+        elif kind == "hardlink":
+            (target_dir / "theme.css").unlink()
+            os.link(external, target_dir / "theme.css")
+        elif kind == "extra":
+            (target_dir / "mounted.svg").write_bytes(b"<svg/>")
+        else:
+            (target_dir / branding_writer._OWNERSHIP_FILE).write_bytes(b"not json")
+        with pytest.raises(branding_writer.BrandingArchiveError):
+            branding_writer.extract_branding_archive(archive, target_dir)
+        assert not (target_dir / "manifest.json").exists()
+        assert external.read_bytes() == b"a{}"
+
+    def test_refuses_symlinked_output_directory(
+        self,
+        target_dir: Path,
+    ) -> None:
+        linked = target_dir.parent / "linked"
+        linked.symlink_to(target_dir, target_is_directory=True)
+        with pytest.raises(branding_writer.BrandingArchiveError):
+            branding_writer.extract_branding_archive(_archive_b64([("theme.css", b"a{}")]), linked)
+        assert list(target_dir.iterdir()) == []
+
+    def test_refuses_symlinked_ownership_marker(
+        self,
+        target_dir: Path,
+    ) -> None:
+        archive = _archive_b64([("theme.css", b"a{}")])
+        branding_writer.extract_branding_archive(archive, target_dir)
+        marker = target_dir / branding_writer._OWNERSHIP_FILE
+        external = target_dir.parent / "marker.json"
+        marker.rename(external)
+        marker.symlink_to(external)
+        with pytest.raises(branding_writer.BrandingArchiveError):
+            branding_writer.extract_branding_archive(archive, target_dir)
+        assert marker.is_symlink()
+        assert (target_dir / "theme.css").read_bytes() == b"a{}"
+
+    def test_refuses_symlinked_ancestor_before_creating_output(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        external = tmp_path / "external"
+        external.mkdir()
+        link = tmp_path / "linked"
+        link.symlink_to(external, target_is_directory=True)
+        with pytest.raises(branding_writer.BrandingArchiveError):
+            branding_writer.extract_branding_archive(
+                _archive_b64([("theme.css", b"a{}")]), link / "new" / "branding"
+            )
+        assert list(external.iterdir()) == []
+
+    def test_refuses_shared_ancestor_before_creating_output(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        shared = tmp_path / "shared"
+        shared.mkdir()
+        shared.chmod(0o777)
+        try:
+            with pytest.raises(branding_writer.BrandingArchiveError):
+                branding_writer.extract_branding_archive(
+                    _archive_b64([("theme.css", b"a{}")]), shared / "new" / "branding"
+                )
+            assert list(shared.iterdir()) == []
+        finally:
+            shared.chmod(0o700)
+
+    @pytest.mark.parametrize("name", [".branding-archive.json", "theme.css"])
+    def test_refuses_shared_writable_owned_files_before_restoring_missing_assets(
+        self,
+        target_dir: Path,
+        name: str,
+    ) -> None:
+        archive = _archive_b64([("theme.css", b"a{}"), ("manifest.json", b"{}")])
+        branding_writer.extract_branding_archive(archive, target_dir)
+        (target_dir / "manifest.json").unlink()
+        path = target_dir / name
+        original = path.read_bytes()
+        path.chmod(0o666)
+
+        with pytest.raises(branding_writer.BrandingArchiveError):
+            branding_writer.extract_branding_archive(archive, target_dir)
+
+        assert path.read_bytes() == original
+        assert not (target_dir / "manifest.json").exists()
+
+    def test_refuses_oversized_ownership_record_before_restoring_missing_assets(
+        self,
+        target_dir: Path,
+    ) -> None:
+        archive = _archive_b64([("theme.css", b"a{}")])
+        branding_writer.extract_branding_archive(archive, target_dir)
+        (target_dir / "theme.css").unlink()
+        marker = target_dir / branding_writer._OWNERSHIP_FILE
+        original = marker.read_bytes()
+        oversized = original + b" " * (branding_writer._OWNERSHIP_MAX_BYTES + 1 - len(original))
+        marker.write_bytes(oversized)
+
+        with pytest.raises(branding_writer.BrandingArchiveError):
+            branding_writer.extract_branding_archive(archive, target_dir)
+
+        assert marker.read_bytes() == oversized
+        assert not (target_dir / "theme.css").exists()
