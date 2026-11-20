@@ -1597,6 +1597,51 @@ class TestMappingDiscoveryFlags:
         assert egress["tools"][0]["live_discovery"] is True
 
     @pytest.mark.asyncio
+    async def test_live_discovery_marks_mcp_app_backends(
+        self,
+        mock_server_repository,
+    ):
+        """An MCP App tool's _meta.ui page is not in the stored list, so its backend stays live.
+
+        With TOOL_REFRESH_ENABLED the router answers tools/list from the mapping,
+        which keeps only title, annotations and outputSchema. That dropped the
+        tools' _meta (the ui:// page) and execution, so clients never opened the
+        app (1.38.1 regression).
+        """
+        app_tool = {
+            "name": "search",
+            "inputSchema": {"type": "object"},
+            "ui_resource_uri": "ui://search/page",
+        }
+        mock_server_repository.get.return_value = _github_backend(app_tool)
+        with (
+            patch("registry.core.nginx_service.settings.tool_refresh_enabled", True),
+            TemporaryDirectory() as tmpdir,
+        ):
+            mapping = await _write_mappings_and_read(_make_vs_config(), tmpdir)
+
+        assert mapping["tools"][0]["live_discovery"] is True
+
+    @pytest.mark.asyncio
+    async def test_live_discovery_covers_plain_tools_of_an_mcp_app_backend(
+        self,
+        mock_server_repository,
+    ):
+        """A mapped plain tool on an MCP App backend also keeps the backend's _meta."""
+        backend = _github_backend({"name": "search", "inputSchema": {"type": "object"}})
+        backend["tool_list"].append(
+            {"name": "draw", "inputSchema": {"type": "object"}, "ui_resource_uri": "ui://d/page"}
+        )
+        mock_server_repository.get.return_value = backend
+        with TemporaryDirectory() as tmpdir:
+            mapping = await _write_mappings_and_read(_make_vs_config(), tmpdir)
+
+        assert (mapping["tools"][0]["mcp_app"], mapping["tools"][0]["live_discovery"]) == (
+            False,
+            True,
+        )
+
+    @pytest.mark.asyncio
     async def test_mapping_is_written_as_compact_json(
         self,
         mock_server_repository,
