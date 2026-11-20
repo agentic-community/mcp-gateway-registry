@@ -1285,7 +1285,12 @@ class HealthMonitoringService:
                 f"type={type(e).__name__}"
             )
 
-    async def _try_ping_without_auth(self, client: httpx.AsyncClient, endpoint: str) -> bool:
+    async def _try_ping_without_auth(
+        self,
+        client: httpx.AsyncClient,
+        endpoint: str,
+        server_info: dict | None = None,
+    ) -> bool:
         """
         Try a simple ping without authentication headers.
         Used as fallback when auth fails to determine if server is reachable.
@@ -1293,11 +1298,17 @@ class HealthMonitoringService:
         Args:
             client: httpx AsyncClient instance
             endpoint: The MCP endpoint URL to ping
+            server_info: The server record. An OpenAPI MCP server's hub refuses
+                any call without its admission marker, which is a routing proof
+                rather than a credential, so the ping still sends it. Without
+                it the hub answers 401, and a missing hub would read as healthy.
 
         Returns:
             bool: True if server responds (indicating it's reachable but auth expired)
         """
         import uuid
+
+        from ..services.openapi_ownership import admission_headers
 
         try:
             # Minimal headers without auth but with session ID (required by some servers)
@@ -1306,6 +1317,14 @@ class HealthMonitoringService:
                 "Content-Type": "application/json",
                 "Mcp-Session-Id": str(uuid.uuid4()),
             }
+            info = server_info or {}
+            headers.update(
+                admission_headers(
+                    info.get("path") or info.get("service_path"),
+                    info.get("proxy_pass_url"),
+                    endpoint,
+                )
+            )
             ping_payload = '{ "jsonrpc": "2.0", "id": "0", "method": "ping" }'
 
             response = await client.post(
@@ -1510,7 +1529,7 @@ class HealthMonitoringService:
                         logger.info(
                             f"[TRACE] Auth failure detected status={response.status_code} endpoint={redact_url(proxy_pass_url)}; trying ping without auth",
                         )
-                        if await self._try_ping_without_auth(client, proxy_pass_url):
+                        if await self._try_ping_without_auth(client, proxy_pass_url, server_info):
                             return True, HealthStatus.HEALTHY_AUTH_EXPIRED
                         else:
                             return False, "unhealthy: auth failed and ping without auth failed"
@@ -1578,7 +1597,7 @@ class HealthMonitoringService:
                     logger.warning(
                         f"Failed to initialize MCP session for {redact_url(endpoint)}, trying ping without auth"
                     )
-                    if await self._try_ping_without_auth(client, endpoint):
+                    if await self._try_ping_without_auth(client, endpoint, server_info):
                         # Reachable, but it refused the gateway's credentials (or
                         # their absence): report that, so callers that need a
                         # working credential, such as virtual servers, can tell
@@ -1606,7 +1625,7 @@ class HealthMonitoringService:
                     logger.info(
                         f"[TRACE] Auth failure detected ({response.status_code}) for {redact_url(endpoint)}, trying ping without auth"
                     )
-                    if await self._try_ping_without_auth(client, endpoint):
+                    if await self._try_ping_without_auth(client, endpoint, server_info):
                         # Reachable, but the request was refused for its credentials.
                         # healthy-auth-expired still routes (get_healthy_statuses),
                         # and per-user egress credentials now come from the egress
