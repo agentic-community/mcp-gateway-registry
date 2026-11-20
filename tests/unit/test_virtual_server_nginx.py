@@ -1642,6 +1642,62 @@ class TestMappingDiscoveryFlags:
         )
 
     @pytest.mark.asyncio
+    async def test_mcp_app_mapping_carries_the_claude_ui_domain_per_path(
+        self,
+        mock_server_repository,
+        monkeypatch,
+    ):
+        """Claude shows a page only when ui.domain hashes the URL the user added.
+
+        The router replaces the backend's value with these on resources/read.
+        """
+        import hashlib
+
+        monkeypatch.setenv("REGISTRY_URL", "https://gw.example.com")
+        monkeypatch.delenv("AUTH_SERVER_EXTERNAL_URL", raising=False)
+        monkeypatch.setenv("ROOT_PATH", "")
+        mock_server_repository.get.return_value = _github_backend(
+            {"name": "search", "inputSchema": {"type": "object"}, "ui_resource_uri": "ui://s/p"}
+        )
+        with TemporaryDirectory() as tmpdir:
+            mapping = await _write_mappings_and_read(_make_vs_config(), tmpdir)
+
+        url = "https://gw.example.com/virtual/dev-essentials/mcp"
+        expected = hashlib.sha256(url.encode()).hexdigest()[:32] + ".claudemcpcontent.com"
+        domains = mapping["mcp_app_ui_domains"]
+        assert domains["/virtual/dev-essentials/mcp"] == [expected]
+        assert set(domains) == {
+            "/virtual/dev-essentials",
+            "/virtual/dev-essentials/",
+            "/virtual/dev-essentials/mcp",
+            "/virtual/dev-essentials/mcp/",
+        }
+
+    @pytest.mark.asyncio
+    async def test_ui_domains_only_for_mcp_app_backends_and_a_public_url(
+        self,
+        mock_server_repository,
+        monkeypatch,
+    ):
+        """No MCP App tool, no domains; no configured public URL, no domains."""
+        monkeypatch.setenv("REGISTRY_URL", "https://gw.example.com")
+        mock_server_repository.get.return_value = _github_backend(
+            {"name": "search", "inputSchema": {"type": "object"}}
+        )
+        with TemporaryDirectory() as tmpdir:
+            plain = await _write_mappings_and_read(_make_vs_config(), tmpdir)
+
+        monkeypatch.setenv("REGISTRY_URL", "")
+        monkeypatch.setenv("AUTH_SERVER_EXTERNAL_URL", "")
+        mock_server_repository.get.return_value = _github_backend(
+            {"name": "search", "inputSchema": {"type": "object"}, "ui_resource_uri": "ui://s/p"}
+        )
+        with TemporaryDirectory() as tmpdir:
+            no_origin = await _write_mappings_and_read(_make_vs_config(), tmpdir)
+
+        assert ("mcp_app_ui_domains" in plain, no_origin["mcp_app_ui_domains"]) == (False, {})
+
+    @pytest.mark.asyncio
     async def test_mapping_is_written_as_compact_json(
         self,
         mock_server_repository,

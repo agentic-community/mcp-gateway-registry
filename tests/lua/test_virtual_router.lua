@@ -2743,6 +2743,41 @@ do
 end
 
 -- ---------------------------------------------------------------------------
+print("resources/read pages get the virtual server's Claude sandbox domain")
+do
+    local wanted = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.claudemcpcontent.com"
+    local other = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.claudemcpcontent.com"
+    local domains = { wanted, other }
+    local function page(domain)
+        return '{"jsonrpc":"2.0","id":7,"result":{"contents":[{"uri":"ui://app/page",'
+            .. '"mimeType":"text/html;profile=mcp-app","text":"<p>x</p>",'
+            .. '"_meta":{"ui":{"domain":"' .. domain .. '","csp":{"resourceDomains":[]}}}}]}}'
+    end
+
+    local out = cjson.decode(M._with_mcp_app_ui_domains(page("cccccccccccccccccccccccccccccccc.claudemcpcontent.com"), domains))
+    check(out.result.contents[1]._meta.ui.domain == wanted, "the backend's own Claude domain is replaced")
+
+    local kept = page(other)
+    check(M._with_mcp_app_ui_domains(kept, domains) == kept, "a domain right for another public origin is kept")
+
+    local foreign = page("sandbox.example.com")
+    check(M._with_mcp_app_ui_domains(foreign, domains) == foreign, "a non-Claude domain is left alone")
+
+    local rewritten = M._with_mcp_app_ui_domains(page("cccccccccccccccccccccccccccccccc.claudemcpcontent.com"), domains)
+    check(rewritten:find('"resourceDomains":%[%]') ~= nil, "an empty CSP array stays an array")
+
+    local sse = "event: message\ndata: " .. page("cccccccccccccccccccccccccccccccc.claudemcpcontent.com") .. "\n\n"
+    local sse_out = M._with_mcp_app_ui_domains(sse, domains)
+    check(cjson.decode(sse_out:match("data: ([^\n]+)")).result.contents[1]._meta.ui.domain == wanted,
+        "an SSE data line is rewritten")
+    check(sse_out:sub(1, 15) == "event: message\n" and sse_out:sub(-2) == "\n\n", "the SSE framing is kept")
+
+    local plain = '{"jsonrpc":"2.0","id":8,"result":{"contents":[{"uri":"ui://app/page","text":"x"}]}}'
+    check(M._with_mcp_app_ui_domains(plain, domains) == plain, "a page without ui.domain is unchanged")
+    check(M._with_mcp_app_ui_domains(plain, nil) == plain, "no expected domains changes nothing")
+end
+
+-- ---------------------------------------------------------------------------
 if failures > 0 then
     print(string.format("\n%d check(s) FAILED", failures))
     os.exit(1)

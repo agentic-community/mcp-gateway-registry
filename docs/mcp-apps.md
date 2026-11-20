@@ -9,9 +9,9 @@ The chat client (the "host") renders the page. The gateway never renders it. Its
 | Route or feature | Status |
 |---|---|
 | Direct server routes (`/<server>/mcp`) | Supported |
-| Virtual servers (`/virtual/<id>/mcp`) | Not supported yet |
+| Virtual servers (`/virtual/<id>/mcp`) | Supported, with the limits below |
 | Registry UI: MCP APP badge on the server card and on each tool | Supported |
-| Pages that set `_meta.ui.domain` (Claude only) | Supported on direct routes; the gateway rewrites the value, see below |
+| Pages that set `_meta.ui.domain` (Claude only) | Supported; the gateway rewrites the value, see below |
 
 ## How it works
 
@@ -68,7 +68,7 @@ Use the server's gateway URL, for example `https://<your-gateway>/budget-allocat
 
 ### Virtual servers
 
-A virtual server does not support MCP Apps yet:
+A virtual server serves MCP Apps from its backing servers. The router asks a backend with an MCP App tool for its tool list live on every connect, even with `TOOL_REFRESH_ENABLED=true`, because the stored copy does not keep a tool's `_meta`, which holds the page address. In 1.38.1 the stored copy was used, so these tools reached clients without `_meta` and no app opened. Some limits remain:
 
 - The router opens its own sessions to each backend without the UI extension, so a backend that checks for it hides its UI tools.
 - The virtual server advertises `resources` in `initialize` and `server/discover` only when a mapped tool opens a page, and it never advertises the UI extension. It asks only the backends with a mapped page-opening tool for resources.
@@ -81,10 +81,14 @@ A page can set `_meta.ui.domain` to get a stable sandbox origin. Claude accepts 
 
 On direct routes the gateway fixes this. When a `resources/read` reply carries a `ui.domain` ending in `.claudemcpcontent.com`, the auth server's proxy replaces it with the value for the URL the client connected to: the gateway's public origin, then the route path as nginx forwarded it (a trailing slash counts), then any query string. Values in any other format are left alone, and so is every other method. If the reply cannot be parsed, it is forwarded unchanged.
 
-The public origin comes from configuration, never from request headers: `REGISTRY_URL`, then `AUTH_SERVER_EXTERNAL_URL`. If neither is set, the gateway does not rewrite the value. A backend value that already matches either configured origin is left alone. Only direct routes are rewritten; on a virtual server the client connected to the virtual URL. Two cases are not covered:
+The public origin comes from configuration, never from request headers: `REGISTRY_URL`, then `AUTH_SERVER_EXTERNAL_URL`. If neither is set, the gateway does not rewrite the value. A backend value that already matches either configured origin is left alone.
+
+A virtual server's backend replies do not pass through the auth server, so the registry computes the values itself. For each virtual server with an MCP App tool it writes the expected value for each path a client can connect at (`/virtual/<id>`, `/virtual/<id>/mcp`, each with and without a trailing slash) into the server's mapping file, and the router applies the same rule to `resources/read` replies. A connector URL with a query string is not covered on a virtual server.
+
+Two cases are not covered:
 
 - A deployment reachable under more than one host name: the value matches `REGISTRY_URL` (or `AUTH_SERVER_EXTERNAL_URL` when `REGISTRY_URL` is unset) only.
-- A deployment that serves MCP routes under a path prefix: the origin drops the path, so the hash does not match.
+- On a direct route, a deployment that serves MCP routes under a path prefix: the origin drops the path, so the hash does not match. A virtual server includes `ROOT_PATH` in the path it hashes.
 
 Claude keeps a copy of each page it has fetched. A user who saw "There was a problem displaying content" before this rewrite was deployed may keep seeing it, because Claude shows the stored copy without asking the gateway for the page again. To make Claude fetch a fresh copy, remove the connector and add it again, and if that is not enough, add it under a URL Claude has not seen, for example with `?v=2` appended. The auth-server log line `mcp_proxy: rewrote MCP Apps ui.domain` confirms that a fresh copy went out.
 

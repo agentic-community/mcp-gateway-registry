@@ -1836,9 +1836,69 @@ local function _with_modern_result_fields(body, method)
 end
 
 
+
+-- MCP Apps: Claude shows a page only when its _meta.ui.domain is the hash of
+-- the connector URL the user added. A backend hashes its own URL, which is
+-- wrong behind a virtual server. The registry writes the right values per
+-- connector path into the mapping (mcp_app_ui_domains, because this nginx has
+-- no SHA-256); a resources/read reply's Claude-format value that is not among
+-- them is replaced with the first. Same rule as auth_server/mcp_apps_domain.py.
+local CLAUDE_UI_DOMAIN_SUFFIX = ".claudemcpcontent.com"
+
+
+-- Rewrite one JSON-RPC message. Returns the text unchanged when nothing applies.
+local function _rewrite_ui_domain_message(text, domains)
+    local ok, message = pcall(cjson_keep_arrays.decode, text)
+    if not ok or type(message) ~= "table" or type(message.result) ~= "table"
+        or type(message.result.contents) ~= "table" then
+        return text
+    end
+    local expected = {}
+    for _, domain in ipairs(domains) do
+        expected[domain] = true
+    end
+    local changed = false
+    for _, item in ipairs(message.result.contents) do
+        local meta = type(item) == "table" and item._meta
+        local ui = type(meta) == "table" and meta.ui
+        local domain = type(ui) == "table" and ui.domain
+        if type(domain) == "string"
+            and domain:sub(-#CLAUDE_UI_DOMAIN_SUFFIX) == CLAUDE_UI_DOMAIN_SUFFIX
+            and not expected[domain] then
+            ui.domain = domains[1]
+            changed = true
+        end
+    end
+    if not changed then
+        return text
+    end
+    return cjson_keep_arrays.encode(message)
+end
+
+
+-- Rewrite a resources/read body, plain JSON or SSE "data:" lines.
+local function _with_mcp_app_ui_domains(body, domains)
+    if type(body) ~= "string" or body == "" or type(domains) ~= "table"
+        or type(domains[1]) ~= "string" then
+        return body
+    end
+    if body:sub(1, 1) == "{" then
+        return _rewrite_ui_domain_message(body, domains)
+    end
+    local lines = {}
+    for line in (body .. "\n"):gmatch("(.-)\n") do
+        if line:sub(1, 6) == "data: " then
+            line = "data: " .. _rewrite_ui_domain_message(line:sub(7), domains)
+        end
+        lines[#lines + 1] = line
+    end
+    return table.concat(lines, "\n")
+end
+
 local function _proxy_to_backend(request_id, method_name, proxied_params,
                                   backend_location, client_session_id, server_id,
-                                  backend_version, label, allow_pre_consent, param_headers)
+                                  backend_version, label, allow_pre_consent, param_headers,
+                                  ui_domains)
     local proxied_body = cjson.encode({
         jsonrpc = "2.0",
         id = request_id,
@@ -1882,10 +1942,14 @@ local function _proxy_to_backend(request_id, method_name, proxied_params,
     else
         ngx.header["Content-Type"] = "application/json"
     end
+    local body = res.body
+    if ui_domains and res.status >= 200 and res.status < 300 then
+        body = _with_mcp_app_ui_domains(body, ui_domains)
+    end
     if ngx.ctx.vr_modern_client then
-        ngx.print(_with_modern_result_fields(res.body, method_name))
+        ngx.print(_with_modern_result_fields(body, method_name))
     else
-        ngx.print(res.body)
+        ngx.print(body)
     end
 end
 
@@ -2241,10 +2305,13 @@ local function _handle_resources_read(request_id, params, mapping, client_sessio
         return
     end
 
+    -- The Claude sandbox domain for the path this client connected at.
+    local ui_domains = type(mapping.mcp_app_ui_domains) == "table"
+        and mapping.mcp_app_ui_domains[ngx.var.uri] or nil
     _proxy_to_backend(
         request_id, "resources/read", params,
         backend_loc, client_session_id, server_id,
-        nil, "resource:" .. uri
+        nil, "resource:" .. uri, nil, nil, ui_domains
     )
 end
 
@@ -2752,6 +2819,7 @@ if _G._VR_TEST then
     _M._get_mapping = _get_mapping
     _M._ensure_mcp_schema = _ensure_mcp_schema
     _M._with_modern_result_fields = _with_modern_result_fields
+    _M._with_mcp_app_ui_domains = _with_mcp_app_ui_domains
     _M._handle_resources_read = _handle_resources_read
     _M._append_mapping_tools_for_backend = _append_mapping_tools_for_backend
     _M._handle_tools_list = _handle_tools_list

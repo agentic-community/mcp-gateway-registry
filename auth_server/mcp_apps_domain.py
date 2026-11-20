@@ -13,27 +13,18 @@ domains pass through unchanged. Claude's rule:
 https://claude.com/docs/connectors/building/mcp-apps/troubleshooting
 """
 
-import hashlib
 import json
 import logging
-import os
 from typing import Any
 
-from registry.common.request_origin import origin_of_url
+from registry.common.mcp_apps_ui_domain import (
+    CLAUDE_UI_DOMAIN_SUFFIX,
+    claude_ui_domain,  # noqa: F401 - re-exported for server.py
+    gateway_public_origins,  # noqa: F401 - re-exported for server.py
+)
 
 logger = logging.getLogger(__name__)
 
-CLAUDE_UI_DOMAIN_SUFFIX: str = ".claudemcpcontent.com"
-CLAUDE_UI_DOMAIN_HASH_CHARS: int = 32
-# Deployment settings that may hold the gateway's public URL, in order of
-# preference. Never the request's Host or forwarded headers. REGISTRY_URL comes
-# first: MCP routes are served by nginx on the registry's host, while
-# AUTH_SERVER_EXTERNAL_URL can name the auth server itself (the .env.example
-# default is http://localhost:8888). server.py's _GATEWAY_ORIGIN_URL_ENV_VARS
-# lists the same two for a different purpose (trusted origins, where order
-# does not matter), so it is not reused here. settings.registry_url is not
-# used: on the auth server it can be the internal cluster URL.
-GATEWAY_PUBLIC_URL_ENV_VARS: tuple[str, ...] = ("REGISTRY_URL", "AUTH_SERVER_EXTERNAL_URL")
 RESOURCES_READ_METHOD: str = "resources/read"
 SSE_DATA_PREFIX: str = "data:"
 
@@ -142,21 +133,6 @@ def _rewrite_sse_body(
     return "\n".join(out)
 
 
-def gateway_public_origins() -> list[str]:
-    """Return the gateway's configured public origins, most preferred first.
-
-    Returns:
-        Distinct origins such as "https://gateway.example.com". Empty when
-        neither setting holds an absolute http or https URL.
-    """
-    origins: list[str] = []
-    for name in GATEWAY_PUBLIC_URL_ENV_VARS:
-        origin = origin_of_url(os.environ.get(name, ""))
-        if origin and origin not in origins:
-            origins.append(origin)
-    return origins
-
-
 def connector_url(
     origin: str,
     route_path: str,
@@ -180,14 +156,6 @@ def connector_url(
     if query:
         url = f"{url}?{query}"
     return url
-
-
-def claude_ui_domain(
-    url: str,
-) -> str:
-    """Return the ui.domain value Claude expects for a connector URL."""
-    digest = hashlib.sha256(url.encode("utf-8")).hexdigest()
-    return digest[:CLAUDE_UI_DOMAIN_HASH_CHARS] + CLAUDE_UI_DOMAIN_SUFFIX
 
 
 def rewrite_ui_domains(
