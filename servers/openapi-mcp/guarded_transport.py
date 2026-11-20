@@ -9,7 +9,9 @@ pinning and the metadata-address block all stay in ``url_guard.py``.
 """
 
 import base64
+import json
 import logging
+import re
 from dataclasses import dataclass
 from urllib.parse import (
     quote,
@@ -49,6 +51,20 @@ REDACTED: bytes = b"[REDACTED]"
 # Shorter values are not redacted: they would match ordinary text everywhere.
 MIN_REDACT_CHARS: int = 6
 
+# A dot segment, plain or percent-encoded, between separators that may also be
+# encoded. A backend that decodes the path could resolve it out of the target's
+# base path, so such a URL is refused before any credential is attached.
+_DOT_SEGMENT_RE: re.Pattern[str] = re.compile(r"(^|/|%2f)(\.|%2e){1,2}(/|%2f|$)", re.IGNORECASE)
+_DEFAULT_PORTS: dict[str, int] = {"http": 80, "https": 443}
+
+# Backends are asked for uncompressed responses, and a compressed one is refused
+# before it is read: decoding happens before the size cap can apply, so a small
+# compressed body could expand past it in memory.
+IDENTITY_ENCODINGS: frozenset[str] = frozenset({"", "identity"})
+_DROPPED_RESPONSE_HEADERS: frozenset[bytes] = frozenset(
+    {b"content-encoding", b"transfer-encoding", b"content-length", b"set-cookie", b"set-cookie2"}
+)
+
 # Key under which the dispatcher stores the verified per-user keys on the ASGI
 # scope. FastMCP rebuilds the request from the scope inside the tool call.
 USER_CREDENTIALS_SCOPE_KEY: str = "openapi_mcp_user_credentials"
@@ -85,6 +101,37 @@ def _same_destination(
         return False
 
 
+def _json_forms(
+    secret: str,
+) -> set[str]:
+    """How a JSON encoder may write the secret inside a string: escaped quotes and
+    backslashes, \\uXXXX for non-ASCII, and the optional \\/ escape for "/"."""
+    forms = {json.dumps(secret)[1:-1], json.dumps(secret, ensure_ascii=False)[1:-1]}
+    forms |= {form.replace("/", "\\/") for form in forms}
+    return forms
+
+
+def _origin(
+    url: httpx2.URL,
+) -> tuple[str, str, int | None]:
+    scheme = url.scheme.lower()
+    return scheme, (url.host or "").lower(), url.port or _DEFAULT_PORTS.get(scheme)
+
+
+def _within_base(
+    url: httpx2.URL,
+    base: httpx2.URL,
+) -> bool:
+    """True when the URL keeps the base URL's origin and stays under its path."""
+    if _origin(url) != _origin(base):
+        return False
+    raw_path = url.raw_path.split(b"?", 1)[0].decode("ascii", "replace")
+    if _DOT_SEGMENT_RE.search(raw_path) or "\\" in raw_path or "%5c" in raw_path.lower():
+        return False
+    root = base.path.rstrip("/")
+    return not root or url.path == root or url.path.startswith(root + "/")
+
+
 def secret_forms(
     *secrets: str | None,
     basic_username: str | None = None,
@@ -100,6 +147,7 @@ def secret_forms(
         if not secret or len(secret) < MIN_REDACT_CHARS:
             continue
         forms.update({secret, quote(secret, safe=""), quote_plus(secret)})
+        forms.update(_json_forms(secret))
         if basic_username is not None:
             forms.add(base64.b64encode(f"{basic_username}:{secret}".encode()).decode())
     return tuple(sorted((f.encode() for f in forms), key=len, reverse=True))
@@ -183,20 +231,51 @@ class GuardedHttpx2Transport(httpx2.AsyncBaseTransport):
     def __init__(
         self,
         max_response_bytes: int,
+        base_url: str,
         per_user: PerUserAuth | None = None,
         shared_secret_forms: tuple[bytes, ...] = (),
+        credential_bearing: bool = False,
     ) -> None:
         self._inner = url_guard.GuardedAsyncTransport(guard_profile=url_guard.PROXY_PROFILE)
         self._max_response_bytes = max_response_bytes
+        self._base = httpx2.URL(base_url)
         self._per_user = per_user
         self._shared_secret_forms = shared_secret_forms
+        self._credential_bearing = credential_bearing or per_user is not None
+
+    def _check_destination(
+        self,
+        request: httpx2.Request,
+    ) -> None:
+        """Refuse a request outside the target's base URL, or a credentialed one over HTTP.
+
+        Runs before a per-user key is attached; a shared credential is already on
+        the request, and raising here keeps it from being sent.
+        """
+        if not _within_base(request.url, self._base):
+            logger.warning("Backend call refused: the URL leaves the target's base URL")
+            raise BackendUrlBlockedError(
+                "backend URL is outside the target's base URL", request=request
+            )
+        insecure = request.url.scheme.lower() != "https"
+        if (
+            insecure
+            and self._credential_bearing
+            and not url_guard.is_operator_trusted_host(request.url.host)
+        ):
+            logger.warning("Backend call refused: a credentialed target must use HTTPS")
+            raise BackendUrlBlockedError(
+                "a credentialed backend call must use HTTPS", request=request
+            )
 
     async def handle_async_request(
         self,
         request: httpx2.Request,
     ) -> httpx2.Response:
+        self._check_destination(request)
         body = await request.aread()
         inner_request = _to_httpx_request(request, body)
+        inner_request.headers["Accept-Encoding"] = "identity"
         forms = self._shared_secret_forms
         if self._per_user is not None:
             key = _user_key(self._per_user, request)
@@ -206,7 +285,8 @@ class GuardedHttpx2Transport(httpx2.AsyncBaseTransport):
         try:
             inner_response = await self._inner.handle_async_request(inner_request)
         except UrlValidationError as e:
-            logger.warning(f"Backend call blocked by the SSRF guard: {e}")
+            # The error text can embed the URL, and a query-string key with it.
+            logger.warning("Backend call blocked by the SSRF guard")
             raise BackendUrlBlockedError(
                 "backend URL blocked by the SSRF guard", request=request
             ) from e
@@ -219,13 +299,23 @@ class GuardedHttpx2Transport(httpx2.AsyncBaseTransport):
                 f"backend request failed ({type(e).__name__})", request=request
             ) from e
 
+        encoding = inner_response.headers.get("content-encoding", "").strip().lower()
+        if encoding not in IDENTITY_ENCODINGS:
+            await inner_response.aclose()
+            raise BackendRequestFailedError(
+                f"backend sent a compressed response ({encoding[:40]}), which is not accepted",
+                request=request,
+            )
         content = redact(
             await _read_capped(inner_response, self._max_response_bytes, request), forms
         )
+        # Set-Cookie is dropped: the client is shared by every caller of this
+        # target, so a stored backend session would ride along on the next
+        # caller's request.
         headers = [
             (k, redact(v, forms))
             for k, v in inner_response.headers.raw
-            if k.lower() not in (b"content-encoding", b"transfer-encoding", b"content-length")
+            if k.lower() not in _DROPPED_RESPONSE_HEADERS
         ]
         return httpx2.Response(
             status_code=inner_response.status_code,

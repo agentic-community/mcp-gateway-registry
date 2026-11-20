@@ -154,7 +154,7 @@ def _add_target_body(
     warnings: list[str],
     sync_status: str,
 ) -> dict:
-    base = target_response(target, user_context).model_dump(mode="json")
+    base = target_response(server, target, user_context).model_dump(mode="json")
     body = AddTargetResponse(
         **base,
         warnings=warnings,
@@ -322,7 +322,7 @@ async def get_openapi_target(
     except OpenApiServerError as e:
         return _error(e)
     runtime = (await _runtime()).get(slug)
-    return target_response(target, user_context, runtime).model_dump(mode="json")
+    return target_response(server, target, user_context, runtime).model_dump(mode="json")
 
 
 @router.patch("/openapi-servers/{slug}/targets/{name}")

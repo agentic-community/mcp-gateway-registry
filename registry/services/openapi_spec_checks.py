@@ -15,6 +15,7 @@ from datetime import (
     datetime,
 )
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 import yaml
@@ -24,6 +25,7 @@ from ..exceptions import UrlValidationError
 from ..utils.url_guard import (
     PROXY_PROFILE,
     guarded_async_client,
+    is_operator_trusted_host,
     validate_url,
 )
 from .openapi_errors import (
@@ -39,6 +41,9 @@ MAX_TOOL_NAME_CHARS: int = 64
 LOCAL_REF_PREFIX: str = "#"
 MAX_REPORTED_REFS: int = 5
 TOOL_NAME_RE = re.compile(r"^[A-Za-z0-9_.\-]+$")
+IDENTITY_ENCODINGS: frozenset[str] = frozenset({"", "identity"})
+# A "." or ".." path segment, raw or percent-encoded, with "/" or "%2f" around it.
+DOT_SEGMENT_RE = re.compile(r"(^|/|%2f)(\.|%2e){1,2}(/|%2f|$)", re.IGNORECASE)
 SPEC_ACCEPT_HEADER: str = (
     "application/json, application/yaml, application/x-yaml, text/yaml, */*;q=0.5"
 )
@@ -90,6 +95,41 @@ def validate_target_url(
         ) from e
 
 
+def check_credential_transport(
+    base_url: str,
+    auth_scheme: str,
+) -> None:
+    """A target that carries a credential must use HTTPS.
+
+    Plain HTTP is accepted only for a host the operator named in
+    SSRF_ALLOWED_HOSTS or SSRF_ALLOWED_CIDRS, such as an API inside the same
+    private network. The container checks the same rule again before sending.
+    """
+    if auth_scheme == "none":
+        return
+    parts = urlsplit(base_url)
+    if parts.scheme.lower() == "https" or is_operator_trusted_host(parts.hostname):
+        return
+    raise unprocessable(
+        "https_required",
+        "a target with a credential must use an https:// base_url. For an API inside "
+        "your own network, an operator can add its host to SSRF_ALLOWED_HOSTS.",
+        {"field": "base_url"},
+    )
+
+
+def _dot_segment_paths(
+    document: dict[str, Any],
+) -> list[str]:
+    """Spec paths with a "." or ".." segment, which could leave the target's base URL."""
+    found = []
+    for path in document.get("paths") or {}:
+        text = str(path)
+        if DOT_SEGMENT_RE.search(text) or "\\" in text or "%5c" in text.lower():
+            found.append(text[:200])
+    return found
+
+
 async def _read_capped(
     response: httpx.Response,
     max_bytes: int,
@@ -105,6 +145,25 @@ async def _read_capped(
             )
         chunks.append(chunk)
     return b"".join(chunks)
+
+
+def _refuse_compressed(
+    response: httpx.Response,
+) -> None:
+    """Refuse a compressed spec before reading it.
+
+    Decoding allocates the whole decompressed chunk before the size cap sees it,
+    so a small compressed body could use a lot of memory. The request asks for
+    identity encoding; a host that compresses anyway is refused.
+    """
+    encoding = response.headers.get("content-encoding", "").strip().lower()
+    if encoding not in IDENTITY_ENCODINGS:
+        raise OpenApiServerError(
+            502,
+            "spec_fetch_failed",
+            f"the spec host sent a compressed response ({encoding[:40]}). Upload the spec "
+            "file instead, or serve it uncompressed.",
+        )
 
 
 def _count_fetch(
@@ -164,7 +223,10 @@ async def _fetch(
             profile=PROXY_PROFILE, timeout=SPEC_FETCH_TIMEOUT_SECONDS
         ) as client:
             async with client.stream(
-                "GET", spec_url, headers={"Accept": SPEC_ACCEPT_HEADER}, follow_redirects=False
+                "GET",
+                spec_url,
+                headers={"Accept": SPEC_ACCEPT_HEADER, "Accept-Encoding": "identity"},
+                follow_redirects=False,
             ) as response:
                 if response.status_code != 200:
                     raise OpenApiServerError(
@@ -173,6 +235,7 @@ async def _fetch(
                         f"the spec host returned HTTP {response.status_code}. Redirects are not "
                         "followed: give the final URL of the spec.",
                     )
+                _refuse_compressed(response)
                 raw = await _read_capped(response, max_bytes)
                 return raw, response.headers.get("content-type", "")
     except UrlValidationError as e:
@@ -262,6 +325,14 @@ def parse_spec(
         )
     if not isinstance(document.get("paths"), dict) or not document["paths"]:
         raise unprocessable("spec_invalid", "the spec has no paths, so it would produce no tools")
+    escaping = _dot_segment_paths(document)
+    if escaping:
+        raise unprocessable(
+            "spec_invalid",
+            "the spec has paths with '.' or '..' segments or backslashes, which could reach "
+            f"URLs outside base_url: {escaping[:MAX_REPORTED_REFS]}",
+            {"paths": escaping[:MAX_REPORTED_REFS]},
+        )
     info = document.get("info") if isinstance(document.get("info"), dict) else {}
     return FetchedSpec(
         raw=raw,

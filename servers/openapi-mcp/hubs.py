@@ -35,6 +35,8 @@ from models import (
 )
 from settings import ContainerSettings
 
+from registry.utils import url_guard
+
 logger = logging.getLogger(__name__)
 
 
@@ -108,17 +110,23 @@ def _backend_client(
             target.auth_credential.get_secret_value(),
             basic_username=(target.auth_username or "") if target.auth_scheme == "basic" else None,
         )
-    return httpx2.AsyncClient(
+    client = httpx2.AsyncClient(
         base_url=target.base_url,
         timeout=settings.openapi_mcp_backend_timeout_seconds,
         transport=GuardedHttpx2Transport(
             max_response_bytes=settings.openapi_mcp_max_response_bytes,
+            base_url=target.base_url,
             per_user=per_user,
             shared_secret_forms=shared_forms,
+            credential_bearing=target.auth_scheme != "none",
         ),
         follow_redirects=False,
         **_auth_client_kwargs(target),
     )
+    # Every caller of this target shares the client, so it must never keep a
+    # backend cookie: one user's session would go out on the next user's call.
+    client.cookies.jar = url_guard.NoStoreCookieJar()
+    return client
 
 
 async def _mount_target(

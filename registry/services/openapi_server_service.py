@@ -163,6 +163,25 @@ def _require_egress_for(
         )
 
 
+async def _write_server_info_fields(
+    path: str,
+    fields: dict[str, Any],
+) -> None:
+    """Write only the named ServerInfo fields.
+
+    A full-record write would put back the is_enabled and tool_overrides values
+    read a moment earlier, undoing an admin's disable or tool block that landed
+    in between. Only the fields this service owns are written.
+    """
+    saved = await server_service.update_server(path, fields, updated_fields=list(fields))
+    if not saved:
+        raise OpenApiServerError(
+            503,
+            "server_sync_failed",
+            "the server record could not be updated; retry the request",
+        )
+
+
 async def _sync_server_info(
     server: OpenApiServer,
 ) -> None:
@@ -171,7 +190,7 @@ async def _sync_server_info(
     wanted = _egress_fields(server)
     if existing.get("egress_auth_mode", "none") == wanted["egress_auth_mode"]:
         return
-    await server_service.update_server(server.path, {**existing, **_server_info_entry(server)})
+    await _write_server_info_fields(server.path, wanted)
     await server_lifecycle.flush_nginx()
     logger.info(f"'{server.slug}' egress routing set to {wanted['egress_auth_mode']}")
 
@@ -416,8 +435,10 @@ async def update_server(
             setattr(server, key, value)
 
     server = await _save_with_retry(slug, _change)
-    existing = await server_service.get_server_info(server.path) or {}
-    await server_service.update_server(server.path, {**existing, **_server_info_entry(server)})
+    entry = _server_info_entry(server)
+    changed = {name: entry[name] for name in updates}
+    if changed:
+        await _write_server_info_fields(server.path, changed)
     return server, await _push_and_refresh(server, rescan=False)
 
 
@@ -556,6 +577,9 @@ async def add_target(
     _check_target_slot(server, request.name)
     _require_egress_for(request.auth)
     openapi_spec_checks.validate_target_url(str(request.base_url), "base_url")
+    openapi_spec_checks.check_credential_transport(
+        str(request.base_url), request.auth.scheme if request.auth else "none"
+    )
     spec_url = str(request.spec_url) if request.spec_url is not None else None
     fetched, preview = await _admit_spec(
         spec_url, request.spec_content, request.name, _tool_options(request)
@@ -688,6 +712,7 @@ async def update_target(
     old_sha = candidate.spec_sha256
     _apply_target_update(candidate, request)
     openapi_spec_checks.validate_target_url(candidate.base_url, "base_url")
+    openapi_spec_checks.check_credential_transport(candidate.base_url, candidate.auth.scheme)
     if _changes_spec(request):
         _apply_spec_source(candidate, request)
         fetched, preview = await _admit_spec(

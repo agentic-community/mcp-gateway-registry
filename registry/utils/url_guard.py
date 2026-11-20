@@ -1142,6 +1142,28 @@ def _openapi_mcp_reserved_host() -> str | None:
     return host.lower() if host else None
 
 
+def is_operator_trusted_host(
+    hostname: str | None,
+) -> bool:
+    """True when the operator explicitly allowlisted this host for private targets.
+
+    A host named in SSRF_ALLOWED_HOSTS, or an IP literal inside SSRF_ALLOWED_CIDRS.
+    A hostname that only resolves into an allowed range does not count, so a
+    caller that relaxes a rule for trusted internal hosts stays strict.
+    """
+    if not isinstance(hostname, str) or not hostname:
+        return False
+    host = hostname.lower().rstrip(".").strip("[]")
+    allowlist = _proxy_allowlist()
+    if allowlist.allows_host(host):
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return any(ip in net for net in allowlist.cidrs if net.version == ip.version)
+
+
 def is_openapi_mcp_container_url(
     url: str | None,
 ) -> bool:
@@ -2411,7 +2433,7 @@ def guarded_async_client(
 #     NOT enable http2 on these clients (it would coalesce far more aggressively).
 #   * No shared default identity state -- no default auth headers (callers pass the
 #     credential per request). Cookie persistence is disabled via a no-store cookie
-#     jar (see _disable_cookie_persistence / _NoStoreCookieJar): a Set-Cookie is never
+#     jar (see _disable_cookie_persistence / NoStoreCookieJar): a Set-Cookie is never
 #     stored, so it can never be replayed onto a later OR concurrent request sharing
 #     the client. Credentials never ride cookies on these paths, so this is
 #     defense-in-depth.
@@ -2432,7 +2454,7 @@ def _pool_limits() -> httpx.Limits:
     )
 
 
-class _NoStoreCookieJar(http.cookiejar.CookieJar):
+class NoStoreCookieJar(http.cookiejar.CookieJar):
     """A cookie jar that silently drops every cookie.
 
     Installing this on a pooled, shared client makes cookie handling stateless: a
@@ -2449,7 +2471,7 @@ class _NoStoreCookieJar(http.cookiejar.CookieJar):
 
 def _disable_cookie_persistence(client: httpx.AsyncClient) -> httpx.AsyncClient:
     """Swap in a no-store cookie jar so the shared client never persists cookies."""
-    client.cookies.jar = _NoStoreCookieJar()
+    client.cookies.jar = NoStoreCookieJar()
     return client
 
 

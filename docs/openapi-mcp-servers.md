@@ -53,8 +53,10 @@ The server's name becomes its path, so "Weather APIs" is served at `/weather-api
 Adding a target stores nothing until every check passes:
 
 - The SSRF guard checks the base URL, and the spec URL when there is one, the same way it checks any registered backend. To reach an internal API, an operator adds its host to `SSRF_ALLOWED_HOSTS` or `SSRF_ALLOWED_CIDRS`.
-- The registry fetches the spec without following redirects, so give the final URL. It refuses a spec larger than `OPENAPI_MCP_SPEC_MAX_BYTES` (5 MiB by default), fetched or uploaded.
+- A target with a credential needs an `https://` base URL. Plain HTTP is accepted only for a host listed in `SSRF_ALLOWED_HOSTS`, or an IP address inside `SSRF_ALLOWED_CIDRS`, such as an API in your own network. The container applies the same rule again before each call.
+- The registry fetches the spec without following redirects, so give the final URL. It asks for an uncompressed response and refuses a compressed one; upload the file instead if the host always compresses. It refuses a spec larger than `OPENAPI_MCP_SPEC_MAX_BYTES` (5 MiB by default), fetched or uploaded.
 - The spec must be OpenAPI 3.x in JSON or YAML, valid UTF-8, with no YAML anchors or aliases.
+- No spec path may contain a `.` or `..` segment or a backslash, raw or percent-encoded, because such a path could send the credential outside the base URL.
 - Every `$ref` must be a local `#/...` pointer. A spec split across files, or one that refers to a URL or a local file, is refused; bundle it into one document first (for example with `redocly bundle`). Convert a Swagger 2.0 spec first, for example with [converter.swagger.io](https://converter.swagger.io).
 - One target may produce at most `OPENAPI_MCP_MAX_TOOLS_PER_TARGET` tools (100 by default). A larger spec gets a `too_many_tools` error that lists the spec's tags with their operation counts. Choose operations with `include_tags` and `include_operations`; an `include_operations` entry is an `operationId` or `"METHOD /path"`.
 - Tool names may be at most 64 characters. Rename long or clashing ones with `tool_name_overrides`, keyed by `operationId`, or by `"METHOD /path"` for an operation that has none.
@@ -147,9 +149,11 @@ The registry must reach `raw.githubusercontent.com` to fetch the spec (upload th
 
 ## Who can use a server
 
-A new server is `private`: only admins can see and call it. This differs from `POST /api/servers/register`, where the default is `public`. Every caller spends the targets' shared credentials, so open a server with shared targets to a group (`group-restricted`) or to everyone (`public`) only when it is ready. A server whose targets are all per-user spends no one's key but the caller's. The server is an ordinary registry server, so scopes, the gateway's access check, search and the per-tool block all apply to it unchanged.
+A new server is `private`: the registry lists it only to admins. Visibility controls who sees the server in the registry; the gateway decides who may call it from scopes alone, as for every other server, so a user whose scopes grant the server (for example through a wildcard) can call it even while it is private. Check your scope grants before you add a shared key. This differs from `POST /api/servers/register`, where the default is `public`. Every caller spends the targets' shared credentials, so open a server with shared targets to a group (`group-restricted`) or to everyone (`public`) only when it is ready. A server whose targets are all per-user spends no one's key but the caller's. The server is an ordinary registry server, so scopes, the gateway's access check, search and the per-tool block all apply to it unchanged.
 
 The OpenAPI MCP server owns that registry record. The generic `/api/servers/*` routes that would change or remove it (edit, replace through register, remove, the credential, OAuth and version routes) return `409` and point to `/api/openapi-servers/{slug}`. Toggle, refresh, rescan, rating and the per-tool block still work through the generic routes, so an admin can turn a server back on after an interrupted scan. No other registration may point at the openapi-mcp container.
+
+When a caller who is not an admin reads a server through `/api/openapi-servers`, the response lists only the tools their scopes grant. It leaves out each target's overrides and include filters, because those name operations too, and it replaces a target's load error with a generic message.
 
 Each tool is marked from its HTTP method: `GET`, `HEAD` and `OPTIONS` are read-only, and `DELETE` is destructive. Clients that confirm destructive calls, such as Claude Code, ask before a `DELETE`. To remove a tool entirely, block it with the existing per-tool block (`tool_overrides`) on the server, or leave its operation out with the include filters.
 
@@ -157,7 +161,9 @@ Each tool is marked from its HTTP method: `GET`, `HEAD` and `OPTIONS` are read-o
 
 - A JSON array response arrives wrapped as `{"result": [...]}`, because MCP structured output has to be an object.
 - Tools refuse arguments the spec does not define, so a misspelled argument returns an error.
-- If a backend echoes the target's credential in its response, as api.nasa.gov does in its `links` URLs, the container replaces it with `[REDACTED]` before the response reaches the agent. This covers the raw key, its URL-encoded forms and a basic-auth header value, for shared and per-user targets alike. A link copied from such a response therefore no longer works on its own; the agent calls the tool again instead.
+- If a backend echoes the target's credential in its response, as api.nasa.gov does in its `links` URLs, the container replaces it with `[REDACTED]` before the response reaches the agent. This covers the raw key, its URL-encoded and JSON-escaped forms and a basic-auth header value, for shared and per-user targets alike. A link copied from such a response therefore no longer works on its own; the agent calls the tool again instead.
+- The container sends no cookies and drops every `Set-Cookie` a backend returns, so one caller's backend session never reaches another caller. An API that works only with cookie sessions does not work through an OpenAPI MCP server.
+- The container asks for uncompressed responses and turns a compressed one into a tool error, because decompressing it could use far more memory than the response cap allows.
 - Responses larger than `OPENAPI_MCP_MAX_RESPONSE_BYTES` (2 MiB by default) become a tool error, as do backend calls slower than `OPENAPI_MCP_BACKEND_TIMEOUT_SECONDS` (30 seconds).
 - By default tools carry no output schema, because many real APIs return responses that break their own spec. Set `keep_output_schemas` on a target to keep the spec's schemas.
 
