@@ -28,6 +28,16 @@ class TestImportTouchesPrivilegedScope:
     def test_privileged_group_mapping(self) -> None:
         assert _import_touches_privileged_scope("eng", ["mcp-registry-admin"], None) is True
 
+    def test_slashed_forms_are_caught(self) -> None:
+        """A full-path spelling of a privileged name must not slip past the guard.
+
+        Mirrors the repository-layer test so both layers stay in step
+        (issue #1689).
+        """
+        assert _import_touches_privileged_scope("/registry-admins", None, None) is True
+        assert _import_touches_privileged_scope("eng", ["/mcp-registry-admin"], None) is True
+        assert _import_touches_privileged_scope("eng", [" registry-admins "], None) is True
+
     def test_all_server_grant_is_privileged(self) -> None:
         assert _import_touches_privileged_scope("eng", ["eng"], {"toggle_service": ["all"]}) is True
 

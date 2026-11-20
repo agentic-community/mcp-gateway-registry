@@ -52,8 +52,19 @@ class TestBuildVisibilityFilter:
         assert {"visibility": "private", "owner": "alice"} in clauses
         assert {
             "visibility": "group-restricted",
-            "allowed_groups": {"$in": ["g1"]},
+            "allowed_groups": {"$in": ["/g1", "g1"]},
         } in clauses
+
+    def test_filter_queries_every_stored_form_of_the_groups(self):
+        """A record restricted to ``/team`` is found for a session carrying ``team``."""
+        f = _build_visibility_filter({"username": "x", "groups": ["team", "/ops"]})
+        group_clause = next(c for c in f["$or"] if c["visibility"] == "group-restricted")
+        assert group_clause["allowed_groups"] == {"$in": ["/ops", "/team", "ops", "team"]}
+
+    def test_filter_with_no_groups_matches_no_group_restricted_record(self):
+        f = _build_visibility_filter({"username": "x", "groups": []})
+        group_clause = next(c for c in f["$or"] if c["visibility"] == "group-restricted")
+        assert group_clause["allowed_groups"] == {"$in": []}
 
     def test_no_entity_type_key_to_avoid_clobber(self):
         f = _build_visibility_filter({"username": "alice", "groups": []})
@@ -79,6 +90,11 @@ class TestUserCanView:
         rec = _record(visibility="group-restricted", allowed_groups=["g1", "g2"])
         assert _user_can_view(rec, {"username": "x", "groups": ["g2"]})
         assert not _user_can_view(rec, {"username": "x", "groups": ["g9"]})
+
+    def test_group_restricted_matches_across_slash_forms(self):
+        """``/team`` in allowed_groups matches a canonical ``team`` session group."""
+        rec = _record(visibility="group-restricted", allowed_groups=["/team"])
+        assert _user_can_view(rec, {"username": "x", "groups": ["team"]})
 
     def test_unknown_visibility_denied(self):
         rec = _record(visibility="mystery")

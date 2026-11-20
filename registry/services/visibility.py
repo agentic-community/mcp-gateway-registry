@@ -20,6 +20,7 @@ from urllib.parse import urlsplit
 from ..core.config import DeploymentMode, settings
 from ..exceptions import UrlValidationError
 from ..schemas.agent_models import AgentInterface
+from ..utils.group_names import groups_intersect
 from ..utils.url_guard import normalize_url_identity
 
 logger = logging.getLogger(__name__)
@@ -416,9 +417,7 @@ async def user_can_access_agent(
     if agent_card.visibility == "private":
         return agent_card.registered_by == user_context.get("username")
     if agent_card.visibility == "group-restricted":
-        allowed_groups = set(agent_card.allowed_groups)
-        user_groups = set(user_context.get("groups", []))
-        return bool(allowed_groups & user_groups)
+        return groups_intersect(user_context.get("groups", []), agent_card.allowed_groups)
     return False
 
 
@@ -461,8 +460,7 @@ def user_can_access_agent_from_doc(
     if visibility == "private":
         return registered_by == user_context.get("username")
     if visibility == "group-restricted":
-        user_groups = set(user_context.get("groups", []))
-        return bool(set(allowed_groups) & user_groups)
+        return groups_intersect(user_context.get("groups", []), allowed_groups)
     return False
 
 
@@ -486,9 +484,7 @@ async def user_can_access_skill(
     if visibility == "private":
         return owner == user_context.get("username")
     if visibility == "group":
-        user_groups = set(user_context.get("groups", []))
-        skill_groups = set(allowed_groups or [])
-        return bool(user_groups & skill_groups)
+        return groups_intersect(user_context.get("groups", []), allowed_groups)
     return False
 
 
@@ -513,6 +509,5 @@ async def user_can_access_custom_entity(
     if visibility == "private":
         return owner == user_context.get("username")
     if visibility == "group-restricted":
-        user_groups = set(user_context.get("groups", []) or [])
-        return bool(user_groups & set(allowed_groups or []))
+        return groups_intersect(user_context.get("groups", []), allowed_groups)
     return False  # deny-by-default for any unknown visibility

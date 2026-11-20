@@ -79,6 +79,7 @@ from ..services.registration_gate_service import check_registration_gate
 from ..services.security_pending import tags_after_passing_scan
 from ..services.visibility import gateway_routable_agent_interfaces
 from ..services.webhook_service import send_registration_webhook
+from ..utils.group_names import groups_intersect
 from ..utils.metadata import (
     flatten_metadata_to_text,
     parse_and_validate_metadata_fields,
@@ -1095,8 +1096,7 @@ def _filter_agents_by_access(
             continue
 
         if agent.visibility == "group-restricted":
-            agent_groups = set(agent.allowed_groups)
-            if agent_groups & user_groups:
+            if groups_intersect(user_groups, agent.allowed_groups):
                 accessible.append(agent)
             continue
 

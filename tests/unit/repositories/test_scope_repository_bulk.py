@@ -192,7 +192,9 @@ class TestGetGroupMappingsBulk:
     async def test_uses_in_query_with_deduped_sorted_groups(self, repo, mock_collection):
         mock_collection.find.return_value = _make_cursor([])
         await repo.get_group_mappings_bulk(["g-b", "g-a", "g-b", ""])
-        mock_collection.find.assert_called_once_with({"group_mappings": {"$in": ["g-a", "g-b"]}})
+        mock_collection.find.assert_called_once_with(
+            {"group_mappings": {"$in": ["/g-a", "/g-b", "g-a", "g-b"]}}
+        )
 
     async def test_returns_deduped_union_of_scope_ids(self, repo, mock_collection):
         # Two groups map to overlapping scopes; the scope _id appears once each.
@@ -205,3 +207,85 @@ class TestGetGroupMappingsBulk:
     async def test_error_returns_empty(self, repo, mock_collection):
         mock_collection.find.side_effect = Exception("db error")
         assert await repo.get_group_mappings_bulk(["g-a"]) == []
+
+    async def test_full_path_claim_queries_both_forms(self, repo, mock_collection):
+        """A Keycloak full-path claim must match a mapping stored in either form.
+
+        ``/mcp-admins`` in the claim, ``mcp-admins`` in the document (or the
+        reverse) matched nothing before normalisation (issue #1689). The query
+        carries both forms so no data migration is needed.
+        """
+        mock_collection.find.return_value = _make_cursor([])
+        await repo.get_group_mappings_bulk(["/mcp-admins"])
+        mock_collection.find.assert_called_once_with(
+            {"group_mappings": {"$in": ["/mcp-admins", "mcp-admins"]}}
+        )
+
+    async def test_bare_claim_queries_full_path_form_too(self, repo, mock_collection):
+        """A bare claim must also query the ``/name`` form a mapping may be stored in."""
+        mock_collection.find.return_value = _make_cursor([])
+        await repo.get_group_mappings_bulk(["mcp-admins"])
+        mock_collection.find.assert_called_once_with(
+            {"group_mappings": {"$in": ["/mcp-admins", "mcp-admins"]}}
+        )
+
+
+def _collection_holding(docs: list[dict]) -> MagicMock:
+    """A collection whose ``find`` applies a ``group_mappings`` ``$in`` filter.
+
+    Asserting the query shape alone cannot show that a stored value is found.
+    This evaluates the filter the way MongoDB does for an array field (any
+    element equal to any listed value) against the given documents.
+    """
+    collection = AsyncMock()
+
+    def _find(query: dict, projection: dict | None = None) -> MagicMock:
+        if "group_mappings" not in query:
+            return _make_cursor(docs)
+        wanted = set(query["group_mappings"]["$in"])
+        hits = [d for d in docs if wanted & set(d.get("group_mappings", []))]
+        return _make_cursor(hits)
+
+    collection.find = MagicMock(side_effect=_find)
+    return collection
+
+
+def _repo_holding(docs: list[dict]) -> DocumentDBScopeRepository:
+    r = DocumentDBScopeRepository.__new__(DocumentDBScopeRepository)
+    r._collection = _collection_holding(docs)
+    r._collection_name = "mcp_scopes_test"
+    r._scopes_cache = {}
+    return r
+
+
+class TestStoredFormIsFoundFromEitherClaimForm:
+    """Scope lookup must agree with the login filter on stored ``/team`` mappings.
+
+    The login filter canonicalises stored names, so it keeps a bare ``team``
+    claim when the mapping is stored as ``/team``. The lookup has to find that
+    mapping too, or the session holds a group that resolves to no scope.
+    """
+
+    SLASHED = [
+        {"_id": "team-scope", "group_mappings": ["/team"]},
+        {"_id": "other-scope", "group_mappings": ["unrelated"]},
+    ]
+
+    async def test_bulk_bare_claim_finds_slashed_mapping(self):
+        repo = _repo_holding(self.SLASHED)
+        assert await repo.get_group_mappings_bulk(["team"]) == ["team-scope"]
+
+    async def test_single_bare_claim_finds_slashed_mapping(self):
+        repo = _repo_holding(self.SLASHED)
+        assert await repo.get_group_mappings("team") == ["team-scope"]
+
+    async def test_bulk_slashed_claim_finds_bare_mapping(self):
+        repo = _repo_holding([{"_id": "team-scope", "group_mappings": ["team"]}])
+        assert await repo.get_group_mappings_bulk(["/team"]) == ["team-scope"]
+
+    async def test_every_name_the_filter_keeps_resolves_to_a_scope(self):
+        """The mapped set the login filter reads and the lookup agree."""
+        repo = _repo_holding(self.SLASHED)
+        mapped = await repo.get_all_mapped_group_names()
+        assert "team" in mapped
+        assert await repo.get_group_mappings_bulk(["team"]) == ["team-scope"]

@@ -11,6 +11,8 @@ from typing import Any
 
 import httpx
 
+from .group_names import normalize_group_names
+
 logger = logging.getLogger(__name__)
 
 
@@ -395,8 +397,17 @@ async def update_keycloak_group(group_name: str, description: str) -> dict[str, 
 
 
 def _normalize_group_list(groups: list[str]) -> list[str]:
-    """Clean and validate incoming group list."""
-    normalized = [group.strip() for group in groups if group and group.strip()]
+    """Clean and validate incoming group list.
+
+    Delegates to the shared canonical form (surrounding whitespace and slashes
+    removed, empties and duplicates dropped) so admin-API group assignment agrees
+    with how claims and scope mappings are compared. Previously this stripped
+    whitespace only, leaving two normalisers in the codebase that disagreed.
+
+    Raises:
+        KeycloakAdminError: If no usable group name remains.
+    """
+    normalized = normalize_group_names(groups)
     if not normalized:
         raise KeycloakAdminError("At least one group must be provided")
     return normalized
