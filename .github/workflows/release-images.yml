@@ -94,6 +94,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             BUILD_VERSION=${{ github.ref_name }}
+            APT_CACHE_EPOCH=${{ github.run_id }}-${{ github.run_attempt }}
             ${{ matrix.extra_build_args }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
