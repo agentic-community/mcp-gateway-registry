@@ -926,6 +926,7 @@ These have no `.env` equivalent because they describe the infrastructure, not th
 | `global.existingMongoCredentialsSecret` | External Mongo URI secret. |
 | `global.generateSecrets` | Default `true`: the chart generates any secret value you leave empty on first install and reads it back with `lookup` on upgrade, so it stays the same. Set `false` under ArgoCD or any other `helm template` tool, which has no cluster access and would generate a new value on every sync. With `false`, an empty value fails rendering with the name of the value to set: `global.secretKey`, `global.authProvider.keycloak.clientSecret` and `.m2mClientSecret`, `keycloak.auth.adminPassword`, `keycloak.postgresql.auth.password` and `.postgresPassword`, `mongodb.password`, `global.federation.staticToken` and `.encryptionKey` (federation only), and `registry.egressAuth.markerSecret`. The `existing*Secret` values can supply them instead. |
 | `global.ingress.className`, `tls`, `routingMode`, `paths.*`, `inboundCidrs` | ALB ingress shape. |
+| `global.ingress.sslPolicy` | The stack defaults to `ELBSecurityPolicy-TLS13-1-3-2021-06`, so its ALB HTTPS listener requires TLS 1.3. Set `ELBSecurityPolicy-TLS13-1-2-2021-06` to also allow TLS 1.2 clients, or set `""` to use the AWS Load Balancer Controller's default policy. |
 | `keycloak.create` | Deploy Keycloak in-chart vs external. |
 | `keycloak.httpRelativePath` | Keycloak base path. |
 | `keycloakIngress.enabled` | Create a Keycloak ingress. |

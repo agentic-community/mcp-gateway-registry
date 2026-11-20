@@ -3,6 +3,24 @@ release:
   name: test
   namespace: default
 tests:
+  - it: requires TLS 1.3 on the registry ingress by default
+    templates:
+      - charts/registry/templates/ingress.yaml
+    asserts:
+      - equal:
+          path: metadata.annotations["alb.ingress.kubernetes.io/ssl-policy"]
+          value: ELBSecurityPolicy-TLS13-1-3-2021-06
+
+  - it: accepts a policy override for TLS 1.2 clients
+    templates:
+      - charts/registry/templates/ingress.yaml
+    set:
+      global.ingress.sslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
+    asserts:
+      - equal:
+          path: metadata.annotations["alb.ingress.kubernetes.io/ssl-policy"]
+          value: ELBSecurityPolicy-TLS13-1-2-2021-06
+
   # Registry ingress in path mode exposes /oauth2, /keycloak, /realms,
   # /resources — required because auth-server and Keycloak have no
   # ingress of their own and the registry's nginx proxies them internally.
