@@ -21,7 +21,7 @@ The registry is the only component that stores anything. It holds `SECRET_KEY`, 
 
 The container holds the sync secret and, in memory only, the decrypted shared keys of the servers it runs. It never holds `SECRET_KEY` and never calls the registry. It treats every spec and every backend response as hostile.
 
-The auth server sits on the call path of servers with per-user targets. It asks the registry to vend a credential and forwards the result to the container without reading it, so it never holds the sync secret either.
+Every MCP call reaches the container through the auth server: nginx asks its `/validate` whether the caller may use the server, then proxies the call to its mcp-proxy hop, which forwards it to the container. For a server with per-user targets the hop also asks the registry to vend a credential and forwards the result without reading it, so the auth server never holds the sync secret either.
 
 ## Who can change a server
 
@@ -70,7 +70,7 @@ The container logs a refused backend call by its reason only. The URL can carry 
 
 ## Network isolation
 
-The container answers hub calls without authentication of its own. It relies on two things: the gateway checks every call, and only the registry and the auth server can reach the container's port.
+The container does not authenticate callers itself; the gateway does. The container relies on two things: only the registry and the auth server can reach its port, and every hub call carries the admission marker described below.
 
 | Deployment | Isolation |
 |------------|-----------|
@@ -78,37 +78,35 @@ The container answers hub calls without authentication of its own. It relies on 
 | Amazon ECS | A security group that admits only the registry and auth-server security groups |
 | Helm | A NetworkPolicy that admits only the registry and auth-server pods. It has no effect on a cluster that does not enforce NetworkPolicy, such as EKS with the VPC CNI's policy agent off |
 
-Network isolation cannot tell an authorized gateway call from a gateway call made on behalf of a different registration. The admission marker proposal below covers that case.
+Network isolation cannot tell an authorized gateway call from a gateway call made on behalf of a different registration. The admission marker covers that case.
 
-## Proposal: a per-slug admission marker (not built)
+## The admission marker
 
-*Status: proposed 2026-11-20, waiting for maintainer approval before it is built.*
+### The gap it closes
 
-### The gap
+The registry reserves the container's hostname, so no ordinary registration can name `openapi-mcp`. The same container is also reachable by IP address (a ClusterIP, a task IP) or by another DNS name. On a deployment where the operator admits that range through `SSRF_ALLOWED_CIDRS` or allows private targets, someone who may edit an ordinary registration could point it at `http://<container-ip>:9876/s/<victim-slug>/mcp`. The gateway would check the caller against the ordinary registration and forward the call from an allowed source, and the victim hub would spend its shared key. The default configuration, with an empty allowlist, does not admit that address.
 
-The registry reserves the container's hostname, so no ordinary registration can name `openapi-mcp`. The same container is also reachable by IP address (a ClusterIP, a task IP) or by another DNS name. On a deployment where the operator admits that range through `SSRF_ALLOWED_CIDRS` or allows private targets, someone who may edit an ordinary registration can point it at `http://<container-ip>:9876/s/<victim-slug>/mcp`. The gateway then checks the caller against the ordinary registration, proxies from an allowed source, and the victim hub spends its shared key. The default configuration, with an empty allowlist, does not admit that address.
+### How it works
 
-### The design
+![The admission marker on every hub call](../images/openapi-mcp-servers-security-admission-marker.svg)
 
-![Proposal: a per-slug admission marker](../images/openapi-mcp-servers-security-admission-marker.svg)
+The container requires an `X-OpenAPI-MCP-Admission` header on every `/s/<slug>/...` call. Its value is an HMAC-SHA256 of the slug, keyed with a key derived from the sync secret (`admission_marker` in `registry/auth/openapi_mcp_sync.py`). The dispatcher computes the value for the slug in the path and refuses a missing or wrong marker with `401` before it looks up the hub, so an unadmitted caller cannot even learn which slugs exist. The header is not in the MCP allowlist, so no backend ever receives it.
 
-Every legitimate call to a hub comes from a place that knows the server is an OpenAPI MCP server. Each such place adds a header, `X-OpenAPI-MCP-Admission`, whose value is `HMAC-SHA256(sync secret, "openapi-mcp-admission\n" + slug)`. The dispatcher computes the same value for the slug in the path and refuses a mismatch with `401` before the hub runs.
+Only the routes that serve a slug can produce its marker:
 
-- **nginx.** The registry generates the location for each owned server, so it writes `proxy_set_header X-OpenAPI-MCP-Admission <value>` into that location only. A location for an ordinary server has no value to set, and a client cannot compute one without the sync secret.
-- **The auth-server hop.** The registry's vend already recognizes an OpenAPI MCP record and returns the envelope. It returns the marker beside it, and only when the record passes `points_at_own_hub` for that slug. The auth server forwards both without reading them.
-- **The registry's own calls.** Health checks, tool refreshes and the security scan add the marker for a record that passes `points_at_own_hub`. A record that only points at the container's address gets no marker, so its probe fails.
+- **nginx.** The registry writes the marker into the location of each OpenAPI MCP server it owns. The auth server's mcp-proxy hop forwards it unchanged on both the shared-key and the per-user paths. Every other MCP location sends the header empty, which drops a client-supplied copy.
+- **Virtual servers.** The internal location for a virtual server's backend sets the marker of the backing server when that backend is an OpenAPI MCP server, and sends it empty otherwise.
+- **The registry's own calls.** Health checks, tool refreshes and the security scan add the marker through `admission_headers` in `registry/services/openapi_ownership.py`. It returns a marker only for a record at `/<slug>` whose target is exactly `<container>/s/<slug>/mcp`, and only when the call goes to that URL. The ownership rule keeps every other record off the container's hostname, so a record that reaches the container by IP gets no marker and its health check fails. The scanner receives the marker in its environment and turns it into its `--header` flag inside the child process, the same way it receives its bearer token, so the value never appears on a command line.
 
 ### Why a marker, and not a per-request token
 
-The review that found the gap suggested a short-lived admission token bound to each request. A token like that needs a mint on every call, a replay store, and a clock check in the container. The marker needs none of these, because the gateway has already authorized the caller: the container only has to learn which route the call came through, and the only routes that can produce the marker are the ones that serve that slug.
+The review that found the gap suggested a short-lived admission token bound to each request. A token like that needs a mint on every call, a replay store and a clock check in the container. The marker needs none of these, because the gateway has already authorized the caller: the container only has to learn which route the call came through, and only the routes that serve a slug can produce its marker.
 
 The marker does not expire. Anyone who can read the generated nginx config or the registry's environment can replay it, but those readers already hold the sync secret. Rotating the sync secret changes every marker at the next nginx reload and push.
 
-### Open questions
+### Upgrading
 
-- The security scanner can send a header only on its command line (`--header`), and a secret must not go on argv. The scan already passes its bearer token through an environment variable (`registry/services/security_scanner.py`); the marker would use the same path.
-- Should the marker also bind the server's incarnation (its creation time), so a slug deleted and created again gets a new value? The push already carries the incarnation, so the cost is small.
-- A rollout needs the registry, auth server and container from the same release. A container that requires the marker behind an older registry would refuse every call, so the container should enforce it only once the registry reports that it sends one.
+The registry and the openapi-mcp container must come from the same release. A container that requires the marker refuses every hub call from a registry that does not send one. The auth server needs no change, because it already forwards the header.
 
 ## Known limits
 
@@ -121,7 +119,6 @@ The marker does not expire. Anyone who can read the generated nginx config or th
 
 | Item | Notes |
 |------|-------|
-| Admission marker | The proposal above, after approval |
 | Visibility at the execution boundary | Platform-wide: apply `visibility` and `allowed_groups` in `/validate` for every server type, including virtual backends |
 | TLS for internal hops | Default `OPENAPI_MCP_INTERNAL_URL` to HTTPS on each deployment surface, with a CA bundle for the private certificate |
 | Bounded decompression in health probes | `registry/health/service.py` reads a `server/discover` response with `aiter_bytes()`, which decodes a compressed body before its size check. The same fix applies |
@@ -133,7 +130,7 @@ A security review on 2026-11-18, at revision `ee8a3744b`, raised eight findings 
 | Finding | Status |
 |---------|--------|
 | 1. Pooled clients replay one user's backend cookie for another | Fixed: no-store cookie jar, `Set-Cookie` dropped |
-| 2. A container alias or IP reaches a hub | Proposed: the admission marker above |
+| 2. A container alias or IP reaches a hub | Fixed: the admission marker |
 | 3. Visibility does not restrict tool calls | Not changed in this PR; see Known limits |
 | 4. A spec path escapes the approved base path | Fixed at admission and before each call |
 | 5. Full-record writes undo a disable or tool block | Fixed: field-scoped writes |
@@ -142,5 +139,5 @@ A security review on 2026-11-18, at revision `ee8a3744b`, raised eight findings 
 | 8. Target reads show tools the caller has no grant for | Fixed: tool names filtered, overrides admin-only |
 | Callout: a refused URL is logged | Fixed: reason only |
 | Callout: keys over HTTP | Fixed: HTTPS required unless the host is operator-trusted |
-| Callout: hub calls rely on network isolation | Addressed by the marker proposal |
+| Callout: hub calls rely on network isolation | Addressed: the admission marker |
 | Callout: envelopes are signed, not encrypted | Known limit; TLS follow-up |

@@ -1078,6 +1078,8 @@ class TestGenerateVirtualBackendLocations:
 
         cleared = {name.lower() for name in re.findall(r'proxy_set_header (\S+) "";', block)}
         assert cleared == {
+            # An ordinary backend never sends an OpenAPI MCP admission marker.
+            "x-openapi-mcp-admission",
             "authorization",
             "x-authorization",
             "proxy-authorization",

@@ -3,9 +3,10 @@
 The registry owns all state and pushes it here. This process keeps one FastMCP
 hub per OpenAPI MCP server, in memory only:
 
-- ``/s/<slug>/mcp``: the MCP endpoint of one server. It has no auth of its own;
-  the gateway's ``auth_request`` guards it, and only nginx and the registry can
-  reach this container.
+- ``/s/<slug>/mcp``: the MCP endpoint of one server. The gateway's
+  ``auth_request`` decides who may call it; this process only checks that the
+  call came through a route that serves this slug (the admission marker), and
+  only the registry and the auth server can reach this container.
 - ``/internal/*``: the registry's control API, each call carrying a fresh sync
   token (``registry/auth/openapi_mcp_sync.py``).
 - ``/health``: liveness, no auth.
@@ -45,9 +46,11 @@ from starlette.responses import (
 from starlette.routing import Route
 
 from registry.auth.openapi_mcp_sync import (
+    ADMISSION_HEADER,
     ENVELOPE_HEADER,
     JtiCache,
     SyncTokenError,
+    admission_marker_matches,
     verify_credential_envelope,
     verify_sync_token,
 )
@@ -207,6 +210,33 @@ async def _not_found(
     await response(scope, receive, send)
 
 
+def _header(
+    scope,
+    name: str,
+) -> str | None:
+    wanted = name.lower().encode()
+    raw = next((v for k, v in scope.get("headers", []) if k.lower() == wanted), None)
+    return None if raw is None else raw.decode("latin-1")
+
+
+def _admitted(
+    scope,
+    slug: str,
+) -> bool:
+    """True when the call carries this slug's admission marker.
+
+    Only the server's own gateway routes and the registry can produce it, so
+    an ordinary registration aimed at this container's IP is refused here.
+    """
+    presented = _header(scope, ADMISSION_HEADER)
+    secret = settings.openapi_mcp_sync_secret.get_secret_value()
+    if admission_marker_matches(secret, slug, presented):
+        return True
+    reason = "missing" if presented is None else "wrong"
+    logger.warning(f"Refused a call to '{slug}': admission marker {reason}")
+    return False
+
+
 def _user_credentials(
     scope,
     slug: str,
@@ -239,6 +269,13 @@ async def app(
         await control_app(scope, receive, send)
         return
     slug, _, rest = path[len(SLUG_PREFIX) :].partition("/")
+    # Checked before the hub lookup, so an unadmitted caller cannot learn
+    # which slugs exist.
+    if not _admitted(scope, slug):
+        await _error(401, "unauthorized", "this call did not come through the gateway")(
+            scope, receive, send
+        )
+        return
     entry = hubs.get_hub(slug)
     if entry is None:
         await _not_found(scope, receive, send)

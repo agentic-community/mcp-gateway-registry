@@ -4,7 +4,7 @@
 
 *Status: all five slices are built on branch `feat/openapi-mcp-servers-2022` (PR #2039), including per-user credentials and uploaded specs.*
 
-Every diagram is an SVG in `docs/images/`, named `openapi-mcp-servers-*`. The threat model, every security control and the open proposals are in [openapi-mcp-servers-security.md](openapi-mcp-servers-security.md).
+Every diagram is an SVG in `docs/images/`, named `openapi-mcp-servers-*`. The threat model and every security control are in [openapi-mcp-servers-security.md](openapi-mcp-servers-security.md).
 
 ## 100-level: what it is and why
 
@@ -54,7 +54,7 @@ The registry is the control plane. It owns all state and never carries REST traf
 | Reconciler | registry | Compares stored state with what the container reports and pushes any server that is stale or missing |
 | `server_service`, health service | registry (existing) | Each OpenAPI MCP server is an ordinary `ServerInfo` record, so search, scopes, nginx routing, health checks and the security scan work unchanged |
 | SSRF guard | both | The registry uses it to fetch specs and to admit the container by exact identity. The container uses the same file for every backend call |
-| Dispatcher | container | Sends `/s/<slug>/...` to that server's hub with only MCP headers, and everything else to the control API |
+| Dispatcher | container | Checks the slug's admission marker, then sends `/s/<slug>/...` to that server's hub with only MCP headers, and everything else to the control API |
 | Control API | container | `/internal/*`: apply a server's state, delete a server, preview a spec, report status. Each call needs a valid sync token |
 | Hub manager | container | Keeps one FastMCP hub per server. A push builds a new hub, swaps it in, and closes the old one |
 | Backend client | container | One per target. Holds the target's credential, applies its filters and overrides, and sends every request through the SSRF guard |
@@ -120,9 +120,9 @@ If any step fails, the registry returns an error and stores nothing. If every st
 
 ![A tool call through the gateway](../images/openapi-mcp-servers-200-tool-call.svg)
 
-The gateway treats the server like any other: nginx asks the auth server's `/validate` whether the caller's token and scopes allow this server, then proxies to the container. Inside the container:
+The gateway treats the server like any other: nginx asks the auth server's `/validate` whether the caller's token and scopes allow this server, then proxies the call through the auth server's mcp-proxy hop to the container. The server's nginx location adds its admission marker, which the hop forwards. Inside the container:
 
-- The dispatcher keeps only MCP headers, such as `content-type`, `accept` and `mcp-protocol-version`. FastMCP copies every inbound header it receives onto the backend request, so without this step a third-party API would see the caller's identity headers, forwarding addresses and internal routing headers.
+- The dispatcher refuses the call with `401` unless it carries the admission marker for the slug in its path. It then keeps only MCP headers, such as `content-type`, `accept` and `mcp-protocol-version`. FastMCP copies every inbound header it receives onto the backend request, so without this step a third-party API would see the caller's identity headers, forwarding addresses and internal routing headers.
 - The hub refuses any argument the spec does not define, so a misspelled argument returns an error. In the prototype FastMCP dropped such an argument and the API returned less data than asked for.
 - The backend client adds the target's credential and sends the request through the SSRF guard, which resolves the host, checks the IP and pins the connection to it.
 - The container turns a response over 2 MiB into a tool error. It wraps array responses as `{"result": [...]}`, because MCP structured output has to be an object.
@@ -157,7 +157,7 @@ This table summarizes the main controls. The full security design, with its trus
 | A spec or base URL points at internal services or cloud metadata | The same SSRF guard runs on the spec fetch and on every backend call |
 | A key leaves its approved base URL, or travels in clear | Spec paths with `.` or `..` segments are refused, and the container checks that each final URL stays under the base URL. A target with a key needs HTTPS unless the operator allowlisted its host |
 | One user's backend session reaches another user | The backend clients store no cookies and drop every `Set-Cookie` |
-| An ordinary server registers the container as its backend | The container's hostname is reserved. Only a server whose path and target match `/<slug>` and `<container>/s/<slug>/mcp` exactly gets the built-in profile. That profile reaches only `/s/<slug>/mcp`, never `/internal/*`. The reservation matches the hostname, so the container reached by IP or another name is a known gap; the security design proposes a fix |
+| An ordinary server registers the container as its backend | The container's hostname is reserved. Only a server whose path and target match `/<slug>` and `<container>/s/<slug>/mcp` exactly gets the built-in profile. That profile reaches only `/s/<slug>/mcp`, never `/internal/*`. The container also refuses any hub call without that slug's admission marker, which only the server's own gateway routes and the registry's own calls send, so reaching the container by IP or another name gets `401` |
 | Gateway headers reach a third-party API | The dispatcher keeps only an allowlist of MCP headers |
 | One user's key is used for another user, or sent to another host | Per-user keys are keyed on the immutable user id, bound to the target's base URL, and delivered per call in a signed, single-use, slug-bound envelope; a missing key is an error, never a fallback to a shared key |
 | A spec or response that expands into gigabytes, or a spec that takes a long time to convert | YAML aliases and compressed bodies are refused, specs are capped at 5 MiB and responses at 2 MiB, and each conversion has 10 seconds |

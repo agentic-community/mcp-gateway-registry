@@ -19,11 +19,13 @@ from typing import Any
 
 import certifi
 
+from ..auth.openapi_mcp_sync import ADMISSION_HEADER
 from ..common.log_redaction import redact_url
 from ..core.config import settings
 from ..core.endpoint_utils import get_endpoint_url
 from ..repositories.factory import get_security_scan_repository
 from ..schemas.security import SecurityScanConfig, SecurityScanResult
+from .openapi_ownership import admission_headers
 from .scanner_llm_analyzer import (
     MCP_SCANNER_LITELLM_STANDIN,
     LLMAnalyzerUnavailableError,
@@ -39,6 +41,8 @@ OUTPUT_DIR = PROJECT_ROOT / "security_scans"
 # Name of the environment variable carrying the scan credential to the child. Private to
 # this module and the shim below; deliberately NOT one of mcp-scanner's own variables.
 _SCANNER_BEARER_ENV = "MCP_GATEWAY_SCAN_BEARER"  # nosec B105 - env var name, not a secret
+# The OpenAPI MCP admission marker, handed over the same way as the bearer token.
+_SCANNER_ADMISSION_ENV = "MCP_GATEWAY_SCAN_ADMISSION"  # nosec B105 - env var name, not a secret
 
 # Python source run inside the scanner subprocess, after the litellm stand-in. It fixes
 # when mcp-scanner falls back from MCP 2026-07-28 to the initialize handshake.
@@ -90,7 +94,9 @@ _SCANNER_SHIM = (
         "import os,sys;"
         "from mcpscanner.cli import cli_entry_point;"
         f"_t=os.environ.pop({_SCANNER_BEARER_ENV!r},None);"
-        "sys.argv=['mcp-scanner']+sys.argv[1:]+(['--bearer-token',_t] if _t else []);"
+        f"_a=os.environ.pop({_SCANNER_ADMISSION_ENV!r},None);"
+        "sys.argv=['mcp-scanner']+sys.argv[1:]+(['--bearer-token',_t] if _t else [])"
+        f"+(['--header',{ADMISSION_HEADER + ': '!r}+_a] if _a else []);"
         "sys.exit(cli_entry_point())"
     )
 )
@@ -416,6 +422,9 @@ class SecurityScannerService:
                 api_key=api_key,
                 headers=headers,
                 timeout=timeout,
+                admission=admission_headers(server_path, registered_url, server_url).get(
+                    ADMISSION_HEADER
+                ),
             )
 
             # Analyze results
@@ -532,6 +541,7 @@ class SecurityScannerService:
         api_key: str | None = None,
         headers: str | None = None,
         timeout: int | None = None,
+        admission: str | None = None,
     ) -> dict:
         """
         Run mcp-scanner command and return raw output.
@@ -544,6 +554,8 @@ class SecurityScannerService:
             api_key: OpenAI API key for LLM-based analysis
             headers: JSON string of headers to include in requests
             timeout: Scan timeout in seconds
+            admission: The OpenAPI MCP admission marker, for a scan of an
+                OpenAPI MCP server's hub. Passed through the environment.
 
         Returns:
             Dictionary containing analysis results and tool results
@@ -598,6 +610,9 @@ class SecurityScannerService:
                 env[_SCANNER_BEARER_ENV] = bearer_token
         if api_key:
             env["MCP_SCANNER_LLM_API_KEY"] = api_key
+        if admission:
+            # The OpenAPI MCP container refuses a hub call without its marker.
+            env[_SCANNER_ADMISSION_ENV] = admission
 
         # Run scanner with timeout
         try:

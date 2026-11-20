@@ -18,8 +18,15 @@ that sets a target URL, so the rules hold for any route, including future ones.
 import logging
 from typing import Any
 
+from ..auth.openapi_mcp_sync import (
+    ADMISSION_HEADER,
+    SyncTokenError,
+    admission_marker,
+)
+from ..core.config import settings
 from ..utils.url_guard import (
     UrlValidationError,
+    is_builtin_openapi_mcp_target,
     is_openapi_mcp_container_url,
     normalize_url_identity,
     openapi_mcp_target_url,
@@ -81,6 +88,40 @@ def points_at_own_hub(
         # that host is enough to refuse a repoint.
         return is_openapi_mcp_container_url(url)
     return _same_target(url, expected)
+
+
+def admission_headers(
+    entity_path: str | None,
+    registered_target: str | None,
+    destination_url: str | None = None,
+) -> dict[str, str]:
+    """The admission marker header for a registry call to an OpenAPI MCP server's hub.
+
+    The container refuses a hub call without the marker for that slug. Only a
+    record at ``/<slug>`` whose target is exactly ``<container>/s/<slug>/mcp``
+    gets one, and only when the call goes to that same URL. Ownership checks
+    keep every other record off the container's hostname, so a record that
+    reaches the container by IP or another name never gets a marker.
+
+    Returns an empty dict for every other call.
+    """
+    if not is_builtin_openapi_mcp_target("mcp_server", entity_path, registered_target):
+        return {}
+    destination = destination_url or registered_target
+    try:
+        same_hub = normalize_url_identity(destination).rstrip("/") == normalize_url_identity(
+            registered_target
+        ).rstrip("/")
+    except (UrlValidationError, TypeError, AttributeError):
+        same_hub = False
+    if not same_hub:
+        return {}
+    slug = str(entity_path).strip("/")
+    try:
+        return {ADMISSION_HEADER: admission_marker(settings.openapi_mcp_sync_secret, slug)}
+    except SyncTokenError:
+        logger.warning(f"No admission marker for '{slug}': OPENAPI_MCP_SYNC_SECRET is not set")
+        return {}
 
 
 def check_openapi_ownership(

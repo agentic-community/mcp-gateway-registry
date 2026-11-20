@@ -465,6 +465,16 @@ def _build_headers_for_server(
         destination_url,
         server_info,
     )
+    if destination_safe:
+        from ..services.openapi_ownership import admission_headers
+
+        headers.update(
+            admission_headers(
+                server_info.get("path") or server_info.get("service_path"),
+                server_info.get("proxy_pass_url"),
+                destination_url,
+            )
+        )
     if has_server_values and not destination_safe:
         logger.warning(
             f"MCP headers withheld service={server_info.get('service_path') or server_info.get('path') or 'unknown'} destination={redact_url(destination_url or '')} reason=URL validation failed",

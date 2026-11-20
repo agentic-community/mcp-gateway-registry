@@ -933,6 +933,10 @@ class HealthMonitoringService:
             )
             return headers
 
+        from ..services.openapi_ownership import admission_headers
+
+        headers.update(admission_headers(entity_path, registered_target, destination_url))
+
         server_headers = server_info.get("headers", [])
         if isinstance(server_headers, list):
             for header_dict in server_headers:
