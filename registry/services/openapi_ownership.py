@@ -120,7 +120,7 @@ def admission_headers(
     try:
         return {ADMISSION_HEADER: admission_marker(settings.openapi_mcp_sync_secret, slug)}
     except SyncTokenError:
-        logger.warning(f"No admission marker for '{slug}': OPENAPI_MCP_SYNC_SECRET is not set")
+        logger.warning("No admission marker: OPENAPI_MCP_SYNC_SECRET is not set")
         return {}
 
 
