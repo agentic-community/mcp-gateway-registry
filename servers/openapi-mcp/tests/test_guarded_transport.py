@@ -23,8 +23,11 @@ SETTINGS_READ_PATTERNS: tuple[re.Pattern, ...] = (
 
 def _client(
     max_bytes: int = 1_000_000,
+    base_url: str = "https://api.example.com",
 ) -> httpx2.AsyncClient:
-    return httpx2.AsyncClient(transport=GuardedHttpx2Transport(max_response_bytes=max_bytes))
+    return httpx2.AsyncClient(
+        transport=GuardedHttpx2Transport(max_response_bytes=max_bytes, base_url=base_url)
+    )
 
 
 class TestRealGuard:
@@ -42,7 +45,7 @@ class TestRealGuard:
         ],
     )
     async def test_private_and_metadata_targets_blocked(self, url):
-        async with _client() as client:
+        async with _client(base_url=url) as client:
             with pytest.raises(BackendUrlBlockedError):
                 await client.get(url)
 

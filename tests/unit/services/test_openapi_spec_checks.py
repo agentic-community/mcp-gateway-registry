@@ -1,10 +1,14 @@
 """Tests for OpenAPI spec fetching and checks (issue #2022)."""
 
+import gzip
+
 import httpx
 import pytest
 
+from registry.core.config import settings
 from registry.services import openapi_spec_checks
 from registry.services.openapi_errors import OpenApiServerError
+from registry.utils import url_guard
 
 VALID_YAML: bytes = b"""
 openapi: 3.0.4
@@ -179,15 +183,39 @@ class TestFetchSpec:
 
     @pytest.fixture
     def serve(self, monkeypatch):
+        seen: list[httpx.Request] = []
+
         def _install(
             response: httpx.Response,
         ) -> None:
+            def _handler(
+                request: httpx.Request,
+            ) -> httpx.Response:
+                seen.append(request)
+                return response
+
             def _client(**kwargs):
-                return httpx.AsyncClient(transport=httpx.MockTransport(lambda request: response))
+                return httpx.AsyncClient(transport=httpx.MockTransport(_handler))
 
             monkeypatch.setattr(openapi_spec_checks, "guarded_async_client", _client)
+            return seen
 
         return _install
+
+    async def test_asks_for_identity_and_refuses_a_compressed_spec(self, serve):
+        seen = serve(
+            httpx.Response(
+                200, content=gzip.compress(VALID_YAML), headers={"content-encoding": "gzip"}
+            )
+        )
+
+        with pytest.raises(OpenApiServerError) as info:
+            await openapi_spec_checks.fetch_spec_bytes("https://api.example.com/spec", 10_000)
+
+        assert (info.value.code, seen[0].headers["accept-encoding"]) == (
+            "spec_fetch_failed",
+            "identity",
+        )
 
     async def test_returns_bytes_and_content_type(self, serve):
         serve(httpx.Response(200, content=VALID_YAML, headers={"content-type": "application/yaml"}))
@@ -228,3 +256,46 @@ class TestFetchSpec:
             openapi_spec_checks.validate_target_url("http://127.0.0.1:8080/api", "base_url")
 
         assert (info.value.code, info.value.extra["field"]) == ("url_blocked", "base_url")
+
+
+class TestDotSegmentPaths:
+    """A spec path must not climb out of the target's base URL (security review #4)."""
+
+    @pytest.mark.parametrize(
+        "path",
+        ["/../../collect", "/a/./b", "/%2e%2e/x", "/..%2Fx", "/a\\..\\b", "/a/%5c..%5cb", "/.."],
+    )
+    def test_dot_segment_path_rejected(self, path):
+        raw = VALID_YAML.replace(b"/items:", f'"{path}":'.encode())
+
+        assert _code(raw) == "spec_invalid"
+
+    @pytest.mark.parametrize("path", ["/items/{id}", "/v1.2/items", "/files/{name}.json", "/..x"])
+    def test_ordinary_paths_with_dots_pass(self, path):
+        raw = VALID_YAML.replace(b"/items:", f'"{path}":'.encode())
+
+        assert openapi_spec_checks.parse_spec(raw).spec["paths"]
+
+
+class TestCredentialTransport:
+    """A credentialed target needs HTTPS unless the operator trusts the host."""
+
+    def test_credential_over_http_is_refused(self):
+        with pytest.raises(OpenApiServerError) as info:
+            openapi_spec_checks.check_credential_transport("http://api.example.com", "bearer")
+
+        assert (info.value.code, info.value.extra["field"]) == ("https_required", "base_url")
+
+    @pytest.mark.parametrize(
+        ("url", "scheme"),
+        [("https://api.example.com", "bearer"), ("http://api.example.com", "none")],
+    )
+    def test_https_or_no_credential_passes(self, url, scheme):
+        openapi_spec_checks.check_credential_transport(url, scheme)
+
+    def test_operator_trusted_host_may_use_http(self, monkeypatch, request):
+        monkeypatch.setattr(settings, "ssrf_allowed_hosts", "internal-api")
+        url_guard._proxy_allowlist.cache_clear()
+        request.addfinalizer(url_guard._proxy_allowlist.cache_clear)
+
+        openapi_spec_checks.check_credential_transport("http://internal-api:8080/v1", "basic")

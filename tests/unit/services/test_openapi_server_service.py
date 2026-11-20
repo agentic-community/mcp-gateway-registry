@@ -15,6 +15,7 @@ import pytest
 from registry.schemas.openapi_server_models import (
     OpenApiServer,
     OpenApiServerCreateRequest,
+    OpenApiServerUpdateRequest,
     OpenApiTargetCreateRequest,
     OpenApiTargetUpdateRequest,
     StoredSpec,
@@ -656,3 +657,64 @@ async def test_push_and_refresh_reports_pending_past_budget(env, monkeypatch):
         status = await service._push_and_refresh(server, rescan=False)
 
     assert status == "pending"
+
+
+class TestServerInfoWritesAreFieldScoped:
+    """A stale full-record write must not undo a disable or tool block (security review #5)."""
+
+    async def test_metadata_update_writes_only_the_changed_fields(self, env):
+        _servers, _specs, mocks = env
+        await _create()
+        mocks["get_server_info"].return_value = {
+            "path": "/weather-apis",
+            "is_enabled": True,
+            "tool_overrides": {},
+        }
+        mocks["update_server"].reset_mock()
+
+        await service.update_server(
+            "weather-apis", OpenApiServerUpdateRequest(description="new text")
+        )
+
+        args, kwargs = mocks["update_server"].call_args
+        assert (args[1], kwargs["updated_fields"]) == ({"description": "new text"}, ["description"])
+
+    async def test_egress_sync_writes_only_the_egress_fields(self, env, monkeypatch):
+        _servers, _specs, mocks = env
+        monkeypatch.setattr(service.settings, "egress_auth_enabled", True)
+        monkeypatch.setattr(service.server_lifecycle, "flush_nginx", AsyncMock())
+        await _create()
+        mocks["get_server_info"].return_value = {"is_enabled": False, "egress_auth_mode": "none"}
+        mocks["update_server"].reset_mock()
+
+        await service.add_target(
+            "weather-apis",
+            _target_request(auth={"scheme": "bearer", "credential_mode": "per_user"}),
+            ADMIN,
+        )
+
+        _args, kwargs = mocks["update_server"].call_args
+        assert sorted(kwargs["updated_fields"]) == ["egress_auth_mode", "egress_oauth"]
+
+    async def test_a_lost_record_write_is_reported(self, env):
+        _servers, _specs, mocks = env
+        await _create()
+        mocks["update_server"].return_value = False
+
+        with pytest.raises(OpenApiServerError) as info:
+            await service.update_server("weather-apis", OpenApiServerUpdateRequest(tags=["x"]))
+
+        assert info.value.code == "server_sync_failed"
+
+
+async def test_credentialed_http_target_is_refused_and_nothing_stored(env):
+    servers, _specs, mocks = env
+    await _create()
+
+    with pytest.raises(OpenApiServerError) as info:
+        await service.add_target(
+            "weather-apis", _target_request(base_url="http://petstore.example.com/api"), ADMIN
+        )
+
+    assert (info.value.code, servers.docs["weather-apis"].targets) == ("https_required", [])
+    mocks["fetch"].assert_not_called()

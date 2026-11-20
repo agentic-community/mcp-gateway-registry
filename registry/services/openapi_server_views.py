@@ -11,6 +11,7 @@ Two directions:
 import logging
 from typing import Any
 
+from ..auth.tool_filter import filter_tools_for_user
 from ..core.config import settings
 from ..schemas.openapi_server_models import (
     OpenApiServer,
@@ -47,7 +48,36 @@ def _runtime_for(
     return entry["status"], entry.get("error")
 
 
+def _tool_projection(
+    server: OpenApiServer,
+    target: OpenApiTarget,
+    user_context: dict | None,
+) -> dict[str, Any]:
+    """The target's tools as the caller may see them.
+
+    Tool names go through the same filter as every other server's tools, so a
+    caller granted one tool does not learn the others. The override maps and
+    include filters name operations too, so only an admin sees them.
+    """
+    context = user_context or {}
+    visible = filter_tools_for_user(
+        server.name,
+        [{"name": name} for name in target.tool_names],
+        context,
+        server_path=server.path,
+    )
+    is_admin = context.get("is_admin") is True
+    return {
+        "tool_names": [tool["name"] for tool in visible],
+        "tool_name_overrides": target.tool_name_overrides if is_admin else {},
+        "description_overrides": target.description_overrides if is_admin else {},
+        "include_tags": target.include_tags if is_admin else [],
+        "include_operations": target.include_operations if is_admin else [],
+    }
+
+
 def target_response(
+    server: OpenApiServer,
     target: OpenApiTarget,
     user_context: dict | None,
     runtime: dict[str, Any] | None = None,
@@ -55,6 +85,9 @@ def target_response(
     """One target as a caller may see it."""
     redact = should_redact_backend_urls(user_context)
     status, error = _runtime_for(target.name, runtime)
+    if redact and error:
+        # A conversion error can quote operation names and paths from the spec.
+        error = "the target could not be loaded; an admin can see the details"
     return OpenApiTargetResponse(
         name=target.name,
         description=target.description,
@@ -72,11 +105,7 @@ def target_response(
             username=None if redact else target.auth.username,
             credential_set=bool(target.auth.credential_encrypted),
         ),
-        tool_names=target.tool_names,
-        tool_name_overrides=target.tool_name_overrides,
-        description_overrides=target.description_overrides,
-        include_tags=target.include_tags,
-        include_operations=target.include_operations,
+        **_tool_projection(server, target, user_context),
         keep_output_schemas=target.keep_output_schemas,
         status=status,
         error=error,
@@ -102,7 +131,7 @@ def server_response(
         allowed_groups=server.allowed_groups,
         generation=server.generation,
         sync_status=sync_status,
-        targets=[target_response(t, user_context, runtime) for t in server.targets],
+        targets=[target_response(server, t, user_context, runtime) for t in server.targets],
         created_at=server.created_at,
         updated_at=server.updated_at,
     )

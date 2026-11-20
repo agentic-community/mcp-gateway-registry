@@ -103,13 +103,13 @@ async def test_no_default_auth_header():
 async def test_no_cookie_persistence_uses_no_store_jar():
     # Cookies are never stored (a no-store jar), so a Set-Cookie can never be
     # replayed onto a later OR concurrent request sharing the pooled client.
-    from registry.utils.url_guard import _NoStoreCookieJar
+    from registry.utils.url_guard import NoStoreCookieJar
 
     for client in (
         shared_plain_async_client(),
         shared_guarded_async_client(profile=PROXY_PROFILE),
     ):
-        assert isinstance(client.cookies.jar, _NoStoreCookieJar)
+        assert isinstance(client.cookies.jar, NoStoreCookieJar)
         # Even an explicit set is dropped -> nothing to replay, no shared state to race.
         client.cookies.set("sid", "secret", domain="example.com")
         assert len(client.cookies) == 0
