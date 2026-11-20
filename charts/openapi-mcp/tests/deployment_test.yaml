@@ -17,7 +17,7 @@ tests:
           value: Recreate
       - equal:
           path: spec.template.spec.containers[0].image
-          value: public.ecr.aws/p3v1o3c6/openapi-mcp:1.37.0
+          value: public.ecr.aws/p3v1o3c6/openapi-mcp:1.38.1
       - equal:
           path: spec.template.spec.containers[0].ports[0].containerPort
           value: 9876
