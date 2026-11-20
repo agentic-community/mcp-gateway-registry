@@ -17,6 +17,7 @@ from typing import (
 from urllib.parse import urlparse
 
 import httpx
+import yaml
 
 from ..common.log_redaction import redact_url
 from ..core.config import settings
@@ -75,6 +76,8 @@ logger = logging.getLogger(__name__)
 
 # Constants
 URL_VALIDATION_TIMEOUT: int = 10
+MAX_SKILL_FRONTMATTER_CHARS: int = 64 * 1024
+MAX_SKILL_YAML_DEPTH: int = 32
 
 # Upper bound on GitLab tree-API pages fetched during resource discovery, so a
 # server that keeps echoing the x-next-page header cannot loop indefinitely.
@@ -635,6 +638,30 @@ async def _validate_skill_md_url(
         raise SkillUrlValidationError(url, str(e)) from e
 
 
+def _load_skill_frontmatter(frontmatter: str) -> dict[str, Any]:
+    if len(frontmatter) > MAX_SKILL_FRONTMATTER_CHARS:
+        return {}
+    source = frontmatter + "\n"
+    depth = 0
+    try:
+        for event in yaml.parse(source, Loader=yaml.BaseLoader):
+            if isinstance(event, yaml.AliasEvent) or getattr(event, "tag", None) is not None:
+                return {}
+            if isinstance(event, yaml.ScalarEvent):
+                event.value.encode("utf-8")
+            if isinstance(event, yaml.MappingStartEvent | yaml.SequenceStartEvent):
+                depth += 1
+                if depth > MAX_SKILL_YAML_DEPTH:
+                    return {}
+            elif isinstance(event, yaml.MappingEndEvent | yaml.SequenceEndEvent):
+                depth -= 1
+        # BaseLoader preserves scalar text and cannot construct Python objects.
+        metadata = yaml.load(source, Loader=yaml.BaseLoader)  # nosec B506 - data-only loader
+    except (yaml.YAMLError, ValueError):
+        return {}
+    return metadata if isinstance(metadata, dict) else {}
+
+
 async def _parse_skill_md_content(
     url: str,
     auth_scheme: str = "none",
@@ -735,57 +762,40 @@ async def _parse_skill_md_content(
             # 3. Code block without ---: ```yaml\n...\n```
             frontmatter = None
             frontmatter_end_pos = 0
+            scan = content[: MAX_SKILL_FRONTMATTER_CHARS + 1]
 
             # Format 1: Standard frontmatter at start of file
-            frontmatter_match = re.match(r"^---\s*\n(.*?)\n---\s*\n", content, re.DOTALL)
+            frontmatter_match = re.match(r"^---[^\S\n]*\n(.*?)\n---[^\S\n]*\n", scan, re.DOTALL)
             if frontmatter_match:
                 frontmatter = frontmatter_match.group(1)
                 frontmatter_end_pos = frontmatter_match.end()
             else:
-                # Format 2: YAML code block with --- markers inside
-                # Matches: ```yaml\n---\nkey: value\n---\n```
-                codeblock_with_markers = re.search(
-                    r"```ya?ml\s*\n---\s*\n(.*?)\n---\s*\n```",
-                    content,
-                    re.DOTALL | re.IGNORECASE,
-                )
-                if codeblock_with_markers:
-                    frontmatter = codeblock_with_markers.group(1)
-                    frontmatter_end_pos = codeblock_with_markers.end()
-                else:
-                    # Format 3: YAML code block without --- markers
-                    # Matches: ```yaml\nkey: value\n```
-                    codeblock_no_markers = re.search(
-                        r"```ya?ml\s*\n(.*?)\n```",
-                        content,
-                        re.DOTALL | re.IGNORECASE,
-                    )
-                    if codeblock_no_markers:
-                        frontmatter = codeblock_no_markers.group(1)
-                        frontmatter_end_pos = codeblock_no_markers.end()
+                fence = re.search(r"```ya?ml[^\S\n]*\n", scan, re.IGNORECASE)
+                if fence:
+                    end = scan.find("\n```", fence.end())
+                    if end != -1:
+                        frontmatter = scan[fence.end() : end]
+                        frontmatter = re.sub(r"^---[^\S\n]*\n|\n---[^\S\n]*$", "", frontmatter)
+                        frontmatter_end_pos = end + len("\n```")
 
             if frontmatter:
-                # Parse simple YAML key: value pairs
-                for line in frontmatter.split("\n"):
-                    if ":" in line:
-                        key, value = line.split(":", 1)
-                        key = key.strip().lower()
-                        value = value.strip().strip('"').strip("'")
-                        if key == "name":
-                            result["name"] = value
-                        elif key == "description":
-                            result["description"] = value
-                        elif key == "version":
-                            result["version"] = value
+                metadata = _load_skill_frontmatter(frontmatter)
+                if metadata:
+                    for key, value in metadata.items():
+                        if not isinstance(key, str):
+                            continue
+                        key = key.lower()
+                        if key in ("name", "description", "version") and isinstance(value, str):
+                            result[key] = value
                         elif key == "tags":
-                            # Handle comma-separated or YAML list
-                            if value.startswith("["):
-                                value = value.strip("[]")
-                            result["tags"] = [
-                                t.strip().strip('"').strip("'")
-                                for t in value.split(",")
-                                if t.strip()
-                            ]
+                            if isinstance(value, str):
+                                value = value.split(",")
+                            if isinstance(value, list):
+                                result[key] = [
+                                    tag.strip()
+                                    for tag in value
+                                    if isinstance(tag, str) and tag.strip()
+                                ]
 
                 # Remove frontmatter from content for further parsing
                 content = content[frontmatter_end_pos:]
