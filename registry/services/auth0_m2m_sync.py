@@ -229,6 +229,11 @@ class Auth0M2MSync:
     async def sync_from_auth0(self, force_full_sync: bool = False) -> dict:
         """Sync M2M clients from Auth0 to MongoDB.
 
+        Auth0's ``is_first_party`` controls consent, not active state. New
+        clients are enabled; sync preserves operator-owned enablement in both
+        collections, including during a full sync. A missing record inherits
+        the other collection's enablement when first inserted.
+
         Args:
             force_full_sync: If True, update all clients. Otherwise incremental.
 
@@ -261,8 +266,11 @@ class Auth0M2MSync:
                         logger.warning(f"Client {client.get('name')} has no client_id, skipping")
                         continue
 
-                    # Check if client already exists in database
+                    # Read both records before inserting a missing counterpart.
                     existing = await self.collection.find_one({"client_id": client_id})
+                    existing_idp = await self.idp_collection.find_one({"client_id": client_id})
+                    enablement = existing_idp if existing_idp is not None else existing
+                    initial_enabled = enablement is None or enablement.get("enabled", True) is True
 
                     # Determine groups for this client
                     groups = self._determine_groups(client_id)
@@ -273,27 +281,29 @@ class Auth0M2MSync:
                         "name": client.get("name", client_id),
                         "description": client.get("description"),
                         "groups": groups,
-                        "enabled": not client.get("is_first_party", False),
                         "auth0_client_id": client.get("client_id"),
                         "app_type": client.get("app_type"),
                         "last_synced": datetime.utcnow(),
                     }
 
-                    if existing:
-                        # Update existing record
-                        client_doc["updated_at"] = datetime.utcnow()
-                        await self.collection.update_one(
-                            {"client_id": client_id}, {"$set": client_doc}
-                        )
-                        updated_count += 1
-                        logger.info(f"Updated client: {client_id}")
-                    else:
-                        # Insert new record
-                        client_doc["created_at"] = datetime.utcnow()
-                        client_doc["updated_at"] = datetime.utcnow()
-                        await self.collection.insert_one(client_doc)
+                    client_doc["updated_at"] = datetime.utcnow()
+                    result = await self.collection.update_one(
+                        {"client_id": client_id},
+                        {
+                            "$set": client_doc,
+                            "$setOnInsert": {
+                                "enabled": initial_enabled,
+                                "created_at": datetime.utcnow(),
+                            },
+                        },
+                        upsert=True,
+                    )
+                    if result.upserted_id is not None:
                         added_count += 1
                         logger.info(f"Added new client: {client_id}")
+                    else:
+                        updated_count += 1
+                        logger.info(f"Updated client: {client_id}")
 
                     # Also sync to generic idp_m2m_clients collection for groups enrichment
                     idp_doc = {
@@ -301,20 +311,23 @@ class Auth0M2MSync:
                         "name": client.get("name", client_id),
                         "description": client.get("description"),
                         "groups": groups,
-                        "enabled": not client.get("is_first_party", False),
                         "provider": "auth0",
                         "idp_app_id": client.get("client_id"),
                         "updated_at": datetime.utcnow(),
                     }
 
-                    existing_idp = await self.idp_collection.find_one({"client_id": client_id})
-                    if existing_idp:
-                        await self.idp_collection.update_one(
-                            {"client_id": client_id}, {"$set": idp_doc}
-                        )
-                    else:
-                        idp_doc["created_at"] = datetime.utcnow()
-                        await self.idp_collection.insert_one(idp_doc)
+                    # Enablement is insert-only so a concurrent disable wins.
+                    await self.idp_collection.update_one(
+                        {"client_id": client_id},
+                        {
+                            "$set": idp_doc,
+                            "$setOnInsert": {
+                                "enabled": initial_enabled,
+                                "created_at": datetime.utcnow(),
+                            },
+                        },
+                        upsert=True,
+                    )
 
                 except Exception as e:
                     error_msg = f"Failed to process client {client.get('name')}: {e}"
