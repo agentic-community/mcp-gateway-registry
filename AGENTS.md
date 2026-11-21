@@ -362,6 +362,10 @@ working in those areas.
   header (clear client copies on normal routes), require the nginx marker and
   resolved upstream, and check the rewritten backing method/tool grant separately.
   Never grant direct backing access from virtual binding alone.
+- **Owned records:** a server record a feature service owns (OpenAPI MCP servers mark it with
+  `metadata.openapi_server`) is written only through that service. Enforce it in the
+  `server_service` write path (`check_openapi_ownership`), not per route, and bind every
+  credential vend to a destination it derives itself, never to the record's current target.
 - **MCP backend identity:** preserve the exact registered path (including a
   legitimate trailing `/mcp`) across auth, signed proxy token, and vend; never
   strip a transport segment twice. Bind the exact outbound URL at credential
@@ -480,6 +484,7 @@ working in those areas.
   names from registry values must be injective encodings. A header only a NEW
   template sets/clears is forgeable behind an OLD one: honor it only with the
   marker under a new header name (`X-Validate-Binding-Secret`).
+- **Bridges to third-party APIs:** a library that copies inbound headers onto outbound requests (FastMCP OpenAPI tools do) must sit behind an inbound-header allowlist, so gateway identity, forwarding and routing headers never reach a third-party API. A built-in private target (airegistry-tools, the openapi-mcp container) is admitted only by exact entity identity, through a profile limited to that entity's URLs, never by host. A reserved hostname is not an identity: the same backend answers on its IP, so the openapi-mcp container also requires a per-slug admission marker that only that server's own routes and the registry's probes send. The bridge also redacts every form of the credential it attached from the response (body and headers, JSON-escaped forms included), because a backend may echo it back to the model. Its pooled backend clients keep no cookies, every final URL must stay inside the approved base URL (HTTPS when a key is sent), and a compressed response is refused before it is read.
 - **After fixing a finding, grep the pattern repo-wide**, because findings usually have
   siblings the report didn't list.
 

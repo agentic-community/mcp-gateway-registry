@@ -20,6 +20,8 @@ from .interfaces import (
     CustomEntityRepositoryBase,
     CustomTypeRepositoryBase,
     FederationConfigRepositoryBase,
+    OpenApiServerRepositoryBase,
+    OpenApiSpecRepositoryBase,
     PeerFederationRepositoryBase,
     RegistryCardRepositoryBase,
     ScopeRepositoryBase,
@@ -44,6 +46,8 @@ _peer_federation_repo: PeerFederationRepositoryBase | None = None
 _audit_repo: AuditRepositoryBase | None = None
 _skill_repo: SkillRepositoryBase | None = None
 _virtual_server_repo: VirtualServerRepositoryBase | None = None
+_openapi_server_repo: OpenApiServerRepositoryBase | None = None
+_openapi_spec_repo: OpenApiSpecRepositoryBase | None = None
 _backend_session_repo: BackendSessionRepositoryBase | None = None
 _skill_security_scan_repo: SkillSecurityScanRepositoryBase | None = None
 _registry_card_repo: RegistryCardRepositoryBase | None = None
@@ -218,6 +222,26 @@ def get_virtual_server_repository() -> VirtualServerRepositoryBase:
     return _virtual_server_repo
 
 
+def get_openapi_server_repository() -> OpenApiServerRepositoryBase:
+    """Get the OpenAPI MCP server repository singleton."""
+    global _openapi_server_repo
+    if _openapi_server_repo is None:
+        from .documentdb.openapi_server_repository import DocumentDBOpenApiServerRepository
+
+        _openapi_server_repo = DocumentDBOpenApiServerRepository()
+    return _openapi_server_repo
+
+
+def get_openapi_spec_repository() -> OpenApiSpecRepositoryBase:
+    """Get the OpenAPI spec repository singleton."""
+    global _openapi_spec_repo
+    if _openapi_spec_repo is None:
+        from .documentdb.openapi_server_repository import DocumentDBOpenApiSpecRepository
+
+        _openapi_spec_repo = DocumentDBOpenApiSpecRepository()
+    return _openapi_spec_repo
+
+
 def get_backend_session_repository() -> BackendSessionRepositoryBase:
     """Get backend session repository singleton."""
     global _backend_session_repo
@@ -320,6 +344,8 @@ def reset_repositories() -> None:
         _audit_repo, \
         _skill_repo, \
         _virtual_server_repo, \
+        _openapi_server_repo, \
+        _openapi_spec_repo, \
         _backend_session_repo, \
         _skill_security_scan_repo, \
         _registry_card_repo, \
@@ -337,6 +363,8 @@ def reset_repositories() -> None:
     _audit_repo = None
     _skill_repo = None
     _virtual_server_repo = None
+    _openapi_server_repo = None
+    _openapi_spec_repo = None
     _backend_session_repo = None
     _skill_security_scan_repo = None
     _registry_card_repo = None

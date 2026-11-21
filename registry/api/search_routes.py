@@ -22,6 +22,7 @@ from ..repositories.interfaces import SearchRepositoryBase
 from ..services.agent_service import agent_service
 from ..services.custom_entity_scopes import entity_scope as _entity_scope
 from ..services.custom_entity_scopes import resolve_list_grant as _resolve_list_grant
+from ..services.openapi_ownership import hidden_while_feature_off
 from ..services.server_service import server_service
 from ..services.tool_blocks import blocked_names_for, hide_blocked_tools
 from ..services.virtual_server_service import get_virtual_server_service
@@ -898,6 +899,8 @@ async def semantic_search(
         server_mcp_endpoint = server.get("mcp_endpoint")
         # The search index does not carry append_mcp_path; the server record does.
         server_full_info = await server_service.get_server_info(server_path)
+        if hidden_while_feature_off(server_full_info):
+            continue
         endpoint_url = _compute_endpoint_url(
             path=server_path,
             proxy_pass_url=server_proxy_url,

@@ -16,11 +16,54 @@ import {
   initiateConsent,
   disconnect,
   setEgressPat,
+  openApiTargetOf,
+  OPENAPI_USER_MODE,
   type EgressConnection,
   type AvailableEgressServer,
 } from '../utils/egressAuth';
 import { isSafeUrl } from '../utils/safeUrl';
+import { deleteMyCredential } from '../hooks/useOpenApiServers';
 import { FIELD, LABEL } from '../components/formFields/formClasses';
+
+/** A connection's name for labels and errors. OpenAPI keys name their target and server. */
+function _connectionLabel(conn: EgressConnection): string {
+  const target = openApiTargetOf(conn.provider);
+  if (target) {
+    return `OpenAPI target ${target} on ${conn.server_path}`;
+  }
+  return `${conn.provider} for ${conn.server_path}`;
+}
+
+
+/**
+ * True when the OpenAPI route cannot remove a key because its target is gone:
+ * the server or target was deleted (404) or switched to a shared credential.
+ */
+function _isOrphanedKeyError(err: unknown): boolean {
+  const response = (err as { response?: { status?: number; data?: { error?: string } } })?.response;
+  return response?.status === 404 || response?.data?.error === 'not_per_user';
+}
+
+
+/**
+ * Delete a vault entry. OpenAPI keys go through their own my-credential route;
+ * a key whose target no longer exists falls back to the generic disconnect,
+ * which needs only the caller's own identity.
+ */
+async function _removeConnection(conn: EgressConnection): Promise<void> {
+  const target = openApiTargetOf(conn.provider);
+  if (!target) {
+    await disconnect(conn.provider, conn.server_path);
+    return;
+  }
+  try {
+    await deleteMyCredential(conn.server_path.replace(/^\//, ''), target);
+  } catch (err) {
+    if (!_isOrphanedKeyError(err)) throw err;
+    await disconnect(conn.provider, conn.server_path);
+  }
+}
+
 
 /**
  * Connected Accounts: the end-user surface for the per-user egress credential
@@ -80,7 +123,8 @@ const ConnectedAccountsPage: React.FC = () => {
         listAvailableServers(),
       ]);
       setConnections(conns);
-      setAvailable(avail);
+      // OpenAPI per-user keys are added from the server card, not from here.
+      setAvailable(avail.filter(s => s.egress_auth_mode !== OPENAPI_USER_MODE));
     } catch {
       setError('Could not load connections.');
     } finally {
@@ -146,10 +190,10 @@ const ConnectedAccountsPage: React.FC = () => {
   const handleDisconnect = async (conn: EgressConnection) => {
     setError('');
     try {
-      await disconnect(conn.provider, conn.server_path);
+      await _removeConnection(conn);
       await refresh();
     } catch {
-      setError(`Could not disconnect ${conn.provider} for ${conn.server_path}.`);
+      setError(`Could not disconnect ${_connectionLabel(conn)}.`);
     }
   };
 
@@ -335,12 +379,20 @@ const ConnectedAccountsPage: React.FC = () => {
             >
               <div className="min-w-0 flex-1">
                 <div className="flex items-center space-x-2">
-                  <span className="font-medium text-fg capitalize">
-                    {conn.provider}
-                  </span>
-                  <span className="text-xs text-fg-muted">
-                    {conn.server_path}
-                  </span>
+                  {openApiTargetOf(conn.provider) ? (
+                    <span className="font-medium text-fg">
+                      {_connectionLabel(conn)}
+                    </span>
+                  ) : (
+                    <>
+                      <span className="font-medium text-fg capitalize">
+                        {conn.provider}
+                      </span>
+                      <span className="text-xs text-fg-muted">
+                        {conn.server_path}
+                      </span>
+                    </>
+                  )}
                   {conn.status !== 'active' && (
                     <span className="text-xs px-2 py-0.5 rounded-full bg-warning-100 dark:bg-warning-900/40 text-warning-800 dark:text-warning-300">
                       {conn.status}
@@ -356,7 +408,7 @@ const ConnectedAccountsPage: React.FC = () => {
               <button
                 onClick={() => handleDisconnect(conn)}
                 className="btn-base flex-shrink-0 px-3 py-1.5 text-danger-600 dark:text-danger-400 hover:bg-danger-50 hover:text-danger-700 dark:hover:bg-danger-500/10 dark:hover:text-danger-300"
-                aria-label={`Disconnect ${conn.provider} for ${conn.server_path}`}
+                aria-label={`Disconnect ${_connectionLabel(conn)}`}
               >
                 <TrashIcon className="h-4 w-4" />
                 <span>Disconnect</span>

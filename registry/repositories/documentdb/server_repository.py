@@ -680,6 +680,20 @@ class DocumentDBServerRepository(ServerRepositoryBase):
             logger.error(f"Error counting servers in DocumentDB: {e}", exc_info=True)
             return 0
 
+    async def list_openapi_managed_paths(self) -> set[str]:
+        """Paths of records an OpenAPI MCP server owns, read with one query."""
+        collection = await self._get_collection()
+        try:
+            cursor = collection.find(
+                {"metadata.openapi_server.slug": {"$exists": True}}, projection={"_id": 1}
+            )
+            return {doc["_id"] async for doc in cursor}
+        except Exception as e:
+            logger.error(
+                f"Error listing OpenAPI MCP server records in DocumentDB: {e}", exc_info=True
+            )
+            raise
+
     async def count_tools(self) -> int:
         """Get the total number of tools exposed across all servers.
 

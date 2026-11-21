@@ -46,6 +46,7 @@ from ..core.schemas import (
     OAuthBackendConfigRequest,
     OAuthDiscoveryConfigRequest,
 )
+from ..exceptions import UrlValidationError
 from ..schemas.registry_card import LifecycleStatus
 from ..schemas.server_update_models import (
     SERVER_REGISTRANT_ONLY_FIELDS,
@@ -64,6 +65,7 @@ from ..services.lifecycle_events import (
     fire_scan_complete_event,
     user_can_change_lifecycle_status,
 )
+from ..services.openapi_ownership import managed_openapi_slug
 from ..services.registration_gate_service import check_registration_gate
 from ..services.security_pending import tags_after_passing_scan
 from ..services.security_scanner import (
@@ -738,6 +740,39 @@ async def _add_server_security_pending(
     return tags
 
 
+def start_post_registration_tasks(
+    path: str,
+    proxy_pass_url: str,
+    server_entry: dict,
+    performed_by: str | None,
+    headers_list: list | None = None,
+    run_scan: bool = True,
+    run_health_check: bool = True,
+) -> None:
+    """Start the background steps every server registration runs.
+
+    The security scan, the immediate health check, and the registration
+    webhook (issue #742). Used by POST /api/servers/register and by OpenAPI MCP
+    servers (issue #2022), so both register a server the same way.
+    """
+    from ..health.service import health_service
+
+    if run_scan:
+        asyncio.create_task(
+            _perform_security_scan_on_registration(path, proxy_pass_url, server_entry, headers_list)
+        )
+    if run_health_check:
+        asyncio.create_task(health_service.perform_immediate_health_check(path))
+    asyncio.create_task(
+        send_registration_webhook(
+            event_type="registration",
+            registration_type="server",
+            card_data=strip_credentials_from_dict(server_entry),
+            performed_by=performed_by,
+        )
+    )
+
+
 async def _perform_security_scan_on_registration(
     path: str,
     proxy_pass_url: str,
@@ -853,6 +888,28 @@ async def _perform_security_scan_on_registration(
             scan_error=f"{type(e).__name__}: {e}",
             registration_type="server",
         )
+
+
+def _refuse_openapi_managed(
+    server_info: dict | None,
+    action: str,
+) -> None:
+    """409 for a generic route that would change a server an OpenAPI MCP server owns (issue #2022).
+
+    The OpenAPI MCP server service keeps this record in step with its own; a
+    generic edit, replace or remove would leave the two out of step. Toggle,
+    refresh, rescan, rating and the per-tool block stay allowed.
+    """
+    slug = managed_openapi_slug(server_info)
+    if slug is None:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=(
+            f"{(server_info or {}).get('path')} belongs to OpenAPI MCP server '{slug}'; "
+            f"{action} it under /api/openapi-servers/{slug}"
+        ),
+    )
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -2384,6 +2441,7 @@ async def internal_register_service(
 
     # Check if server exists and handle overwrite logic
     existing_server = await server_service.get_server_info(path)
+    _refuse_openapi_managed(existing_server, "replace")
     if existing_server and not overwrite:
         logger.debug(f"INTERNAL REGISTER: Server exists and overwrite=False for path {path}")
         return JSONResponse(
@@ -2581,6 +2639,7 @@ async def internal_remove_service(
 
     # Check if server exists
     server_info = await server_service.get_server_info(service_path)
+    _refuse_openapi_managed(server_info, "remove")
     if not server_info:
         logger.debug(f"INTERNAL REMOVE: Service not found at path '{service_path}'")
         return JSONResponse(
@@ -2881,6 +2940,7 @@ async def edit_server_submit(
 
     # Check if the server exists and get service name
     server_info = await server_service.get_server_info(service_path)
+    _refuse_openapi_managed(server_info, "edit")
     if not server_info:
         raise HTTPException(status_code=404, detail="Service path not found")
 
@@ -4549,7 +4609,6 @@ async def register_service_api(
     # with named status codes.
     from fastapi import status as fastapi_status
 
-    from ..health.service import health_service
     from ..utils.local_runtime_validation import (
         add_unpinned_warning_tag,
         parse_and_validate_local_runtime,
@@ -4851,6 +4910,7 @@ async def register_service_api(
 
     # Check if server exists and handle overwrite/version logic
     existing_server = await server_service.get_server_info(path)
+    _refuse_openapi_managed(existing_server, "replace")
 
     # Ownership guard: overwriting (or auto-versioning) an existing server
     # replaces another user's registration and can redirect its traffic. Only
@@ -4937,25 +4997,15 @@ async def register_service_api(
                 f"it appears in default search results or the gateway route."
             )
 
-        # Security scanning (non-blocking). Skipped for local stdio servers.
-        if not is_local:
-            asyncio.create_task(
-                _perform_security_scan_on_registration(
-                    path, proxy_pass_url, server_entry, headers_list
-                )
-            )
-
-        # Trigger async task for health check
-        asyncio.create_task(health_service.perform_immediate_health_check(path))
-
-        # Registration webhook (Issue #742)
-        asyncio.create_task(
-            send_registration_webhook(
-                event_type="registration",
-                registration_type="server",
-                card_data=strip_credentials_from_dict(server_entry),
-                performed_by=user_context.get("username"),
-            )
+        # Security scan (skipped for local stdio servers), health check and
+        # registration webhook, shared with OpenAPI MCP servers (issue #2022).
+        start_post_registration_tasks(
+            path,
+            proxy_pass_url,
+            server_entry,
+            user_context.get("username"),
+            headers_list=headers_list,
+            run_scan=not is_local,
         )
 
         return JSONResponse(
@@ -4967,6 +5017,11 @@ async def register_service_api(
             },
         )
 
+    except UrlValidationError:
+        # A URL the guard or the OpenAPI MCP ownership rule refused: the app's
+        # handler answers 400 with the reason. The catch-all below would turn
+        # it into a bare 500 that hides why the registration was refused.
+        raise
     except Exception as e:
         logger.error(f"Service registration failed type={type(e).__name__}")
         raise HTTPException(status_code=500, detail="Service registration failed")
@@ -5013,6 +5068,7 @@ async def update_server_auth_credential(
 
     # Look up the server first so the permission check can use its display name.
     existing_server = await server_service.get_server_info(server_path, include_credentials=True)
+    _refuse_openapi_managed(existing_server, "change the credential of")
     if not existing_server:
         return JSONResponse(
             status_code=404,
@@ -5236,6 +5292,7 @@ async def put_server_oauth_config(
         server_path = "/" + server_path
 
     existing_server = await server_service.get_server_info(server_path, include_credentials=True)
+    _refuse_openapi_managed(existing_server, "change the OAuth configuration of")
     if not existing_server:
         return JSONResponse(status_code=404, content={"error": "Server not found"})
 
@@ -5471,6 +5528,7 @@ async def put_server_oauth_discovery(
     if not server_path.startswith("/"):
         server_path = "/" + server_path
     existing_server = await server_service.get_server_info(server_path, include_credentials=True)
+    _refuse_openapi_managed(existing_server, "change the OAuth configuration of")
     if not existing_server:
         return JSONResponse(status_code=404, content={"error": "Server not found"})
 
@@ -5667,6 +5725,7 @@ async def delete_server_oauth_discovery(
     if not server_path.startswith("/"):
         server_path = "/" + server_path
     existing_server = await server_service.get_server_info(server_path, include_credentials=True)
+    _refuse_openapi_managed(existing_server, "change the OAuth configuration of")
     if not existing_server:
         return JSONResponse(status_code=404, content={"error": "Server not found"})
     _check_server_permission(
@@ -5866,9 +5925,6 @@ async def remove_service_api(
       -F "path=/myservice"
     ```
     """
-    from ..health.service import health_service
-    from ..services.scope_service import remove_server_scopes
-
     # Set audit action for server removal
     set_audit_action(
         request, "delete", "server", resource_id=path, description=f"Remove server at {path}"
@@ -5884,6 +5940,7 @@ async def remove_service_api(
 
     # Check if server exists
     server_info = await server_service.get_server_info(path)
+    _refuse_openapi_managed(server_info, "remove")
     if not server_info:
         logger.warning(f"Service not found at path '{path}'")
         return JSONResponse(
@@ -5965,42 +6022,10 @@ async def remove_service_api(
             },
         )
 
-    logger.info(f"Service removed successfully: {path} by user {user_context.get('username')}")
+    # Search, nginx, scopes, webhook: shared with OpenAPI MCP servers (issue #2022).
+    from ..services.server_lifecycle import clean_up_removed_server
 
-    # Remove from DocumentDB search index
-    try:
-        from ..repositories.factory import get_search_repository
-
-        search_repo = get_search_repository()
-        await search_repo.remove_entity(path)
-    except Exception as e:
-        logger.warning(f"Failed to remove search index for {path}: {e}")
-
-    # Flush nginx config immediately (delete must take effect before response)
-    from ..core.nginx_service import nginx_reload_scheduler
-
-    nginx_reload_scheduler.mark_dirty()
-    await nginx_reload_scheduler.flush_now()
-
-    # Broadcast health status update to WebSocket clients
-    await health_service.broadcast_health_update(path)
-
-    # Remove server from scopes and reload auth server
-    try:
-        await remove_server_scopes(path)
-        logger.info(f"Successfully removed server {path} from scopes")
-    except Exception as e:
-        logger.warning(f"Failed to remove server {path} from scopes: {e}")
-
-    # Deletion webhook (Issue #742): server_info was fetched before removal
-    asyncio.create_task(
-        send_registration_webhook(
-            event_type="deletion",
-            registration_type="server",
-            card_data=strip_credentials_from_dict(server_info),
-            performed_by=user_context.get("username"),
-        )
-    )
+    await clean_up_removed_server(path, server_info, user_context.get("username"))
 
     return JSONResponse(
         status_code=200,
@@ -7070,6 +7095,7 @@ async def remove_server_version(
     # modify_service permission as PUT/PATCH /servers/{path}. nginx_proxied_auth
     # only authenticates; it does not authorize.
     existing_server = await server_service.get_server_info(decoded_path)
+    _refuse_openapi_managed(existing_server, "change the versions of")
     if not existing_server:
         raise HTTPException(status_code=404, detail="Service path not registered")
     _check_server_permission(
@@ -7136,6 +7162,7 @@ async def set_default_version(
     # the same modify_service permission as PUT/PATCH /servers/{path}.
     # nginx_proxied_auth only authenticates; it does not authorize.
     existing_server = await server_service.get_server_info(decoded_path)
+    _refuse_openapi_managed(existing_server, "change the versions of")
     if not existing_server:
         raise HTTPException(status_code=404, detail="Service path not registered")
     _check_server_permission(
@@ -7345,6 +7372,7 @@ async def update_server_endpoint(
     path = _normalize_server_path(path)
 
     existing = await server_service.get_server_info(path, include_credentials=True)
+    _refuse_openapi_managed(existing, "replace")
     if not existing:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -7529,6 +7557,7 @@ async def patch_server_endpoint(
     path = _normalize_server_path(path)
 
     existing = await server_service.get_server_info(path, include_credentials=True)
+    _refuse_openapi_managed(existing, "edit")
     if not existing:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

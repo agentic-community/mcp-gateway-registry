@@ -325,6 +325,15 @@ class TestSettingsEnvironmentVariables:
 class TestSettingsPathsLocalDev:
     """Test path properties in local development mode."""
 
+    @pytest.fixture(autouse=True)
+    def _app_log_dir_unset(self, monkeypatch):
+        """These tests pin the defaults that apply when APP_LOG_DIR is unset.
+
+        tests/conftest.py points APP_LOG_DIR at a temp directory for the whole
+        run, so clear it here.
+        """
+        monkeypatch.delenv("APP_LOG_DIR", raising=False)
+
     @patch("registry.core.config.Path")
     def test_is_local_dev_true(self, mock_path_class) -> None:
         """Test is_local_dev property when /app does not exist."""
@@ -467,6 +476,15 @@ class TestSettingsPathsLocalDev:
 @pytest.mark.core
 class TestSettingsPathsContainer:
     """Test path properties in container/production mode."""
+
+    @pytest.fixture(autouse=True)
+    def _app_log_dir_unset(self, monkeypatch):
+        """These tests pin the defaults that apply when APP_LOG_DIR is unset.
+
+        tests/conftest.py points APP_LOG_DIR at a temp directory for the whole
+        run, so clear it here.
+        """
+        monkeypatch.delenv("APP_LOG_DIR", raising=False)
 
     @patch.object(Settings, "is_local_dev", new_callable=lambda: property(lambda self: False))
     def test_servers_dir_container(self, mock_is_local_dev) -> None:

@@ -462,7 +462,7 @@ Global parameters must come **before** the subcommand:
 
 | Parameter | Description |
 |-----------|-------------|
-| `--registry-url` | Registry base URL (default: http://localhost:8000) |
+| `--registry-url` | Registry base URL. Wins over `REGISTRY_URL`; with neither set, `http://localhost` |
 | `--token-file` | Path to JSON file containing access token |
 
 ### Register Skills from Anthropic Skills Repository

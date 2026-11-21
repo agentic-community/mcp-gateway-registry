@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from registry.auth.openapi_mcp_sync import ADMISSION_HEADER
 from registry.auth.proxied_token import _api_auth_request_enabled
 from registry.auth.resource_binding import INVALID_VERSION_SENTINEL
 from registry.common.log_redaction import redact_url
@@ -657,6 +658,27 @@ def _virtual_mcp_app_ui_domains(
     base = root_path + "/" + virtual_server_path.strip("/")
     paths = [base, base + "/", base + "/mcp", base + "/mcp/"]
     return {path: [claude_ui_domain(origin + path) for origin in origins] for path in paths}
+
+
+def _openapi_admission_directive(
+    entity_path: str | None,
+    registered_target: str | None,
+    destination_url: str | None = None,
+    indent: str = "        ",
+) -> str:
+    """The one nginx line that sets or clears the OpenAPI MCP admission marker.
+
+    An OpenAPI MCP server's own location sends its slug's marker, which the
+    openapi-mcp container requires on every hub call (issue #2022). Every other
+    MCP location sends it empty, so nginx drops a client-supplied copy. The
+    value is a hex digest, so it needs no escaping.
+    """
+    from ..services.openapi_ownership import admission_headers
+
+    marker = admission_headers(entity_path, registered_target, destination_url).get(
+        ADMISSION_HEADER, ""
+    )
+    return f'{indent}proxy_set_header {ADMISSION_HEADER} "{marker}";'
 
 
 def _vs_backend_header_clears(
@@ -2688,6 +2710,7 @@ class NginxConfigService:
                 rendered_locations.add(location_path)
                 server_info, egress_mode, version_id, base_path = renderable
                 proxy_pass_url = server_info["proxy_pass_url"]
+                admission_directive = _openapi_admission_directive(base_path, proxy_pass_url)
                 # Determine upstream host from proxy_pass_url
                 parsed_url = urlparse(proxy_pass_url)
                 upstream_host = parsed_url.netloc
@@ -2804,6 +2827,7 @@ class NginxConfigService:
         proxy_set_header X-Upstream-Url "";
         proxy_set_header X-User $http_x_user;
         proxy_set_header X-Username $http_x_username;
+{admission_directive}
         proxy_set_header Accept "application/json, text/event-stream";
         proxy_set_header Content-Type $content_type;
         proxy_read_timeout {mcp_proxy_read_timeout}s;
@@ -2869,6 +2893,7 @@ class NginxConfigService:
         # internal tokens, and the internal routing/identity headers. The list
         # comes from RESERVED_CUSTOM_HEADER_NAMES (_VS_BACKEND_STRIPPED_HEADERS).
 {_vs_backend_header_clears()}
+{admission_directive}
         # Forward the validated caller identity so backends can attribute
         # write operations to the authenticated user.  These are set as
         # request headers by virtual_router.lua (ngx.req.set_header) before
@@ -3534,6 +3559,9 @@ class NginxConfigService:
         # Resolve nginx read/send timeout from MCP_PROXY_TIMEOUT (+ buffer) so
         # the inner auth-server hop always times out first.
         mcp_proxy_read_timeout = _resolve_mcp_proxy_read_timeout_seconds()
+        admission_directive = _openapi_admission_directive(
+            path, (server_info or {}).get("proxy_pass_url"), proxy_pass_url
+        )
 
         # Common proxy settings
         common_settings = f"""
@@ -3627,6 +3655,8 @@ class NginxConfigService:
         proxy_set_header X-Internal-Token $auth_internal_token;
         proxy_set_header X-Registered-Server-Path "{safe_registered_path}";
         proxy_set_header X-Registered-Route-Mode "direct";
+        # OpenAPI MCP admission marker: this server's own, or empty.
+{admission_directive}
 
         # Pass all original client headers
         proxy_pass_request_headers on;

@@ -689,6 +689,18 @@ module "ecs_service_auth" {
         {
           name  = "EGRESS_OBO_CACHE_EXPIRY_SKEW_SECONDS"
           value = tostring(var.egress_obo_cache_expiry_skew_seconds)
+        },
+        # OpenAPI MCP servers (issue #2022). The mcp-proxy hop forwards
+        # per-user-credential calls to the openapi-mcp container. The auth
+        # server never receives OPENAPI_MCP_SYNC_SECRET: the registry signs
+        # the per-user credential envelope.
+        {
+          name  = "OPENAPI_MCP_ENABLED"
+          value = tostring(var.openapi_mcp_enabled)
+        },
+        {
+          name  = "OPENAPI_MCP_INTERNAL_URL"
+          value = local.openapi_mcp_internal_url
         }
         ],
         # Extra environment variables from user (Issue #1000)
@@ -959,10 +971,16 @@ module "ecs_service_registry" {
 
   # Task roles
   create_task_exec_iam_role = true
-  task_exec_iam_role_policies = {
-    SecretsManagerAccess = aws_iam_policy.ecs_secrets_access.arn
-    EcsExecTaskExecution = aws_iam_policy.ecs_exec_task_execution.arn
-  }
+  task_exec_iam_role_policies = merge(
+    {
+      SecretsManagerAccess = aws_iam_policy.ecs_secrets_access.arn
+      EcsExecTaskExecution = aws_iam_policy.ecs_exec_task_execution.arn
+    },
+    # OpenAPI MCP sync secret (issue #2022): registry and openapi-mcp only.
+    var.openapi_mcp_enabled ? {
+      OpenapiMcpSyncSecret = aws_iam_policy.openapi_mcp_sync_secret_access[0].arn
+    } : {}
+  )
   create_tasks_iam_role = true
   tasks_iam_role_policies = merge(
     {
@@ -1615,6 +1633,36 @@ module "ecs_service_registry" {
           name  = "MAX_CUSTOM_TYPES"
           value = tostring(var.max_custom_types)
         },
+        # OpenAPI MCP servers (issue #2022). OPENAPI_MCP_SYNC_SECRET is injected
+        # via secrets/valueFrom below, never here.
+        {
+          name  = "OPENAPI_MCP_ENABLED"
+          value = tostring(var.openapi_mcp_enabled)
+        },
+        {
+          name  = "OPENAPI_MCP_INTERNAL_URL"
+          value = local.openapi_mcp_internal_url
+        },
+        {
+          name  = "OPENAPI_MCP_MAX_SERVERS"
+          value = tostring(var.openapi_mcp_max_servers)
+        },
+        {
+          name  = "OPENAPI_MCP_MAX_TARGETS_PER_SERVER"
+          value = tostring(var.openapi_mcp_max_targets_per_server)
+        },
+        {
+          name  = "OPENAPI_MCP_MAX_TOOLS_PER_TARGET"
+          value = tostring(var.openapi_mcp_max_tools_per_target)
+        },
+        {
+          name  = "OPENAPI_MCP_SPEC_MAX_BYTES"
+          value = tostring(var.openapi_mcp_spec_max_bytes)
+        },
+        {
+          name  = "OPENAPI_MCP_RECONCILE_INTERVAL_SECONDS"
+          value = tostring(var.openapi_mcp_reconcile_interval_seconds)
+        },
         # Update check (admin "newer release available" banner)
         {
           name  = "UPDATE_CHECK_ENABLED"
@@ -2246,6 +2294,13 @@ module "ecs_service_registry" {
             name      = "METRICS_API_KEY"
             valueFrom = aws_secretsmanager_secret.metrics_api_key[0].arn
           }
+        ] : [],
+        # OpenAPI MCP sync secret (issue #2022), shared with the openapi-mcp task.
+        var.openapi_mcp_enabled ? [
+          {
+            name      = "OPENAPI_MCP_SYNC_SECRET"
+            valueFrom = aws_secretsmanager_secret.openapi_mcp_sync_secret[0].arn
+          }
         ] : []
       )
 
@@ -2816,6 +2871,253 @@ module "ecs_service_mcpgw" {
 
   tags = local.common_tags
 
+}
+
+
+# ECS Service: openapi-mcp (issue #2022, opt-in via openapi_mcp_enabled)
+#
+# Serves REST APIs described by OpenAPI specs as MCP servers. The registry pushes
+# each server's state to this task, and nginx inside the registry container
+# proxies MCP traffic to it, so the only ingress is from the registry security
+# group. It runs as a single task: Service Connect hides replicas behind one
+# name, and every replica would need every push (openapi_mcp_replicas is
+# validated to 1).
+#
+# Memory: a load test of 10 servers x 10 targets (one 4.4 MB spec) peaked at
+# 293 MiB (2026-11-13). That plus 50% is about 440 MiB; 1024 MiB is the smallest
+# Fargate size for 0.5 vCPU, which spec conversion (CPU-bound) needs.
+module "ecs_service_openapi_mcp" {
+  #checkov:skip=CKV_TF_1:Module version is pinned via version constraint
+  source  = "terraform-aws-modules/ecs/aws//modules/service"
+  version = "~> 6.0"
+  count   = var.openapi_mcp_enabled ? 1 : 0
+
+  name          = "${local.name_prefix}-openapi-mcp"
+  cluster_arn   = var.ecs_cluster_arn
+  cpu           = "512"
+  memory        = "1024"
+  desired_count = var.openapi_mcp_replicas
+
+  # One task only, so no autoscaling.
+  enable_autoscaling = false
+
+  # Stop the old task before starting the new one. The module defaults (200%
+  # max, 66% min healthy) run two tasks during a deploy, and Service Connect
+  # would split registry pushes and /health polls between them, so one task
+  # serves stale tools. Matches the Helm chart's Recreate strategy.
+  deployment_maximum_percent         = 100
+  deployment_minimum_healthy_percent = 0
+
+  enable_execute_command = true
+
+  requires_compatibilities = ["FARGATE", "EC2"]
+  capacity_provider_strategy = {
+    FARGATE = {
+      capacity_provider = "FARGATE"
+      weight            = 100
+      base              = 1
+    }
+  }
+
+  # The execution role reads only the sync secret. The task role carries no
+  # Secrets Manager grant: the container calls third-party APIs, not AWS.
+  create_task_exec_iam_role = true
+  task_exec_iam_role_policies = {
+    OpenapiMcpSyncSecret = aws_iam_policy.openapi_mcp_sync_secret_access[0].arn
+    EcsExecTaskExecution = aws_iam_policy.ecs_exec_task_execution.arn
+  }
+  create_tasks_iam_role = true
+  tasks_iam_role_policies = {
+    EcsExecTask = aws_iam_policy.ecs_exec_task.arn
+  }
+
+  service_connect_configuration = {
+    namespace = aws_service_discovery_private_dns_namespace.mcp.arn
+    service = [{
+      client_alias = {
+        port     = local.openapi_mcp_port
+        dns_name = "openapi-mcp"
+      }
+      port_name      = "openapi-mcp"
+      discovery_name = "openapi-mcp"
+    }]
+  }
+
+  container_definitions = {
+    openapi-mcp = {
+      cpu                    = 512
+      memory                 = 1024
+      essential              = true
+      image                  = var.openapi_mcp_image_uri
+      versionConsistency     = "disabled"
+      readonlyRootFilesystem = false
+
+      # The empty lists below are what ECS stores for this container. With a
+      # linuxParameters block present the provider compares the definition
+      # strictly, so leaving them unset made every plan replace the task
+      # definition and restart the service.
+      linuxParameters = {
+        capabilities = {
+          add  = []
+          drop = ["ALL"]
+        }
+      }
+      mountPoints    = []
+      volumesFrom    = []
+      systemControls = []
+
+      portMappings = [
+        {
+          name          = "openapi-mcp"
+          containerPort = local.openapi_mcp_port
+          # ECS stores hostPort equal to containerPort in awsvpc mode; see the
+          # note on linuxParameters above.
+          hostPort = local.openapi_mcp_port
+          protocol = "tcp"
+        }
+      ]
+
+      environment = concat([
+        {
+          name  = "HOST"
+          value = var.bind_host
+        },
+        {
+          name  = "PORT"
+          value = tostring(local.openapi_mcp_port)
+        },
+        {
+          name  = "OPENAPI_MCP_BACKEND_TIMEOUT_SECONDS"
+          value = tostring(var.openapi_mcp_backend_timeout_seconds)
+        },
+        {
+          name  = "OPENAPI_MCP_MAX_RESPONSE_BYTES"
+          value = tostring(var.openapi_mcp_max_response_bytes)
+        },
+        {
+          name  = "OPENAPI_MCP_CONVERSION_TIMEOUT_SECONDS"
+          value = tostring(var.openapi_mcp_conversion_timeout_seconds)
+        },
+        # Application logs (docs/logging-standard.md), the same four settings
+        # the mcpgw task gets. Read by servers/openapi-mcp/logging_setup.py.
+        {
+          name  = "APP_LOG_DIR"
+          value = var.app_log_dir
+        },
+        {
+          name  = "APP_LOG_FILE_FORMAT"
+          value = var.app_log_file_format
+        },
+        {
+          name  = "APP_LOG_CONSOLE_FORMAT"
+          value = var.app_log_console_format
+        },
+        {
+          name  = "APP_LOG_LEVEL"
+          value = var.app_log_level
+        },
+        # SSRF guard: the same values the registry gets, so the guard in this
+        # container applies the registry's PROXY_PROFILE policy unchanged.
+        {
+          name  = "SSRF_ALLOWED_HOSTS"
+          value = var.ssrf_allowed_hosts
+        },
+        {
+          name  = "SSRF_ALLOWED_CIDRS"
+          value = var.ssrf_allowed_cidrs
+        },
+        {
+          name  = "GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS"
+          value = tostring(var.gateway_proxy_allow_private_targets)
+        },
+        {
+          name  = "GITHUB_EXTRA_HOSTS"
+          value = var.github_extra_hosts
+        },
+        {
+          name  = "EGRESS_OAUTH_TRUSTED_IDP_HOSTS"
+          value = var.egress_oauth_trusted_idp_hosts
+        },
+        {
+          name  = "EGRESS_HTTP_POOL_MAX_CONNECTIONS"
+          value = tostring(var.egress_http_pool_max_connections)
+        },
+        {
+          name  = "EGRESS_HTTP_POOL_MAX_KEEPALIVE"
+          value = tostring(var.egress_http_pool_max_keepalive)
+        },
+        {
+          name  = "EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS"
+          value = tostring(var.egress_http_pool_keepalive_expiry_seconds)
+        },
+        {
+          name  = "EGRESS_HTTP_POOL_CONNECT_RETRIES"
+          value = tostring(var.egress_http_pool_connect_retries)
+        },
+        # Forward-proxy egress (issue #1832). HTTP_PROXY / HTTPS_PROXY / NO_PROXY
+        # are copied from registry_extra_env by local.openapi_mcp_forward_proxy_env.
+        {
+          name  = "EGRESS_FORWARD_PROXY_ENABLED"
+          value = tostring(var.egress_forward_proxy_enabled)
+        },
+        {
+          name  = "EGRESS_FORWARD_PROXY_CA_BUNDLE"
+          value = var.egress_forward_proxy_ca_bundle
+        }
+        ],
+        local.openapi_mcp_forward_proxy_env,
+        var.openapi_mcp_extra_env
+      )
+
+      # The sync secret comes from Secrets Manager, never from environment.
+      secrets = [
+        {
+          name      = "OPENAPI_MCP_SYNC_SECRET"
+          valueFrom = aws_secretsmanager_secret.openapi_mcp_sync_secret[0].arn
+        }
+      ]
+
+      enable_cloudwatch_logging              = true
+      cloudwatch_log_group_name              = "/ecs/${local.name_prefix}-openapi-mcp"
+      cloudwatch_log_group_retention_in_days = 30
+
+      healthCheck = {
+        command     = ["CMD-SHELL", "curl -fsS http://127.0.0.1:${local.openapi_mcp_port}/health || exit 1"]
+        interval    = 30
+        timeout     = 5
+        retries     = 3
+        startPeriod = 30
+      }
+    }
+  }
+
+  subnet_ids = var.private_subnet_ids
+  security_group_ingress_rules = {
+    registry = {
+      description                  = "openapi-mcp from the registry (sync pushes and nginx MCP proxy)"
+      from_port                    = local.openapi_mcp_port
+      to_port                      = local.openapi_mcp_port
+      ip_protocol                  = "tcp"
+      referenced_security_group_id = module.ecs_service_registry.security_group_id
+    }
+    auth_server = {
+      description                  = "openapi-mcp from the auth server (mcp-proxy hop for per-user credentials)"
+      from_port                    = local.openapi_mcp_port
+      to_port                      = local.openapi_mcp_port
+      ip_protocol                  = "tcp"
+      referenced_security_group_id = module.ecs_service_auth.security_group_id
+    }
+  }
+  # Egress to any address: the container calls operator-registered REST APIs.
+  # The SSRF guard inside the container decides which destinations are allowed.
+  security_group_egress_rules = {
+    all = {
+      ip_protocol = "-1"
+      cidr_ipv4   = "0.0.0.0/0"
+    }
+  }
+
+  tags = local.common_tags
 }
 
 

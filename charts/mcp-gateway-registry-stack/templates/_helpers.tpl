@@ -181,3 +181,59 @@ Usage:
 {{- fail (printf "global.generateSecrets is false and %s has no value, so the chart will not generate one. Set %s explicitly, or set %s to a Secret that already holds it. Generation is unsafe under ArgoCD and other `helm template` based tools: they render without cluster access, so the chart cannot read the previous value back and every sync would produce a different secret." .key .value .byo) -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+OpenAPI MCP servers (issue #2022): the feature needs the registry flag, the
+auth-server flag and the openapi-mcp subchart together, both services must call
+the container at the same internal URL, and the container's SSRF guard must
+apply the registry's policy. Fails the render when they disagree, instead of
+deploying a registry that pushes to a missing pod, an auth server that cannot
+forward per-user-credential calls, or a pod with a looser guard.
+*/}}
+{{- define "mcp-gateway-registry-stack.validateOpenapiMcp" -}}
+{{- /* .Values itself is not a plain map, so dig starts one level down. */ -}}
+{{- $openapiMcp := .Values.openapiMcp | default dict -}}
+{{- $registry := .Values.registry | default dict -}}
+{{- $stackEnabled := dig "enabled" false $openapiMcp -}}
+{{- $registryEnabled := dig "app" "openapiMcpEnabled" false $registry -}}
+{{- if ne (toString $stackEnabled) (toString $registryEnabled) -}}
+{{- fail (printf "openapiMcp.enabled (%v) and registry.app.openapiMcpEnabled (%v) must be equal. Set both to true to turn on OpenAPI MCP servers, or both to false." $stackEnabled $registryEnabled) -}}
+{{- end -}}
+{{- /* The auth server's mcp-proxy hop forwards per-user-credential calls to the container. */ -}}
+{{- $authServer := index .Values "auth-server" | default dict -}}
+{{- $authServerEnabled := dig "app" "openapiMcpEnabled" false $authServer -}}
+{{- if ne (toString $stackEnabled) (toString $authServerEnabled) -}}
+{{- fail (printf "openapiMcp.enabled (%v) and auth-server.app.openapiMcpEnabled (%v) must be equal. Set openapiMcp.enabled, registry.app.openapiMcpEnabled and auth-server.app.openapiMcpEnabled to the same value." $stackEnabled $authServerEnabled) -}}
+{{- end -}}
+{{- $defaultInternalUrl := "http://openapi-mcp:9876" -}}
+{{- $registryUrl := dig "app" "openapiMcpInternalUrl" $defaultInternalUrl $registry -}}
+{{- $authServerUrl := dig "app" "openapiMcpInternalUrl" $defaultInternalUrl $authServer -}}
+{{- if ne (toString $registryUrl) (toString $authServerUrl) -}}
+{{- fail (printf "registry.app.openapiMcpInternalUrl (%q) and auth-server.app.openapiMcpInternalUrl (%q) must be equal. Both services call the same openapi-mcp container." (toString $registryUrl) (toString $authServerUrl)) -}}
+{{- end -}}
+{{- if $stackEnabled -}}
+  {{- $pairs := list
+        (list "app.ssrfAllowedHosts" (dig "app" "ssrfAllowedHosts" "" $registry) (dig "app" "ssrfAllowedHosts" "" $openapiMcp))
+        (list "app.gatewayProxyAllowPrivateTargets" (dig "app" "gatewayProxyAllowPrivateTargets" false $registry) (dig "app" "gatewayProxyAllowPrivateTargets" false $openapiMcp))
+        (list "app.egressForwardProxyEnabled" (dig "app" "egressForwardProxyEnabled" false $registry) (dig "app" "egressForwardProxyEnabled" false $openapiMcp))
+        (list "egressAuth.oauthTrustedIdpHosts / app.egressOauthTrustedIdpHosts" (dig "egressAuth" "oauthTrustedIdpHosts" "" $registry) (dig "app" "egressOauthTrustedIdpHosts" "" $openapiMcp)) -}}
+  {{- range $pairs -}}
+    {{- if ne (toString (index . 1)) (toString (index . 2)) -}}
+    {{- fail (printf "registry %s is %q but openapiMcp has %q. The openapi-mcp SSRF guard must apply the registry's policy; set the same value on both." (index . 0) (toString (index . 1)) (toString (index . 2))) -}}
+    {{- end -}}
+  {{- end -}}
+  {{- /* Both pods read the sync secret through secretKeyRef, so they must name the same Secret. */ -}}
+  {{- $globalSecret := dig "openapiMcp" "existingSyncSecret" "" (.Values.global | default dict) -}}
+  {{- $containerSecret := $globalSecret | default (dig "syncSecret" "existingSecret" "" $openapiMcp) | default (dig "syncSecret" "name" "openapi-mcp-sync-secret" $openapiMcp) -}}  {{- /* pragma: allowlist secret */ -}}
+  {{- $registrySecret := $globalSecret | default (dig "app" "openapiMcpSyncSecretName" "openapi-mcp-sync-secret" $registry) -}}  {{- /* pragma: allowlist secret */ -}}
+  {{- if ne (toString $containerSecret) (toString $registrySecret) -}}
+  {{- fail (printf "openapi-mcp reads the sync secret from Secret %q but the registry reads %q. Name an existing Secret once with global.openapiMcp.existingSyncSecret, which both read, instead of openapiMcp.syncSecret.existingSecret or syncSecret.name." (toString $containerSecret) (toString $registrySecret)) -}}
+  {{- end -}}
+  {{- /* The registry and auth server reach the container by its Service name and port. */ -}}
+  {{- $serviceHost := printf "%s:%v" (dig "app" "name" "openapi-mcp" $openapiMcp) (dig "service" "port" 9876 $openapiMcp) -}}
+  {{- $urlHost := (urlParse (toString $registryUrl)).host -}}
+  {{- if ne $urlHost $serviceHost -}}
+  {{- fail (printf "registry.app.openapiMcpInternalUrl (%q) does not reach the openapi-mcp Service at %s. Set registry.app.openapiMcpInternalUrl and auth-server.app.openapiMcpInternalUrl to http://%s, or keep openapiMcp.app.name and openapiMcp.service.port at their defaults." (toString $registryUrl) $serviceHost $serviceHost) -}}
+  {{- end -}}
+{{- end -}}
+{{- end -}}

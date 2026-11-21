@@ -37,6 +37,7 @@ from ..utils.tool_list_hash import (
 )
 from ..utils.url_guard import (
     BUILTIN_AIREGISTRY_TOOLS_PROFILE,
+    BUILTIN_OPENAPI_MCP_PROFILE,
     PROXY_PROFILE,
     guarded_async_client,
     proxy_profile_for_entity_target,
@@ -654,6 +655,11 @@ class HealthMonitoringService:
         # stream/post below; the SSRF guard still validates+pins every request.
         client = shared_guarded_async_client(profile=PROXY_PROFILE)
         builtin_client = shared_guarded_async_client(profile=BUILTIN_AIREGISTRY_TOOLS_PROFILE)
+        openapi_mcp_client = shared_guarded_async_client(profile=BUILTIN_OPENAPI_MCP_PROFILE)
+        clients_by_profile = {
+            BUILTIN_AIREGISTRY_TOOLS_PROFILE.name: builtin_client,
+            BUILTIN_OPENAPI_MCP_PROFILE.name: openapi_mcp_client,
+        }
 
         check_tasks = []
         for service_path in enabled_services:
@@ -671,9 +677,7 @@ class HealthMonitoringService:
                 profile = proxy_profile_for_entity_target(
                     "mcp_server", path, info["proxy_pass_url"]
                 )
-                selected_client = (
-                    builtin_client if profile is BUILTIN_AIREGISTRY_TOOLS_PROFILE else client
-                )
+                selected_client = clients_by_profile.get(profile.name, client)
                 batch_coros.append(self._check_single_service(selected_client, path, info))
             results = await asyncio.gather(*batch_coros, return_exceptions=True)
 
@@ -928,6 +932,10 @@ class HealthMonitoringService:
                 f"Health server headers withheld service={entity_path or 'unknown'} destination={redact_url(destination_url)} validation_type={type(exc).__name__}",
             )
             return headers
+
+        from ..services.openapi_ownership import admission_headers
+
+        headers.update(admission_headers(entity_path, registered_target, destination_url))
 
         server_headers = server_info.get("headers", [])
         if isinstance(server_headers, list):
@@ -1277,7 +1285,12 @@ class HealthMonitoringService:
                 f"type={type(e).__name__}"
             )
 
-    async def _try_ping_without_auth(self, client: httpx.AsyncClient, endpoint: str) -> bool:
+    async def _try_ping_without_auth(
+        self,
+        client: httpx.AsyncClient,
+        endpoint: str,
+        server_info: dict | None = None,
+    ) -> bool:
         """
         Try a simple ping without authentication headers.
         Used as fallback when auth fails to determine if server is reachable.
@@ -1285,11 +1298,17 @@ class HealthMonitoringService:
         Args:
             client: httpx AsyncClient instance
             endpoint: The MCP endpoint URL to ping
+            server_info: The server record. An OpenAPI MCP server's hub refuses
+                any call without its admission marker, which is a routing proof
+                rather than a credential, so the ping still sends it. Without
+                it the hub answers 401, and a missing hub would read as healthy.
 
         Returns:
             bool: True if server responds (indicating it's reachable but auth expired)
         """
         import uuid
+
+        from ..services.openapi_ownership import admission_headers
 
         try:
             # Minimal headers without auth but with session ID (required by some servers)
@@ -1298,6 +1317,14 @@ class HealthMonitoringService:
                 "Content-Type": "application/json",
                 "Mcp-Session-Id": str(uuid.uuid4()),
             }
+            info = server_info or {}
+            headers.update(
+                admission_headers(
+                    info.get("path") or info.get("service_path"),
+                    info.get("proxy_pass_url"),
+                    endpoint,
+                )
+            )
             ping_payload = '{ "jsonrpc": "2.0", "id": "0", "method": "ping" }'
 
             response = await client.post(
@@ -1502,7 +1529,7 @@ class HealthMonitoringService:
                         logger.info(
                             f"[TRACE] Auth failure detected status={response.status_code} endpoint={redact_url(proxy_pass_url)}; trying ping without auth",
                         )
-                        if await self._try_ping_without_auth(client, proxy_pass_url):
+                        if await self._try_ping_without_auth(client, proxy_pass_url, server_info):
                             return True, HealthStatus.HEALTHY_AUTH_EXPIRED
                         else:
                             return False, "unhealthy: auth failed and ping without auth failed"
@@ -1570,7 +1597,7 @@ class HealthMonitoringService:
                     logger.warning(
                         f"Failed to initialize MCP session for {redact_url(endpoint)}, trying ping without auth"
                     )
-                    if await self._try_ping_without_auth(client, endpoint):
+                    if await self._try_ping_without_auth(client, endpoint, server_info):
                         # Reachable, but it refused the gateway's credentials (or
                         # their absence): report that, so callers that need a
                         # working credential, such as virtual servers, can tell
@@ -1598,7 +1625,7 @@ class HealthMonitoringService:
                     logger.info(
                         f"[TRACE] Auth failure detected ({response.status_code}) for {redact_url(endpoint)}, trying ping without auth"
                     )
-                    if await self._try_ping_without_auth(client, endpoint):
+                    if await self._try_ping_without_auth(client, endpoint, server_info):
                         # Reachable, but the request was refused for its credentials.
                         # healthy-auth-expired still routes (get_healthy_statuses),
                         # and per-user egress credentials now come from the egress
@@ -1837,6 +1864,24 @@ class HealthMonitoringService:
 
         # All other status codes (404, 500, etc.) are considered unhealthy
         return False
+
+    async def refresh_tools_now(
+        self,
+        service_path: str,
+    ) -> None:
+        """Run the tool refresh for one server and return when it is done.
+
+        perform_immediate_health_check starts the same refresh in the background;
+        callers that must answer with the new tool list (OpenAPI MCP servers,
+        issue #2022) await this instead of polling the record.
+        """
+        from ..services.server_service import server_service
+
+        server_info = await server_service.get_server_info(service_path)
+        if not server_info or not server_info.get("proxy_pass_url"):
+            logger.warning(f"Tool refresh skipped for {service_path}: no proxy_pass_url")
+            return
+        await self._update_tools_background(service_path, server_info["proxy_pass_url"])
 
     async def _fetch_tools_for_server(
         self,

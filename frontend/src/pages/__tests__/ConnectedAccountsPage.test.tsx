@@ -4,9 +4,12 @@ import { MemoryRouter } from 'react-router-dom';
 
 import ConnectedAccountsPage from '../ConnectedAccountsPage';
 import * as egressAuth from '../../utils/egressAuth';
+import { deleteMyCredential } from '../../hooks/useOpenApiServers';
 
 jest.mock('../../utils/egressAuth');
 const mocked = egressAuth as jest.Mocked<typeof egressAuth>;
+jest.mock('../../hooks/useOpenApiServers', () => ({ deleteMyCredential: jest.fn() }));
+const mockedDeleteMyCredential = deleteMyCredential as jest.MockedFunction<typeof deleteMyCredential>;
 
 // The page uses useNavigate() for the "Back to Dashboard" link, so it must be
 // rendered inside a Router.
@@ -159,5 +162,65 @@ describe('ConnectedAccountsPage', () => {
     mocked.listConnections.mockRejectedValue(new Error('boom'));
     renderPage();
     expect(await screen.findByText('Could not load connections.')).toBeInTheDocument();
+  });
+
+  it('labels an OpenAPI per-user key and removes it through its own route', async () => {
+    const actual = jest.requireActual('../../utils/egressAuth');
+    mocked.openApiTargetOf.mockImplementation(actual.openApiTargetOf);
+    mocked.listConnections
+      .mockResolvedValueOnce([
+        {
+          provider: 'openapi-petstore',
+          server_path: '/weather-apis',
+          scopes: [],
+          expires_at: null,
+          status: 'active',
+          last_refreshed_at: null,
+        },
+      ])
+      .mockResolvedValueOnce([]);
+    mockedDeleteMyCredential.mockResolvedValue();
+
+    renderPage();
+    expect(
+      await screen.findByText('OpenAPI target petstore on /weather-apis'),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /disconnect openapi target petstore/i }));
+
+    await waitFor(() =>
+      expect(mockedDeleteMyCredential).toHaveBeenCalledWith('weather-apis', 'petstore')
+    );
+    expect(mocked.disconnect).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [404, 'not_found'],
+    [409, 'not_per_user'],
+  ])('falls back to the generic disconnect for a key whose target is gone (%s %s)', async (status, error) => {
+    const actual = jest.requireActual('../../utils/egressAuth');
+    mocked.openApiTargetOf.mockImplementation(actual.openApiTargetOf);
+    mocked.listConnections
+      .mockResolvedValueOnce([
+        {
+          provider: 'openapi-petstore',
+          server_path: '/deleted-server',
+          scopes: [],
+          expires_at: null,
+          status: 'active',
+          last_refreshed_at: null,
+        },
+      ])
+      .mockResolvedValueOnce([]);
+    mockedDeleteMyCredential.mockRejectedValue({ response: { status, data: { error } } });
+    mocked.disconnect.mockResolvedValue();
+
+    renderPage();
+    fireEvent.click(
+      await screen.findByRole('button', { name: /disconnect openapi target petstore/i }),
+    );
+
+    await waitFor(() =>
+      expect(mocked.disconnect).toHaveBeenCalledWith('openapi-petstore', '/deleted-server'),
+    );
   });
 });

@@ -226,6 +226,13 @@ log "Found .env file"
 # Load environment variables from .env file early so we can check STORAGE_BACKEND
 source .env
 
+# OpenAPI MCP servers (issue #2022): start the openapi-mcp service with the
+# registry. COMPOSE_PROFILES applies to every compose command below.
+if [ "${OPENAPI_MCP_ENABLED:-false}" = "true" ]; then
+    export COMPOSE_PROFILES="${COMPOSE_PROFILES:+${COMPOSE_PROFILES},}openapi-mcp"
+    log "OPENAPI_MCP_ENABLED=true: adding compose profile openapi-mcp"
+fi
+
 # Check if docker compose is installed
 if ! docker compose version &> /dev/null; then
     log "ERROR: docker compose is not available"
@@ -233,9 +240,14 @@ if ! docker compose version &> /dev/null; then
     exit 1
 fi
 
-# Stop and remove existing services if they exist
+# Stop and remove existing services if they exist. The openapi-mcp profile is
+# always included here: compose ignores a service whose profile is inactive,
+# so after OPENAPI_MCP_ENABLED is turned off a plain "down" would leave the old
+# openapi-mcp container running, still holding every server and its shared
+# credentials in memory. "up" below starts it again only when the flag is on.
 log "Stopping existing services (if any)..."
-$COMPOSE_CMD $COMPOSE_FILES down --remove-orphans || log "No existing services to stop"
+COMPOSE_PROFILES="${COMPOSE_PROFILES:+${COMPOSE_PROFILES},}openapi-mcp" \
+    $COMPOSE_CMD $COMPOSE_FILES down --remove-orphans || log "No existing services to stop"
 log "Existing services stopped"
 
 # Clean up any root-owned directories from previous Docker runs

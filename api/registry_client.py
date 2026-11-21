@@ -1892,6 +1892,7 @@ class RegistryClient:
             or endpoint.startswith("/api/peers")
             or endpoint.startswith("/api/skills")
             or endpoint.startswith("/api/virtual-servers")
+            or endpoint.startswith("/api/openapi-servers")
             or endpoint.startswith("/api/custom-types")
             or endpoint.startswith("/api/custom")
             or endpoint.startswith("/api/admin")
@@ -5659,6 +5660,136 @@ class RegistryClient:
         result = response.json()
         logger.info(f"Virtual server rated: avg={result.get('average_rating')}")
         return result
+
+    # ------------------------------------------------------------------
+    # OpenAPI MCP servers (issue #2022). Responses are returned as dicts:
+    # the API never includes a credential, only auth.credential_set.
+    # ------------------------------------------------------------------
+
+    def create_openapi_server(
+        self,
+        body: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Create an OpenAPI MCP server from {name, description, tags, visibility, allowed_groups}."""
+        return self._make_request(method="POST", endpoint="/api/openapi-servers", data=body).json()
+
+    def list_openapi_servers(self) -> dict[str, Any]:
+        """List the OpenAPI MCP servers the caller can see: {"servers": [...]}."""
+        return self._make_request(method="GET", endpoint="/api/openapi-servers").json()
+
+    def get_openapi_server(
+        self,
+        slug: str,
+    ) -> dict[str, Any]:
+        """Get one OpenAPI MCP server with its targets."""
+        return self._make_request(method="GET", endpoint=f"/api/openapi-servers/{slug}").json()
+
+    def update_openapi_server(
+        self,
+        slug: str,
+        body: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Update description, tags, visibility or allowed_groups."""
+        return self._make_request(
+            method="PATCH", endpoint=f"/api/openapi-servers/{slug}", data=body
+        ).json()
+
+    def delete_openapi_server(
+        self,
+        slug: str,
+    ) -> None:
+        """Delete an OpenAPI MCP server and its tools."""
+        self._make_request(method="DELETE", endpoint=f"/api/openapi-servers/{slug}")
+
+    def add_openapi_target(
+        self,
+        slug: str,
+        body: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Add a REST target; body follows OpenApiTargetCreateRequest."""
+        return self._make_request(
+            method="POST", endpoint=f"/api/openapi-servers/{slug}/targets", data=body
+        ).json()
+
+    def get_openapi_target(
+        self,
+        slug: str,
+        name: str,
+    ) -> dict[str, Any]:
+        """Get one REST target."""
+        return self._make_request(
+            method="GET", endpoint=f"/api/openapi-servers/{slug}/targets/{name}"
+        ).json()
+
+    def update_openapi_target(
+        self,
+        slug: str,
+        name: str,
+        body: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Update a target, rotate its credential (auth) or refresh its spec (refresh_spec)."""
+        return self._make_request(
+            method="PATCH", endpoint=f"/api/openapi-servers/{slug}/targets/{name}", data=body
+        ).json()
+
+    def remove_openapi_target(
+        self,
+        slug: str,
+        name: str,
+    ) -> None:
+        """Remove a target and its tools."""
+        self._make_request(method="DELETE", endpoint=f"/api/openapi-servers/{slug}/targets/{name}")
+
+    def set_openapi_key(
+        self,
+        slug: str,
+        name: str,
+        secret: str,
+        ttl_value: int,
+        ttl_unit: str,
+        sub: str | None = None,
+        auth_method: str | None = None,
+    ) -> dict[str, Any]:
+        """Store the caller's own key for a per-user target (an admin may pass sub and auth_method)."""
+        body: dict[str, Any] = {"secret": secret, "ttl_value": ttl_value, "ttl_unit": ttl_unit}
+        if sub:
+            body["sub"] = sub
+        if auth_method:
+            body["auth_method"] = auth_method
+        return self._make_request(
+            method="PUT",
+            endpoint=f"/api/openapi-servers/{slug}/targets/{name}/my-credential",
+            data=body,
+        ).json()
+
+    def get_openapi_key_status(
+        self,
+        slug: str,
+        name: str,
+    ) -> dict[str, Any]:
+        """Whether the caller has a key for a per-user target, and when it expires. Never the key."""
+        return self._make_request(
+            method="GET", endpoint=f"/api/openapi-servers/{slug}/targets/{name}/my-credential"
+        ).json()
+
+    def list_openapi_keys(
+        self,
+        slug: str,
+    ) -> dict[str, Any]:
+        """The caller's key status for every per-user target of a server."""
+        return self._make_request(
+            method="GET", endpoint=f"/api/openapi-servers/{slug}/my-credentials"
+        ).json()
+
+    def delete_openapi_key(
+        self,
+        slug: str,
+        name: str,
+    ) -> None:
+        """Remove the caller's key for a per-user target."""
+        self._make_request(
+            method="DELETE", endpoint=f"/api/openapi-servers/{slug}/targets/{name}/my-credential"
+        )
 
     def get_virtual_server_rating(self, path: str) -> dict[str, Any]:
         """
