@@ -37,14 +37,14 @@ metadata:
 spec:
   workloadSelector:
     labels:
-      app.kubernetes.io/name: registry
+      app.kubernetes.io/name: {{ include "mcp-gateway-registry-stack.appName" (dict "ctx" . "chart" "registry" "default" "registry") | quote }}
   egress:
     - port:
         number: {{ $authPort }}
         protocol: TCP
         name: tcp-auth-server
       hosts:
-        - {{ printf "./auth-server.%s.svc.cluster.local" $ns | quote }}
+        - {{ printf "./%s.%s.svc.cluster.local" (include "mcp-gateway-registry-stack.appName" (dict "ctx" . "chart" "auth-server" "default" "auth-server")) $ns | quote }}
     {{- if .Values.keycloak.create }}
     {{- $kcPort := dig "service" "containerPort" (dig "containerPorts" "http" 8080 .Values.keycloak) .Values.keycloak }}
     - port:

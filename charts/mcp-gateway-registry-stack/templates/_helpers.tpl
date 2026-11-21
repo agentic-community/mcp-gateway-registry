@@ -272,3 +272,63 @@ the name that chart creates. The chart never runs the Job as "default".
 {{- define "mcp-gateway-registry-stack.keycloakAdminInitServiceAccount" -}}
 {{- dig "sslInit" "serviceAccount" "name" "" (.Values.keycloak | default dict) | default (printf "%s-keycloak-admin-init" .Release.Name) -}}
 {{- end -}}
+
+{{/*
+app.name of an application subchart (registry, auth-server, mcpgw). The subchart
+labels its pods app.kubernetes.io/name=<app.name> and names its Service after
+it, so mesh selectors and hosts must follow this value, not a literal.
+Usage: include "mcp-gateway-registry-stack.appName" (dict "ctx" . "chart" "registry" "default" "registry")
+*/}}
+{{- define "mcp-gateway-registry-stack.appName" -}}
+{{- dig "app" "name" .default (index .ctx.Values .chart | default dict) -}}
+{{- end -}}
+
+{{/*
+ServiceAccount an application subchart's pods run as: serviceAccount.name, else
+app.name (the subcharts' own serviceAccountName rule).
+*/}}
+{{- define "mcp-gateway-registry-stack.appServiceAccount" -}}
+{{- $sub := index .ctx.Values .chart | default dict -}}
+{{- dig "serviceAccount" "name" "" $sub | default (dig "app" "name" .default $sub) -}}
+{{- end -}}
+
+{{/*
+Trusted load balancer CIDRs (registry.app.trustedRealIpCidrs) as a list.
+*/}}
+{{- define "mcp-gateway-registry-stack.trustedProxyCidrs" -}}
+{{- $out := list -}}
+{{- range (splitList "," (dig "app" "trustedRealIpCidrs" "" (.Values.registry | default dict))) -}}
+{{- if trim . }}{{- $out = append $out (trim .) }}{{- end -}}
+{{- end -}}
+{{- toYaml $out -}}
+{{- end -}}
+
+{{/*
+True when the ALB is routed through the Istio ingress gateway.
+*/}}
+{{- define "mcp-gateway-registry-stack.ingressRouted" -}}
+{{- $gw := .Values.global.serviceMesh.ingressGateway | default dict -}}
+{{- if and (include "mcp-gateway-registry-stack.istioEnabled" .) $gw.enabled $gw.routeIngress -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+Fail closed unless the conditions routed mode depends on hold. In routed mode
+the registry's entry port admits only the gateway, auth-server and mcpgw, and
+the gateway admits only the load balancer's CIDRs; both are AuthorizationPolicy
+rules, enforced only with the policies on and with STRICT mTLS (a plaintext
+caller has no identity to check). The gateway trusts one upstream proxy, so its
+allow list (registry.app.trustedRealIpCidrs) must be set.
+*/}}
+{{- define "mcp-gateway-registry-stack.validateIngressRoute" -}}
+{{- if include "mcp-gateway-registry-stack.ingressRouted" . -}}
+{{- if not .Values.global.serviceMesh.authorizationPolicies.enabled -}}
+{{- fail "global.serviceMesh.ingressGateway.routeIngress requires global.serviceMesh.authorizationPolicies.enabled: true. Routed mode relies on them to restrict who reaches the registry and the gateway." -}}
+{{- end -}}
+{{- if ne (.Values.global.serviceMesh.mtls.mode | default "STRICT") "STRICT" -}}
+{{- fail "global.serviceMesh.ingressGateway.routeIngress requires global.serviceMesh.mtls.mode: STRICT. Under PERMISSIVE a caller without a mesh identity can reach the registry's sidecar." -}}
+{{- end -}}
+{{- if not (fromYamlArray (include "mcp-gateway-registry-stack.trustedProxyCidrs" .)) -}}
+{{- fail "global.serviceMesh.ingressGateway.routeIngress requires registry.app.trustedRealIpCidrs (the load balancer's subnets). The gateway trusts one upstream proxy (numTrustedProxies: 1) and admits only those addresses." -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}

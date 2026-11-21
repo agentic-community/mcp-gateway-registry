@@ -23,7 +23,7 @@ enabled (global.serviceMesh.enabled && global.serviceMesh.type == "istio").
 {{- $ex := $mtls.strictExceptions | default dict }}
 {{- $igw := .Values.global.serviceMesh.ingressGateway | default dict }}
 {{- /* Behind the ingress gateway nothing outside the mesh reaches the registry. */ -}}
-{{- $registryException := and $ex.registryEntrypoint (not (and $igw.enabled $igw.routeIngress)) }}
+{{- $registryException := and $ex.registryEntrypoint (not (include "mcp-gateway-registry-stack.ingressRouted" .)) }}
 {{- $labels := include "mcp-gateway-registry-stack.labels" . }}
 {{- $fullname := include "mcp-gateway-registry-stack.fullname" . }}
 apiVersion: security.istio.io/v1
@@ -49,7 +49,7 @@ metadata:
 spec:
   selector:
     matchLabels:
-      app.kubernetes.io/name: registry
+      app.kubernetes.io/name: {{ include "mcp-gateway-registry-stack.appName" (dict "ctx" . "chart" "registry" "default" "registry") | quote }}
   mtls:
     mode: STRICT
   portLevelMtls:

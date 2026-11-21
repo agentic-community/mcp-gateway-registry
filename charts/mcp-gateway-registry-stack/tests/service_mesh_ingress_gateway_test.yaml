@@ -3,6 +3,7 @@ templates:
   - templates/servicemesh-ingress-gateway.yaml
   - templates/servicemesh-authorizationpolicy.yaml
   - templates/servicemesh-peerauthentication.yaml
+  - templates/servicemesh-registry-sidecar.yaml
   - charts/registry/templates/ingress.yaml
   - charts/registry/templates/secret.yaml
   - charts/registry/templates/deployment.yaml
@@ -153,12 +154,73 @@ tests:
           path: spec.rules[0].http.paths[0].backend.service.name
           value: registry
 
+  # ---- routed mode refuses to render unless forwarded-IP trust is safe ----
+  - it: refuses routeIngress with the AuthorizationPolicies off
+    template: templates/servicemesh-ingress-gateway.yaml
+    set:
+      global.serviceMesh.ingressGateway.enabled: true
+      global.serviceMesh.ingressGateway.routeIngress: true
+      global.serviceMesh.authorizationPolicies.enabled: false
+      registry.app.trustedRealIpCidrs: 10.1.2.0/24
+    asserts:
+      - failedTemplate:
+          errorPattern: "routeIngress requires global.serviceMesh.authorizationPolicies.enabled: true"
+
+  - it: refuses routeIngress under PERMISSIVE mTLS
+    template: templates/servicemesh-ingress-gateway.yaml
+    set:
+      global.serviceMesh.ingressGateway.enabled: true
+      global.serviceMesh.ingressGateway.routeIngress: true
+      global.serviceMesh.mtls.mode: PERMISSIVE
+      registry.app.trustedRealIpCidrs: 10.1.2.0/24
+    asserts:
+      - failedTemplate:
+          errorPattern: "routeIngress requires global.serviceMesh.mtls.mode: STRICT"
+
+  - it: refuses routeIngress without the load balancer CIDRs
+    template: templates/servicemesh-ingress-gateway.yaml
+    set:
+      global.serviceMesh.ingressGateway.enabled: true
+      global.serviceMesh.ingressGateway.routeIngress: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "routeIngress requires registry.app.trustedRealIpCidrs"
+
+  # ---- gateway exposure ----
+  - it: admits any source to the gateway before traffic is routed
+    template: templates/servicemesh-ingress-gateway.yaml
+    documentIndex: 8
+    set:
+      global.serviceMesh.ingressGateway.enabled: true
+      registry.app.trustedRealIpCidrs: 10.1.2.0/24
+    asserts:
+      - isKind:
+          of: AuthorizationPolicy
+      - notExists:
+          path: spec.rules[0].from
+
+  - it: admits only the load balancer CIDRs to the gateway when routed
+    template: templates/servicemesh-ingress-gateway.yaml
+    documentIndex: 8
+    set:
+      global.serviceMesh.ingressGateway.enabled: true
+      global.serviceMesh.ingressGateway.routeIngress: true
+      registry.app.trustedRealIpCidrs: "10.1.2.0/24, 10.1.3.0/24"
+    asserts:
+      - equal:
+          path: spec.rules[0].from[0].source.ipBlocks
+          value: ["10.1.2.0/24", "10.1.3.0/24"]
+      - equal:
+          path: spec.rules[0].to[0].operation.ports
+          value: ["8443"]
+
   # ---- traffic routed through the gateway ----
   - it: points the ALB Ingress at the gateway over HTTPS
     template: charts/registry/templates/ingress.yaml
     set:
       global.serviceMesh.ingressGateway.enabled: true
       global.serviceMesh.ingressGateway.routeIngress: true
+      registry.app.trustedRealIpCidrs: 10.1.2.0/24
     asserts:
       - equal:
           path: spec.rules[0].http.paths[0].backend.service
@@ -170,28 +232,29 @@ tests:
           path: metadata.annotations["alb.ingress.kubernetes.io/healthcheck-protocol"]
           value: HTTPS
 
-  - it: narrows the registry entry ports to the gateway, auth-server and mcpgw
+  - it: admits only the gateway and mcpgw to the registry's HTTP port and closes 8443
     template: templates/servicemesh-authorizationpolicy.yaml
     documentIndex: 0
     set:
       global.serviceMesh.ingressGateway.enabled: true
       global.serviceMesh.ingressGateway.routeIngress: true
+      registry.app.trustedRealIpCidrs: 10.1.2.0/24
     asserts:
       - equal:
-          path: spec.rules[0].from[0].source.principals
+          path: spec.rules[0]
           value:
-            - cluster.local/ns/default/sa/mcp-ingress-gateway
-            - cluster.local/ns/default/sa/auth-server
-            - cluster.local/ns/default/sa/mcpgw-server
+            from: [{source: {principals: [cluster.local/ns/default/sa/mcp-ingress-gateway, cluster.local/ns/default/sa/mcpgw-server]}}]
+            to: [{operation: {ports: ["8080"]}}]
       - equal:
-          path: spec.rules[0].to[0].operation.ports
-          value: ["8080", "8443"]
+          path: spec.rules[1].to[0].operation.ports
+          value: ["8091"]
 
   - it: drops the registry STRICT exception
     template: templates/servicemesh-peerauthentication.yaml
     set:
       global.serviceMesh.ingressGateway.enabled: true
       global.serviceMesh.ingressGateway.routeIngress: true
+      registry.app.trustedRealIpCidrs: 10.1.2.0/24
     asserts:
       - hasDocuments:
           count: 2
@@ -200,27 +263,85 @@ tests:
           value: rel-mcp-gateway-registry-stack-mongodb-operator-webhook
         documentIndex: 1
 
-  - it: trusts the sidecar address in nginx so client_ip shows the end user
+  - it: never makes nginx trust the sidecar address in routed mode
     template: charts/registry/templates/secret.yaml
+    documentSelector:
+      path: metadata.name
+      value: registry-secret
     set:
       global.serviceMesh.ingressGateway.enabled: true
       global.serviceMesh.ingressGateway.routeIngress: true
-      registry.app.trustedRealIpCidrs: "10.1.2.0/24, 10.1.3.0/24"
+      registry.app.trustedRealIpCidrs: "10.1.2.0/24,10.1.3.0/24"
     asserts:
       - equal:
           path: data.TRUSTED_REAL_IP_CIDRS
-          value: 10.1.2.0/24,10.1.3.0/24,127.0.0.6/32
+          value: 10.1.2.0/24,10.1.3.0/24
           decodeBase64: true
-        documentSelector:
-          path: metadata.name
-          value: registry-secret
+      - notExists:
+          path: data.INTERNAL_API_PORT
 
-  - it: does not use TPROXY behind the gateway even when preserveClientIp is set
-    template: charts/registry/templates/deployment.yaml
+  - it: restricts the gateway pods to the given security groups
+    template: templates/servicemesh-ingress-gateway.yaml
+    documentIndex: 6
     set:
-      global.serviceMesh.istio.preserveClientIp: true
       global.serviceMesh.ingressGateway.enabled: true
       global.serviceMesh.ingressGateway.routeIngress: true
+      registry.app.trustedRealIpCidrs: 10.1.2.0/24
+      global.serviceMesh.ingressGateway.securityGroupIds: [sg-0abc]
     asserts:
-      - notExists:
-          path: spec.template.metadata.annotations["sidecar.istio.io/interceptionMode"]
+      - isKind:
+          of: SecurityGroupPolicy
+      - equal:
+          path: spec
+          value:
+            podSelector: {matchLabels: {istio: mcp-ingress-gateway}}
+            securityGroups: {groupIds: [sg-0abc]}
+
+  - it: follows a renamed registry in its policy, Sidecar and gateway route
+    templates:
+      - templates/servicemesh-authorizationpolicy.yaml
+      - templates/servicemesh-registry-sidecar.yaml
+      - templates/servicemesh-ingress-gateway.yaml
+    set:
+      registry.app.name: my-registry
+      auth-server.app.name: my-auth
+      global.serviceMesh.ingressGateway.enabled: true
+    asserts:
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/name"]
+          value: my-registry
+        template: templates/servicemesh-authorizationpolicy.yaml
+        documentIndex: 0
+      - equal:
+          path: spec.workloadSelector.labels["app.kubernetes.io/name"]
+          value: my-registry
+        template: templates/servicemesh-registry-sidecar.yaml
+      - equal:
+          path: spec.egress[0].hosts
+          value: ["./my-auth.default.svc.cluster.local"]
+        template: templates/servicemesh-registry-sidecar.yaml
+      - equal:
+          path: spec.http[0].route[0].destination.host
+          value: my-registry.default.svc.cluster.local
+        template: templates/servicemesh-ingress-gateway.yaml
+        documentIndex: 7
+
+  - it: uses a renamed app's ServiceAccount as its principal
+    template: templates/servicemesh-authorizationpolicy.yaml
+    documentIndex: 1
+    set:
+      registry.app.name: my-registry
+    asserts:
+      - contains:
+          path: spec.rules[0].from[0].source.principals
+          content: cluster.local/ns/default/sa/my-registry
+
+  - it: renders the same gateway objects when routed (no extra header-rewriting route)
+    template: templates/servicemesh-ingress-gateway.yaml
+    set:
+      global.serviceMesh.ingressGateway.enabled: true
+      global.serviceMesh.ingressGateway.routeIngress: true
+      registry.app.trustedRealIpCidrs: 10.1.2.0/24
+    asserts:
+      - hasDocuments:
+          count: 9

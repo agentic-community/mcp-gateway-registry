@@ -1,6 +1,8 @@
 suite: Keycloak public hostname pinned under the service mesh
 templates:
   - templates/servicemesh-keycloak-hostname.yaml
+  - charts/keycloak/templates/statefulset.yaml
+  - charts/keycloak/templates/configmap-env-vars.yaml
   - templates/oauth-provider-secret.yaml
 release:
   name: rel
@@ -60,3 +62,20 @@ tests:
     asserts:
       - hasDocuments:
           count: 0
+
+  - it: rolls Keycloak when the mesh hostname ConfigMap changes
+    template: charts/keycloak/templates/statefulset.yaml
+    set:
+      global.domain: example.com
+      global.serviceMesh.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["mcp-gateway-registry-stack/mesh-hostname"]
+          value: https://mcpregistry.example.com
+
+  - it: marks the Keycloak pod template differently with the mesh off
+    template: charts/keycloak/templates/statefulset.yaml
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["mcp-gateway-registry-stack/mesh-hostname"]
+          value: "off"

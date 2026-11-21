@@ -25,7 +25,7 @@ global:
   # mesh templates with no second copy. Only "istio" is implemented today.
   serviceMesh:
     # Main switch. When false, nothing mesh-related renders and no workload is
-    # annotated for injection: a non-mesh install is byte-for-byte unchanged.
+    # annotated for injection. The first upgrade to this chart version restarts Keycloak once (see keycloak.podAnnotations).
     enabled: false
     # Which mesh to render for. The discriminator is a seam for other meshes;
     # a value other than "istio" renders no Istio objects or annotations.
@@ -72,11 +72,20 @@ global:
       # routeIngress is true.
       enabled: false
       # Point the ALB Ingress at the gateway over HTTPS instead of at the
-      # registry over HTTP. Also narrows the registry's entry ports to the
-      # gateway, auth-server and mcpgw identities, makes the registry fully
-      # STRICT, and lets nginx trust the sidecar address so client_ip shows the
-      # end user without TPROXY. Requires enabled: true.
+      # registry over HTTP. Also admits only the load balancer's CIDRs to the
+      # gateway, only the gateway and mcpgw to the registry's HTTP port, closes
+      # the registry's TLS port and makes the registry fully STRICT. nginx does
+      # not trust the gateway's forwarded headers (see the docs on client IPs).
+      # Requires enabled: true, authorizationPolicies.enabled: true,
+      # mtls.mode: STRICT and registry.app.trustedRealIpCidrs; the render fails
+      # otherwise.
       routeIngress: false
+      # Security groups for the gateway pods (EKS Security Groups for Pods,
+      # rendered as a SecurityGroupPolicy). Use one that admits 8443 only from
+      # the load balancer's security group, so being in an allowed subnet is not
+      # enough to reach a listener that trusts one upstream proxy. Requires the
+      # VPC CNI with ENABLE_POD_ENI=true; empty renders nothing.
+      securityGroupIds: []
       # Name of the gateway's Deployment, Service and ServiceAccount.
       name: mcp-ingress-gateway
       replicas: 2
@@ -246,7 +255,7 @@ global:
       registry: /registry
 # Optional service mesh support (global.serviceMesh above). A service mesh is
 # highly encouraged but NOT required: with global.serviceMesh.enabled=false (the
-# default) the chart renders exactly as it does without any mesh awareness. The
+# default) the chart renders as it did before mesh support, apart from a one-time Keycloak restart on the first upgrade (keycloak.podAnnotations). The
 # chart does NOT install a mesh control plane (istiod is a cluster prerequisite);
 # it labels its own pods for sidecar injection and renders namespaced mesh policy
 # (PeerAuthentication, AuthorizationPolicy). Subchart pods it does not template
@@ -427,6 +436,15 @@ keycloak:
   # together with extraEnvVars when moving to the official-image Keycloak chart,
   # which sets the same KC_HOSTNAME* values itself.
   extraEnvVarsCM: '{{ .Release.Name }}-keycloak-mesh-hostname'
+  # Roll Keycloak when that ConfigMap's content changes (turning the mesh on or
+  # off). Keycloak reads envFrom only at startup and the StatefulSet references
+  # the ConfigMap by name, so without this the pod keeps the old hostname
+  # settings. Bitnami renders podAnnotations with tpl. Adding the annotation
+  # changes the pod template, so the first upgrade to this chart version
+  # restarts Keycloak once, with or without the mesh. Bitnami-only: remove
+  # together with extraEnvVarsCM.
+  podAnnotations:
+    mcp-gateway-registry-stack/mesh-hostname: '{{ if include "mcp-gateway-registry-stack.istioEnabled" . }}{{ include "mcp-gateway-registry-stack.keycloakExternalUrl" . }}{{ else }}off{{ end }}'
   ingress:
     enabled: false
   nodeSelector: {}

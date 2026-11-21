@@ -30,14 +30,15 @@ global.serviceMesh.authorizationPolicies.enabled. Istio source principals are
 {{- $fullname := include "mcp-gateway-registry-stack.fullname" . }}
 {{- $labels := include "mcp-gateway-registry-stack.labels" . }}
 {{- $igw := .Values.global.serviceMesh.ingressGateway | default dict }}
-{{- $routed := and $igw.enabled $igw.routeIngress }}
-{{- /* ServiceAccount names. App SAs honor the subchart serviceAccount.name. */ -}}
-{{- $registrySa := "registry" }}
-{{- with (dig "serviceAccount" "name" "" (.Values.registry | default dict)) }}{{- $registrySa = . }}{{- end }}
-{{- $authSa := "auth-server" }}
-{{- with (dig "serviceAccount" "name" "" (index .Values "auth-server" | default dict)) }}{{- $authSa = . }}{{- end }}
-{{- $mcpgwSa := "mcpgw-server" }}
-{{- with (dig "serviceAccount" "name" "" (.Values.mcpgw | default dict)) }}{{- $mcpgwSa = . }}{{- end }}
+{{- $routed := include "mcp-gateway-registry-stack.ingressRouted" . }}
+{{- /* App workloads: selectors and ServiceAccounts follow the subcharts'
+       app.name and serviceAccount.name, as the subcharts label and run them. */ -}}
+{{- $registryApp := include "mcp-gateway-registry-stack.appName" (dict "ctx" . "chart" "registry" "default" "registry") }}
+{{- $authApp := include "mcp-gateway-registry-stack.appName" (dict "ctx" . "chart" "auth-server" "default" "auth-server") }}
+{{- $mcpgwApp := include "mcp-gateway-registry-stack.appName" (dict "ctx" . "chart" "mcpgw" "default" "mcpgw-server") }}
+{{- $registrySa := include "mcp-gateway-registry-stack.appServiceAccount" (dict "ctx" . "chart" "registry" "default" "registry") }}
+{{- $authSa := include "mcp-gateway-registry-stack.appServiceAccount" (dict "ctx" . "chart" "auth-server" "default" "auth-server") }}
+{{- $mcpgwSa := include "mcp-gateway-registry-stack.appServiceAccount" (dict "ctx" . "chart" "mcpgw" "default" "mcpgw-server") }}
 {{- $p := dict
   "registry" (printf "%s/ns/%s/sa/%s" $td $ns $registrySa)
   "auth" (printf "%s/ns/%s/sa/%s" $td $ns $authSa)
@@ -60,21 +61,21 @@ metadata:
 spec:
   selector:
     matchLabels:
-      app.kubernetes.io/name: registry
+      app.kubernetes.io/name: {{ $registryApp | quote }}
   action: ALLOW
   rules:
     {{- if $routed }}
-    # Entry point behind the Istio ingress gateway: only the gateway and the
-    # in-namespace callers of the registry API (auth-server, mcpgw) reach nginx.
+    # Entry point behind the Istio ingress gateway: the gateway, and mcpgw (the
+    # only in-mesh registry API caller; the auth-server uses 8091). The TLS
+    # listener 8443 is closed: nothing uses it in this mode.
     - from:
         - source:
             principals:
               - {{ printf "%s/ns/%s/sa/%s" $td $ns ($igw.name | default "mcp-ingress-gateway") | quote }}
-              - {{ $p.auth | quote }}
               - {{ $p.mcpgw | quote }}
       to:
         - operation:
-            ports: ["8080", "8443"]
+            ports: ["8080"]
     {{- else }}
     # Public entry point (nginx 8080 HTTP, 8443 HTTPS). The load balancer is
     # outside the mesh, and every request here is authenticated by the gateway
@@ -107,7 +108,7 @@ metadata:
 spec:
   selector:
     matchLabels:
-      app.kubernetes.io/name: auth-server
+      app.kubernetes.io/name: {{ $authApp | quote }}
   action: ALLOW
   rules:
     # registry (nginx auth_request, token paths) and mcpgw -> auth-server.
@@ -134,7 +135,7 @@ metadata:
 spec:
   selector:
     matchLabels:
-      app.kubernetes.io/name: mcpgw-server
+      app.kubernetes.io/name: {{ $mcpgwApp | quote }}
   action: ALLOW
   rules:
     # registry (airegistry-tools proxy, health checks) and auth-server

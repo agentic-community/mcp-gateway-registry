@@ -1,7 +1,9 @@
 # Service Mesh Deployment (Helm / EKS)
 
 The Helm stack chart can run inside an Istio service mesh. A mesh is highly encouraged but not required: with mesh
-support off (the default), the chart renders exactly as it does today. There are no application code changes for the
+support off (the default), the chart renders as it did before mesh support. The one exception is Keycloak: the first
+upgrade to this chart version restarts it once, because a pod annotation added for mesh support changes its pod
+template (see Keycloak's public hostname). There are no application code changes for the
 mesh, and no code path depends on it.
 
 This page covers what the chart does when you turn the mesh on, what you have to provide, the rollout order that avoids
@@ -183,7 +185,9 @@ Where a sidecar still handles HTTP (the registry's inbound from the load balance
 - The request path is normalized (`.` and `..` segments) before nginx sees it, and request headers are capped at 60 KiB
   in total.
 
-A sidecar in its default interception mode hands every connection to the application from `127.0.0.6`, its local address, instead of the caller's. The registry can avoid this with TPROXY or the ingress gateway (see Client IP in the audit log). The auth-server and mcpgw
+A sidecar in its default interception mode hands every connection to the application from `127.0.0.6`, its local
+address, instead of the caller's. The registry can avoid this with TPROXY or the ingress gateway (see Client IP in the
+audit log). The auth-server and mcpgw
 still see `127.0.0.6` as their peer, but they take the caller's address from the `X-Real-IP` header the registry's nginx
 sets, so their logs are unaffected. The auth-server's uvicorn trusts forwarded headers only from `127.0.0.1` and `::1`,
 which never included the registry's pod IP, so its trust decision is unchanged.
@@ -195,10 +199,10 @@ resources, so it needs no Gateway API CRDs and no separate Helm install: istiod 
 gateway Envoy through its `gateway` injection template. Two switches let you check the gateway before traffic moves to
 it:
 
-| Value                                            | Effect                                                                                                                                                                                                                                                                                                                                                                           |
-|--------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `global.serviceMesh.ingressGateway.enabled`      | Renders the gateway: ServiceAccount, Deployment, ClusterIP Service, an HTTPS `Gateway`, a `VirtualService` to the registry, a TLS Secret, and an AuthorizationPolicy admitting the load balancer on 8443. Traffic still goes to the registry.                                                                                                                                    |
-| `global.serviceMesh.ingressGateway.routeIngress` | Points the ALB Ingress at the gateway over HTTPS (`backend-protocol` and `healthcheck-protocol: HTTPS`). It also narrows the registry's entry ports to the gateway, auth-server and mcpgw identities, drops the registry STRICT exception, and adds `127.0.0.6/32` to nginx's trusted proxies so `client_ip` shows the end user. Requires `enabled`; the render fails otherwise. |
+| Value                                            | Effect                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+|--------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `global.serviceMesh.ingressGateway.enabled`      | Renders the gateway: ServiceAccount, Deployment, ClusterIP Service, an HTTPS `Gateway`, a `VirtualService` to the registry, a TLS Secret, and an AuthorizationPolicy admitting the load balancer on 8443. Traffic still goes to the registry.                                                                                                                                                                                                                                                                                                                                                               |
+| `global.serviceMesh.ingressGateway.routeIngress` | Points the ALB Ingress at the gateway over HTTPS (`backend-protocol` and `healthcheck-protocol: HTTPS`), admits only the load balancer's CIDRs to the gateway, admits only the gateway and mcpgw identities to the registry's HTTP port, closes the registry's TLS port 8443, and drops the registry STRICT exception. nginx does not trust the gateway's forwarded headers, so all clients share one rate-limit bucket (see Client IP in the audit log). Requires `enabled`, `authorizationPolicies.enabled: true`, `mtls.mode: STRICT` and `registry.app.trustedRealIpCidrs`; the render fails otherwise. |
 
 With both on, every hop is encrypted: client to ALB (TLS, the ACM certificate), ALB to gateway (TLS, the gateway's
 certificate), gateway to registry (mTLS).
@@ -213,10 +217,18 @@ istiod serves the gateway its certificate only if the gateway's ServiceAccount m
 the chart creates that Role and RoleBinding. The gateway pod mounts no Kubernetes API token, so the grant is only used
 by istiod's check.
 
+The gateway trusts one upstream proxy, so only the load balancer should reach it. In routed mode its AuthorizationPolicy
+admits only the load balancer's CIDRs, but a CIDR identifies a network range, not the load balancer. Set
+`ingressGateway.securityGroupIds` to a security group that admits 8443 only from the load balancer's security group: the
+chart then renders a `SecurityGroupPolicy` (EKS Security Groups for Pods) for the gateway pods, and the CIDR rule stays
+as a second layer. This requires the VPC CNI with `ENABLE_POD_ENI=true`; without it the object has no effect.
+
 The gateway parses HTTP, so Envoy's limits (60 KiB of request headers in total) apply before a request reaches nginx.
 
 Roll out in order: enable the gateway and check it from inside the cluster (health, login, an MCP call), then set
-`routeIngress`. The load balancer re-registers its targets on the gateway pods. To roll back, set `routeIngress: false`.
+`routeIngress` together with `registry.app.trustedRealIpCidrs`. Until `routeIngress` is on, the gateway admits any
+source so it can be tested in-cluster. The load balancer re-registers its targets on the gateway pods. To roll back, set
+`routeIngress: false`.
 
 ## Client IP in the audit log
 
@@ -257,7 +269,21 @@ were compromised, it could change that pod's iptables rules and stop its traffic
 
 ### Behind the ingress gateway: `routeIngress: true`
 
-With the ingress gateway routing the load balancer's traffic (see [Ingress gateway](#ingress-gateway)), `client_ip` shows the end user without TPROXY. The gateway runs with `numTrustedProxies: 1`, so it keeps the load balancer's `X-Forwarded-For` entry and appends the load balancer's address. Only the gateway, auth-server and mcpgw can reach nginx, so the chart adds `127.0.0.6/32` to nginx's trusted proxies; with the load balancer's subnets in `registry.app.trustedRealIpCidrs`, nginx walks the chain back to the client. A caller that reaches the gateway directly with a forged `X-Forwarded-For` is recorded with its own address, because that address is not trusted. `preserveClientIp` has no effect in this mode.
+nginx does not trust forwarded headers from the gateway. Behind the gateway, nginx sees every request arriving from its
+own sidecar (`127.0.0.6`), the same address an in-mesh caller such as mcpgw arrives from, so it cannot tell the
+gateway's `X-Forwarded-For` from one a caller made up. As a result:
+
+- `client_ip` in the audit log is `127.0.0.6` for every request. The end user is the entry left of the load balancer's
+  address in `request.forwarded_for`: the gateway keeps the load balancer's `X-Forwarded-For` (`numTrustedProxies: 1`)
+  and appends the load balancer's address. Use it for investigation, not attribution.
+- nginx's per-IP rate limits key on `127.0.0.6`, so all clients share one bucket, and one busy client can throttle the
+  others.
+- `preserveClientIp: true` makes nginx see the gateway pod's address instead, which still does not separate clients.
+
+This mode trades per-client limits for an encrypted load balancer hop and a registry reachable only by the gateway and
+mcpgw. Per-client attribution and limits behind the gateway need nginx to trust forwarded headers only on a listener the
+gateway alone can reach, which requires an nginx change and is planned as a follow-up. If per-client limits matter more
+than encrypting the hop, leave `routeIngress` off and use `preserveClientIp: true` with `trustedRealIpCidrs`.
 
 ## Keycloak chart compatibility
 
@@ -291,8 +317,15 @@ With the mesh on, the chart pins the Bitnami Keycloak's hostname through a Confi
 `<release>-keycloak-mesh-hostname`, wired with `keycloak.extraEnvVarsCM`): `KC_HOSTNAME` is the public URL (the same
 value as `KEYCLOAK_EXTERNAL_URL`), `KC_HOSTNAME_STRICT=true`, and `KC_HOSTNAME_BACKCHANNEL_DYNAMIC=true` so token, JWKS
 and userinfo calls from inside the cluster stay internal. The official-image Keycloak chart sets the same three values
-itself; when moving to it, remove `keycloak.extraEnvVarsCM` together with the other Bitnami-only
+itself; when moving to it, remove `keycloak.extraEnvVarsCM` and `keycloak.podAnnotations` together with the other
+Bitnami-only
 `keycloak.extraEnvVars`.
+
+Keycloak reads the ConfigMap only at startup, so the chart also sets a `keycloak.podAnnotations` entry that carries the
+pinned hostname (or `off`). Turning the mesh on or off changes the annotation, and the StatefulSet rolls Keycloak with
+the new settings. Adding that annotation changes Keycloak's pod template, so the first upgrade to this chart version
+restarts Keycloak once, with the mesh on or off; restart the registry afterwards so nginx picks up Keycloak's new
+address.
 
 ## Restarting Keycloak
 
@@ -319,7 +352,9 @@ a reply.
 
 ## Limits of this version
 
-**The mesh is not the external-traffic boundary.** Traffic to external identity providers, to SaaS MCP servers, and to an external MongoDB or DocumentDB crosses the mesh edge. Without `ingressGateway.routeIngress`, the load balancer's hop to the registry is plain HTTP inside the VPC. Under PERMISSIVE mTLS and Istio's
+**The mesh is not the external-traffic boundary.** Traffic to external identity providers, to SaaS MCP servers, and to
+an external MongoDB or DocumentDB crosses the mesh edge. Without `ingressGateway.routeIngress`, the load balancer's hop
+to the registry is plain HTTP inside the VPC. Under PERMISSIVE mTLS and Istio's
 default outbound policy, these work with no extra configuration. Locking them down with `ServiceEntry` objects is a
 later step.
 
