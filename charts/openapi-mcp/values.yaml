@@ -9,7 +9,7 @@ global:
   image:
     # Container registry (host + optional namespace). Shared default across subcharts.
     registry: public.ecr.aws/p3v1o3c6
-    tag: 1.38.1
+    tag: 1.38.2
     pullPolicy: IfNotPresent
   # Set by the stack chart; the per-chart value below wins only when this is empty.
   ssrfAllowedCidrs: ""
