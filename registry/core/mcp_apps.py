@@ -64,17 +64,14 @@ def _clean_visibility(
     """Keep only the visibility values the spec defines.
 
     Args:
-        value: The tool's _meta.ui.visibility, which may be missing or malformed.
+        value: The tool's explicit visibility value, which may be malformed.
 
     Returns:
-        The valid values in spec order, or the spec default when none are valid.
+        The valid values in spec order, or an empty list for a non-list value.
     """
     if not isinstance(value, list):
-        return list(MCP_APPS_VISIBILITY_VALUES)
-    cleaned = [item for item in MCP_APPS_VISIBILITY_VALUES if item in value]
-    if not cleaned:
-        return list(MCP_APPS_VISIBILITY_VALUES)
-    return cleaned
+        return []
+    return [item for item in MCP_APPS_VISIBILITY_VALUES if item in value]
 
 
 def _ui_block(
@@ -101,23 +98,20 @@ def tool_ui_fields(
             docstring.
 
     Returns:
-        {"ui_resource_uri": ..., "ui_visibility": [...]} when the tool has a
-        valid UI page, otherwise an empty dict.
+        Valid page and visibility fields. An app-only callable may omit a page.
     """
     meta = tool.meta if isinstance(tool.meta, dict) else {}
     ui = _ui_block(meta)
-    uri = ui.get("resourceUri")
-    if uri is None:
-        uri = meta.get(MCP_APPS_DEPRECATED_URI_KEY)
-    if uri is None:
-        return {}
-    if not _is_valid_ui_resource_uri(uri):
-        logger.debug(f"Ignoring invalid MCP Apps resource URI on tool {tool.name}")
-        return {}
-    return {
-        TOOL_UI_RESOURCE_URI_KEY: uri,
-        TOOL_UI_VISIBILITY_KEY: _clean_visibility(ui.get("visibility")),
-    }
+    fields: dict[str, Any] = {}
+    if "visibility" in ui:
+        fields[TOOL_UI_VISIBILITY_KEY] = _clean_visibility(ui["visibility"])
+    uri = ui.get("resourceUri", meta.get(MCP_APPS_DEPRECATED_URI_KEY))
+    if uri is not None:
+        if _is_valid_ui_resource_uri(uri):
+            fields[TOOL_UI_RESOURCE_URI_KEY] = uri
+        else:
+            logger.debug(f"Ignoring invalid MCP Apps resource URI on tool {tool.name}")
+    return fields
 
 
 def count_mcp_app_tools(
@@ -157,9 +151,27 @@ def stored_ui_resource_uri(
         The address, or None when the tool has no valid page.
     """
     uri = tool.get(TOOL_UI_RESOURCE_URI_KEY)
+    if uri is None:
+        meta = tool.get("_meta")
+        if isinstance(meta, dict):
+            uri = _ui_block(meta).get("resourceUri", meta.get(MCP_APPS_DEPRECATED_URI_KEY))
     if _is_valid_ui_resource_uri(uri):
         return uri
     return None
+
+
+def stored_ui_visibility(
+    tool: dict[str, Any],
+) -> list[str]:
+    """Return validated audiences from either stored MCP tool representation."""
+    if TOOL_UI_VISIBILITY_KEY in tool:
+        return _clean_visibility(tool[TOOL_UI_VISIBILITY_KEY])
+    meta = tool.get("_meta")
+    if isinstance(meta, dict):
+        ui = _ui_block(meta)
+        if "visibility" in ui:
+            return _clean_visibility(ui["visibility"])
+    return list(MCP_APPS_VISIBILITY_VALUES)
 
 
 def is_model_visible(
@@ -176,16 +188,10 @@ def is_model_visible(
         tool: A tool dict as the registry stores it.
 
     Returns:
-        True unless the tool has a valid page and a ui_visibility list
-        without "model". Visibility on a tool without a valid page is ignored,
-        as is a missing list (the spec default is model and app).
+        True when the validated audience includes the model. App-only tools
+        can omit a page URI because an existing page calls them.
     """
-    if not stored_ui_resource_uri(tool):
-        return True
-    visibility = tool.get(TOOL_UI_VISIBILITY_KEY)
-    if not isinstance(visibility, list):
-        return True
-    return "model" in visibility
+    return "model" in stored_ui_visibility(tool)
 
 
 def model_visible_tools(
@@ -204,30 +210,3 @@ def model_visible_tools(
         if isinstance(tool, dict) and is_model_visible(tool):
             visible.append(tool)
     return visible
-
-
-def mcp_app_signature(
-    tool_list: list[dict[str, Any]] | None,
-) -> list[tuple[str, str, tuple[str, ...]]]:
-    """Summarize which tools have a UI page, for change detection.
-
-    The health check rewrites the stored tool list only when something changed.
-    Comparing two signatures tells it when a tool gained, lost or moved its page,
-    which a tool count alone would miss.
-
-    Args:
-        tool_list: Tool dicts as the registry stores them.
-
-    Returns:
-        Sorted (tool name, resource URI, visibility) entries for the UI tools.
-    """
-    entries: list[tuple[str, str, tuple[str, ...]]] = []
-    for tool in tool_list or []:
-        if not isinstance(tool, dict):
-            continue
-        uri = tool.get(TOOL_UI_RESOURCE_URI_KEY)
-        if not uri:
-            continue
-        visibility = tuple(tool.get(TOOL_UI_VISIBILITY_KEY) or [])
-        entries.append((str(tool.get("name", "")), str(uri), visibility))
-    return sorted(entries)

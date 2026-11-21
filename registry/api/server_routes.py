@@ -3566,39 +3566,40 @@ async def get_service_tools(
                 detail="Failed to fetch tools from MCP server. Service may be unhealthy.",
             )
 
-        # Update the server registry with the fresh tools. Compare by hash, the
-        # same way the health loop does (issue #2050), so a change to any tool's
-        # name, description, schema or annotations is saved.
+        # Compare the same client-visible projection as background discovery,
+        # including MCP Apps metadata.
         new_tool_count = len(tool_list)
         new_hash = tool_list_hash(tool_list)
 
         if tool_list_hash(server_info.get("tool_list")) != new_hash:
+            revision = server_info.get("updated_at")
+            if not revision:
+                raise HTTPException(status_code=409, detail="Server revision unavailable")
             logger.info(f"Updating tool list for {service_path}. New count: {new_tool_count}")
 
-            # Update server info with fresh tools
-            updated_server_info = server_info.copy()
-            updated_server_info["tool_list"] = tool_list
-            updated_server_info["num_tools"] = new_tool_count
-            updated_server_info["tool_list_hash"] = new_hash
+            # A concurrent credential, endpoint or tool-block edit must survive
+            # this live fetch. ServerService derives the page count and indexes
+            # a fresh read after this field-scoped write.
+            updated_server_info = {
+                "tool_list": tool_list,
+                "num_tools": new_tool_count,
+                "tool_list_hash": new_hash,
+            }
             if server_info.get("tool_list"):
                 updated_server_info["tool_list_changed_at"] = datetime.now(UTC).isoformat()
 
-            # Save updated server info
-            success = await server_service.update_server(service_path, updated_server_info)
+            success = await server_service.update_server(
+                service_path,
+                updated_server_info,
+                updated_fields=list(updated_server_info),
+                expected_updated_at=revision,
+            )
             if success:
                 logger.info(f"Successfully updated tool list for {service_path}")
-
-                # Update DocumentDB search index with new tool data
-                try:
-                    from ..repositories.factory import get_search_repository
-
-                    search_repo = get_search_repository()
-                    await search_repo.index_server(service_path, updated_server_info, is_enabled)
-                except Exception as e:
-                    logger.warning(f"Failed to update search index for {service_path}: {e}")
-                logger.info(f"Updated search index for {service_path}")
             else:
-                logger.error(f"Failed to save updated tool list for {service_path}")
+                raise HTTPException(
+                    status_code=409, detail="Tool refresh could not be saved; refresh again"
+                )
 
         # Issue #1026: filter live tools before returning
         filtered_tools = await annotate_blocked_tools(

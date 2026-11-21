@@ -2,14 +2,9 @@
 
 The health loop and the live tools route fetch a server's ``tools/list`` and
 need to know whether it differs from the stored copy. This module reduces each
-tool to the fields a client acts on (name, description, input schema, title,
-annotations, outputSchema), hashes that, and hashes the whole list. It also
-reports which tools were added, removed or changed, by name, for the log.
-
-The derived ``parsed_description`` field is left out, because the registry
-computes it from ``description``. The input schema is read from
-``inputSchema``, falling back to the older ``schema`` key, so a hand-registered
-list and a discovered one compare equal when they describe the same tool.
+tool to the validated client projection, including optional metadata and MCP
+Apps page and audience fields. It also reports added, removed and changed tools
+by name. Discovery and registration representations share the same projection.
 
 This module must not import the MCP SDK, for the same reason as
 ``registry.utils.tool_annotations``: it may end up on the auth server's import
@@ -18,7 +13,6 @@ path, and the auth-server image has no SDK.
 
 import hashlib
 import json
-import logging
 from typing import Any
 
 from pydantic import (
@@ -26,15 +20,11 @@ from pydantic import (
     Field,
 )
 
-from .tool_annotations import stored_tool_metadata
-
-logger = logging.getLogger(__name__)
+from .tool_schema import stored_tool_to_mcp
 
 # Bump when the set of fields the hash covers changes, so every stored list
 # compares as changed once instead of matching by accident.
-TOOL_HASH_FIELDS_VERSION: str = "1"
-INPUT_SCHEMA_KEY: str = "inputSchema"
-LEGACY_SCHEMA_KEY: str = "schema"
+TOOL_HASH_FIELDS_VERSION: str = "2"
 
 
 class ToolListChanges(BaseModel):
@@ -64,32 +54,6 @@ class ToolListChanges(BaseModel):
         return bool(self.added or self.removed or self.changed)
 
 
-def _tool_input_schema(
-    tool: dict[str, Any],
-) -> dict[str, Any]:
-    """Return the tool's input schema from inputSchema, else the older schema key."""
-    schema = tool.get(INPUT_SCHEMA_KEY)
-    if isinstance(schema, dict):
-        return schema
-    legacy = tool.get(LEGACY_SCHEMA_KEY)
-    if isinstance(legacy, dict):
-        return legacy
-    return {}
-
-
-def _canonical_tool(
-    tool: dict[str, Any],
-) -> dict[str, Any]:
-    """Return the fields of one tool that the hash covers."""
-    canonical: dict[str, Any] = {
-        "name": str(tool.get("name", "")),
-        "description": tool.get("description") or "",
-        INPUT_SCHEMA_KEY: _tool_input_schema(tool),
-    }
-    canonical.update(stored_tool_metadata(tool))
-    return canonical
-
-
 def _hashes_by_name(
     tool_list: list[dict[str, Any]] | None,
 ) -> dict[str, str]:
@@ -114,7 +78,7 @@ def tool_definition_hash(
         A 64-character hex digest.
     """
     text = json.dumps(
-        _canonical_tool(tool),
+        stored_tool_to_mcp(tool),
         sort_keys=True,
         separators=(",", ":"),
         default=str,
