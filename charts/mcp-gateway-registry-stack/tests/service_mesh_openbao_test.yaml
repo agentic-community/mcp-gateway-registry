@@ -1,0 +1,93 @@
+suite: OpenBao LIST requests pass the service mesh as TCP
+templates:
+  - templates/servicemesh-openbao-sidecars.yaml
+  - templates/servicemesh-auth-server-sidecar.yaml
+  - templates/servicemesh-registry-sidecar.yaml
+release:
+  name: rel
+  namespace: default
+tests:
+  - it: renders nothing when the mesh is off
+    template: templates/servicemesh-openbao-sidecars.yaml
+    set:
+      openbao.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders nothing when OpenBao is not deployed
+    template: templates/servicemesh-openbao-sidecars.yaml
+    set:
+      global.serviceMesh.enabled: true
+      openbao.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: makes OpenBao's inbound 8200 TCP
+    template: templates/servicemesh-openbao-sidecars.yaml
+    set:
+      global.serviceMesh.enabled: true
+      openbao.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.workloadSelector.labels
+          value: {app.kubernetes.io/name: openbao, component: server}
+      - equal:
+          path: spec.ingress[0]
+          value:
+            port: {number: 8200, protocol: TCP, name: tcp-openbao}
+            defaultEndpoint: 127.0.0.1:8200
+
+  - it: adds a registry TCP egress to OpenBao
+    template: templates/servicemesh-registry-sidecar.yaml
+    set:
+      global.serviceMesh.enabled: true
+      openbao.enabled: true
+    asserts:
+      - equal:
+          path: spec.egress[2]
+          value:
+            port: {number: 8200, protocol: TCP, name: tcp-openbao}
+            hosts: ["./rel-openbao.default.svc.cluster.local"]
+      - equal:
+          path: spec.egress[3].hosts
+          value: ["*/*"]
+
+  - it: makes the auth-server's inbound TCP so large X-Body headers pass
+    template: templates/servicemesh-auth-server-sidecar.yaml
+    set:
+      global.serviceMesh.enabled: true
+    asserts:
+      - equal:
+          path: spec.workloadSelector.labels["app.kubernetes.io/name"]
+          value: auth-server
+      - equal:
+          path: spec.ingress
+          value:
+            - {port: {number: 8888, protocol: TCP, name: tcp-auth-server}, defaultEndpoint: "127.0.0.1:8888"}
+            - {port: {number: 9464, protocol: TCP, name: tcp-metrics}, defaultEndpoint: "127.0.0.1:9464"}
+      - equal:
+          path: spec.egress
+          value: [{hosts: ["*/*"]}]
+
+  - it: adds the auth-server's OpenBao TCP egress when its OBO cache uses OpenBao
+    template: templates/servicemesh-auth-server-sidecar.yaml
+    set:
+      global.serviceMesh.enabled: true
+      openbao.enabled: true
+      auth-server.egressAuth.oboCacheEnabled: "true"
+    asserts:
+      - equal:
+          path: spec.egress[0]
+          value:
+            port: {number: 8200, protocol: TCP, name: tcp-openbao}
+            hosts: ["./rel-openbao.default.svc.cluster.local"]
+
+  - it: renders no auth-server Sidecar with the mesh off
+    template: templates/servicemesh-auth-server-sidecar.yaml
+    asserts:
+      - hasDocuments:
+          count: 0

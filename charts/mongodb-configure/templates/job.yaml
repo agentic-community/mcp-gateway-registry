@@ -55,8 +55,20 @@ spec:
       labels:
         app.kubernetes.io/name: setup-mongodb
         app.kubernetes.io/component: setup-mongodb
+        {{- $sm := .Values.global.serviceMesh | default dict }}
+        {{- if and $sm.enabled (eq ($sm.type | default "istio") "istio") }}
+        # Join the mesh so the MongoDB AuthorizationPolicy can identify this Job
+        # by its ServiceAccount. Native sidecars (Kubernetes 1.29+) stop the
+        # proxy when the Job's container exits, so the pod still reaches
+        # Completed and `helm upgrade --wait` does not hang.
+        sidecar.istio.io/inject: "true"
+        {{- end }}
     spec:
       restartPolicy: Never
+      # Dedicated identity (templates/serviceaccount.yaml) so the mesh MongoDB
+      # AuthorizationPolicy can allow this Job without trusting the namespace
+      # "default" ServiceAccount.
+      serviceAccountName: {{ include "mongodb-configure.serviceAccountName" . }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000

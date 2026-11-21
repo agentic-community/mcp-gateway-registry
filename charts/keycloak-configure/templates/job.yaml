@@ -14,6 +14,16 @@ metadata:
     "helm.sh/hook-delete-policy": "before-hook-creation"
 spec:
   template:
+    {{- $sm := .Values.global.serviceMesh | default dict }}
+    {{- if and $sm.enabled (eq ($sm.type | default "istio") "istio") }}
+    metadata:
+      labels:
+        # Join the mesh so the Keycloak AuthorizationPolicy can identify this
+        # Job by its ServiceAccount (keycloak-configure-sa). Native sidecars
+        # (Kubernetes 1.29+) stop the proxy when the container exits, so the Job
+        # still completes.
+        sidecar.istio.io/inject: "true"
+    {{- end }}
     spec:
       containers:
         - name: job

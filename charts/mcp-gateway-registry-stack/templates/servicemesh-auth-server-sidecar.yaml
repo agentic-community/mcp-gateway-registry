@@ -1,0 +1,58 @@
+{{- /*
+Istio Sidecar for the auth-server pods.
+
+Inbound 8888 (and the 9464 metrics port) are TCP for the auth-server's sidecar,
+so it forwards bytes without parsing HTTP. This matters for three reasons:
+  - The registry's nginx sends the MCP request body to /validate base64-encoded
+    in an X-Body header, for bodies up to 1 MiB. Envoy's HTTP parser caps request
+    headers at 60 KiB and answers 431, so any tool call with a body over about
+    45 KiB failed validation. The app itself accepts 2 MiB
+    (--h11-max-incomplete-event-size).
+  - Envoy's HTTP layer adds X-Forwarded-Proto, X-Forwarded-Client-Cert and
+    X-Request-Id and normalizes the path. With TCP, the auth-server receives the
+    exact request nginx built, which is what its authorization decisions bind to.
+  - Callers keep their mTLS identity, and the auth-server AuthorizationPolicy
+    checks only identity and port, so it applies to the TCP connections unchanged.
+The cost is HTTP-level telemetry for the auth-server's inbound (Kiali shows TCP).
+
+When the auth-server's OBO token cache uses OpenBao, its egress to OpenBao is
+also TCP, so OpenBao's LIST requests pass (see servicemesh-openbao-sidecars.yaml).
+*/ -}}
+{{- if include "mcp-gateway-registry-stack.istioEnabled" . }}
+{{- $ns := .Release.Namespace }}
+{{- $authPort := dig "service" "port" 8888 (index .Values "auth-server" | default dict) }}
+{{- $obo := dig "egressAuth" "oboCacheEnabled" false (index .Values "auth-server" | default dict) }}
+apiVersion: networking.istio.io/v1
+kind: Sidecar
+metadata:
+  name: {{ include "mcp-gateway-registry-stack.fullname" . }}-auth-server
+  namespace: {{ $ns | quote }}
+  labels:
+    {{- include "mcp-gateway-registry-stack.labels" . | nindent 4 }}
+spec:
+  workloadSelector:
+    labels:
+      app.kubernetes.io/name: {{ include "mcp-gateway-registry-stack.appName" (dict "ctx" . "chart" "auth-server" "default" "auth-server") | quote }}
+  ingress:
+    - port:
+        number: {{ $authPort }}
+        protocol: TCP
+        name: tcp-auth-server
+      defaultEndpoint: {{ printf "127.0.0.1:%v" $authPort | quote }}
+    - port:
+        number: 9464
+        protocol: TCP
+        name: tcp-metrics
+      defaultEndpoint: "127.0.0.1:9464"
+  egress:
+    {{- if and .Values.openbao.enabled (eq (toString $obo) "true") }}
+    - port:
+        number: 8200
+        protocol: TCP
+        name: tcp-openbao
+      hosts:
+        - {{ printf "./%s.%s.svc.cluster.local" (include "mcp-gateway-registry-stack.openbaoName" .) $ns | quote }}
+    {{- end }}
+    - hosts:
+        - "*/*"
+{{- end }}

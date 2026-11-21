@@ -1,0 +1,271 @@
+{{- /*
+Istio ingress gateway in front of the registry, from plain resources.
+
+istiod turns the Deployment below into a gateway Envoy (gateway injection
+template), so this needs no Gateway API CRDs and no separate Helm install.
+Rendered when an Istio mesh is enabled and global.serviceMesh.ingressGateway.
+enabled is true. Traffic only uses it once ingressGateway.routeIngress points
+the ALB Ingress at it (see charts/registry/templates/ingress.yaml).
+
+Path: ALB --HTTPS--> gateway :8443 --mTLS--> registry Service :8000 (nginx).
+  - TLS from the ALB terminates here with the certificate in the TLS Secret
+    below: self-signed (generated once, reused on upgrade) unless
+    ingressGateway.tls.existingSecret names one. The ALB does not validate the
+    target certificate, so self-signed still encrypts the hop.
+  - numTrustedProxies: 1 makes the gateway trust the ALB's X-Forwarded-For
+    entry. In routed mode only the ALB's subnets may reach it. nginx does not
+    trust the gateway's forwarded headers: behind the gateway it sees every
+    request from its sidecar (127.0.0.6), which other in-mesh callers share.
+  - The gateway keeps the client's Host header, which the registry's nginx
+    routes on.
+*/ -}}
+{{- $sm := .Values.global.serviceMesh | default dict }}
+{{- $gw := $sm.ingressGateway | default dict }}
+{{- if and $gw.routeIngress (not $gw.enabled) }}
+{{- fail "global.serviceMesh.ingressGateway.routeIngress requires global.serviceMesh.ingressGateway.enabled: true; enable the gateway first and check it, then route the ingress to it." }}
+{{- end }}
+{{- include "mcp-gateway-registry-stack.validateIngressRoute" . }}
+{{- if and (include "mcp-gateway-registry-stack.istioEnabled" .) $gw.enabled }}
+{{- $routed := include "mcp-gateway-registry-stack.ingressRouted" . }}
+{{- $ns := .Release.Namespace }}
+{{- $name := $gw.name | default "mcp-ingress-gateway" }}
+{{- $labels := include "mcp-gateway-registry-stack.labels" . }}
+{{- $registrySvc := include "mcp-gateway-registry-stack.appName" (dict "ctx" . "chart" "registry" "default" "registry") }}
+{{- $secretName := (dig "tls" "existingSecret" "" $gw) | default (printf "%s-tls" $name) }}
+{{- $host := include "mcp-gateway-registry-stack.keycloakExternalUrl" . | trimPrefix "https://" | trimPrefix "http://" }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns | quote }}
+  labels:
+    {{- $labels | nindent 4 }}
+automountServiceAccountToken: false
+---
+# istiod serves a gateway the TLS Secret named in its Gateway only if the
+# gateway's ServiceAccount may read Secrets in this namespace (it checks with a
+# SubjectAccessReview). The gateway pod itself has no Kubernetes API token
+# (automountServiceAccountToken: false; its istio-token is audience-bound to
+# istiod), so this grant is used by istiod's check, not by the pod.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}-secret-reader
+  namespace: {{ $ns | quote }}
+  labels:
+    {{- $labels | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}-secret-reader
+  namespace: {{ $ns | quote }}
+  labels:
+    {{- $labels | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}-secret-reader
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ $ns | quote }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns | quote }}
+  labels:
+    {{- $labels | nindent 4 }}
+spec:
+  replicas: {{ $gw.replicas | default 2 }}
+  selector:
+    matchLabels:
+      app: {{ $name }}
+      istio: {{ $name }}
+  template:
+    metadata:
+      annotations:
+        # istiod replaces the placeholder container with the gateway Envoy.
+        inject.istio.io/templates: gateway
+        proxy.istio.io/config: '{"gatewayTopology": {"numTrustedProxies": 1}}'
+      labels:
+        app: {{ $name }}
+        istio: {{ $name }}
+        sidecar.istio.io/inject: "true"
+    spec:
+      serviceAccountName: {{ $name }}
+      {{- with .Values.global.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1337
+        runAsGroup: 1337
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: istio-proxy
+          image: auto
+          ports:
+            - name: https
+              containerPort: 8443
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          {{- with $gw.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns | quote }}
+  labels:
+    {{- $labels | nindent 4 }}
+spec:
+  # ClusterIP only: the existing ALB Ingress targets the pods directly; a
+  # LoadBalancer Service would provision a second load balancer.
+  type: ClusterIP
+  selector:
+    app: {{ $name }}
+    istio: {{ $name }}
+  ports:
+    - name: https
+      port: 443
+      targetPort: https
+      protocol: TCP
+{{- if not (dig "tls" "existingSecret" "" $gw) }}
+{{- $existing := lookup "v1" "Secret" $ns $secretName }}
+{{- $crt := "" }}{{- $key := "" }}
+{{- if and $existing (index ($existing.data | default dict) "tls.crt") }}
+{{- $crt = index $existing.data "tls.crt" | b64dec }}{{- $key = index $existing.data "tls.key" | b64dec }}
+{{- else }}
+{{- include "mcp-gateway-registry-stack.requireGeneratedSecret" (dict "ctx" . "key" "the ingress gateway TLS certificate" "value" "a certificate" "byo" "global.serviceMesh.ingressGateway.tls.existingSecret") }}
+{{- $cert := genSelfSignedCert $host nil (list $host) 3650 }}
+{{- $crt = $cert.Cert }}{{- $key = $cert.Key }}
+{{- end }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $secretName }}
+  namespace: {{ $ns | quote }}
+  labels:
+    {{- $labels | nindent 4 }}
+type: kubernetes.io/tls
+data:
+  tls.crt: {{ $crt | b64enc | quote }}
+  tls.key: {{ $key | b64enc | quote }}
+{{- end }}
+{{- with $gw.securityGroupIds }}
+---
+# EKS Security Groups for Pods: the gateway pods get these security groups
+# instead of the node's. Use one that admits 8443 only from the load balancer's
+# security group (plus what the pods need: istiod 15012, DNS, the registry).
+# The AuthorizationPolicy's CIDR rule below stays as a second layer. Requires
+# the VPC CNI with ENABLE_POD_ENI=true; otherwise this object has no effect.
+apiVersion: vpcresources.k8s.aws/v1beta1
+kind: SecurityGroupPolicy
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns | quote }}
+  labels:
+    {{- $labels | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      istio: {{ $name }}
+  securityGroups:
+    groupIds:
+      {{- toYaml . | nindent 6 }}
+{{- end }}
+---
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns | quote }}
+  labels:
+    {{- $labels | nindent 4 }}
+spec:
+  selector:
+    istio: {{ $name }}
+  servers:
+    - port:
+        number: 8443
+        name: https
+        protocol: HTTPS
+      # The ALB health checks address the pod IP, so accept any host here; the
+      # registry's nginx still checks the Host it routes on.
+      hosts:
+        - "*"
+      tls:
+        mode: SIMPLE
+        credentialName: {{ $secretName }}
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns | quote }}
+  labels:
+    {{- $labels | nindent 4 }}
+spec:
+  hosts:
+    - "*"
+  gateways:
+    - {{ $name }}
+  http:
+    - route:
+        - destination:
+            host: {{ printf "%s.%s.svc.cluster.local" $registrySvc $ns }}
+            port:
+              number: {{ dig "service" "port" 8000 (.Values.registry | default dict) }}
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: {{ include "mcp-gateway-registry-stack.fullname" . }}-allow-ingress-gateway
+  namespace: {{ $ns | quote }}
+  labels:
+    {{- $labels | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      istio: {{ $name }}
+  action: ALLOW
+  rules:
+    {{- if $routed }}
+    # Routed: only the load balancer's subnets (registry.app.trustedRealIpCidrs).
+    # The gateway trusts one upstream proxy (numTrustedProxies: 1), so a caller
+    # that could reach it directly could choose the client address. ipBlocks
+    # matches the connection's source address, not X-Forwarded-For.
+    - from:
+        - source:
+            ipBlocks:
+              {{- range fromYamlArray (include "mcp-gateway-registry-stack.trustedProxyCidrs" .) }}
+              - {{ . | quote }}
+              {{- end }}
+      to:
+        - operation:
+            ports: ["8443"]
+    {{- else }}
+    # Not routed yet: any source, so the gateway can be checked from inside the
+    # cluster. nginx does not trust the gateway's forwarded headers in this mode.
+    - to:
+        - operation:
+            ports: ["8443"]
+    {{- end }}
+{{- end }}

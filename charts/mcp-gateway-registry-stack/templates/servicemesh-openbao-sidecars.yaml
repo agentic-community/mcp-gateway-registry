@@ -1,0 +1,44 @@
+{{- /*
+Istio Sidecars that let OpenBao's LIST requests through the mesh.
+
+OpenBao's list API (`/v1/<mount>/metadata/...`) uses the HTTP method LIST. The
+sidecar's HTTP/1 parser accepts only standard methods and answers anything else
+with "400 Bad Request" before any routing or AuthorizationPolicy runs, so a
+registry listing a user's egress credentials fails. The rejected request also
+shows in Kiali as coming from "unknown", because it is refused before Istio
+reads the caller's identity.
+
+The OpenBao chart fixes its Service ports as appProtocol HTTP, so the protocol is
+overridden per workload instead:
+  - OpenBao's inbound 8200 is TCP (an ingress listener on its Sidecar). Clients
+    that speak HTTP over mTLS still work; only HTTP-level parsing is skipped.
+  - Each client that lists secrets declares its egress to 8200 as TCP: the
+    registry (servicemesh-registry-sidecar.yaml) and, when its OBO token cache
+    uses OpenBao, the auth-server (servicemesh-auth-server-sidecar.yaml).
+The OpenBao AuthorizationPolicy checks identity and port, so it applies to the
+TCP connections unchanged.
+*/ -}}
+{{- if and (include "mcp-gateway-registry-stack.istioEnabled" .) .Values.openbao.enabled }}
+{{- $ns := .Release.Namespace }}
+apiVersion: networking.istio.io/v1
+kind: Sidecar
+metadata:
+  name: {{ include "mcp-gateway-registry-stack.fullname" . }}-openbao-ingress
+  namespace: {{ $ns | quote }}
+  labels:
+    {{- include "mcp-gateway-registry-stack.labels" . | nindent 4 }}
+spec:
+  workloadSelector:
+    labels:
+      app.kubernetes.io/name: openbao
+      component: server
+  ingress:
+    - port:
+        number: 8200
+        protocol: TCP
+        name: tcp-openbao
+      defaultEndpoint: 127.0.0.1:8200
+  egress:
+    - hosts:
+        - "*/*"
+{{- end }}

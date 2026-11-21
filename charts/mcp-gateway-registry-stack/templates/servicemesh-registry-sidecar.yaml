@@ -1,0 +1,70 @@
+{{- /*
+Istio Sidecar for the registry pods: route the nginx hops that forward the
+client's Host header by destination address instead of by Host, and carry
+OpenBao's LIST requests as TCP.
+
+The registry's nginx proxies to the auth-server (login, callbacks, the
+mcp-proxy hop) and to Keycloak (/realms, /resources, /keycloak) while passing
+the client's Host header through (`proxy_set_header Host $host`). An Istio
+sidecar routes outbound HTTP by Host, so a public hostname such as
+mcpregistry.example.com matches no Service, falls through to the passthrough
+cluster, and leaves the pod as plaintext with no mTLS identity. The destination's
+AuthorizationPolicy then denies it ("RBAC: access denied").
+
+Declaring these two ports as TCP for the registry's sidecar makes Envoy pick the
+destination by IP, so the hop keeps its mTLS identity whatever Host nginx sends.
+The AuthorizationPolicies check only identity and port, so they apply unchanged.
+The cost is HTTP-level telemetry for these two hops.
+
+It names Services, not pods, so it works with both the Bitnami Keycloak chart
+and the official-image chart: both keep <release>-keycloak-headless.
+
+Other destinations on these ports (an in-cluster MCP server listening on 8080 in
+another namespace, for example) fall through to passthrough, as they would for
+any service outside the mesh. The catch-all egress keeps every other port's
+default behavior.
+*/ -}}
+{{- if include "mcp-gateway-registry-stack.istioEnabled" . }}
+{{- $ns := .Release.Namespace }}
+{{- $authPort := dig "service" "port" 8888 (index .Values "auth-server" | default dict) }}
+apiVersion: networking.istio.io/v1
+kind: Sidecar
+metadata:
+  name: {{ include "mcp-gateway-registry-stack.fullname" . }}-registry-egress
+  namespace: {{ $ns | quote }}
+  labels:
+    {{- include "mcp-gateway-registry-stack.labels" . | nindent 4 }}
+spec:
+  workloadSelector:
+    labels:
+      app.kubernetes.io/name: {{ include "mcp-gateway-registry-stack.appName" (dict "ctx" . "chart" "registry" "default" "registry") | quote }}
+  egress:
+    - port:
+        number: {{ $authPort }}
+        protocol: TCP
+        name: tcp-auth-server
+      hosts:
+        - {{ printf "./%s.%s.svc.cluster.local" (include "mcp-gateway-registry-stack.appName" (dict "ctx" . "chart" "auth-server" "default" "auth-server")) $ns | quote }}
+    {{- if .Values.keycloak.create }}
+    {{- $kcPort := dig "service" "containerPort" (dig "containerPorts" "http" 8080 .Values.keycloak) .Values.keycloak }}
+    - port:
+        number: {{ $kcPort }}
+        protocol: TCP
+        name: tcp-keycloak
+      hosts:
+        - {{ printf "./%s-keycloak-headless.%s.svc.cluster.local" .Release.Name $ns | quote }}
+    {{- end }}
+    {{- if .Values.openbao.enabled }}
+    # OpenBao's list API uses the non-standard HTTP method LIST, which the
+    # sidecar's HTTP parser rejects with a 400. TCP here (and on OpenBao's own
+    # inbound, see servicemesh-openbao-sidecars.yaml) lets it through.
+    - port:
+        number: 8200
+        protocol: TCP
+        name: tcp-openbao
+      hosts:
+        - {{ printf "./%s.%s.svc.cluster.local" (include "mcp-gateway-registry-stack.openbaoName" .) $ns | quote }}
+    {{- end }}
+    - hosts:
+        - "*/*"
+{{- end }}

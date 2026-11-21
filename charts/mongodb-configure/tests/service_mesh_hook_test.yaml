@@ -1,0 +1,69 @@
+suite: mongodb-configure hook Job joins the service mesh
+templates:
+  - templates/job.yaml
+  - templates/serviceaccount.yaml
+release:
+  name: test
+  namespace: default
+tests:
+  - it: adds no inject label when the mesh is disabled (non-mesh parity)
+    template: templates/job.yaml
+    asserts:
+      - isNull:
+          path: spec.template.metadata.labels["sidecar.istio.io/inject"]
+
+  - it: labels the bootstrap Job for sidecar injection when the mesh is enabled
+    template: templates/job.yaml
+    set:
+      global.serviceMesh.enabled: true
+      global.serviceMesh.type: istio
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels["sidecar.istio.io/inject"]
+          value: "true"
+
+  - it: does not label for a non-istio mesh type
+    template: templates/job.yaml
+    set:
+      global.serviceMesh.enabled: true
+      global.serviceMesh.type: linkerd
+    asserts:
+      - isNull:
+          path: spec.template.metadata.labels["sidecar.istio.io/inject"]
+
+  - it: runs the Job as its own ServiceAccount
+    template: templates/job.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: setup-mongodb
+
+  - it: creates the setup-mongodb ServiceAccount
+    template: templates/serviceaccount.yaml
+    asserts:
+      - isKind:
+          of: ServiceAccount
+      - equal:
+          path: metadata.name
+          value: setup-mongodb
+
+  - it: honors an explicit serviceAccount.name on the Job and the ServiceAccount
+    set:
+      serviceAccount.name: my-mongo-setup
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: my-mongo-setup
+        template: templates/job.yaml
+      - equal:
+          path: metadata.name
+          value: my-mongo-setup
+        template: templates/serviceaccount.yaml
+
+  - it: creates no ServiceAccount when serviceAccount.create is false
+    template: templates/serviceaccount.yaml
+    set:
+      serviceAccount.create: false
+    asserts:
+      - hasDocuments:
+          count: 0

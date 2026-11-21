@@ -24,7 +24,16 @@ spec:
       labels:
         app.kubernetes.io/name: {{ .Values.app.name }}
         app.kubernetes.io/component: {{ .Values.app.name }}
+        {{- with include "mcpgw.meshPodLabels" . }}
+        {{- . | nindent 8 }}
+        {{- end }}
+      {{- $podAnn := include "mcpgw.podAnnotations" . }}
+      {{- if $podAnn }}
+      annotations:
+        {{- $podAnn | nindent 8 }}
+      {{- end }}
     spec:
+      serviceAccountName: {{ include "mcpgw.serviceAccountName" . }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

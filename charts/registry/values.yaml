@@ -62,6 +62,10 @@ serviceAccount:
   create: true
   name: "" # defaults to app.name ("registry") when empty
   annotations: {}
+# Extra annotations for the pod template, merged with the service-mesh proxy
+# config annotation the chart adds when global.serviceMesh is enabled. With the
+# mesh off this is the only source and defaults to none.
+podAnnotations: {}
 app:
   name: registry
   replicas: 2

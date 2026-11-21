@@ -6,7 +6,8 @@ This directory contains Helm charts for deploying the MCP Gateway Registry stack
 
 ### EKS Cluster Setup
 
-For deploying on Amazon EKS, we recommend using the [AWS AI/ML on Amazon EKS](https://github.com/awslabs/ai-on-eks) blueprints to provision an EKS cluster with GPU support, autoscaling, and AI/ML optimizations.
+For deploying on Amazon EKS, we recommend using the [AWS AI/ML on Amazon EKS](https://github.com/awslabs/ai-on-eks)
+blueprints to provision an EKS cluster with GPU support, autoscaling, and AI/ML optimizations.
 
 **Quick Start with AI on EKS:**
 
@@ -43,7 +44,8 @@ Once your EKS cluster is provisioned, return to this directory to deploy the MCP
 
 ### Stack Chart
 
-- **mcp-gateway-registry-stack**: Complete stack deployment including identity provider, auth-server, registry, and configuration
+- **mcp-gateway-registry-stack**: Complete stack deployment including identity provider, auth-server, registry, and
+  configuration
 
 ## Authentication Providers
 
@@ -167,11 +169,13 @@ helm install mcp-stack ./charts/mcp-gateway-registry-stack \
 - **Secret Keys**: Change default secret keys in production - they should match across all services
 - **Resources**: Adjust CPU/memory based on your requirements
 - **Ingress**: Configure ingress settings for your environment
-- **Existing Secrets**: All charts support referencing pre-existing Kubernetes secrets instead of having Helm manage them. See the [stack chart README](mcp-gateway-registry-stack/README.md#using-existing-secrets) for details.
+- **Existing Secrets**: All charts support referencing pre-existing Kubernetes secrets instead of having Helm manage
+  them. See the [stack chart README](mcp-gateway-registry-stack/README.md#using-existing-secrets) for details.
 
 ### Domain Configuration
 
-The stack chart uses `global.domain` to automatically configure all service endpoints. You can choose between two routing modes:
+The stack chart uses `global.domain` to automatically configure all service endpoints. You can choose between two
+routing modes:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -195,11 +199,13 @@ The stack chart uses `global.domain` to automatically configure all service endp
 #### Subdomain-Based Routing (Default)
 
 Services are accessed via subdomains:
+
 - `keycloak.{domain}` - Keycloak authentication server
 - `auth-server.{domain}` - MCP Gateway auth server
 - `mcpregistry.{domain}` - MCP server registry
 
 **Configuration:**
+
 ```yaml
 global:
   domain: "yourdomain.com"
@@ -210,13 +216,16 @@ global:
 #### Path-Based Routing
 
 Services are accessed via paths on a single domain:
+
 - `{domain}/keycloak` - Keycloak authentication server
 - `{domain}/auth-server` - MCP Gateway auth server
 - `{domain}/registry` - MCP server registry
 
-**Note:** All paths are configurable. You can customize them to match your URL structure (e.g., `/api/auth`, `/api/registry`).
+**Note:** All paths are configurable. You can customize them to match your URL structure (e.g., `/api/auth`,
+`/api/registry`).
 
 **Configuration:**
+
 ```yaml
 global:
   domain: "yourdomain.com"
@@ -260,6 +269,20 @@ helm upgrade mcp-stack ./charts/mcp-gateway-registry-stack \
 - **Subdomain mode:** Configure DNS A/CNAME records for each subdomain pointing to your ingress
 - **Path mode:** Configure a single DNS A/CNAME record for your domain pointing to your ingress
 
+## Service Mesh (optional)
+
+The stack chart can run inside an Istio service mesh. A mesh is highly encouraged but not required: with
+`global.serviceMesh.enabled=false` (the default) the chart renders as it did before mesh support, except that the first
+upgrade restarts Keycloak once. When enabled, the chart labels its pods (including the bootstrap Jobs and the MongoDB
+members) for sidecar injection and renders a namespaced `PeerAuthentication` (STRICT mTLS by default, with the load
+balancer and MongoDB webhook ports exempt) plus an `AuthorizationPolicy` per destination workload. Label the namespace
+`istio-injection=enabled` and follow the two-stage rollout in the guide. An optional Istio ingress gateway
+(`global.serviceMesh.ingressGateway`) can front the registry so every hop from the load balancer is encrypted. The chart
+does not install the Istio control plane, which is a cluster prerequisite.
+
+See [Service Mesh Deployment](../docs/service-mesh-deployment.md) for the full guide and the `global.serviceMesh.*`
+parameters.
+
 ## Deployment Options: Kubernetes vs AWS ECS
 
 This project supports two deployment methods:
@@ -267,6 +290,7 @@ This project supports two deployment methods:
 ### 1. Kubernetes Deployment (This Directory)
 
 Deploy the MCP Gateway Registry on any Kubernetes cluster using Helm charts. Ideal for:
+
 - Multi-cloud deployments (AWS EKS, Google GKE, Azure AKS)
 - On-premises Kubernetes clusters
 - Organizations with existing Kubernetes infrastructure
@@ -279,6 +303,7 @@ Deploy the MCP Gateway Registry on any Kubernetes cluster using Helm charts. Ide
 ### 2. AWS ECS Deployment (Terraform)
 
 Deploy the MCP Gateway Registry on AWS ECS using Terraform for infrastructure-as-code. Ideal for:
+
 - AWS-native deployments with full AWS integration
 - Organizations using AWS Fargate for serverless containers
 - Teams preferring Terraform for infrastructure management
@@ -290,14 +315,15 @@ Deploy the MCP Gateway Registry on AWS ECS using Terraform for infrastructure-as
 
 ### Choosing Between Kubernetes and ECS
 
-| Feature | Kubernetes (Helm) | AWS ECS (Terraform) |
-|---------|------------------|---------------------|
-| **Portability** | High - works on any K8s cluster | AWS-specific |
-| **Multi-cloud** | Yes | No (AWS only) |
-| **Complexity** | Moderate - requires K8s knowledge | Lower - managed by AWS |
-| **Customization** | High - full K8s ecosystem | Moderate - AWS services |
-| **Auto-scaling** | K8s HPA, Cluster Autoscaler | ECS Service Auto Scaling |
-| **Cost** | Depends on cluster costs | Pay-per-task (Fargate) |
-| **Tools** | kubectl, helm | AWS CLI, terraform |
+| Feature           | Kubernetes (Helm)                 | AWS ECS (Terraform)      |
+|-------------------|-----------------------------------|--------------------------|
+| **Portability**   | High - works on any K8s cluster   | AWS-specific             |
+| **Multi-cloud**   | Yes                               | No (AWS only)            |
+| **Complexity**    | Moderate - requires K8s knowledge | Lower - managed by AWS   |
+| **Customization** | High - full K8s ecosystem         | Moderate - AWS services  |
+| **Auto-scaling**  | K8s HPA, Cluster Autoscaler       | ECS Service Auto Scaling |
+| **Cost**          | Depends on cluster costs          | Pay-per-task (Fargate)   |
+| **Tools**         | kubectl, helm                     | AWS CLI, terraform       |
 
-**Note:** The Helm charts and Terraform configurations are separate deployment methods. Choose the one that best fits your infrastructure and team expertise.
+**Note:** The Helm charts and Terraform configurations are separate deployment methods. Choose the one that best fits
+your infrastructure and team expertise.

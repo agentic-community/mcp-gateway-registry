@@ -1,4 +1,19 @@
 {{/*
+Name of the ServiceAccount the mcpgw pod runs as. Explicit serviceAccount.name
+wins; otherwise defaults to the app name ("mcpgw-server"). A stable first-class
+identity so mesh AuthorizationPolicy and future RBAC/IRSA can key on it; without
+it the pod would run as the namespace "default" SA, which cannot be used as an
+authz principal.
+*/}}
+{{- define "mcpgw.serviceAccountName" -}}
+{{- if .Values.serviceAccount.name -}}
+{{- .Values.serviceAccount.name -}}
+{{- else -}}
+{{- .Values.app.name -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Reserved env var names for the mcpgw chart.
 
 Users must not supply these via .Values.extraEnv. The list is the union of:
@@ -99,5 +114,51 @@ Call as: {{ include "mcpgw.valueOrDefault" (list .Values.app.httpPoolMaxKeepaliv
 {{- index . 1 -}}
 {{- else -}}
 {{- toString $value -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Pod annotations for this workload, including optional service-mesh sidecar
+injection. Mesh-agnostic: the only mesh wired today is Istio, gated on the
+stack's global.serviceMesh passthrough (global.serviceMesh.enabled AND
+global.serviceMesh.type == "istio"). When active, this long-running workload is
+annotated for sidecar injection and (optionally)
+holdApplicationUntilProxyStarts. Operator-supplied .Values.podAnnotations merge
+on top. Additive: with the mesh off, only .Values.podAnnotations (default {})
+renders, so a non-mesh install is byte-for-byte unchanged.
+
+Call as: {{- include "mcpgw.podAnnotations" . | nindent 8 }}
+(renders nothing when there are no annotations).
+*/}}
+{{- define "mcpgw.podAnnotations" -}}
+{{- $ann := dict -}}
+{{- $sm := .Values.global.serviceMesh | default dict -}}
+{{- if and $sm.enabled (eq ($sm.type | default "istio") "istio") -}}
+{{- $istio := $sm.istio | default dict -}}
+{{- if $istio.holdApplicationUntilProxyStarts -}}
+{{- $_ := set $ann "proxy.istio.io/config" "{\"holdApplicationUntilProxyStarts\": true}" -}}
+{{- end -}}
+{{- end -}}
+{{- with .Values.podAnnotations -}}
+{{- $ann = merge (deepCopy .) $ann -}}
+{{- end -}}
+{{- if $ann -}}
+{{- toYaml $ann -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Pod labels for service-mesh sidecar injection. Istio's injector webhook selects
+pods by the LABEL sidecar.istio.io/inject (its objectSelector reads labels, not
+annotations), so the opt-in is a label. Emitted only when global.serviceMesh is
+enabled with type "istio"; renders nothing otherwise, so a non-mesh install is
+unchanged.
+
+Call as: {{- include "mcpgw.meshPodLabels" . | nindent 8 }}
+*/}}
+{{- define "mcpgw.meshPodLabels" -}}
+{{- $sm := .Values.global.serviceMesh | default dict -}}
+{{- if and $sm.enabled (eq ($sm.type | default "istio") "istio") -}}
+sidecar.istio.io/inject: "true"
 {{- end -}}
 {{- end -}}

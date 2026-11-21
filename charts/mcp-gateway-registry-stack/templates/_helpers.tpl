@@ -181,3 +181,154 @@ Usage:
 {{- fail (printf "global.generateSecrets is false and %s has no value, so the chart will not generate one. Set %s explicitly, or set %s to a Secret that already holds it. Generation is unsafe under ArgoCD and other `helm template` based tools: they render without cluster access, so the chart cannot read the previous value back and every sync would produce a different secret." .key .value .byo) -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+True when an Istio service mesh is enabled for this release, i.e.
+serviceMesh.enabled AND serviceMesh.type == "istio". Returns a non-empty string
+(truthy) or empty. Use as the single gate for every Istio object and injection
+annotation so the condition cannot drift across templates:
+
+  {{- if include "mcp-gateway-registry-stack.istioEnabled" . }}
+*/}}
+{{- define "mcp-gateway-registry-stack.istioEnabled" -}}
+{{- $sm := .Values.global.serviceMesh | default dict -}}
+{{- if and $sm.enabled (eq ($sm.type | default "istio") "istio") -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/*
+Which Keycloak chart backs this release, for service-mesh policy selectors.
+"official" when the values use the local official-image chart (keycloak.postgres,
+PR #2070); "bitnami" when they use the Bitnami chart (keycloak.postgresql). Both
+charts keep the Service names <release>-keycloak and <release>-keycloak-headless,
+but label their pods and run them as ServiceAccounts differently.
+*/}}
+{{- define "mcp-gateway-registry-stack.keycloakFlavor" -}}
+{{- if hasKey (.Values.keycloak | default dict) "postgres" -}}official{{- else -}}bitnami{{- end -}}
+{{- end -}}
+
+{{/*
+Pod selector labels (YAML map) for the Keycloak server pods.
+*/}}
+{{- define "mcp-gateway-registry-stack.keycloakServerSelector" -}}
+app.kubernetes.io/name: keycloak
+app.kubernetes.io/instance: {{ .Release.Name | quote }}
+app.kubernetes.io/component: {{ ternary "server" "keycloak" (eq (include "mcp-gateway-registry-stack.keycloakFlavor" .) "official") }}
+{{- end -}}
+
+{{/*
+Pod selector labels (YAML map) for Keycloak's PostgreSQL pods.
+*/}}
+{{- define "mcp-gateway-registry-stack.keycloakPostgresSelector" -}}
+{{- if eq (include "mcp-gateway-registry-stack.keycloakFlavor" .) "official" -}}
+app.kubernetes.io/name: keycloak
+app.kubernetes.io/instance: {{ .Release.Name | quote }}
+app.kubernetes.io/component: postgres
+{{- else -}}
+app.kubernetes.io/name: postgresql
+app.kubernetes.io/instance: {{ .Release.Name | quote }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+ServiceAccount the Keycloak pods run as, used as their identity in the Keycloak
+and PostgreSQL AuthorizationPolicies. Read from keycloak.serviceAccount, which
+both the Bitnami chart and the official-image chart (#2070) use: an explicit
+name wins, otherwise "<release>-keycloak", the name both charts create. A
+configuration that leaves Keycloak on the namespace "default" ServiceAccount
+(create: false with no name) fails the render instead of admitting "default",
+which every pod without its own ServiceAccount shares.
+*/}}
+{{- define "mcp-gateway-registry-stack.keycloakServiceAccount" -}}
+{{- $sa := (.Values.keycloak | default dict).serviceAccount | default dict -}}
+{{- if $sa.name -}}{{ $sa.name }}
+{{- else if eq (toString (dig "create" true $sa)) "false" -}}
+{{- fail "global.serviceMesh.authorizationPolicies: keycloak.serviceAccount.create is false and keycloak.serviceAccount.name is empty, so Keycloak would run as the namespace default ServiceAccount, which the mesh policies do not admit. Set keycloak.serviceAccount.name to the ServiceAccount Keycloak uses." -}}
+{{- else -}}{{ printf "%s-keycloak" .Release.Name }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Public Keycloak URL: the host Keycloak must put in `iss` and in discovery
+documents. Same derivation as KEYCLOAK_EXTERNAL_URL in oauth-provider-secret.yaml;
+tests/service_mesh_keycloak_hostname_test.yaml asserts the two agree.
+*/}}
+{{- define "mcp-gateway-registry-stack.keycloakExternalUrl" -}}
+{{- $domain := .Values.global.domain | default "localhost" -}}
+{{- $protocol := ternary "https" "http" .Values.global.ingress.tls -}}
+{{- if eq (.Values.global.ingress.routingMode | default "subdomain") "path" -}}
+{{- printf "%s://%s" $protocol $domain -}}
+{{- else -}}
+{{- printf "%s://%s.%s" $protocol (.Values.global.ingress.registrySubdomain | default "mcpregistry") $domain -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+ServiceAccount of the official-image Keycloak chart's admin-init Job (#2070):
+keycloak.sslInit.serviceAccount.name, otherwise "<release>-keycloak-admin-init",
+the name that chart creates. The chart never runs the Job as "default".
+*/}}
+{{- define "mcp-gateway-registry-stack.keycloakAdminInitServiceAccount" -}}
+{{- dig "sslInit" "serviceAccount" "name" "" (.Values.keycloak | default dict) | default (printf "%s-keycloak-admin-init" .Release.Name) -}}
+{{- end -}}
+
+{{/*
+app.name of an application subchart (registry, auth-server, mcpgw). The subchart
+labels its pods app.kubernetes.io/name=<app.name> and names its Service after
+it, so mesh selectors and hosts must follow this value, not a literal.
+Usage: include "mcp-gateway-registry-stack.appName" (dict "ctx" . "chart" "registry" "default" "registry")
+*/}}
+{{- define "mcp-gateway-registry-stack.appName" -}}
+{{- dig "app" "name" .default (index .ctx.Values .chart | default dict) -}}
+{{- end -}}
+
+{{/*
+ServiceAccount an application subchart's pods run as: serviceAccount.name, else
+app.name (the subcharts' own serviceAccountName rule).
+*/}}
+{{- define "mcp-gateway-registry-stack.appServiceAccount" -}}
+{{- $sub := index .ctx.Values .chart | default dict -}}
+{{- dig "serviceAccount" "name" "" $sub | default (dig "app" "name" .default $sub) -}}
+{{- end -}}
+
+{{/*
+Trusted load balancer CIDRs (registry.app.trustedRealIpCidrs) as a list.
+*/}}
+{{- define "mcp-gateway-registry-stack.trustedProxyCidrs" -}}
+{{- $out := list -}}
+{{- range (splitList "," (dig "app" "trustedRealIpCidrs" "" (.Values.registry | default dict))) -}}
+{{- if trim . }}{{- $out = append $out (trim .) }}{{- end -}}
+{{- end -}}
+{{- toYaml $out -}}
+{{- end -}}
+
+{{/*
+True when the ALB is routed through the Istio ingress gateway.
+*/}}
+{{- define "mcp-gateway-registry-stack.ingressRouted" -}}
+{{- $gw := .Values.global.serviceMesh.ingressGateway | default dict -}}
+{{- if and (include "mcp-gateway-registry-stack.istioEnabled" .) $gw.enabled $gw.routeIngress -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+Fail closed unless the conditions routed mode depends on hold. In routed mode
+the registry's entry port admits only the gateway, auth-server and mcpgw, and
+the gateway admits only the load balancer's CIDRs; both are AuthorizationPolicy
+rules, enforced only with the policies on and with STRICT mTLS (a plaintext
+caller has no identity to check). The gateway trusts one upstream proxy, so its
+allow list (registry.app.trustedRealIpCidrs) must be set.
+*/}}
+{{- define "mcp-gateway-registry-stack.validateIngressRoute" -}}
+{{- if include "mcp-gateway-registry-stack.ingressRouted" . -}}
+{{- if not .Values.global.serviceMesh.authorizationPolicies.enabled -}}
+{{- fail "global.serviceMesh.ingressGateway.routeIngress requires global.serviceMesh.authorizationPolicies.enabled: true. Routed mode relies on them to restrict who reaches the registry and the gateway." -}}
+{{- end -}}
+{{- if ne (.Values.global.serviceMesh.mtls.mode | default "STRICT") "STRICT" -}}
+{{- fail "global.serviceMesh.ingressGateway.routeIngress requires global.serviceMesh.mtls.mode: STRICT. Under PERMISSIVE a caller without a mesh identity can reach the registry's sidecar." -}}
+{{- end -}}
+{{- if not (fromYamlArray (include "mcp-gateway-registry-stack.trustedProxyCidrs" .)) -}}
+{{- fail "global.serviceMesh.ingressGateway.routeIngress requires registry.app.trustedRealIpCidrs (the load balancer's subnets). The gateway trusts one upstream proxy (numTrustedProxies: 1) and admits only those addresses." -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}

@@ -1,0 +1,83 @@
+{{- /*
+Istio PeerAuthentication for the stack.
+
+The namespace-wide policy sets the mTLS mode from global.serviceMesh.mtls.mode.
+STRICT (the default) rejects plaintext arriving at every pod in the namespace.
+PERMISSIVE accepts both mTLS and plaintext, for the first rollout before every
+pod has a sidecar.
+
+With STRICT, two callers cannot present a mesh identity, so their ports stay
+PERMISSIVE through workload-scoped policies (portLevelMtls needs a selector):
+  - the load balancer reaching the registry's nginx (8080, 8443), until an
+    ingress gateway fronts the registry;
+  - the Kubernetes API server calling the MongoDB operator's validating webhook.
+The AuthorizationPolicies still apply on those ports.
+
+These objects are ADDITIVE: they do not replace the chart's NetworkPolicies or
+the app-level X-Internal-Token checks. Rendered only when an Istio mesh is
+enabled (global.serviceMesh.enabled && global.serviceMesh.type == "istio").
+*/ -}}
+{{- if include "mcp-gateway-registry-stack.istioEnabled" . }}
+{{- $mtls := .Values.global.serviceMesh.mtls | default dict }}
+{{- $mode := $mtls.mode | default "STRICT" }}
+{{- $ex := $mtls.strictExceptions | default dict }}
+{{- $igw := .Values.global.serviceMesh.ingressGateway | default dict }}
+{{- /* Behind the ingress gateway nothing outside the mesh reaches the registry. */ -}}
+{{- $registryException := and $ex.registryEntrypoint (not (include "mcp-gateway-registry-stack.ingressRouted" .)) }}
+{{- $labels := include "mcp-gateway-registry-stack.labels" . }}
+{{- $fullname := include "mcp-gateway-registry-stack.fullname" . }}
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: {{ $fullname }}-mesh-default
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- $labels | nindent 4 }}
+spec:
+  mtls:
+    mode: {{ $mode }}
+{{- if eq $mode "STRICT" }}
+{{- if $registryException }}
+---
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: {{ $fullname }}-registry-entrypoint
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- $labels | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "mcp-gateway-registry-stack.appName" (dict "ctx" . "chart" "registry" "default" "registry") | quote }}
+  mtls:
+    mode: STRICT
+  portLevelMtls:
+    # The load balancer is outside the mesh.
+    8080:
+      mode: PERMISSIVE
+    8443:
+      mode: PERMISSIVE
+{{- end }}
+{{- if and $ex.mongodbOperatorWebhook .Values.mongodb.enabled }}
+---
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: {{ $fullname }}-mongodb-operator-webhook
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- $labels | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mongodb-kubernetes-operator
+  mtls:
+    mode: STRICT
+  portLevelMtls:
+    # The Kubernetes API server is outside the mesh.
+    {{ $ex.mongodbOperatorWebhookPort | default 1993 | int }}:
+      mode: PERMISSIVE
+{{- end }}
+{{- end }}
+{{- end }}

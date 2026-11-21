@@ -191,3 +191,75 @@ Call as: {{ include "registry.sessionSetting" (list . "sessionMaxAgeSeconds" (li
 {{- end -}}
 {{- toJson $result -}}
 {{- end -}}
+
+{{/*
+Pod annotations for this workload, including optional service-mesh sidecar
+injection. Mesh-agnostic: the only mesh wired today is Istio, gated on the
+stack's global.serviceMesh passthrough (global.serviceMesh.enabled AND
+global.serviceMesh.type == "istio"). When active, this long-running workload is
+annotated for sidecar injection and (optionally)
+holdApplicationUntilProxyStarts. Operator-supplied .Values.podAnnotations merge
+on top. Additive: with the mesh off, only .Values.podAnnotations (default {})
+renders, so a non-mesh install is byte-for-byte unchanged.
+
+Call as: {{- include "registry.podAnnotations" . | nindent 8 }}
+(renders nothing when there are no annotations).
+*/}}
+{{- define "registry.podAnnotations" -}}
+{{- $ann := dict -}}
+{{- $sm := .Values.global.serviceMesh | default dict -}}
+{{- if and $sm.enabled (eq ($sm.type | default "istio") "istio") -}}
+{{- $istio := $sm.istio | default dict -}}
+{{- if $istio.holdApplicationUntilProxyStarts -}}
+{{- $_ := set $ann "proxy.istio.io/config" "{\"holdApplicationUntilProxyStarts\": true}" -}}
+{{- end -}}
+{{- /* Opt-in (global.serviceMesh.istio.preserveClientIp): TPROXY keeps the
+       caller's source address, so nginx (and the audit log's client_ip) sees
+       the real peer instead of 127.0.0.6. Needs a root, NET_ADMIN sidecar. */ -}}
+{{- if eq (toString (dig "preserveClientIp" false $istio)) "true" -}}
+{{- $_ := set $ann "sidecar.istio.io/interceptionMode" "TPROXY" -}}
+{{- end -}}
+{{- end -}}
+{{- with .Values.podAnnotations -}}
+{{- $ann = merge (deepCopy .) $ann -}}
+{{- end -}}
+{{- if $ann -}}
+{{- toYaml $ann -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Pod labels for service-mesh sidecar injection. Istio's injector webhook selects
+pods by the LABEL sidecar.istio.io/inject (its objectSelector reads labels, not
+annotations), so the opt-in is a label. Emitted only when global.serviceMesh is
+enabled with type "istio"; renders nothing otherwise, so a non-mesh install is
+unchanged.
+
+Call as: {{- include "registry.meshPodLabels" . | nindent 8 }}
+*/}}
+{{- define "registry.meshPodLabels" -}}
+{{- $sm := .Values.global.serviceMesh | default dict -}}
+{{- if and $sm.enabled (eq ($sm.type | default "istio") "istio") -}}
+sidecar.istio.io/inject: "true"
+{{- end -}}
+{{- end -}}
+
+{{/*
+Name of the Istio ingress gateway Service when the stack routes the ALB through
+it (global.serviceMesh: Istio enabled, ingressGateway.enabled and
+ingressGateway.routeIngress, with AuthorizationPolicies on, STRICT mTLS and
+app.trustedRealIpCidrs set); empty otherwise. Drives the Ingress backend, the
+Ingress backend.
+*/}}
+{{- define "registry.meshIngressGateway" -}}
+{{- $sm := .Values.global.serviceMesh | default dict -}}
+{{- $gw := $sm.ingressGateway | default dict -}}
+{{- $authz := dig "authorizationPolicies" "enabled" true $sm -}}
+{{- $strict := eq (dig "mtls" "mode" "STRICT" $sm) "STRICT" -}}
+{{- /* The ALB is moved to the gateway only when the gateway's protections hold
+       (the stack chart fails the render with the reason when one does not):
+       AuthorizationPolicies on, STRICT mTLS, and the load balancer's CIDRs set. */ -}}
+{{- if and $sm.enabled (eq ($sm.type | default "istio") "istio") $gw.enabled $gw.routeIngress $authz $strict (trim (.Values.app.trustedRealIpCidrs | default "")) -}}
+{{- $gw.name | default "mcp-ingress-gateway" -}}
+{{- end -}}
+{{- end -}}

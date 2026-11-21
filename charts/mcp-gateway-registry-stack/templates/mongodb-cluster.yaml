@@ -43,12 +43,22 @@ spec:
       scramCredentialsSecretName: my-scram
   additionalMongodConfig:
     storage.wiredTiger.engineConfig.journalCompressor: zlib
-  {{- with .Values.global.nodeSelector }}
+  {{- $meshOn := include "mcp-gateway-registry-stack.istioEnabled" . }}
+  {{- if or .Values.global.nodeSelector $meshOn }}
   statefulSet:
     spec:
       template:
+        {{- if $meshOn }}
+        metadata:
+          labels:
+            # Opt the mongod pods into the service mesh. Changing the template
+            # makes the operator roll the replica set one member at a time.
+            sidecar.istio.io/inject: "true"
+        {{- end }}
+        {{- with .Values.global.nodeSelector }}
         spec:
           nodeSelector:
             {{- toYaml . | nindent 12 }}
+        {{- end }}
   {{- end }}
 {{ end }}

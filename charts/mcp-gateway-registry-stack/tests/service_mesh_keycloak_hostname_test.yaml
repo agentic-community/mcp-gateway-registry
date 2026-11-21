@@ -1,0 +1,81 @@
+suite: Keycloak public hostname pinned under the service mesh
+templates:
+  - templates/servicemesh-keycloak-hostname.yaml
+  - charts/keycloak/templates/statefulset.yaml
+  - charts/keycloak/templates/configmap-env-vars.yaml
+  - templates/oauth-provider-secret.yaml
+release:
+  name: rel
+  namespace: default
+tests:
+  - it: renders an empty ConfigMap with the mesh off, so Keycloak settings are unchanged
+    template: templates/servicemesh-keycloak-hostname.yaml
+    asserts:
+      - isKind:
+          of: ConfigMap
+      - equal:
+          path: metadata.name
+          value: rel-keycloak-mesh-hostname
+      - equal:
+          path: data
+          value: {}
+
+  - it: pins KC_HOSTNAME with the mesh on
+    template: templates/servicemesh-keycloak-hostname.yaml
+    set:
+      global.serviceMesh.enabled: true
+      global.domain: example.com
+    asserts:
+      - equal:
+          path: data
+          value:
+            KC_HOSTNAME: https://mcpregistry.example.com
+            KC_HOSTNAME_STRICT: "true"
+            KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+
+  - it: matches KEYCLOAK_EXTERNAL_URL in path routing mode
+    template: templates/servicemesh-keycloak-hostname.yaml
+    set:
+      global.serviceMesh.enabled: true
+      global.domain: example.com
+      global.ingress.routingMode: path
+    asserts:
+      - equal:
+          path: data.KC_HOSTNAME
+          value: https://example.com
+
+  - it: KEYCLOAK_EXTERNAL_URL uses the same value (drift guard)
+    template: templates/oauth-provider-secret.yaml
+    set:
+      global.domain: example.com
+    asserts:
+      - equal:
+          path: data.KEYCLOAK_EXTERNAL_URL
+          value: https://mcpregistry.example.com
+          decodeBase64: true
+
+  - it: is not rendered for the official-image Keycloak chart
+    template: templates/servicemesh-keycloak-hostname.yaml
+    set:
+      global.serviceMesh.enabled: true
+      keycloak.postgres.database: keycloak
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: rolls Keycloak when the mesh hostname ConfigMap changes
+    template: charts/keycloak/templates/statefulset.yaml
+    set:
+      global.domain: example.com
+      global.serviceMesh.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["mcp-gateway-registry-stack/mesh-hostname"]
+          value: https://mcpregistry.example.com
+
+  - it: marks the Keycloak pod template differently with the mesh off
+    template: charts/keycloak/templates/statefulset.yaml
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["mcp-gateway-registry-stack/mesh-hostname"]
+          value: "off"

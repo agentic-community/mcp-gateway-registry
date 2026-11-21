@@ -19,6 +19,13 @@ global:
     type: keycloak
     entra:
       adminGroupId:
+# ServiceAccount for the setup-mongodb Job. Created by default so the Job runs as
+# a stable named identity (the service-mesh MongoDB AuthorizationPolicy allows it
+# by name). Set create=false + name to bring your own.
+serviceAccount:
+  create: true
+  name: "" # defaults to "setup-mongodb" when empty
+  annotations: {}
 # Image for the init Job. This chart runs the REGISTRY image, because the
 # initialization script, the scope seed JSONs it loads and the pinned
 # motor/pymongo venv all already live in it at /app. Nothing is copied into a

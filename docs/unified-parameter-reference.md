@@ -996,6 +996,32 @@ Extends gateway reverse-proxying to non-MCP entities (skills, agents, custom ent
 
 ---
 
+## Group 34 — Service Mesh (Helm / EKS only)
+
+Optional Istio service mesh support for the Helm stack chart. Helm only: there is no Docker or Terraform surface, because the mesh is a Kubernetes construct. Off by default, so a non-mesh install is unchanged. The chart labels its pods for injection and renders mesh policy, but does not install the Istio control plane, and the namespace must be labeled `istio-injection=enabled`. See [service mesh deployment](service-mesh-deployment.md).
+
+| Parameter | Docker (`.env`) | Terraform (`.tfvars`) | Helm (`values.yaml`) | Purpose                                                                                                                                                                                                  |
+|-----------|-----------------|-----------------------|----------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Mesh enabled | — (n/a) | — (n/a) | `global.serviceMesh.enabled` | Main switch. `false` (default) renders no mesh objects and annotates no workloads.                                                                                                                         |
+| Mesh type | — (n/a) | — (n/a) | `global.serviceMesh.type` | Mesh implementation. Only `istio` is implemented; any other value renders nothing (safe no-op). Default `istio`.                                                                                         |
+| mTLS mode | — (n/a) | — (n/a) | `global.serviceMesh.mtls.mode` | Namespace `PeerAuthentication` mode: `STRICT` (default, rejects plaintext apart from the exceptions below) or `PERMISSIVE` (accepts mTLS and plaintext; for the first rollout or a rollback). |
+| STRICT exception: registry entry point | — (n/a) | — (n/a) | `global.serviceMesh.mtls.strictExceptions.registryEntrypoint` | With STRICT, keep the registry's 8080 and 8443 PERMISSIVE for the load balancer. Default `true`; turn off once an ingress gateway fronts the registry.                                                   |
+| STRICT exception: MongoDB operator webhook | — (n/a) | — (n/a) | `global.serviceMesh.mtls.strictExceptions.mongodbOperatorWebhook` | With STRICT, keep the MongoDB operator's webhook port PERMISSIVE for the Kubernetes API server. Default `true`.                                                                                          |
+| MongoDB operator webhook port | — (n/a) | — (n/a) | `global.serviceMesh.mtls.strictExceptions.mongodbOperatorWebhookPort` | The operator's `MDB_WEBHOOK_PORT`. Default `1993`.                                                                                                                                                       |
+| Hold app until proxy starts | — (n/a) | — (n/a) | `global.serviceMesh.istio.holdApplicationUntilProxyStarts` | Sets `proxy.istio.io/config` holdApplicationUntilProxyStarts on app pods. Avoids the startup race on classic sidecars; inert with native sidecars (K8s 1.29+). Default `true`.                           |
+| Preserve client IP | — (n/a) | — (n/a) | `global.serviceMesh.istio.preserveClientIp` | Run the registry pods' sidecar in TPROXY mode so nginx and the audit log's `client_ip` see the real caller instead of `127.0.0.6`; required for `registry.app.trustedRealIpCidrs` under the mesh. Opt-in because it runs the registry's `istio-proxy` as root with `NET_ADMIN`, which the `baseline` and `restricted` Pod Security profiles reject. With it off, the end user is the entry left of `127.0.0.6` in `request.forwarded_for`. Default `false`. |
+| Ingress gateway | — (n/a) | — (n/a) | `global.serviceMesh.ingressGateway.enabled` | Render an Istio ingress gateway in front of the registry from plain resources (no Gateway API CRDs). Traffic does not use it until `routeIngress`. Default `false`. |
+| Route ingress through the gateway | — (n/a) | — (n/a) | `global.serviceMesh.ingressGateway.routeIngress` | Point the ALB Ingress at the gateway over HTTPS; admit only the load balancer's CIDRs to the gateway and only the gateway and mcpgw to the registry's HTTP port; close registry 8443; drop the registry STRICT exception. nginx does not trust the gateway's forwarded headers, so `client_ip` is `127.0.0.6` and all clients share one rate-limit bucket. Requires `enabled`, `authorizationPolicies.enabled: true`, `mtls.mode: STRICT` and `registry.app.trustedRealIpCidrs`; the render fails otherwise. Default `false`. |
+| Ingress gateway name | — (n/a) | — (n/a) | `global.serviceMesh.ingressGateway.name` | Name of the gateway's Deployment, Service and ServiceAccount. Default `mcp-ingress-gateway`. |
+| Ingress gateway replicas | — (n/a) | — (n/a) | `global.serviceMesh.ingressGateway.replicas` | Default `2`. |
+| Ingress gateway resources | — (n/a) | — (n/a) | `global.serviceMesh.ingressGateway.resources` | Container resources for the gateway Envoy. Default `{}`. |
+| Ingress gateway TLS Secret | — (n/a) | — (n/a) | `global.serviceMesh.ingressGateway.tls.existingSecret` | Kubernetes TLS Secret the gateway serves. Empty generates a self-signed certificate once and reuses it; required when `global.generateSecrets` is false. |
+| Ingress gateway security groups | — (n/a) | — (n/a) | `global.serviceMesh.ingressGateway.securityGroupIds` | Security groups for the gateway pods, rendered as a `SecurityGroupPolicy`; use one admitting 8443 only from the load balancer's security group. Requires the VPC CNI with `ENABLE_POD_ENI=true`. Default `[]`. |
+| AuthorizationPolicies enabled | — (n/a) | — (n/a) | `global.serviceMesh.authorizationPolicies.enabled` | Render the ALLOW `AuthorizationPolicy` set (one per destination workload). A selected workload denies any request that matches no rule, including plaintext from pods without a sidecar. Default `true`. |
+| Trust domain | — (n/a) | — (n/a) | `global.serviceMesh.authorizationPolicies.trustDomain` | Istio trust domain used to build source principals (`<trustDomain>/ns/<ns>/sa/<sa>`). Default `cluster.local`.                                                                                           |
+
+---
+
 ## Checklist for new parameters
 
 When you add a new configuration parameter:

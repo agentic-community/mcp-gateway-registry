@@ -1,0 +1,166 @@
+suite: service mesh routing and policies across Keycloak charts
+templates:
+  - templates/servicemesh-registry-sidecar.yaml
+  - templates/servicemesh-authorizationpolicy.yaml
+release:
+  name: rel
+  namespace: default
+tests:
+  - it: renders no registry Sidecar when the mesh is disabled
+    template: templates/servicemesh-registry-sidecar.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: routes the registry's auth-server and Keycloak hops as TCP
+    template: templates/servicemesh-registry-sidecar.yaml
+    set:
+      global.serviceMesh.enabled: true
+    asserts:
+      - isKind:
+          of: Sidecar
+      - equal:
+          path: spec.workloadSelector.labels["app.kubernetes.io/name"]
+          value: registry
+      - equal:
+          path: spec.egress[0].port
+          value: {number: 8888, protocol: TCP, name: tcp-auth-server}
+      - equal:
+          path: spec.egress[0].hosts
+          value: ["./auth-server.default.svc.cluster.local"]
+      - equal:
+          path: spec.egress[1].port
+          value: {number: 8080, protocol: TCP, name: tcp-keycloak}
+      - equal:
+          path: spec.egress[1].hosts
+          value: ["./rel-keycloak-headless.default.svc.cluster.local"]
+      - equal:
+          path: spec.egress[2].hosts
+          value: ["*/*"]
+
+  - it: omits the Keycloak hop when Keycloak is external
+    template: templates/servicemesh-registry-sidecar.yaml
+    set:
+      global.serviceMesh.enabled: true
+      keycloak.create: false
+    asserts:
+      - lengthEqual:
+          path: spec.egress
+          count: 2
+
+  - it: selects Bitnami Keycloak server pods by component keycloak
+    template: templates/servicemesh-authorizationpolicy.yaml
+    documentIndex: 3
+    set:
+      global.serviceMesh.enabled: true
+    asserts:
+      - equal:
+          path: metadata.name
+          value: rel-mcp-gateway-registry-stack-allow-keycloak
+      - equal:
+          path: spec.selector.matchLabels
+          value:
+            app.kubernetes.io/name: keycloak
+            app.kubernetes.io/instance: rel
+            app.kubernetes.io/component: keycloak
+
+  - it: lets the Bitnami Keycloak ServiceAccount reach Bitnami PostgreSQL
+    template: templates/servicemesh-authorizationpolicy.yaml
+    documentIndex: 4
+    set:
+      global.serviceMesh.enabled: true
+    asserts:
+      - equal:
+          path: spec.selector.matchLabels
+          value:
+            app.kubernetes.io/name: postgresql
+            app.kubernetes.io/instance: rel
+      - equal:
+          path: spec.rules[0].from[0].source.principals
+          value: ["cluster.local/ns/default/sa/rel-keycloak"]
+
+  - it: selects official-chart Keycloak server pods by component server
+    template: templates/servicemesh-authorizationpolicy.yaml
+    documentIndex: 3
+    set:
+      global.serviceMesh.enabled: true
+      keycloak.postgres.database: keycloak
+    asserts:
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/component"]
+          value: server
+      - contains:
+          path: spec.rules[0].from[0].source.principals
+          content: cluster.local/ns/default/sa/rel-keycloak-admin-init
+      - notContains:
+          path: spec.rules[0].from[0].source.principals
+          content: cluster.local/ns/default/sa/rel-keycloak
+      - notContains:
+          path: spec.rules[0].from[0].source.principals
+          content: cluster.local/ns/default/sa/default
+      - equal:
+          path: spec.rules[1].to[0].operation.ports
+          value: ["7800", "57800"]
+
+  - it: selects official-chart PostgreSQL pods by component postgres
+    template: templates/servicemesh-authorizationpolicy.yaml
+    documentIndex: 4
+    set:
+      global.serviceMesh.enabled: true
+      keycloak.postgres.database: keycloak
+    asserts:
+      - equal:
+          path: spec.selector.matchLabels
+          value:
+            app.kubernetes.io/name: keycloak
+            app.kubernetes.io/instance: rel
+            app.kubernetes.io/component: postgres
+      - equal:
+          path: spec.rules[0].from[0].source.principals
+          value: ["cluster.local/ns/default/sa/rel-keycloak"]
+
+  - it: follows keycloak.serviceAccount.name
+    template: templates/servicemesh-authorizationpolicy.yaml
+    documentIndex: 4
+    set:
+      global.serviceMesh.enabled: true
+      keycloak.postgres.database: keycloak
+      keycloak.serviceAccount.name: keycloak-server
+    asserts:
+      - equal:
+          path: spec.rules[0].from[0].source.principals
+          value: ["cluster.local/ns/default/sa/keycloak-server"]
+
+  - it: refuses to admit the default ServiceAccount for Keycloak
+    template: templates/servicemesh-authorizationpolicy.yaml
+    set:
+      global.serviceMesh.enabled: true
+      keycloak.postgres.database: keycloak
+      keycloak.serviceAccount.create: false
+    asserts:
+      - failedTemplate:
+          errorPattern: "keycloak.serviceAccount.create is false and keycloak.serviceAccount.name is empty"
+
+  - it: follows a renamed admin-init ServiceAccount
+    template: templates/servicemesh-authorizationpolicy.yaml
+    documentIndex: 3
+    set:
+      global.serviceMesh.enabled: true
+      keycloak.postgres.database: keycloak
+      keycloak.sslInit.serviceAccount.name: kc-admin-init
+    asserts:
+      - contains:
+          path: spec.rules[0].from[0].source.principals
+          content: cluster.local/ns/default/sa/kc-admin-init
+
+  - it: omits the admin-init principal when the official chart's sslInit is off
+    template: templates/servicemesh-authorizationpolicy.yaml
+    documentIndex: 3
+    set:
+      global.serviceMesh.enabled: true
+      keycloak.postgres.database: keycloak
+      keycloak.sslInit.enabled: false
+    asserts:
+      - notContains:
+          path: spec.rules[0].from[0].source.principals
+          content: cluster.local/ns/default/sa/rel-keycloak-admin-init
