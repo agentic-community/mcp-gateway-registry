@@ -2,6 +2,8 @@ suite: global.ssrfAllowedCidrs is set once and reaches every subchart (#2018)
 release:
   name: test
   namespace: default
+set:
+  keycloak.postgres.bootstrap.mode: fresh-install
 tests:
   - it: global.ssrfAllowedCidrs reaches the registry deployment
     templates:

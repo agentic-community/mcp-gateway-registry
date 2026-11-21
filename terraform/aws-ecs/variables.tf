@@ -64,6 +64,23 @@ variable "ingress_cidr_blocks" {
   default     = ["0.0.0.0/0"]
 }
 
+variable "keycloak_admin_cidr_blocks" {
+  description = <<-EOT
+    Source CIDR blocks allowed to reach Keycloak's admin paths (/admin, /admin/*,
+    /realms/master, /realms/master/*) through the Keycloak ALB. Null (the default)
+    uses ingress_cidr_blocks. The NAT gateway egress IPs (local.selected_nat_public_ips)
+    are always added, because the registry calls the Keycloak admin API through the
+    public Keycloak URL. The post-deployment setup scripts also use that URL, so the
+    machine running them must be inside these CIDRs.
+
+    The ALB sees CloudFront edge IPs when enable_cloudfront = true, so the restriction
+    cannot apply there: admin paths are forwarded without a source-IP check, and
+    `terraform plan` fails if this is set to anything other than ingress_cidr_blocks.
+  EOT
+  type        = list(string)
+  default     = null
+}
+
 variable "auth_server_url" {
   description = "Internal URL the registry/nginx use to reach the auth-server. Set to a Cloud Map / Service Connect FQDN (e.g. http://auth-server.<namespace>.local:8888) for deployments where only FQDNs resolve. Defaults to the Compose-style service name for backward compatibility."
   type        = string
@@ -216,9 +233,13 @@ variable "mcpgw_image_uri" {
 }
 
 variable "keycloak_image_uri" {
-  description = "Container image URI for Keycloak. Defaults to the official public image, run non-optimized so no custom build or private ECR push is required (the task supplies KC_* config at runtime). Override with a custom-built image if desired."
+  description = <<-EOT
+    Container image URI for Keycloak, defaulting to the official non-optimized 26.8.2 image.
+    Use a fixed version tag or digest; no custom build or private ECR push is required.
+    The task supplies the database and hostname configuration at runtime.
+  EOT
   type        = string
-  default     = "quay.io/keycloak/keycloak:25.0"
+  default     = "quay.io/keycloak/keycloak:26.8.2"
 }
 
 #

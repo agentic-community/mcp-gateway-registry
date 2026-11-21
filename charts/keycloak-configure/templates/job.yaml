@@ -1,3 +1,6 @@
+{{- if include "keycloak-configure.enabled" . }}
+{{- $globalKeycloak := dig "authProvider" "keycloak" dict .Values.global }}
+{{- $keycloakRealm := include "keycloak-configure.realm" . }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -25,10 +28,16 @@ spec:
             - secretRef:
                 name: {{ .Values.global.existingKeycloakClientSecret | default "keycloak-client-secret" }}
           env:
+            - name: REALM
+              value: {{ $keycloakRealm | quote }}
+            {{- if not .Values.keycloak.existingSecret }}
+            - name: KEYCLOAK_ADMIN
+              value: {{ $globalKeycloak.adminUsername | default .Values.keycloak.adminUser | quote }}
+            {{- end }}
             - valueFrom:
                 secretKeyRef:
-                  key: admin-password
-                  name: {{ .Release.Name}}-keycloak
+                  key: {{ $globalKeycloak.adminExistingSecretPasswordKey | default .Values.keycloak.adminExistingSecretPasswordKey | quote }}
+                  name: {{ $globalKeycloak.adminExistingSecret | default .Values.keycloak.adminExistingSecret | default (printf "%s-keycloak" .Release.Name) | quote }}
               name: KEYCLOAK_ADMIN_PASSWORD
             - name: ENABLE_DCR_CONFIG
               value: {{ .Values.dcr.enabled | default false | toString | quote }}
@@ -43,3 +52,4 @@ spec:
             name: setup-keycloak
       serviceAccountName: keycloak-configure-sa
   backoffLimit: 4
+{{- end }}

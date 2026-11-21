@@ -1011,6 +1011,12 @@ surface.
 
 ## Deployment surface & insecure-by-default config
 
+- Database image migrations require explicit bootstrap intent and a verified snapshot of a stopped source. Database reachability and `PG_VERSION` do not establish restore completion. Commit the restore receipt with the restored data before admitting traffic, retain interrupted data, and refuse a changed intent until an operator resolves the interruption.
+- For a reused PVC on SELinux nodes, allow kubelet to relabel the volume and enforce read-only access at the consuming container's volume mount. Setting the PVC source itself read-only can preserve another pod's security label and deny access despite correct Unix permissions. Verify both checksum stability and read-only container access after transfer.
+- Recheck retained database-directory permissions after a Kubernetes volume mount. `fsGroup` may add group-write bits that PostgreSQL rejects. Narrow only the owned, non-symlink data directory before startup; never use recursive permissive chmod or weaken the database's ownership checks.
+- Treat configured database and role names as data at every boundary. Validate their supported format before initialization, preserve their exact spelling, pass them through quoted environment arguments, and use identifier-aware SQL formatting. A successful bootstrap receipt does not authorize changing the database identity on retained storage; verify the configured owner and role before startup. Migration overlays must not override an operator's chosen names with example defaults.
+- Verify initializer authentication without a terminal on the shipped image. A piped password does not prove that a CLI reads stdin. Run administrator reconciliation separately from server readiness so stale bootstrap credentials cannot restart healthy pods.
+- Pin the IdP's public URL across server hostname settings, nginx headers and issuer validation. Keep internal signing-key transport separate from public issuer identity, and exercise HTTP/HTTPS listeners and path-prefixed deployments together.
 - **Publish sensitive ports on loopback, not `0.0.0.0`.** In compose/dev stacks,
   bind datastores, vaults, IdP admin ports, and backend services to `127.0.0.1:`;
   only the intended front door (nginx 80/443) listens on all interfaces.

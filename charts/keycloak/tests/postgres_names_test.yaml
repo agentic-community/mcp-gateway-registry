@@ -1,0 +1,347 @@
+suite: configurable PostgreSQL identities
+release:
+  name: test
+  namespace: default
+set:
+  hostname: https://id.example.com
+  postgres.bootstrap.mode: fresh-install
+tests:
+  - it: preserves custom PostgreSQL names in fresh-install mode
+    templates:
+      - templates/keycloak.yaml
+      - templates/postgres.yaml
+    set:
+      postgres.username: Sso_Runtime
+      postgres.database: Sso-Catalog
+      postgres.bootstrap.mode: fresh-install
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KC_DB_USERNAME
+            value: Sso_Runtime
+        template: templates/keycloak.yaml
+        documentSelector: &keycloakDeploymentfresh-install
+          path: kind
+          value: Deployment
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KC_DB_URL_DATABASE
+            value: Sso-Catalog
+        template: templates/keycloak.yaml
+        documentSelector: *keycloakDeploymentfresh-install
+      - contains:
+          path: spec.template.spec.initContainers[0].env
+          content:
+            name: PGUSER
+            value: Sso_Runtime
+        template: templates/keycloak.yaml
+        documentSelector: *keycloakDeploymentfresh-install
+      - contains:
+          path: spec.template.spec.initContainers[0].env
+          content:
+            name: PGDATABASE
+            value: Sso-Catalog
+        template: templates/keycloak.yaml
+        documentSelector: *keycloakDeploymentfresh-install
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KEYCLOAK_DB_USER
+            value: Sso_Runtime
+        template: templates/postgres.yaml
+        documentSelector: &postgresStatefulSetfresh-install
+          path: kind
+          value: StatefulSet
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KEYCLOAK_DB_NAME
+            value: Sso-Catalog
+        template: templates/postgres.yaml
+        documentSelector: *postgresStatefulSetfresh-install
+  - it: preserves custom PostgreSQL names in restore mode
+    templates:
+      - templates/keycloak.yaml
+      - templates/postgres.yaml
+    set:
+      postgres.username: Sso_Runtime
+      postgres.database: Sso-Catalog
+      postgres.bootstrap.mode: restore
+      postgres.bootstrap.existingClaim: snapshot
+      postgres.bootstrap.sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      postgres.bootstrap.sourceQuiesced: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KC_DB_USERNAME
+            value: Sso_Runtime
+        template: templates/keycloak.yaml
+        documentSelector: &keycloakDeploymentrestore
+          path: kind
+          value: Deployment
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KC_DB_URL_DATABASE
+            value: Sso-Catalog
+        template: templates/keycloak.yaml
+        documentSelector: *keycloakDeploymentrestore
+      - contains:
+          path: spec.template.spec.initContainers[0].env
+          content:
+            name: PGUSER
+            value: Sso_Runtime
+        template: templates/keycloak.yaml
+        documentSelector: *keycloakDeploymentrestore
+      - contains:
+          path: spec.template.spec.initContainers[0].env
+          content:
+            name: PGDATABASE
+            value: Sso-Catalog
+        template: templates/keycloak.yaml
+        documentSelector: *keycloakDeploymentrestore
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KEYCLOAK_DB_USER
+            value: Sso_Runtime
+        template: templates/postgres.yaml
+        documentSelector: &postgresStatefulSetrestore
+          path: kind
+          value: StatefulSet
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KEYCLOAK_DB_NAME
+            value: Sso-Catalog
+        template: templates/postgres.yaml
+        documentSelector: *postgresStatefulSetrestore
+  - it: preserves custom PostgreSQL names in existing mode
+    templates:
+      - templates/keycloak.yaml
+      - templates/postgres.yaml
+    set:
+      postgres.username: Sso_Runtime
+      postgres.database: Sso-Catalog
+      postgres.bootstrap.mode: existing
+      postgres.bootstrap.existingVerified: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KC_DB_USERNAME
+            value: Sso_Runtime
+        template: templates/keycloak.yaml
+        documentSelector: &keycloakDeploymentexisting
+          path: kind
+          value: Deployment
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KC_DB_URL_DATABASE
+            value: Sso-Catalog
+        template: templates/keycloak.yaml
+        documentSelector: *keycloakDeploymentexisting
+      - contains:
+          path: spec.template.spec.initContainers[0].env
+          content:
+            name: PGUSER
+            value: Sso_Runtime
+        template: templates/keycloak.yaml
+        documentSelector: *keycloakDeploymentexisting
+      - contains:
+          path: spec.template.spec.initContainers[0].env
+          content:
+            name: PGDATABASE
+            value: Sso-Catalog
+        template: templates/keycloak.yaml
+        documentSelector: *keycloakDeploymentexisting
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KEYCLOAK_DB_USER
+            value: Sso_Runtime
+        template: templates/postgres.yaml
+        documentSelector: &postgresStatefulSetexisting
+          path: kind
+          value: StatefulSet
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KEYCLOAK_DB_NAME
+            value: Sso-Catalog
+        template: templates/postgres.yaml
+        documentSelector: *postgresStatefulSetexisting
+  - it: rejects empty in postgres username
+    templates:
+      - templates/validate-values.yaml
+    set:
+      postgres.username: ''
+    asserts:
+      - failedTemplate:
+          errorPattern: keycloak.postgres.username must be
+  - it: rejects whitespace in postgres username
+    templates:
+      - templates/validate-values.yaml
+    set:
+      postgres.username: ' '
+    asserts:
+      - failedTemplate:
+          errorPattern: keycloak.postgres.username must be
+  - it: rejects shell syntax in postgres username
+    templates:
+      - templates/validate-values.yaml
+    set:
+      postgres.username: sso;echo unsafe
+    asserts:
+      - failedTemplate:
+          errorPattern: keycloak.postgres.username must be
+  - it: rejects connection parameters in postgres username
+    templates:
+      - templates/validate-values.yaml
+    set:
+      postgres.username: dbname=other
+    asserts:
+      - failedTemplate:
+          errorPattern: keycloak.postgres.username must be
+  - it: rejects identifier truncation in postgres username
+    templates:
+      - templates/validate-values.yaml
+    set:
+      postgres.username: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+    asserts:
+      - failedTemplate:
+          errorPattern: keycloak.postgres.username must be
+  - it: rejects nonstring in postgres username
+    templates:
+      - templates/validate-values.yaml
+    set:
+      postgres.username: 42
+    asserts:
+      - failedTemplate:
+          errorPattern: keycloak.postgres.username must be
+  - it: rejects leading digit in postgres username
+    templates:
+      - templates/validate-values.yaml
+    set:
+      postgres.username: 1database
+    asserts:
+      - failedTemplate:
+          errorPattern: keycloak.postgres.username must be
+  - it: rejects empty in postgres database
+    templates:
+      - templates/validate-values.yaml
+    set:
+      postgres.database: ''
+    asserts:
+      - failedTemplate:
+          errorPattern: keycloak.postgres.database must be
+  - it: rejects whitespace in postgres database
+    templates:
+      - templates/validate-values.yaml
+    set:
+      postgres.database: ' '
+    asserts:
+      - failedTemplate:
+          errorPattern: keycloak.postgres.database must be
+  - it: rejects shell syntax in postgres database
+    templates:
+      - templates/validate-values.yaml
+    set:
+      postgres.database: sso;echo unsafe
+    asserts:
+      - failedTemplate:
+          errorPattern: keycloak.postgres.database must be
+  - it: rejects connection parameters in postgres database
+    templates:
+      - templates/validate-values.yaml
+    set:
+      postgres.database: dbname=other
+    asserts:
+      - failedTemplate:
+          errorPattern: keycloak.postgres.database must be
+  - it: rejects identifier truncation in postgres database
+    templates:
+      - templates/validate-values.yaml
+    set:
+      postgres.database: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+    asserts:
+      - failedTemplate:
+          errorPattern: keycloak.postgres.database must be
+  - it: rejects nonstring in postgres database
+    templates:
+      - templates/validate-values.yaml
+    set:
+      postgres.database: 42
+    asserts:
+      - failedTemplate:
+          errorPattern: keycloak.postgres.database must be
+  - it: rejects leading digit in postgres database
+    templates:
+      - templates/validate-values.yaml
+    set:
+      postgres.database: 1database
+    asserts:
+      - failedTemplate:
+          errorPattern: keycloak.postgres.database must be
+  - it: rejects reserved username postgres
+    templates:
+      - templates/validate-values.yaml
+    set:
+      postgres.username: postgres
+    asserts:
+      - failedTemplate:
+          errorPattern: dedicated
+  - it: rejects reserved username public
+    templates:
+      - templates/validate-values.yaml
+    set:
+      postgres.username: public
+    asserts:
+      - failedTemplate:
+          errorPattern: dedicated
+  - it: rejects reserved username PG_read_all_data
+    templates:
+      - templates/validate-values.yaml
+    set:
+      postgres.username: PG_read_all_data
+    asserts:
+      - failedTemplate:
+          errorPattern: dedicated
+  - it: rejects reserved database postgres
+    templates:
+      - templates/validate-values.yaml
+    set:
+      postgres.database: postgres
+    asserts:
+      - failedTemplate:
+          errorPattern: dedicated
+  - it: rejects reserved database template0
+    templates:
+      - templates/validate-values.yaml
+    set:
+      postgres.database: template0
+    asserts:
+      - failedTemplate:
+          errorPattern: dedicated
+  - it: rejects reserved database template1
+    templates:
+      - templates/validate-values.yaml
+    set:
+      postgres.database: template1
+    asserts:
+      - failedTemplate:
+          errorPattern: dedicated
+  - it: ignores unused database names when bundled Keycloak is disabled
+    templates:
+      - templates/validate-values.yaml
+    set:
+      create: false
+      postgres.username: ""
+      postgres.database: ""
+    asserts:
+      - hasDocuments:
+          count: 0

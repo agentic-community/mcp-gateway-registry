@@ -68,7 +68,7 @@ resource "aws_acm_certificate_validation" "registry_cloudfront" {
 
 # ACM Certificate for Keycloak custom domain on CloudFront
 resource "aws_acm_certificate" "keycloak_cloudfront" {
-  count    = var.enable_cloudfront && var.enable_route53_dns ? 1 : 0
+  count    = local.keycloak_selected && var.enable_cloudfront && var.enable_route53_dns ? 1 : 0
   provider = aws.us_east_1
 
   domain_name       = local.keycloak_domain
@@ -90,7 +90,7 @@ resource "aws_acm_certificate" "keycloak_cloudfront" {
 
 # DNS validation records for Keycloak CloudFront certificate
 resource "aws_route53_record" "keycloak_cloudfront_cert_validation" {
-  for_each = var.enable_cloudfront && var.enable_route53_dns ? {
+  for_each = local.keycloak_selected && var.enable_cloudfront && var.enable_route53_dns ? {
     for dvo in aws_acm_certificate.keycloak_cloudfront[0].domain_validation_options : dvo.domain_name => {
       name   = dvo.resource_record_name
       record = dvo.resource_record_value
@@ -108,7 +108,7 @@ resource "aws_route53_record" "keycloak_cloudfront_cert_validation" {
 
 # Wait for Keycloak CloudFront certificate validation
 resource "aws_acm_certificate_validation" "keycloak_cloudfront" {
-  count    = var.enable_cloudfront && var.enable_route53_dns ? 1 : 0
+  count    = local.keycloak_selected && var.enable_cloudfront && var.enable_route53_dns ? 1 : 0
   provider = aws.us_east_1
 
   certificate_arn = aws_acm_certificate.keycloak_cloudfront[0].arn

@@ -2,6 +2,8 @@ suite: stack forwards extraEnv and extraEnvFrom to each subchart
 release:
   name: test
   namespace: default
+set:
+  keycloak.postgres.bootstrap.mode: fresh-install
 tests:
   # registry forwarding
   - it: forwards registry.extraEnv to the registry deployment

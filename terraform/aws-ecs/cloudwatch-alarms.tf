@@ -47,7 +47,7 @@ resource "aws_cloudwatch_metric_alarm" "waf_blocked_requests_high_mcp_gateway" {
 
 # CloudWatch Alarm: WAF Blocked Requests High (Keycloak)
 resource "aws_cloudwatch_metric_alarm" "waf_blocked_requests_high_keycloak" {
-  count = var.enable_waf ? 1 : 0
+  count = local.keycloak_selected && var.enable_waf ? 1 : 0
 
   alarm_name          = "${var.name}-waf-blocked-requests-high-keycloak"
   comparison_operator = "GreaterThanThreshold"
@@ -113,7 +113,7 @@ resource "aws_cloudwatch_metric_alarm" "waf_rate_limit_triggered_mcp_gateway" {
 
 # CloudWatch Alarm: WAF Rate Limit Triggered (Keycloak)
 resource "aws_cloudwatch_metric_alarm" "waf_rate_limit_triggered_keycloak" {
-  count = var.enable_waf ? 1 : 0
+  count = local.keycloak_selected && var.enable_waf ? 1 : 0
 
   alarm_name          = "${var.name}-waf-rate-limit-triggered-keycloak"
   comparison_operator = "GreaterThanThreshold"

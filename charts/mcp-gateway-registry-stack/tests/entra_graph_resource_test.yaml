@@ -4,6 +4,8 @@ release:
   namespace: default
 templates:
   - templates/oauth-provider-secret.yaml
+set:
+  keycloak.postgres.bootstrap.mode: fresh-install
 tests:
   - it: omits native Graph resource when unset
     set:

@@ -3,6 +3,9 @@
 locals {
   name_prefix = var.name
 
+  auth_provider     = var.pingfederate_enabled ? "pingfederate" : (var.auth0_enabled ? "auth0" : (var.okta_enabled ? "okta" : (var.entra_enabled ? "entra" : (var.cognito_enabled ? "cognito" : (var.keycloak_domain != "" ? "keycloak" : "default")))))
+  keycloak_selected = local.auth_provider == "keycloak"
+
   common_tags = merge(
     {
       stack     = var.name

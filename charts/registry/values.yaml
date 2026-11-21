@@ -30,7 +30,9 @@ global:
     # (ELBSecurityPolicy-2016-08). Set a modern policy such as
     # ELBSecurityPolicy-TLS-1-2-Ext-2018-06 when clients require newer TLS.
     sslPolicy:
-    tls: false
+    tls: true
+    # Explicit acknowledgment for development/private HTTP listeners.
+    allowPlaintext: false
     routingMode: subdomain
     # Registry hostname prefix used in subdomain mode.
     registrySubdomain: mcpregistry
@@ -45,6 +47,9 @@ global:
     type: keycloak
     keycloak:
       adminUsername: user
+      adminExistingSecret: "" # Defaults to <release>-keycloak.
+      adminExistingSecretPasswordKey: admin-password # pragma: allowlist secret
+      externalUrl: "" # Canonical public URL; defaults to the gateway origin.
       realm: mcp-gateway
 # Per-service image configuration
 # Any field left empty falls back to the corresponding global.image.* value.

@@ -1,0 +1,52 @@
+suite: explicit registry ingress transport
+release:
+  name: test
+  namespace: default
+set:
+  app.secretKey: EXAMPLE-test-signing-key-not-for-production # pragma: allowlist secret
+  egressAuth.markerSecret: EXAMPLE-test-marker-secret-not-for-production # pragma: allowlist secret
+  ingress.enabled: true
+  global.domain: example.com
+tests:
+  - it: defaults the public listener and advertised URL to HTTPS
+    templates:
+      - templates/ingress.yaml
+      - templates/secret.yaml
+    asserts:
+      - equal:
+          path: metadata.annotations["alb.ingress.kubernetes.io/listen-ports"]
+          value: '[{"HTTPS": 443}]'
+        template: templates/ingress.yaml
+      - equal:
+          path: data.REGISTRY_URL
+          decodeBase64: true
+          value: https://mcpregistry.example.com
+        template: templates/secret.yaml
+  - it: refuses an HTTP listener without explicit acknowledgment
+    templates:
+      - templates/ingress.yaml
+    set:
+      global.ingress.tls: false
+    asserts:
+      - failedTemplate:
+          errorPattern: requires global.ingress.allowPlaintext=true
+  - it: keeps an acknowledged HTTP listener and public URL consistent
+    templates:
+      - templates/ingress.yaml
+      - templates/secret.yaml
+    set:
+      global.ingress.tls: false
+      global.ingress.allowPlaintext: true
+    asserts:
+      - equal:
+          path: metadata.annotations["alb.ingress.kubernetes.io/listen-ports"]
+          value: '[{"HTTP": 80}]'
+        template: templates/ingress.yaml
+      - notExists:
+          path: metadata.annotations["alb.ingress.kubernetes.io/ssl-redirect"]
+        template: templates/ingress.yaml
+      - equal:
+          path: data.REGISTRY_URL
+          decodeBase64: true
+          value: http://mcpregistry.example.com
+        template: templates/secret.yaml

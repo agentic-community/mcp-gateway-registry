@@ -54,7 +54,10 @@ for name, config in images.items():
         print(f"Error: Image '{name}' missing repo_name")
         sys.exit(1)
 
-    ecr_uri = f'{ecr_registry}/{repo_name}:latest'
+    tags = config.get('tags') or ['latest']
+    # Preserve latest for images that publish it; otherwise use the versioned tag.
+    tag = 'latest' if 'latest' in tags else str(tags[0])
+    ecr_uri = f'{ecr_registry}/{repo_name}:{tag}'
     manifest[name] = ecr_uri
 
 # Write manifest

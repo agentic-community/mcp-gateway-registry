@@ -1242,9 +1242,11 @@ AUTH_SERVER_EXTERNAL_URL=https://mcpgateway.mycorp.com
 # 3. Keycloak External URL - Replace with your custom domain
 KEYCLOAK_EXTERNAL_URL=https://mcpgateway.mycorp.com
 
-# 4. Keycloak Admin URL - Replace with your custom domain
-KEYCLOAK_ADMIN_URL=https://mcpgateway.mycorp.com
+# 4. Keycloak Admin URL - Keep setup on the private Compose listener
+KEYCLOAK_ADMIN_URL=http://localhost:8080
 ```
+
+Run setup on the Compose host through its loopback-published Keycloak port. The registry's public URL serves the configured realm and login resources; it refuses Keycloak admin and master-realm paths. For a remote deployment, use its restricted administrator endpoint or a trusted tunnel, not the registry's public domain. See the deployment guide for that topology.
 
 ### Parameters to KEEP UNCHANGED
 

@@ -23,7 +23,7 @@
 #   --dry-run              Show what would be done without executing
 #   --help                 Show this help message
 #
-# Required Environment Variables:
+# Environment Variables (passwords required only for Keycloak initialization):
 #   AWS_REGION                    AWS region (default: us-east-1)
 #   KEYCLOAK_ADMIN_PASSWORD       Keycloak admin password (or loaded from SSM)
 #   INITIAL_ADMIN_PASSWORD        Password for admin user in mcp-gateway realm
@@ -54,6 +54,8 @@ SKIP_SCOPES=false
 SKIP_RESTART=false
 SKIP_DNS_WAIT=false
 DRY_RUN=false
+AUTH_PROVIDER=""
+KEYCLOAK_SELECTED=false
 
 # Counters for summary
 STEPS_TOTAL=0
@@ -204,6 +206,31 @@ _validate_terraform_outputs() {
 
     log_info "Validating required resources..."
 
+    # Older outputs identify Keycloak only through their existing URL. New
+    # outputs must name a supported provider; never infer one from malformed data.
+    if ! AUTH_PROVIDER=$(jq -er '
+        if has("auth_provider") then
+            .auth_provider.value | select(type == "string")
+        elif (.keycloak_url.value? | type == "string" and length > 0) then
+            "keycloak"
+        else
+            error("Missing authentication provider")
+        end
+    ' "$OUTPUTS_FILE" 2>/dev/null); then
+        log_error "Missing or malformed auth_provider output; refresh Terraform outputs."
+        STEPS_FAILED=$((STEPS_FAILED + 1))
+        return 1
+    fi
+    case "$AUTH_PROVIDER" in
+        keycloak) KEYCLOAK_SELECTED=true ;;
+        pingfederate|auth0|okta|entra|cognito|default) KEYCLOAK_SELECTED=false ;;
+        *)
+            log_error "Unsupported auth_provider output; refresh Terraform outputs."
+            STEPS_FAILED=$((STEPS_FAILED + 1))
+            return 1
+            ;;
+    esac
+
     # Core required outputs (always needed)
     local required_outputs=(
         "vpc_id"
@@ -211,9 +238,11 @@ _validate_terraform_outputs() {
         "ecs_cluster_arn"
         "mcp_gateway_url"
         "mcp_gateway_auth_url"
-        "keycloak_url"
         "mcp_gateway_efs_id"
     )
+    if [[ "$KEYCLOAK_SELECTED" == "true" ]]; then
+        required_outputs+=("keycloak_url")
+    fi
 
     # Note: registry_url is only set in custom domain mode
     # cloudfront_mcp_gateway_url is only set in CloudFront mode
@@ -240,7 +269,10 @@ _validate_terraform_outputs() {
         STEPS_PASSED=$((STEPS_PASSED + 1))
 
         # Export values for later use
-        export KEYCLOAK_ADMIN_URL=$(jq -r '.keycloak_url.value' "$OUTPUTS_FILE")
+        export KEYCLOAK_ADMIN_URL=""
+        if [[ "$KEYCLOAK_SELECTED" == "true" ]]; then
+            KEYCLOAK_ADMIN_URL=$(jq -r '.keycloak_url.value' "$OUTPUTS_FILE")
+        fi
         export AUTH_SERVER_EXTERNAL_URL=$(jq -r '.mcp_gateway_auth_url.value' "$OUTPUTS_FILE")
         export ECS_CLUSTER_NAME=$(jq -r '.ecs_cluster_name.value' "$OUTPUTS_FILE")
 
@@ -264,7 +296,10 @@ _validate_terraform_outputs() {
         fi
 
         log_info "Exported configuration:"
-        log_info "  KEYCLOAK_ADMIN_URL: $KEYCLOAK_ADMIN_URL"
+        log_info "  AUTH_PROVIDER: $AUTH_PROVIDER"
+        if [[ "$KEYCLOAK_SELECTED" == "true" ]]; then
+            log_info "  KEYCLOAK_ADMIN_URL: $KEYCLOAK_ADMIN_URL"
+        fi
         log_info "  REGISTRY_URL: $REGISTRY_URL"
         log_info "  CLOUDFRONT_REGISTRY_URL: ${CLOUDFRONT_REGISTRY_URL:-<not set>}"
         log_info "  AUTH_SERVER_EXTERNAL_URL: $AUTH_SERVER_EXTERNAL_URL"
@@ -296,10 +331,10 @@ _wait_for_dns_propagation() {
         return 0
     fi
 
-    local endpoints=(
-        "$KEYCLOAK_ADMIN_URL"
-        "$REGISTRY_URL"
-    )
+    local endpoints=("$REGISTRY_URL")
+    if [[ "$KEYCLOAK_SELECTED" == "true" ]]; then
+        endpoints+=("$KEYCLOAK_ADMIN_URL")
+    fi
 
     local max_attempts=60
     local wait_interval=10
@@ -395,25 +430,27 @@ _verify_ecs_services() {
             fi
         done
 
-        # Check Keycloak in its own cluster
-        local kc_status
-        kc_status=$(aws ecs describe-services \
-            --cluster "$keycloak_cluster" \
-            --services "$keycloak_service" \
-            --region "$AWS_REGION" \
-            --query 'services[0].{running:runningCount,desired:desiredCount}' \
-            --output json 2>/dev/null || echo '{}')
+        if [[ "$KEYCLOAK_SELECTED" == "true" ]]; then
+            # Check Keycloak in its own cluster only when it is deployed.
+            local kc_status
+            kc_status=$(aws ecs describe-services \
+                --cluster "$keycloak_cluster" \
+                --services "$keycloak_service" \
+                --region "$AWS_REGION" \
+                --query 'services[0].{running:runningCount,desired:desiredCount}' \
+                --output json 2>/dev/null || echo '{}')
 
-        local kc_running
-        local kc_desired
-        kc_running=$(echo "$kc_status" | jq -r '.running // 0')
-        kc_desired=$(echo "$kc_status" | jq -r '.desired // 0')
+            local kc_running
+            local kc_desired
+            kc_running=$(echo "$kc_status" | jq -r '.running // 0')
+            kc_desired=$(echo "$kc_status" | jq -r '.desired // 0')
 
-        if [[ "$kc_running" -ge "$kc_desired" && "$kc_desired" -gt 0 ]]; then
-            log_success "  $keycloak_service: $kc_running/$kc_desired running (cluster: $keycloak_cluster)"
-        else
-            log_warning "  $keycloak_service: $kc_running/$kc_desired running (cluster: $keycloak_cluster, waiting...)"
-            all_healthy=false
+            if [[ "$kc_running" -ge "$kc_desired" && "$kc_desired" -gt 0 ]]; then
+                log_success "  $keycloak_service: $kc_running/$kc_desired running (cluster: $keycloak_cluster)"
+            else
+                log_warning "  $keycloak_service: $kc_running/$kc_desired running (cluster: $keycloak_cluster, waiting...)"
+                all_healthy=false
+            fi
         fi
 
         if [[ "$all_healthy" == "true" ]]; then
@@ -438,6 +475,12 @@ _verify_ecs_services() {
 _initialize_keycloak() {
     log_step "5" "Initializing Keycloak"
     STEPS_TOTAL=$((STEPS_TOTAL + 1))
+
+    if [[ "$KEYCLOAK_SELECTED" != "true" ]]; then
+        log_info "Skipping Keycloak initialization (AUTH_PROVIDER=$AUTH_PROVIDER)"
+        STEPS_SKIPPED=$((STEPS_SKIPPED + 1))
+        return 0
+    fi
 
     if [[ "$SKIP_KEYCLOAK" == "true" ]]; then
         log_warning "Skipping Keycloak initialization (--skip-keycloak)"
@@ -664,10 +707,10 @@ _verify_endpoints() {
 
     log_info "Testing endpoint health..."
 
-    local endpoints=(
-        "$REGISTRY_URL/health|Registry Health"
-        "$KEYCLOAK_ADMIN_URL/admin/|Keycloak Admin"
-    )
+    local endpoints=("$REGISTRY_URL/health|Registry Health")
+    if [[ "$KEYCLOAK_SELECTED" == "true" ]]; then
+        endpoints+=("$KEYCLOAK_ADMIN_URL/admin/|Keycloak Admin")
+    fi
 
     local all_healthy=true
 
@@ -712,9 +755,11 @@ _print_summary() {
         echo -e "${GREEN}${BOLD}Post-deployment setup completed successfully!${NC}"
         echo ""
         echo "Next steps:"
-        echo "  1. Access Keycloak Admin: $KEYCLOAK_ADMIN_URL/admin"
-        echo "  2. Access Registry: $REGISTRY_URL"
-        echo "  3. Test authentication flow"
+        echo "  Access Registry: $REGISTRY_URL"
+        if [[ "$KEYCLOAK_SELECTED" == "true" ]]; then
+            echo "  Access Keycloak Admin: $KEYCLOAK_ADMIN_URL/admin"
+        fi
+        echo "  Test authentication with $AUTH_PROVIDER"
         echo ""
     else
         echo -e "${RED}${BOLD}Post-deployment setup completed with errors.${NC}"

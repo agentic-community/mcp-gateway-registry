@@ -128,7 +128,7 @@ module "ecs_service_auth" {
         },
         {
           name  = "AUTH_PROVIDER"
-          value = var.pingfederate_enabled ? "pingfederate" : (var.auth0_enabled ? "auth0" : (var.okta_enabled ? "okta" : (var.entra_enabled ? "entra" : (var.cognito_enabled ? "cognito" : (var.keycloak_domain != "" ? "keycloak" : "default")))))
+          value = local.auth_provider
         },
         # Amazon Cognito configuration (COGNITO_CLIENT_SECRET via Secrets Manager below)
         {
@@ -162,11 +162,11 @@ module "ecs_service_auth" {
         },
         {
           name  = "KEYCLOAK_URL"
-          value = var.keycloak_domain != "" ? "https://${var.keycloak_domain}" : ""
+          value = local.keycloak_selected ? "https://${var.keycloak_domain}" : ""
         },
         {
           name  = "KEYCLOAK_EXTERNAL_URL"
-          value = var.keycloak_domain != "" ? "https://${var.keycloak_domain}" : ""
+          value = local.keycloak_selected ? "https://${var.keycloak_domain}" : ""
         },
         {
           name  = "KEYCLOAK_REALM"
@@ -706,14 +706,6 @@ module "ecs_service_auth" {
             valueFrom = aws_secretsmanager_secret.nginx_marker_secret.arn
           },
           {
-            name      = "KEYCLOAK_CLIENT_SECRET"
-            valueFrom = "${aws_secretsmanager_secret.keycloak_client_secret.arn}:client_secret::"
-          },
-          {
-            name      = "KEYCLOAK_M2M_CLIENT_SECRET"
-            valueFrom = "${aws_secretsmanager_secret.keycloak_m2m_client_secret.arn}:client_secret::"
-          },
-          {
             name      = "DOCUMENTDB_USERNAME"
             valueFrom = "${var.documentdb_credentials_secret_arn}:username::"
           },
@@ -722,6 +714,16 @@ module "ecs_service_auth" {
             valueFrom = "${var.documentdb_credentials_secret_arn}:password::"
           }
         ],
+        local.keycloak_selected ? [
+          {
+            name      = "KEYCLOAK_CLIENT_SECRET"
+            valueFrom = "${aws_secretsmanager_secret.keycloak_client_secret.arn}:client_secret::"
+          },
+          {
+            name      = "KEYCLOAK_M2M_CLIENT_SECRET"
+            valueFrom = "${aws_secretsmanager_secret.keycloak_m2m_client_secret.arn}:client_secret::"
+          },
+        ] : [],
         # PR #947: MongoDB connection string override (Secrets Manager variant).
         # Preferred when the URI contains credentials (avoids plain text in state).
         var.mongodb_connection_string_secret_arn != "" ? [
@@ -1074,11 +1076,15 @@ module "ecs_service_registry" {
         },
         {
           name  = "KEYCLOAK_URL"
-          value = var.keycloak_domain != "" ? "https://${var.keycloak_domain}" : ""
+          value = local.keycloak_selected ? "https://${var.keycloak_domain}" : ""
+        },
+        {
+          name  = "KEYCLOAK_EXTERNAL_URL"
+          value = local.keycloak_selected ? "https://${var.keycloak_domain}" : ""
         },
         {
           name  = "KEYCLOAK_ENABLED"
-          value = var.keycloak_domain != "" ? "true" : "false"
+          value = local.keycloak_selected ? "true" : "false"
         },
         {
           name  = "KEYCLOAK_REALM"
@@ -1090,7 +1096,7 @@ module "ecs_service_registry" {
         },
         {
           name  = "AUTH_PROVIDER"
-          value = var.pingfederate_enabled ? "pingfederate" : (var.auth0_enabled ? "auth0" : (var.okta_enabled ? "okta" : (var.entra_enabled ? "entra" : (var.cognito_enabled ? "cognito" : (var.keycloak_domain != "" ? "keycloak" : "default")))))
+          value = local.auth_provider
         },
         # Amazon Cognito configuration (COGNITO_CLIENT_SECRET via Secrets Manager below)
         {
@@ -2125,6 +2131,16 @@ module "ecs_service_registry" {
             valueFrom = aws_secretsmanager_secret.nginx_marker_secret.arn
           },
           {
+            name      = "EMBEDDINGS_API_KEY"
+            valueFrom = aws_secretsmanager_secret.embeddings_api_key.arn
+          },
+          {
+            name      = "EMBEDDINGS_IDP_CLIENT_SECRET"
+            valueFrom = aws_secretsmanager_secret.embeddings_idp_client_secret.arn
+          }
+        ],
+        local.keycloak_selected ? [
+          {
             name      = "KEYCLOAK_CLIENT_SECRET"
             valueFrom = "${aws_secretsmanager_secret.keycloak_client_secret.arn}:client_secret::"
           },
@@ -2136,15 +2152,7 @@ module "ecs_service_registry" {
             name      = "KEYCLOAK_ADMIN_PASSWORD"
             valueFrom = aws_secretsmanager_secret.keycloak_admin_password.arn
           },
-          {
-            name      = "EMBEDDINGS_API_KEY"
-            valueFrom = aws_secretsmanager_secret.embeddings_api_key.arn
-          },
-          {
-            name      = "EMBEDDINGS_IDP_CLIENT_SECRET"
-            valueFrom = aws_secretsmanager_secret.embeddings_idp_client_secret.arn
-          }
-        ],
+        ] : [],
         # Per-user egress credential vault encryption key (registry-only,
         # optional). Injected as a true secret via Secrets Manager valueFrom;
         # only present when an operator supplied a value (empty => feature off).
@@ -3020,6 +3028,18 @@ module "ecs_service_flight_booking_agent" {
 
       environment = [
         {
+          name  = "KEYCLOAK_URL"
+          value = local.keycloak_selected ? "https://${var.keycloak_domain}" : ""
+        },
+        {
+          name  = "KEYCLOAK_EXTERNAL_URL"
+          value = local.keycloak_selected ? "https://${var.keycloak_domain}" : ""
+        },
+        {
+          name  = "KEYCLOAK_REALM"
+          value = "mcp-gateway"
+        },
+        {
           name  = "AWS_REGION"
           value = data.aws_region.current.id
         },
@@ -3142,6 +3162,18 @@ module "ecs_service_travel_assistant_agent" {
       ]
 
       environment = [
+        {
+          name  = "KEYCLOAK_URL"
+          value = local.keycloak_selected ? "https://${var.keycloak_domain}" : ""
+        },
+        {
+          name  = "KEYCLOAK_EXTERNAL_URL"
+          value = local.keycloak_selected ? "https://${var.keycloak_domain}" : ""
+        },
+        {
+          name  = "KEYCLOAK_REALM"
+          value = "mcp-gateway"
+        },
         {
           name  = "AWS_REGION"
           value = data.aws_region.current.id

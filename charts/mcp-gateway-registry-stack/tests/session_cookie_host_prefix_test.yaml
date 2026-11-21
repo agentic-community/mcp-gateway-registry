@@ -5,6 +5,8 @@ release:
 # The registry and the auth-server must agree on SESSION_COOKIE_HOST_PREFIX:
 # with only one prefixed, /validate finds the session while CSRF, consent and
 # logout do not. global.sessionCookieHostPrefix is the one place to set it.
+set:
+  keycloak.postgres.bootstrap.mode: fresh-install
 tests:
   - it: renders the prefix on in both subcharts' secrets when the global is on
     templates:
