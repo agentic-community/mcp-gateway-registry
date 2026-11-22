@@ -55,6 +55,7 @@ Common questions and answers about the MCP Gateway Registry.
 - [How do I create a read-only user who can see every server, agent and skill but change nothing?](read-only-viewer-group.md)
 - [How do I create a read-only admin who also sees private and group-restricted assets?](read-only-viewer-group.md#read-only-admin)
 - [How do I let a group call only some of the tools on each MCP server?](tool-level-access-control.md)
+- [How do I find out which groups can see or call a tool?](which-groups-can-call-a-tool.md)
 - [How do I set up a self-service workflow for AI assets (draft to review to active)?](self-service-asset-lifecycle-workflow.md)
 - [How do I quarantine a user, an agent, or an MCP server (kill switch)?](quarantine-a-caller-or-target.md)
 
