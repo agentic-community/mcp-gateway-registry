@@ -228,6 +228,17 @@ app:
   # OPENAPI_MCP_SYNC_SECRET: the registry signs the per-user credential envelope.
   openapiMcpEnabled: false
   openapiMcpInternalUrl: "http://openapi-mcp:9876" # How the auth server reaches the container
+  # Exact hostnames the MCP proxy hop and the generic proxy may reach at a
+  # private address (SSRF_ALLOWED_HOSTS). Must equal the registry's
+  # app.ssrfAllowedHosts: the registry health check applies the same rule, so a
+  # host listed there only passes the check and then fails at this hop. For a
+  # standalone install; under the stack chart set global.ssrfAllowedHosts.
+  ssrfAllowedHosts: ""
+  # GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS. Must equal the registry's value, for the
+  # same reason. true admits any private/loopback upstream (metadata always
+  # denied); prefer ssrfAllowedHosts / ssrfAllowedCidrs. Under the stack chart set
+  # global.gatewayProxyAllowPrivateTargets.
+  gatewayProxyAllowPrivateTargets: false
 # Authentication Provider Configuration
 # Choose ONE provider: keycloak, entra, okta, auth0, cognito, or pingfederate
 authProvider:

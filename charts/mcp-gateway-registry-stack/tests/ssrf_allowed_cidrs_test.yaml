@@ -1,4 +1,4 @@
-suite: global.ssrfAllowedCidrs is set once and reaches every subchart (#2018)
+suite: the SSRF allowlist globals are set once and reach every subchart (#2018)
 release:
   name: test
   namespace: default
@@ -50,3 +50,94 @@ tests:
           content:
             name: SSRF_ALLOWED_CIDRS
             value: "240.240.0.0/16"
+
+  # SSRF_ALLOWED_HOSTS and GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS: the registry
+  # health check and the auth-server MCP proxy hop apply the same SSRF profile,
+  # so both services must get the same values.
+  - it: global.ssrfAllowedHosts reaches the registry deployment
+    templates:
+      - charts/registry/templates/deployment.yaml
+    set:
+      global:
+        ssrfAllowedHosts: "obo-echo.ns.svc.cluster.local"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSRF_ALLOWED_HOSTS
+            value: "obo-echo.ns.svc.cluster.local"
+
+  - it: global.ssrfAllowedHosts reaches the auth-server deployment
+    templates:
+      - charts/auth-server/templates/deployment.yaml
+    set:
+      global:
+        ssrfAllowedHosts: "obo-echo.ns.svc.cluster.local"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSRF_ALLOWED_HOSTS
+            value: "obo-echo.ns.svc.cluster.local"
+
+  - it: global.gatewayProxyAllowPrivateTargets reaches both services
+    templates:
+      - charts/registry/templates/deployment.yaml
+      - charts/auth-server/templates/deployment.yaml
+    set:
+      global:
+        gatewayProxyAllowPrivateTargets: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS
+            value: "true"
+
+  - it: refuses a registry-only ssrfAllowedHosts that the auth-server would not get
+    templates:
+      - templates/validate-values.yaml
+    set:
+      registry:
+        app:
+          ssrfAllowedHosts: "obo-echo"
+    asserts:
+      - failedTemplate:
+          errorPattern: "registry.app.ssrfAllowedHosts is \"obo-echo\" but global.ssrfAllowedHosts is \"\""
+
+  - it: refuses an auth-server ssrfAllowedHosts that differs from the global
+    templates:
+      - templates/validate-values.yaml
+    set:
+      global:
+        ssrfAllowedHosts: "a"
+      auth-server:
+        app:
+          ssrfAllowedHosts: "b"
+    asserts:
+      - failedTemplate:
+          errorPattern: "auth-server.app.ssrfAllowedHosts is \"b\""
+
+  - it: accepts a subchart ssrfAllowedHosts equal to the global
+    templates:
+      - templates/validate-values.yaml
+    set:
+      global:
+        ssrfAllowedHosts: "obo-echo"
+      registry:
+        app:
+          ssrfAllowedHosts: "obo-echo"
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: refuses a registry-only gatewayProxyAllowPrivateTargets
+    templates:
+      - templates/validate-values.yaml
+    set:
+      registry:
+        app:
+          gatewayProxyAllowPrivateTargets: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "registry.app.gatewayProxyAllowPrivateTargets is true but global.gatewayProxyAllowPrivateTargets is false"

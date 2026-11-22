@@ -642,12 +642,23 @@ module "ecs_service_auth" {
           name  = "EGRESS_HTTP_POOL_CONNECT_RETRIES"
           value = tostring(var.egress_http_pool_connect_retries)
         },
-        # SSRF guard for the generic proxy (PROXY_PROFILE): an operator CIDR may
-        # admit a reserved IPv4 address (e.g. Istio ServiceEntry VIPs in
-        # 240.240.0.0/16). Same value as the registry and mcpgw. #2018
+        # SSRF allowlist for PROXY_PROFILE, which pins the MCP proxy hop and the
+        # generic proxy. Same variables as the registry, whose health check and
+        # registration guard use the same profile, so a private upstream that
+        # passes there passes here. An operator CIDR may also admit a reserved
+        # IPv4 address (e.g. Istio 240.240.0.0/16, #2018). Metadata and
+        # workload-credential endpoints stay blocked regardless.
+        {
+          name  = "SSRF_ALLOWED_HOSTS"
+          value = var.ssrf_allowed_hosts
+        },
         {
           name  = "SSRF_ALLOWED_CIDRS"
           value = var.ssrf_allowed_cidrs
+        },
+        {
+          name  = "GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS"
+          value = tostring(var.gateway_proxy_allow_private_targets)
         },
         # Forward-proxy egress for the SSRF-guarded clients (issue #1832). OFF by
         # default. HTTP_PROXY / HTTPS_PROXY / NO_PROXY are passed through the

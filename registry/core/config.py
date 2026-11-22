@@ -2026,7 +2026,8 @@ class Settings(BaseSettings):
         description=(
             "Max total connections per pooled egress httpx client (shared across "
             "OBO/3LO/vend/OAuth-callback/MCP-proxy-stream/health). Bounds FD and "
-            "ephemeral-port use under burst."
+            "ephemeral-port use under burst. Every in-flight MCP tool call through "
+            "the auth-server holds one connection for up to MCP_PROXY_TIMEOUT."
         ),
     )
     egress_http_pool_max_keepalive: int = Field(

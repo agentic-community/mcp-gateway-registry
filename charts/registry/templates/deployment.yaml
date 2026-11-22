@@ -221,7 +221,7 @@ spec:
             # location is commented out -> requests 405). The cloud metadata
             # address is never permitted regardless of these values.
             - name: SSRF_ALLOWED_HOSTS
-              value: {{ .Values.app.ssrfAllowedHosts | default "" | quote }}
+              value: {{ .Values.global.ssrfAllowedHosts | default .Values.app.ssrfAllowedHosts | default "" | quote }}
             - name: SSRF_ALLOWED_CIDRS
               value: {{ .Values.global.ssrfAllowedCidrs | default .Values.app.ssrfAllowedCidrs | default "" | quote }}
             - name: CIMD_PUBLISHER_ENABLED
@@ -422,7 +422,7 @@ spec:
             - name: GATEWAY_CANONICAL_NAMESPACE_ENABLED
               value: {{ .Values.app.gatewayCanonicalNamespaceEnabled | default false | toString | quote }}
             - name: GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS
-              value: {{ .Values.app.gatewayProxyAllowPrivateTargets | default false | toString | quote }}
+              value: {{ or .Values.global.gatewayProxyAllowPrivateTargets .Values.app.gatewayProxyAllowPrivateTargets | default false | toString | quote }}
             - name: GATEWAY_GENERIC_CLIENT_MAX_BODY_SIZE
               value: {{ .Values.app.gatewayGenericClientMaxBodySize | default "1m" | quote }}
             - name: GATEWAY_PROXY_PREFIX

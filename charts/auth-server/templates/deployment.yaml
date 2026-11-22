@@ -342,9 +342,14 @@ spec:
               {{- else }}
               value: ""
               {{- end }}
-            # SSRF guard for the generic proxy (PROXY_PROFILE): an operator CIDR
-            # may admit a reserved IPv4 address (e.g. Istio ServiceEntry VIPs in
-            # 240.240.0.0/16). global.ssrfAllowedCidrs (stack chart) wins over app.ssrfAllowedCidrs. #2018
+            # SSRF allowlist for PROXY_PROFILE, which pins the MCP proxy hop and
+            # the generic proxy. Must match the registry, whose health check and
+            # registration guard use the same profile, so a private upstream that
+            # passes there passes here. An operator CIDR may also admit a reserved
+            # IPv4 address (e.g. Istio 240.240.0.0/16, #2018). The stack chart's
+            # globals win over the app.* values, which serve standalone installs.
+            - name: SSRF_ALLOWED_HOSTS
+              value: {{ .Values.global.ssrfAllowedHosts | default .Values.app.ssrfAllowedHosts | default "" | quote }}
             - name: SSRF_ALLOWED_CIDRS
               value: {{ .Values.global.ssrfAllowedCidrs | default .Values.app.ssrfAllowedCidrs | default "" | quote }}
             # OpenAPI MCP servers (issue #2022): the mcp-proxy hop forwards
@@ -357,6 +362,8 @@ spec:
             - name: OPENAPI_MCP_INTERNAL_URL
               value: {{ required "auth-server.app.openapiMcpInternalUrl must be set when app.openapiMcpEnabled is true" .Values.app.openapiMcpInternalUrl | quote }}
             {{- end }}
+            - name: GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS
+              value: {{ or .Values.global.gatewayProxyAllowPrivateTargets .Values.app.gatewayProxyAllowPrivateTargets | default false | toString | quote }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

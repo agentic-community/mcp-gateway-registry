@@ -975,13 +975,50 @@ def _assert_credential_endpoints_bypass_proxy(
     )
 
 
+def _warn_if_proxy_env_ignored(
+    config: _ForwardProxyConfig,
+) -> None:
+    """Warn when HTTP(S)_PROXY is set but the guarded clients will not use it.
+
+    The guarded clients pass their own transport, so httpx and httpx2 never read
+    the proxy variables themselves; only EGRESS_FORWARD_PROXY_ENABLED turns proxy
+    routing on. A deployment that sets HTTPS_PROXY alone therefore sends every
+    guarded request direct, which in a proxy-only network shows up as connect
+    timeouts with nothing in the log pointing at the flag. A warning rather than
+    an error: the variables may be there for other tools in the image.
+    """
+    if config.enabled:
+        return
+    raw_enabled = (os.environ.get(_FORWARD_PROXY_ENABLED_ENV) or "").strip().lower()
+    if raw_enabled in _TRUE_VALUES:
+        return  # flag on but no proxy set: _forward_proxy_config already warned
+    names = [
+        name
+        for name in ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy")
+        if (os.environ.get(name) or "").strip()
+    ]
+    if not names:
+        return
+    logger.warning(
+        "SSRF guard: %s is set but %s is not true, so the SSRF-guarded egress "
+        "clients (health checks, tool discovery, MCP tool calls, OAuth token "
+        "exchange, federation) ignore it and connect direct. Set %s=true to route "
+        "public targets through the proxy.",
+        "/".join(names),
+        _FORWARD_PROXY_ENABLED_ENV,
+        _FORWARD_PROXY_ENABLED_ENV,
+    )
+
+
 def validate_forward_proxy_config() -> None:
     """Resolve and validate forward-proxy configuration at process startup.
 
     Call this from each app's lifespan so a bad CA-bundle path fails the pod
     rather than surfacing on the first proxied request, hours later and far from
     the cause. The CA bundle is validated even when the feature flag is off, so a
-    typo is caught before the flag is flipped.
+    typo is caught before the flag is flipped. Logs a warning when a proxy
+    variable is set while the flag is off, because the guarded clients then
+    ignore it.
 
     Raises:
         UrlValidationError: If the CA bundle path is missing, unreadable, or not
@@ -989,6 +1026,7 @@ def validate_forward_proxy_config() -> None:
             cloud credential endpoints.
     """
     config = _forward_proxy_config()
+    _warn_if_proxy_env_ignored(config)
     _assert_credential_endpoints_bypass_proxy(config)
     _forward_proxy_ssl_context()
 
@@ -1474,6 +1512,43 @@ def proxy_profile_for_entity_target(
             "outbound URL does not match the exact built-in airegistry-tools identity",
         )
     return BUILTIN_AIREGISTRY_TOOLS_PROFILE
+
+
+def proxy_profile_for_mcp_hop(
+    server_path: str,
+    signed_upstream_url: str,
+    outbound_url: str,
+) -> _Profile:
+    """Select the profile for the auth server's hop to a registered MCP backend.
+
+    The same decision ``proxy_profile_for_entity_target`` makes for the
+    registry's health check, so a backend that passes the check passes the hop:
+    ``PROXY_PROFILE`` for an ordinary server, or the exact built-in profile.
+
+    The hop token signs the registration's ``proxy_pass_url`` on a direct route
+    but its resolved MCP endpoint on a virtual route (``selected_upstream``). For
+    the built-in, both are among its exact outbound identities, so a signed
+    built-in endpoint stands for the built-in target. The server path and the
+    outbound URL are still checked exactly, and no other URL is translated.
+
+    Args:
+        server_path: The signed ``server`` claim (the registered path).
+        signed_upstream_url: The signed ``upstream_url`` claim.
+        outbound_url: The URL the hop is about to connect to.
+
+    Returns:
+        The profile to pin the connection under.
+
+    Raises:
+        UrlValidationError: The registration is the built-in but the outbound
+            URL is not one of its exact endpoints.
+    """
+    registered_target = signed_upstream_url
+    if is_builtin_airegistry_tools_outbound_url(signed_upstream_url):
+        registered_target = _BUILTIN_AIREGISTRY_TOOLS_TARGET
+    return proxy_profile_for_entity_target(
+        "mcp_server", server_path, registered_target, outbound_url
+    )
 
 
 def _is_blocked_ip(

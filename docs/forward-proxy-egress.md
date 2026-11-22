@@ -229,6 +229,8 @@ docker compose exec registry sh -c 'grep -n -A3 "location /your-server/" /etc/ng
 
 An external server stays unhealthy after you set the flag. Check the startup log for the INFO line. No line means the flag did not reach the process, and a warning about missing proxy variables means they did not either. Confirm you set both on both services.
 
+The startup log warns that `HTTPS_PROXY is set but EGRESS_FORWARD_PROXY_ENABLED is not true`. The guarded clients read `HTTP_PROXY` and `HTTPS_PROXY` only when the flag is on, so this process sends health checks, tool discovery and MCP tool calls direct. Set `EGRESS_FORWARD_PROXY_ENABLED=true` on that service. If the variables are there for other tools and the gateway should connect direct, ignore the warning.
+
 Every proxied request fails with a certificate error. Your proxy intercepts TLS. Set `EGRESS_FORWARD_PROXY_CA_BUNDLE` and mount the PEM.
 
 Every proxied request fails with `The proxy_ssl_context argument is not allowed for the http scheme`, and sign-in returns `?error=oauth2_callback_failed`. This affects 1.32.0 only, whenever `EGRESS_FORWARD_PROXY_CA_BUNDLE` is set and the proxy URL is `http://`. Upgrade to 1.32.1, or leave the bundle empty until you do: a proxy that does not intercept TLS needs no bundle (#1849).
@@ -241,19 +243,9 @@ A credential-bearing request is refused with a message about an `http` target. T
 
 Probes time out in waves and servers flap. The proxy is rate-limiting or capping concurrent tunnels. Lower `EGRESS_HTTP_POOL_MAX_CONNECTIONS`.
 
-## Known limitation: virtual-server tool calls
+## Virtual-server tool calls
 
-A tool call to an ordinary MCP server path goes through the auth-server, whose egress this feature covers. A tool call fanned out by a **virtual server** does not. The generated nginx config gives each virtual-server member its own internal location:
-
-```nginx
-location /_vs_backend_cloudflare_docs {
-    internal;
-    proxy_pass https://docs.mcp.cloudflare.com/mcp;
-```
-
-That location is reached by a Lua subrequest, so nginx performs the upstream fetch itself, and nginx has no environment-proxy support for `proxy_pass`. Measured on a test deployment: the same tool through `/cloudflare-docs` opened four new tunnels through the proxy, while the same tool through `/virtual/dev-essentials` opened none.
-
-In a proxy-only network, virtual-server tool calls therefore fail even with this feature enabled. Use the per-server paths there. Closing the gap needs `ngx_http_proxy_connect_module` or an equivalent, which is a separate change.
+A tool call fanned out by a **virtual server** also goes through the auth-server. Each virtual-server member's internal nginx location proxies to the auth-server's `/mcp-proxy/` hop rather than to the backend, so this feature covers it the same way it covers a per-server path. Before 1.39.0, a member with no egress credential was proxied by nginx directly, and nginx has no environment-proxy support for `proxy_pass`, so those calls failed in a proxy-only network.
 
 ## Not supported
 

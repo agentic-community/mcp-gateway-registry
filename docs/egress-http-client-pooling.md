@@ -1,6 +1,6 @@
 # Egress HTTP connection pooling: operations guide
 
-The gateway pools its outbound (egress) HTTP clients so repeated egress calls reuse warm TCP+TLS connections instead of handshaking on every request. This covers the OBO token exchange, the 3LO exchange/refresh, the egress-token vend, the MCP-proxy egress stream, the registry health-check loop, and the browser login OAuth callback (authorization-code token exchange + userinfo).
+The gateway pools its outbound (egress) HTTP clients so repeated egress calls reuse warm TCP+TLS connections instead of handshaking on every request. This covers the OBO token exchange, the 3LO exchange/refresh, the egress-token vend, every MCP-proxy upstream stream (each MCP tool call, direct or through a virtual server, with or without an injected egress credential), the registry health-check loop, and the browser login OAuth callback (authorization-code token exchange + userinfo).
 
 The `mcpgw` MCP server pools the same way: its Registry API calls (`list_services`, `list_agents`, `list_skills`, `get_skill_content`, `search_registry`, `intelligent_tool_finder`, `healthcheck`) and its Keycloak M2M `client_credentials` token POST now all ride one process-lifetime pooled client instead of opening a fresh `httpx.AsyncClient` per call.
 
@@ -12,7 +12,7 @@ All four settings are non-secret and wired across Docker (`.env`), ECS Terraform
 
 | Env var | Default | Meaning |
 |---|---|---|
-| `EGRESS_HTTP_POOL_MAX_CONNECTIONS` | `100` | Max total connections per pooled client. Bounds FD/ephemeral-port use under burst. Size above expected concurrent MCP streams + short calls. |
+| `EGRESS_HTTP_POOL_MAX_CONNECTIONS` | `100` | Max total connections per pooled client. Bounds FD/ephemeral-port use under burst. Size above expected concurrent MCP streams + short calls. On the auth-server, every in-flight MCP tool call holds one connection of its profile's pool for up to `MCP_PROXY_TIMEOUT`, per worker: ordinary backends share the `proxy` pool, egress-credentialed backends the `egress-upstream` pool. A request beyond the limit waits for a free connection and returns 504 when the timeout passes. |
 | `EGRESS_HTTP_POOL_MAX_KEEPALIVE` | `20` | Max idle keep-alive connections per pooled client. Clamped to `MAX_CONNECTIONS` at startup. |
 | `EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS` | `30` | Idle keep-alive expiry. **Set this below the shortest upstream/LB idle timeout** (see below). |
 | `EGRESS_HTTP_POOL_CONNECT_RETRIES` | `1` | httpx transport connect-establishment retries. |
@@ -49,7 +49,7 @@ The two `mcpgw_*` label values are emitted by the **mcpgw process** and are scra
 **Scope caveat (important):** on the registry/auth-server side this counter only covers the two POST hops that use the reconnect helper (`obo`, `vend`). It does **not** cover:
 
 - the **3LO** exchange/refresh. Its POST is deliberately *not* retried, because authorization-code and refresh-token grants are single-use/rotating and a blind re-POST could double-spend the grant. A reset there surfaces as a transient "token endpoint unreachable" that the refresh worker retries on its next pass.
-- the **streaming** hops (MCP-proxy egress stream, health initialize/probe). A streaming POST cannot be wrapped by the reconnect helper, so a reset surfaces as a 502 (the MCP client) or a failed health check (retried next cycle).
+- the **streaming** hops (MCP-proxy upstream stream, health initialize/probe). A streaming POST cannot be wrapped by the reconnect helper, so a reset surfaces as a 502 (the MCP client) or a failed health check (retried next cycle).
 - the **login callback** (authorization-code token exchange + userinfo). Its calls are pooled but not wrapped in the reconnect helper, so a reset surfaces as a failed login that the user retries.
 
 On `mcpgw`, `mcpgw_registry` + `mcpgw_m2m_token` cover every hop mcpgw makes *itself* (all are idempotent, all are wrapped), which is more than the registry/auth-server side gets. They do **not** cover fastmcp's own OAuth hops when `OIDC_ENABLED=true`: `OAuthProxy` builds clients inline for `/token` (login, client refresh, proactive refresh) and `/revoke` with no injection point in fastmcp 3.4.9 or 4.1.6, so those four call sites are unpooled, unguarded and uncounted. They fire per login/refresh rather than per tool call. The `/certs` JWKS fetch *is* covered: `JWTVerifier` accepts a public `http_client=` and is wired to the pooled client.

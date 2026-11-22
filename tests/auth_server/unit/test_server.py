@@ -6977,6 +6977,58 @@ class TestForwardHeadersProxyContextStrip:
         assert out.get("X-Forwarded-For") == "203.0.113.5"
 
 
+class TestForwardHeadersRoutingHeaderStrip:
+    """nginx's registration assertions are hop inputs, never backend headers.
+
+    Every MCP backend request now reaches the backend through /mcp-proxy, virtual
+    ones included. The virtual location sets X-Registered-Server-Path and
+    X-Registered-Route-Mode for the hop's route check, and a subrequest can also
+    inherit a client-sent X-Virtual-Original-URL or X-Resolved-Version. None of
+    them is for the backend, so the hop drops all of them.
+    """
+
+    def _forward(self, incoming, relay=False):
+        from auth_server.server import _forward_headers
+
+        return _forward_headers(incoming, relay_authorization=relay)
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "X-Registered-Server-Path",
+            "X-Registered-Route-Mode",
+            "X-Resolved-Version",
+            "X-Virtual-Original-URL",
+            "X-Validate-Binding-Secret",
+            "x-virtual-original-url",
+        ],
+    )
+    def test_strips_each_routing_header(self, name):
+        out = self._forward({name: "x", "Accept": "y"})
+
+        assert name.lower() not in {k.lower() for k in out}
+        assert out.get("Accept") == "y"
+
+    def test_strips_them_for_the_builtin_relay_too(self):
+        """relay_authorization re-admits the caller's bearer only, nothing else."""
+        out = self._forward(
+            {
+                "Authorization": "Bearer t",
+                "X-Registered-Server-Path": "/airegistry-tools",
+                "X-Virtual-Original-URL": "https://gw/virtual/x?token=secret",
+            },
+            relay=True,
+        )
+
+        assert set(k.lower() for k in out) == {"authorization"}
+
+    def test_matches_the_registration_header_map(self):
+        """A header added to _NGINX_REGISTRATION_HEADERS is stripped without a second edit."""
+        from auth_server.server import _GATEWAY_ROUTING_HEADERS, _NGINX_REGISTRATION_HEADERS
+
+        assert {h.lower() for h in _NGINX_REGISTRATION_HEADERS.values()} <= _GATEWAY_ROUTING_HEADERS
+
+
 class TestForwardHeadersInternalTokenStrip:
     """The gateway-internal hop tokens must never be copied onto the egress hop.
 

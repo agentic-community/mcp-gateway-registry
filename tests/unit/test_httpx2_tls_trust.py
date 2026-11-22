@@ -41,7 +41,25 @@ def test_egress_context_reuses_the_forward_proxy_bundle_context():
         assert url_guard.egress_ssl_context() is proxy_context
 
 
-def test_discovery_client_and_sse_factory_use_the_egress_context():
+class _RecordingTransport:
+    """Stands in for the guarded transport and records how it was built."""
+
+    built: list[dict] = []
+
+    def __init__(self, **kwargs):
+        type(self).built.append(kwargs)
+
+
+@pytest.fixture
+def recording_transport(monkeypatch):
+    from registry.utils import url_guard_httpx2
+
+    _RecordingTransport.built = []
+    monkeypatch.setattr(url_guard_httpx2, "GuardedHttpx2AsyncTransport", _RecordingTransport)
+    return _RecordingTransport
+
+
+def test_discovery_client_and_sse_factory_use_the_egress_context(recording_transport):
     seen = []
 
     class _Client:
@@ -49,19 +67,17 @@ def test_discovery_client_and_sse_factory_use_the_egress_context():
             seen.append(kwargs)
 
     with patch.object(mcp_client.httpx2, "AsyncClient", _Client):
-        mcp_client._verified_http_client(headers={"a": "b"})
+        mcp_client._guarded_http_client(url_guard.PROXY_PROFILE, headers={"a": "b"})
 
-    assert seen[0]["verify"] is url_guard.egress_ssl_context()
+    assert recording_transport.built[0]["verify"] is url_guard.egress_ssl_context()
     assert seen[0]["timeout"].read == mcp_client.SDK_DEFAULT_SSE_READ_TIMEOUT_SECONDS
 
 
 @pytest.mark.asyncio
-async def test_streamable_http_discovery_passes_the_egress_context():
-    seen = {}
-
+async def test_streamable_http_discovery_passes_the_egress_context(recording_transport):
     class _Client:
         def __init__(self, **kwargs):
-            seen.update(kwargs)
+            pass
 
         async def __aenter__(self):
             return self
@@ -79,7 +95,7 @@ async def test_streamable_http_discovery_passes_the_egress_context():
     ):
         await mcp_client._discover_streamable_http("https://h.example/mcp", {})
 
-    assert seen["verify"] is url_guard.egress_ssl_context()
+    assert recording_transport.built[0]["verify"] is url_guard.egress_ssl_context()
 
 
 def _scanner_env(monkeypatch, preset: str | None) -> dict:

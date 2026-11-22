@@ -63,9 +63,11 @@ tests:
       #                 generic-proxy vars (auth-server-consumed)
       #   env[24] = EGRESS_FORWARD_PROXY_ENABLED   (issue #1832)
       #   env[25] = EGRESS_FORWARD_PROXY_CA_BUNDLE (issue #1832)
-      #   env[26] = SSRF_ALLOWED_CIDRS (issue #2018, always rendered)
-      #   env[27] = MY_FLAG       (extraEnv[0])
-      #   env[28] = MY_SECRET_VAR (extraEnv[1])
+      #   env[26] = SSRF_ALLOWED_HOSTS (always rendered; matches the registry)
+      #   env[27] = SSRF_ALLOWED_CIDRS (issue #2018, always rendered)
+      #   env[28] = GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS (always rendered)
+      #   env[29] = MY_FLAG       (extraEnv[0])
+      #   env[30] = MY_SECRET_VAR (extraEnv[1])
       - equal:
           path: spec.template.spec.containers[0].env[0].name
           value: ENTRA_CLIENT_SECRET
@@ -90,8 +92,8 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].env[23].name
           value: GATEWAY_GENERIC_STREAM_MAX_BYTES
-      # Forward-proxy egress pair (issue #1832), always rendered, then
-      # SSRF_ALLOWED_CIDRS (issue #2018) immediately before the extraEnv append.
+      # Forward-proxy egress pair (issue #1832), always rendered, then the SSRF
+      # allowlist trio immediately before the extraEnv append.
       - equal:
           path: spec.template.spec.containers[0].env[24].name
           value: EGRESS_FORWARD_PROXY_ENABLED
@@ -100,12 +102,18 @@ tests:
           value: EGRESS_FORWARD_PROXY_CA_BUNDLE
       - equal:
           path: spec.template.spec.containers[0].env[26].name
-          value: SSRF_ALLOWED_CIDRS
+          value: SSRF_ALLOWED_HOSTS
       - equal:
           path: spec.template.spec.containers[0].env[27].name
-          value: MY_FLAG
+          value: SSRF_ALLOWED_CIDRS
       - equal:
           path: spec.template.spec.containers[0].env[28].name
+          value: GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS
+      - equal:
+          path: spec.template.spec.containers[0].env[29].name
+          value: MY_FLAG
+      - equal:
+          path: spec.template.spec.containers[0].env[30].name
           value: MY_SECRET_VAR
 
   - it: appends extraEnv after the OpenAPI MCP pair when app.openapiMcpEnabled is true
@@ -339,6 +347,81 @@ tests:
           content:
             name: SSRF_ALLOWED_CIDRS
             value: "240.240.0.0/16"
+
+  # The MCP proxy hop pins upstreams under PROXY_PROFILE, built from these
+  # values in this process. They must equal the registry's, whose health check
+  # applies the same profile, or a private upstream passes there and fails here.
+  - it: renders SSRF_ALLOWED_HOSTS empty and private targets off by default
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSRF_ALLOWED_HOSTS
+            value: ""
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS
+            value: "false"
+
+  - it: passes app.ssrfAllowedHosts into SSRF_ALLOWED_HOSTS (standalone)
+    set:
+      app.ssrfAllowedHosts: "currenttime-server,obo-echo"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSRF_ALLOWED_HOSTS
+            value: "currenttime-server,obo-echo"
+
+  - it: global.ssrfAllowedHosts wins over app.ssrfAllowedHosts
+    set:
+      global.ssrfAllowedHosts: "obo-echo"
+      app.ssrfAllowedHosts: "currenttime-server"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSRF_ALLOWED_HOSTS
+            value: "obo-echo"
+
+  - it: passes app.gatewayProxyAllowPrivateTargets (standalone)
+    set:
+      app.gatewayProxyAllowPrivateTargets: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS
+            value: "true"
+
+  - it: global.gatewayProxyAllowPrivateTargets turns private targets on
+    set:
+      global.gatewayProxyAllowPrivateTargets: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS
+            value: "true"
+
+  - it: rejects extraEnv overriding SSRF_ALLOWED_HOSTS
+    set:
+      extraEnv:
+        - name: SSRF_ALLOWED_HOSTS
+          value: "metadata.internal"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"SSRF_ALLOWED_HOSTS\" is a reserved variable"
+
+  - it: rejects extraEnv overriding GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS
+    set:
+      extraEnv:
+        - name: gateway_proxy_allow_private_targets
+          value: "true"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"gateway_proxy_allow_private_targets\" is a reserved variable"
 
   - it: rejects a lowercase reserved name (ssrf_allowed_cidrs)
     # Settings reads env case-insensitively, so a lowercase spelling would
