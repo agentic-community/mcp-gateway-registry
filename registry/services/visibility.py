@@ -17,6 +17,7 @@ from collections.abc import Sequence
 from typing import Any
 from urllib.parse import urlsplit
 
+from ..auth.asset_permissions import can_view_all
 from ..core.config import DeploymentMode, settings
 from ..exceptions import UrlValidationError
 from ..schemas.agent_models import AgentInterface
@@ -317,10 +318,73 @@ def redact_proxy_backend_url(
     return item
 
 
+# Scan-result fields only an admin may see: the scanned backend URL and the
+# registry-local path of the scanner's output file. raw_output stays, because the
+# scan dialog renders its per-analyzer findings for every user who may see the
+# asset, and it holds analyzer results, not the backend URL.
+SCAN_RESULT_ADMIN_ONLY_FIELDS: tuple[str, ...] = (
+    "server_url",
+    "agent_url",
+    "output_file",
+)
+
+
+def redact_scan_result_for_non_admin(
+    scan_result: Any,
+    user_context: dict | None,
+) -> Any:
+    """Return a scan result with admin-only fields removed for non-admins.
+
+    Shared by the server, agent and skill security-scan routes so redaction is
+    uniform across the family. Keys on ``is_admin`` only, never on view_all
+    (issue #2099): a read-only admin gets the same redaction as any non-admin.
+
+    Args:
+        scan_result: The stored scan result, as a dict or a pydantic model.
+        user_context: Authenticated user context.
+
+    Returns:
+        The result unchanged for admins; otherwise a dict without the fields in
+        SCAN_RESULT_ADMIN_ONLY_FIELDS.
+    """
+    if user_context and user_context.get("is_admin"):
+        return scan_result
+    if hasattr(scan_result, "model_dump"):
+        scan_result = scan_result.model_dump(mode="json")
+    if not isinstance(scan_result, dict):
+        return scan_result
+    return {k: v for k, v in scan_result.items() if k not in SCAN_RESULT_ADMIN_ONLY_FIELDS}
+
+
+def can_skip_read_visibility(
+    user_context: dict | None,
+) -> bool:
+    """Return True if this caller may see an asset whatever its visibility.
+
+    Admins, and holders of the read-only ``view_all`` permission (issue #2099).
+    Use this on READ paths only: writes, ratings, health checks and token
+    binding keep their own ``is_admin`` check, and redaction
+    (``should_redact_backend_urls``) never consults ``view_all``.
+
+    Args:
+        user_context: Authenticated user context, or None.
+
+    Returns:
+        True if per-asset visibility checks may be skipped for this read.
+    """
+    if not user_context:
+        return False
+    if user_context.get("is_admin"):
+        return True
+    return can_view_all(user_context)
+
+
 async def user_can_access_server(
     path: str,
     server_name: str,
     user_context: dict,
+    *,
+    honor_view_all: bool = False,
 ) -> bool:
     """Visibility check for an MCP server.
 
@@ -335,6 +399,9 @@ async def user_can_access_server(
     from .server_service import server_service
 
     if user_context.get("is_admin"):
+        return True
+    # view_all (issue #2099) applies only when a READ caller opts in.
+    if honor_view_all and can_view_all(user_context):
         return True
 
     accessible_servers = user_context.get("accessible_servers") or []
@@ -360,6 +427,8 @@ def user_can_access_server_from_doc(
     path: str,
     server_name: str,
     user_context: dict,
+    *,
+    honor_view_all: bool = False,
 ) -> bool:
     """Visibility check for an MCP server whose existence is already confirmed.
 
@@ -371,6 +440,9 @@ def user_can_access_server_from_doc(
     proven the server exists by holding its document.
     """
     if user_context.get("is_admin"):
+        return True
+    # view_all (issue #2099) applies only when a READ caller opts in.
+    if honor_view_all and can_view_all(user_context):
         return True
 
     accessible_servers = user_context.get("accessible_servers") or []
@@ -389,6 +461,8 @@ def user_can_access_server_from_doc(
 async def user_can_access_agent(
     agent_path: str,
     user_context: dict,
+    *,
+    honor_view_all: bool = False,
 ) -> bool:
     """Visibility check for an A2A agent (path-based).
 
@@ -401,6 +475,9 @@ async def user_can_access_agent(
     from .agent_service import agent_service
 
     if user_context.get("is_admin"):
+        return True
+    # view_all (issue #2099) applies only when a READ caller opts in.
+    if honor_view_all and can_view_all(user_context):
         return True
 
     accessible_agents = user_context.get("accessible_agents") or []
@@ -425,6 +502,8 @@ async def user_can_access_agent(
 def user_can_access_agent_from_doc(
     document: dict,
     user_context: dict,
+    *,
+    honor_view_all: bool = False,
 ) -> bool:
     """Visibility check for an agent using fields already in hand.
 
@@ -439,6 +518,9 @@ def user_can_access_agent_from_doc(
     iterating over advisory candidates.
     """
     if user_context.get("is_admin"):
+        return True
+    # view_all (issue #2099) applies only when a READ caller opts in.
+    if honor_view_all and can_view_all(user_context):
         return True
 
     path = str(document.get("path") or "")
@@ -472,6 +554,8 @@ async def user_can_access_skill(
     owner: str,
     allowed_groups: list[Any],
     user_context: dict,
+    *,
+    honor_view_all: bool = False,
 ) -> bool:
     """Visibility check for a skill.
 
@@ -480,6 +564,9 @@ async def user_can_access_skill(
     from the search hit or repo dump.
     """
     if user_context.get("is_admin"):
+        return True
+    # view_all (issue #2099) applies only when a READ caller opts in.
+    if honor_view_all and can_view_all(user_context):
         return True
     if visibility == "public":
         return True
@@ -497,6 +584,8 @@ async def user_can_access_custom_entity(
     owner: str,
     allowed_groups: list[Any],
     user_context: dict,
+    *,
+    honor_view_all: bool = False,
 ) -> bool:
     """Visibility check for a custom entity record.
 
@@ -507,6 +596,9 @@ async def user_can_access_custom_entity(
     and 404 in another.
     """
     if user_context.get("is_admin"):
+        return True
+    # view_all (issue #2099) applies only when a READ caller opts in.
+    if honor_view_all and can_view_all(user_context):
         return True
     if visibility == "public":
         return True

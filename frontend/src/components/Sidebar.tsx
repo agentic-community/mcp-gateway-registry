@@ -48,6 +48,7 @@ const NAV_ITEM_ACTIVE = 'bg-accent-soft text-accent-soft-fg';
 
 interface AccessUser {
   is_admin?: boolean;
+  view_all?: boolean;
   can_modify_servers?: boolean;
   auth_method?: string;
   provider?: string;
@@ -58,7 +59,9 @@ interface AccessUser {
 const AccessLevel: React.FC<{ user: AccessUser }> = ({ user }) => {
   const level = user.is_admin
     ? { label: 'Admin access', icon: ShieldCheckIcon, tone: 'text-success-600 dark:text-success-400' }
-    : user.can_modify_servers
+    : user.view_all
+      ? { label: 'Read-only admin', icon: EyeIcon, tone: 'text-info-600 dark:text-info-400' }
+      : user.can_modify_servers
       ? { label: 'Modify access', icon: WrenchScrewdriverIcon, tone: 'text-info-600 dark:text-info-400' }
       : { label: 'Read-only access', icon: EyeIcon, tone: 'text-fg-muted' };
   const Icon = level.icon;

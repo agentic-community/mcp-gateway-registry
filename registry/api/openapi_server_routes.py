@@ -55,7 +55,10 @@ from ..services.openapi_server_views import (
     server_response,
     target_response,
 )
-from ..services.visibility import user_can_access_server
+from ..services.visibility import (
+    can_skip_read_visibility,
+    user_can_access_server,
+)
 
 # The same admin check the virtual server routes use: an explicit admin signal
 # only, never a per-server execute scope.
@@ -123,6 +126,22 @@ def _record(
         logger.debug("openapi_mcp operation metrics unavailable", exc_info=True)
 
 
+async def _can_view(
+    server: OpenApiServer,
+    user_context: dict,
+) -> bool:
+    """READ-only gate for list, detail and target detail.
+
+    Admins and holders of the read-only ``view_all`` permission (issue #2099)
+    see every server; everyone else gets exactly ``_can_read``. The
+    my-credential routes keep ``_can_read``: storing or removing a credential is
+    a write, so view_all must not reach them.
+    """
+    if can_skip_read_visibility(user_context):
+        return True
+    return await _can_read(server, user_context)
+
+
 async def _can_read(
     server: OpenApiServer,
     user_context: dict,
@@ -136,7 +155,9 @@ async def _can_read(
         groups = set(user_context.get("groups") or [])
         if not groups & set(server.allowed_groups):
             return False
-    return await user_can_access_server(server.path, server.name, user_context)
+    return await user_can_access_server(
+        server.path, server.name, user_context, honor_view_all=False
+    )
 
 
 async def _runtime() -> dict:
@@ -204,7 +225,7 @@ async def list_openapi_servers(
 
     runtime = await _runtime()
     servers = await get_openapi_server_repository().list_all()
-    visible = [s for s in servers if await _can_read(s, user_context)]
+    visible = [s for s in servers if await _can_view(s, user_context)]
     return {
         "servers": [
             server_response(s, user_context, runtime.get(s.slug)).model_dump(mode="json")
@@ -221,7 +242,7 @@ async def get_openapi_server(
     """One server with its targets and the container's status for each target."""
     try:
         server = await openapi_server_service.get_server_or_404(slug)
-        if not await _can_read(server, user_context):
+        if not await _can_view(server, user_context):
             raise not_found(f"OpenAPI MCP server '{slug}'")
     except OpenApiServerError as e:
         return _error(e)
@@ -316,7 +337,7 @@ async def get_openapi_target(
     """One target. The credential appears only as credential_set."""
     try:
         server = await openapi_server_service.get_server_or_404(slug)
-        if not await _can_read(server, user_context):
+        if not await _can_view(server, user_context):
             raise not_found(f"OpenAPI MCP server '{slug}'")
         target = openapi_server_service.get_target_or_404(server, name)
     except OpenApiServerError as e:

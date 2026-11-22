@@ -29,6 +29,7 @@ from ..services.transform_service import (
     transform_to_server_response,
 )
 from ..services.visibility import (
+    can_skip_read_visibility,
     redact_server_backend_fields,
     should_redact_backend_urls,
 )
@@ -77,10 +78,10 @@ async def list_servers(
     )
 
     # Get servers based on user permissions (same logic as existing /servers endpoint)
-    if user_context["is_admin"]:
-        # Admin sees all servers
+    if can_skip_read_visibility(user_context):  # admins and view_all holders (#2099)
+        # Admins and view_all holders see all servers
         all_servers = await server_service.get_all_servers()
-        logger.debug(f"Admin user accessing all {len(all_servers)} servers")
+        logger.debug(f"Unrestricted reader accessing all {len(all_servers)} servers")
     else:
         # Regular user sees only accessible servers
         all_servers = await server_service.get_all_servers_with_permissions(
@@ -202,7 +203,7 @@ async def list_server_versions(
     accessible_servers = user_context.get("accessible_servers", [])
     server_name = server_info["server_name"]
 
-    if not user_context["is_admin"]:
+    if not can_skip_read_visibility(user_context):  # admins and view_all holders (#2099)
         # Check if user can access this server
         if server_name not in accessible_servers:
             logger.warning(
@@ -307,7 +308,7 @@ async def get_server_version(
     accessible_servers = user_context.get("accessible_servers", [])
     server_name = server_info["server_name"]
 
-    if not user_context["is_admin"]:
+    if not can_skip_read_visibility(user_context):  # admins and view_all holders (#2099)
         if server_name not in accessible_servers:
             logger.warning(
                 f"User '{user_context['username']}' attempted to access unauthorized server: {server_name}"

@@ -115,7 +115,9 @@ class ToolCatalogService:
             # SAME helper the server-listing / server-tool paths use, so the
             # catalog cannot expose tools from a server the caller lacks scope
             # for. Fails closed (omits the server) on any access uncertainty.
-            if not user_can_access_server_from_doc(path, server_name, user_context):
+            if not user_can_access_server_from_doc(
+                path, server_name, user_context, honor_view_all=True
+            ):
                 logger.debug("Filtering out server %s: caller lacks server access", path)
                 continue
 

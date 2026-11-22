@@ -12,7 +12,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 from ..audit import set_audit_action
-from ..auth.asset_permissions import user_has_asset_permission
+from ..auth.asset_permissions import (
+    can_view_all,
+    user_can_discover_asset,
+)
 from ..auth.dependencies import nginx_proxied_auth
 from ..auth.tool_filter import filter_tools_for_user, tool_allowed_for_user
 from ..constants import DeploymentType
@@ -858,6 +861,7 @@ async def semantic_search(
             server.get("path", ""),
             server.get("server_name", ""),
             user_context,
+            honor_view_all=True,
         ):
             continue
 
@@ -997,7 +1001,9 @@ async def semantic_search(
     for tool in raw_results.get("tools", []):
         server_path = tool.get("server_path", "")
         server_name = tool.get("server_name", "")
-        if not await _user_can_access_server(server_path, server_name, user_context):
+        if not await _user_can_access_server(
+            server_path, server_name, user_context, honor_view_all=True
+        ):
             continue
 
         # A security-blocked tool must not appear in search. intelligent_tool_finder
@@ -1054,7 +1060,7 @@ async def semantic_search(
         if not agent_path:
             continue
 
-        if not await _user_can_access_agent(agent_path, user_context):
+        if not await _user_can_access_agent(agent_path, user_context, honor_view_all=True):
             continue
 
         agent_card_obj = await agent_service.get_agent_info(agent_path)
@@ -1105,7 +1111,7 @@ async def semantic_search(
         # Discovery gate FIRST (list_skills, parity with list_service and the
         # custom-entity type gate): a caller with no list_skills grant sees no
         # skills -- not even public ones -- before the per-record visibility check.
-        if not user_has_asset_permission("skill", "list", skill_name, user_context):
+        if not user_can_discover_asset("skill", skill_name, user_context):
             continue
 
         visibility = skill.get("visibility", "public")
@@ -1113,7 +1119,7 @@ async def semantic_search(
         allowed_groups = skill.get("allowed_groups", [])
 
         if not await _user_can_access_skill(
-            skill_path, visibility, owner, allowed_groups, user_context
+            skill_path, visibility, owner, allowed_groups, user_context, honor_view_all=True
         ):
             continue
 
@@ -1151,6 +1157,7 @@ async def semantic_search(
             vs_path,
             vs.get("server_name", ""),
             user_context,
+            honor_view_all=True,
         ):
             continue
 
@@ -1257,7 +1264,8 @@ async def semantic_search(
     # path is in the granted set (so granting one record surfaces only that
     # record, never every public record of the type). Runs before the per-record
     # visibility check.
-    is_admin = bool(user_context.get("is_admin", False))
+    # Admins and view_all holders (issue #2099) open every type; this is a read.
+    opens_every_type = bool(user_context.get("is_admin", False)) or can_view_all(user_context)
     ui_permissions = user_context.get("ui_permissions") or {}
     # entity_type -> (whole_type_open, granted_record_paths). resolve_list_grant
     # is the shared tier resolver used by user_can_list_custom_entity_type too, so
@@ -1273,7 +1281,7 @@ async def semantic_search(
         if decision is None:
             granted = ui_permissions.get(_entity_scope("list", entity_type)) or []
             whole, paths = _resolve_list_grant(entity_type, granted)
-            decision = (is_admin or whole, paths)
+            decision = (opens_every_type or whole, paths)
             discovery_cache[entity_type] = decision
         whole_open, granted_paths = decision
         if not whole_open and record_path not in granted_paths:
@@ -1284,7 +1292,7 @@ async def semantic_search(
         allowed_groups = record.get("allowed_groups", []) or []
 
         if not await _user_can_access_custom_entity(
-            visibility, owner, allowed_groups, user_context
+            visibility, owner, allowed_groups, user_context, honor_view_all=True
         ):
             continue
 

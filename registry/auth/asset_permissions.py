@@ -39,6 +39,21 @@ AssetFamily = Literal["server", "agent", "skill", "custom_entity"]
 # discovery action every family gates on.
 AssetAction = Literal["list", "get", "create", "modify", "delete", "toggle", "health_check"]
 
+# Read-only admin permission (issue #2099). A group grants it with
+# ``{"view_all": ["all"]}``. It lets a caller SEE every asset on read paths,
+# past each asset's own visibility (public, group-restricted, private). It is
+# not admin: "view_" matches no ADMIN_ACTION_PREFIXES, so
+# is_admin_conferring_action rejects it.
+#
+# SECURITY BOUNDARY: only read paths consult it, through can_view_all or
+# user_can_discover_asset. user_has_asset_permission and accessible_resources_for
+# deliberately ignore it: both feed paths that are not reads (routes that pass a
+# variable action, and token binding in registry/auth/resource_binding.py reads
+# the accessible_* lists). Teaching either of them about view_all
+# would let a holder use assets, not just see them.
+VIEW_ALL_PERMISSION: str = "view_all"
+VIEW_ALL_GRANT: str = "all"
+
 # (family, action) -> the EXACT on-disk ui_permission key. These strings match
 # what is persisted in the scope store today; do not "fix" them here (see the
 # module docstring). custom_entity is intentionally ABSENT: its keys are
@@ -144,6 +159,75 @@ def user_has_asset_permission(
     scope = asset_scope_name(family, action, type_name)
     granted = (user_context.get("ui_permissions") or {}).get(scope) or []
     return "all" in granted or resource_name in granted
+
+
+def ui_permissions_grant_view_all(
+    ui_permissions: dict | None,
+) -> bool:
+    """Return True if merged ui_permissions grant ``view_all`` for "all".
+
+    Only a list holding the exact ``"all"`` grant counts. Named resources, a bare
+    string or any other shape grants nothing (fail closed).
+
+    Args:
+        ui_permissions: The user's merged ui_permissions.
+
+    Returns:
+        True if the caller holds the read-only admin permission.
+    """
+    granted = (ui_permissions or {}).get(VIEW_ALL_PERMISSION)
+    return isinstance(granted, list) and VIEW_ALL_GRANT in granted
+
+
+def can_view_all(
+    user_context: dict | None,
+) -> bool:
+    """Return True if this caller may see every asset on read paths.
+
+    Call this ONLY from read paths. Writes, ratings, health checks, token
+    binding, redaction and admin-only routes must never call it.
+
+    Args:
+        user_context: The authenticated request context.
+
+    Returns:
+        True if the caller holds ``view_all: ["all"]``.
+    """
+    if not user_context:
+        return False
+    return ui_permissions_grant_view_all(user_context.get("ui_permissions"))
+
+
+def user_can_discover_asset(
+    family: str,
+    resource_name: str,
+    user_context: dict,
+    *,
+    type_name: str | None = None,
+) -> bool:
+    """Return True if the caller may discover (list or open) an asset.
+
+    The family's list permission, or ``view_all``. Call this ONLY from read
+    paths; writes keep ``user_has_asset_permission``.
+
+    Args:
+        family: The asset family (server/agent/skill/custom_entity).
+        resource_name: The resource being discovered.
+        user_context: The authenticated request context.
+        type_name: The custom type name; REQUIRED when family == custom_entity.
+
+    Returns:
+        True if the caller may discover the asset.
+    """
+    if can_view_all(user_context):
+        return True
+    return user_has_asset_permission(
+        family,
+        "list",
+        resource_name,
+        user_context,
+        type_name=type_name,
+    )
 
 
 def accessible_resources_for(

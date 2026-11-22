@@ -419,6 +419,24 @@ sanitizer that isn't called) is equivalent to no check.
 
 ## Authorization & ownership
 
+- **A grant that widens what a user can SEE must stay off every path that lets
+  them USE or CHANGE something.** `view_all` (issue #2099) lets a read-only admin
+  skip per-asset visibility, and it is checked only on read paths, through
+  `can_skip_read_visibility` / `can_view_all` / `user_can_discover_asset`, each
+  read site named explicitly. It must never be added to a helper that also serves
+  writes or token binding. Two such helpers exist: `user_has_asset_permission`
+  (several routes pass it a variable `action`) and the `accessible_*` lists, which
+  token binding (`registry/auth/resource_binding.py`) reads.
+  Teaching either about `view_all` would let a holder bind tokens to, or act on,
+  assets they can only look at. Where one helper serves reads and writes, split it
+  (`_filter_agents_for_read` / `_filter_agents_by_access`) or give it an opt-in
+  flag that defaults to off (`honor_view_all=False`), so a new write caller cannot
+  inherit the bypass. Redaction keys on `is_admin`, never on the read bypass.
+  "GET" is not the same as "read": a GET that returns decrypted credentials
+  (`connect-config`), sends a stored credential upstream (a live tool-list fetch,
+  skill content), or writes state (skill health and drift) stays on the old rule,
+  and a holder gets the stored copy or nothing. The shared visibility helpers take
+  `honor_view_all` defaulting to False, and each read caller opts in by name.
 - **Deny by default; never treat a broad or execute scope as admin.** A helper
   meant for "can edit my own resource" must not gate admin-only operations.
   Require explicit `is_admin` or a named admin group/scope from centralized

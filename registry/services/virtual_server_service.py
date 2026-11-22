@@ -715,7 +715,9 @@ class VirtualServerService:
             # Layer 1: backend server access. Skip the whole backend when the
             # caller lacks scope for it, so its tool metadata (names, schemas,
             # backend path) never leaks. Fails closed; admin / wildcard pass.
-            if not user_can_access_server_from_doc(server_path, server_name, user_context):
+            if not user_can_access_server_from_doc(
+                server_path, server_name, user_context, honor_view_all=True
+            ):
                 logger.debug(
                     "Skipping backend %s for virtual tool '%s': caller lacks server access",
                     server_path,

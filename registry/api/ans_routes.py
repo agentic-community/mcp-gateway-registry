@@ -288,7 +288,9 @@ async def get_agent_ans_status(
     # metadata is not exposed to users who cannot see the agent. Reuse the
     # agent doc we already fetched via the *_from_doc helper so the check does
     # not trigger a second identical agent lookup.
-    if not user_can_access_agent_from_doc(agent.model_dump(), user_context or {}):
+    if not user_can_access_agent_from_doc(
+        agent.model_dump(), user_context or {}, honor_view_all=True
+    ):
         raise HTTPException(status_code=404, detail="Agent not found")
 
     ans_metadata = agent.ans_metadata
@@ -391,7 +393,9 @@ async def get_server_ans_status(
     # server doc we already fetched via the *_from_doc helper so the check does
     # not re-fetch the server just to re-confirm it exists.
     server_name = server.get("server_name") or path.strip("/")
-    if not user_can_access_server_from_doc(path, server_name, user_context or {}):
+    if not user_can_access_server_from_doc(
+        path, server_name, user_context or {}, honor_view_all=True
+    ):
         raise HTTPException(status_code=404, detail="Server not found")
 
     ans_metadata = server.get("ans_metadata")

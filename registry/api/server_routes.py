@@ -23,7 +23,10 @@ from pydantic import BaseModel
 
 from ..audit import set_audit_action
 from ..audit.request_id import sanitize_correlation_id
-from ..auth.asset_permissions import user_has_asset_permission
+from ..auth.asset_permissions import (
+    can_view_all,
+    user_has_asset_permission,
+)
 from ..auth.csrf import (
     generate_csrf_token,
     verify_csrf_token_flexible,
@@ -75,7 +78,9 @@ from ..services.security_scanner import (
 from ..services.server_service import server_service
 from ..services.tool_blocks import annotate_blocked_tools, hide_blocked_tools
 from ..services.visibility import (
+    can_skip_read_visibility,
     redact_oauth_config_for_non_owner,
+    redact_scan_result_for_non_admin,
     redact_server_backend_fields,
     should_redact_backend_urls,
 )
@@ -945,9 +950,10 @@ async def read_root(
     service_data = []
     search_query = query.lower() if query else ""
 
-    # Get servers based on user permissions
-    if user_context["is_admin"]:
-        # Admin users see all servers
+    # Get servers based on user permissions. Admins and view_all holders
+    # (issue #2099) see every server; this is a read.
+    sees_every_server = can_skip_read_visibility(user_context)
+    if sees_every_server:
         all_servers = await server_service.get_all_servers()
         logger.info(
             f"Admin user {user_context['username']} accessing all {len(all_servers)} servers"
@@ -985,7 +991,8 @@ async def read_root(
 
         # Check if user can list this service using technical name
         if (
-            "all" not in accessible_services
+            not sees_every_server
+            and "all" not in accessible_services
             and technical_name not in normalized_accessible_services
         ):
             logger.debug(
@@ -1143,7 +1150,11 @@ async def get_servers_json(
     is_admin = user_context.get("is_admin", False) if user_context else False
     accessible_servers_list = user_context.get("accessible_servers", []) if user_context else []
     accessible_services = user_context.get("accessible_services", []) if user_context else []
-    is_unrestricted = is_admin or "all" in accessible_servers_list or "all" in accessible_services
+    # Admins and view_all holders (issue #2099) read every server.
+    sees_every_server = is_admin or can_skip_read_visibility(user_context)
+    is_unrestricted = (
+        sees_every_server or "all" in accessible_servers_list or "all" in accessible_services
+    )
     # Redaction decision is per-request (admin + deployment mode), so compute
     # it once rather than per server row.
     redact_backend = should_redact_backend_urls(user_context)
@@ -1165,7 +1176,7 @@ async def get_servers_json(
         )
     else:
         # FALLBACK PATH: full fetch needed
-        if is_admin:
+        if sees_every_server:
             all_servers = await server_service.get_all_servers(exclude_tool_list=not include_tools)
         else:
             all_servers = await server_service.get_all_servers_with_permissions(
@@ -3372,7 +3383,7 @@ async def get_server_details(
         raise HTTPException(status_code=404, detail="Service path not registered")
 
     # For non-admin users, check if they have access to this specific server
-    if not user_context["is_admin"]:
+    if not can_skip_read_visibility(user_context):  # admins and view_all holders (#2099)
         if not await server_service.user_can_access_server_path(
             service_path, user_context["accessible_servers"]
         ):
@@ -3461,7 +3472,7 @@ async def get_server_canonical(
     is_admin = user_context.get("is_admin", False)
 
     # Non-admin callers may only export servers they can access.
-    if not is_admin:
+    if not can_skip_read_visibility(user_context):  # admins and view_all holders (#2099)
         if not await server_service.user_can_access_server_path(
             service_path, user_context.get("accessible_servers", [])
         ):
@@ -3570,11 +3581,26 @@ async def get_service_tools(
     if not server_info:
         raise HTTPException(status_code=404, detail="Service path not registered")
 
-    # For non-admin users, check if they have access to this specific server
-    if not user_context["is_admin"]:
+    # For non-admin users, check if they have access to this specific server.
+    # A view_all holder (issue #2099) without that access gets the STORED tool
+    # list only: the live fetch below sends the server's stored credential to the
+    # backend and rewrites the stored list, which view_all must not trigger.
+    if not user_context.get("is_admin"):
         if not await server_service.user_can_access_server_path(
             service_path, user_context["accessible_servers"]
         ):
+            if can_view_all(user_context):
+                stored_tools = await annotate_blocked_tools(
+                    service_path,
+                    filter_tools_for_user(
+                        server_info.get("server_name", ""),
+                        server_info.get("tool_list") or [],
+                        user_context,
+                        endpoint="tools_service",
+                        server_path=service_path,
+                    ),
+                )
+                return {"service_path": service_path, "tools": stored_tools, "cached": True}
             logger.warning(
                 f"User {user_context['username']} attempted to access tools for {service_path} without access"
             )
@@ -6790,7 +6816,7 @@ async def get_server_rating(
         )
 
     # For non-admin users, check if they have access to this specific server
-    if not user_context["is_admin"]:
+    if not can_skip_read_visibility(user_context):  # admins and view_all holders (#2099)
         if not await server_service.user_can_access_server_path(
             path, user_context["accessible_servers"]
         ):
@@ -6843,7 +6869,7 @@ async def get_server_security_scan(
         )
 
     # Check user permissions
-    if not user_context["is_admin"]:
+    if not can_skip_read_visibility(user_context):  # admins and view_all holders (#2099)
         if not await server_service.user_can_access_server_path(
             path, user_context["accessible_servers"]
         ):
@@ -6861,7 +6887,7 @@ async def get_server_security_scan(
             "The server may not have been scanned yet.",
         )
 
-    return scan_result
+    return redact_scan_result_for_non_admin(scan_result, user_context)
 
 
 @router.post("/servers/{path:path}/rescan")
@@ -7240,7 +7266,7 @@ async def get_server_versions(
         )
 
     # Access control — admins bypass; non-admins must be able to reach the server.
-    if not (user_context and user_context.get("is_admin")):
+    if not can_skip_read_visibility(user_context):  # admins and view_all holders (#2099)
         accessible_servers = user_context.get("accessible_servers", []) if user_context else []
         has_access = await server_service.user_can_access_server_path(
             decoded_path, accessible_servers
@@ -7297,6 +7323,9 @@ async def get_server_connect_config(
     if not server_info:
         raise HTTPException(status_code=404, detail="Service path not found")
 
+    # Not a view_all read (issue #2099): this route returns DECRYPTED custom
+    # headers, which can carry stored credentials. Only admins and users who can
+    # reach the server get them.
     if not user_context.get("is_admin"):
         accessible_servers = user_context.get("accessible_servers", [])
         has_access = await server_service.user_can_access_server_path(
@@ -7780,7 +7809,7 @@ async def get_server(
         )
 
     # Access control — admin users bypass checks
-    if not user_context.get("is_admin"):
+    if not can_skip_read_visibility(user_context):  # admins and view_all holders (#2099)
         accessible_servers = user_context.get("accessible_servers", [])
         has_access = await server_service.user_can_access_server_path(path, accessible_servers)
         if not has_access:

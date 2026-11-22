@@ -430,6 +430,12 @@ working in those areas.
 - **One entity type's access grant must never gate a different entity type** (a
   skill filter keyed on agent access = bypass); filter each resource by its own
   access check, admin-only universal bypass.
+- **Read-widening grants stay on read paths:** `view_all` (read-only admin) is
+  checked only at named read sites (`can_skip_read_visibility`,
+  `user_can_discover_asset`), never in `user_has_asset_permission`, the
+  `accessible_*` lists (token binding reads them), writes, ratings, health checks
+  or redaction. A helper shared by reads and writes is split, or takes an opt-in
+  flag that defaults to off.
 - **Virtual MCP tools:** a backend tool's blocked override must be checked at
   every `tools/call` and `tools/list` boundary, including cached lists. Bind the
   decision to the mapped backend path and original tool name; unknown state denies.

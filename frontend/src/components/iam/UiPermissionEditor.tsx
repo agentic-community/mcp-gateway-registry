@@ -88,6 +88,10 @@ function _csvToList(csv: string | undefined): string[] {
 }
 
 
+// UI permission that makes a group a read-only admin (issue #2099).
+const VIEW_ALL_KEY = 'view_all';
+
+
 function _isGranted(csv: string | undefined): boolean {
   return _csvToList(csv).length > 0;
 }
@@ -237,8 +241,29 @@ const UiPermissionEditor: React.FC<UiPermissionEditorProps> = ({
     setPermValue(key, ADMIN_CONFERRING_KEYS.has(key) ? '*' : 'all');
   };
 
+  // Read-only admin (issue #2099). Only the exact "all" grant counts on the
+  // server, so the box reflects exactly that, not any non-empty value.
+  const viewAllGranted = _csvToList(uiPermissions[VIEW_ALL_KEY]).includes('all');
+
   return (
     <div className="space-y-5 pl-6">
+      <div className="space-y-1">
+        <p className="text-xs font-semibold text-fg-muted uppercase tracking-wide">
+          Read-only admin
+        </p>
+        <MutationCheckbox
+          scopeKey={VIEW_ALL_KEY}
+          label="View all assets"
+          checked={viewAllGranted}
+          onToggle={(checked) => setPermValue(VIEW_ALL_KEY, checked ? 'all' : '')}
+        />
+        <p className="text-xs text-fg-subtle">
+          Members see every MCP server, virtual server, agent, skill and custom record,
+          including private and group-restricted ones. They cannot change anything, call
+          tools or open Settings, and backend URLs and credentials stay hidden.
+        </p>
+      </div>
+
       <p className="text-xs text-fg-subtle">
         These checkboxes grant catalog-wide CRUD (create/register, modify, delete, toggle)
         on MCP Servers and Agents. Per-server and per-agent authorization — which specific
