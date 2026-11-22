@@ -7,6 +7,7 @@ import { useRegistryConfig } from '../hooks/useRegistryConfig';
 import useEscapeKey from '../hooks/useEscapeKey';
 import { getBaseURL } from '../utils/basePath';
 import { isSafeUrl } from '../utils/safeUrl';
+import { readOnlyAdminDenial } from '../utils/readOnlyAdmin';
 import {
   initiateConsent,
   disconnect as disconnectEgress,
@@ -327,7 +328,10 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
         // Surface an actionable message rather than silently falling back to
         // the static-token config (which hides that OAuth login was configured).
         const status = err?.response?.status;
-        if (status === 403) {
+        const readOnlyAdminNote = readOnlyAdminDenial(err);
+        if (readOnlyAdminNote) {
+          setConnectConfigError(readOnlyAdminNote);
+        } else if (status === 403) {
           setConnectConfigError(
             "Could not load connect configuration (403): your session may be stale. " +
             "Log out and back in, then reopen this dialog. The configuration shown " +

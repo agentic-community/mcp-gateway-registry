@@ -54,6 +54,18 @@ AssetAction = Literal["list", "get", "create", "modify", "delete", "toggle", "he
 VIEW_ALL_PERMISSION: str = "view_all"
 VIEW_ALL_GRANT: str = "all"
 
+# 403 details for the reads view_all deliberately does not open. They share one
+# opening phrase so the UI can show them as a note rather than an error.
+VIEW_ALL_DENIED_PREFIX: str = "Not available with read-only admin access"
+VIEW_ALL_CONNECT_CONFIG_DENIED: str = (
+    f"{VIEW_ALL_DENIED_PREFIX}: connection settings can include stored credentials, "
+    "so only users with access to this server can see them."
+)
+VIEW_ALL_SKILL_CONTENT_DENIED: str = (
+    f"{VIEW_ALL_DENIED_PREFIX}: loading SKILL.md uses the credential stored on the "
+    "skill, so only users the skill is shared with can read its content."
+)
+
 # (family, action) -> the EXACT on-disk ui_permission key. These strings match
 # what is persisted in the scope store today; do not "fix" them here (see the
 # module docstring). custom_entity is intentionally ABSENT: its keys are
