@@ -437,6 +437,8 @@ sanitizer that isn't called) is equivalent to no check.
   skill content), or writes state (skill health and drift) stays on the old rule,
   and a holder gets the stored copy or nothing. The shared visibility helpers take
   `honor_view_all` defaulting to False, and each read caller opts in by name.
+  The tool access listing (`GET /api/tool-access`, issue #2102) is one such named
+  read site: `view_all` there shows group names and grants nothing.
 - **Deny by default; never treat a broad or execute scope as admin.** A helper
   meant for "can edit my own resource" must not gate admin-only operations.
   Require explicit `is_admin` or a named admin group/scope from centralized

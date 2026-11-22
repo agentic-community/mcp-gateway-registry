@@ -90,6 +90,7 @@ To change the tool list later, edit the file and import it again, or edit the gr
 
 ## Related
 
+- [Tool access listing](../tool-access-listing.md) shows which groups can see and call each tool, so you can check a scope after importing it.
 - [Fine-grained access control](../scopes.md#methods-vs-tools-access-control) explains how the gateway checks methods and tools.
 - [Scope management](../scopes-mgmt.md) documents every field in a scope file.
 - [How do I create a non-admin group that can register servers and run health checks?](read-write-non-admin-group.md)

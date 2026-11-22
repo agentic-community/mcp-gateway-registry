@@ -423,6 +423,37 @@ async def user_can_access_server(
     ) or (bool(server_name) and server_name in accessible_servers)
 
 
+def user_can_list_virtual_server(
+    user_context: dict,
+    virtual_path: str,
+    *,
+    honor_view_all: bool = False,
+) -> bool:
+    """Return True when the user may see a virtual server in a read.
+
+    Admins and ``list_virtual_server: ["all"]`` holders see every virtual
+    server; otherwise its path must be in the user's ``list_virtual_server``
+    grants. ``honor_view_all`` lets a READ caller admit view_all holders
+    (issue #2099); it defaults to False so a write never gets the bypass.
+
+    Args:
+        user_context: Authenticated user context.
+        virtual_path: Virtual server path (``/virtual/<slug>``).
+        honor_view_all: True only at read sites.
+
+    Returns:
+        True if the user may read the virtual server.
+    """
+    if honor_view_all and can_view_all(user_context):
+        return True
+    ui_permissions = user_context.get("ui_permissions", {})
+    list_virtual_perms = ui_permissions.get("list_virtual_server", [])
+    if user_context.get("is_admin") or "all" in list_virtual_perms:
+        return True
+    normalized_perms = {p.strip("/") for p in list_virtual_perms}
+    return virtual_path.strip("/") in normalized_perms
+
+
 def user_can_access_server_from_doc(
     path: str,
     server_name: str,

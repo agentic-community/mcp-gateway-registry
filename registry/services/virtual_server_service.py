@@ -218,6 +218,14 @@ class VirtualServerService:
         configs = await self._repo.list_all()
         return [self._config_to_info(c) for c in configs]
 
+    async def list_virtual_server_configs(self) -> list[VirtualServerConfig]:
+        """List every virtual server's full configuration, tool mappings included.
+
+        Returns:
+            List of VirtualServerConfig
+        """
+        return await self._repo.list_all()
+
     async def get_virtual_server(
         self,
         path: str,

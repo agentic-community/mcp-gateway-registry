@@ -19,6 +19,7 @@ const Logout = lazy(() => import('./pages/Logout'));
 const OAuthCallback = lazy(() => import('./pages/OAuthCallback'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
 const ConnectedAccountsPage = lazy(() => import('./pages/ConnectedAccountsPage'));
+const ToolAccessPage = lazy(() => import('./pages/ToolAccessPage'));
 
 function App() {
   return (
@@ -64,6 +65,13 @@ function App() {
                 <ProtectedRoute>
                   <Layout>
                     <ConnectedAccountsPage />
+                  </Layout>
+                </ProtectedRoute>
+              } />
+              <Route path="/tool-access" element={
+                <ProtectedRoute>
+                  <Layout>
+                    <ToolAccessPage />
                   </Layout>
                 </ProtectedRoute>
               } />

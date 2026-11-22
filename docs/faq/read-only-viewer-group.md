@@ -162,6 +162,8 @@ A few reads stay closed to `view_all` alone, because they use stored credentials
 
 For the first two, the API returns HTTP 403 with a detail that starts with "Not available with read-only admin access" and says why. The UI shows that note in place of the SKILL.md content and in the server's connection dialog.
 
+Members can open the [Tool access](../tool-access-listing.md) page, which lists the groups that can see and call every tool.
+
 Security-scan results reach members without the scanned backend URL and the scanner's output-file path, as for any non-admin.
 
 ### Through the registry's MCP tools

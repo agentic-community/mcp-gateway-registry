@@ -3903,6 +3903,76 @@ def cmd_skill_list(args: argparse.Namespace) -> int:
         return 1
 
 
+def _format_access_groups(
+    names: list[str],
+    groups: dict,
+) -> str:
+    """Render group names, collapsing admin groups into one 'Admins' entry."""
+    shown = [name for name in names if not (groups.get(name) and groups[name].is_admin)]
+    if len(shown) < len(names):
+        shown.append("Admins")
+    return ", ".join(shown) if shown else "(none)"
+
+
+def _print_access_summary(
+    label: str,
+    summary,
+    groups: dict,
+) -> None:
+    """Print the groups that grant access alone, then the groups needed together."""
+    print(f"    {label} alone: {_format_access_groups(summary.alone, groups)}")
+    if summary.together:
+        print(f"    {label} together (one group from each):")
+        for condition in summary.together:
+            print(f"      - {condition.label}: {_format_access_groups(condition.groups, groups)}")
+
+
+def cmd_tool_access_list(args: argparse.Namespace) -> int:
+    """
+    List which groups can see and call each tool (issue #2102).
+
+    Args:
+        args: Command arguments
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    try:
+        client = _create_client(args)
+        response = client.list_tool_access(
+            query=args.query,
+            server_path=args.server_path,
+            server_type=args.server_type,
+            group=args.group,
+            include_disabled=not args.exclude_disabled,
+            limit=args.limit,
+            offset=args.offset,
+        )
+    except Exception as e:
+        logger.error(f"List tool access failed: {e}")
+        return 1
+
+    if args.json:
+        print(json.dumps(response.model_dump(), indent=2, default=str))
+        return 0
+    if not response.rows:
+        logger.info("No tools found. Non-admins see only the servers they own.")
+        return 0
+
+    for row in response.rows:
+        flags = f" [{row.server_type}]" + ("" if row.enabled else " [disabled]")
+        flags += " [blocked]" if row.blocked else ""
+        backend = f" (backend {row.backend_tool_name})" if row.backend_tool_name else ""
+        print(f"{row.server_path}  {row.tool_name}{backend}{flags}")
+        _print_access_summary("see", row.can_see, response.groups)
+        _print_access_summary("call", row.can_call, response.groups)
+        print()
+    next_offset = response.offset + len(response.rows)
+    more = f", next --offset {next_offset}" if response.has_next else ""
+    logger.info(f"Showing {len(response.rows)} of {response.total_count} rows{more}")
+    return 0
+
+
 def cmd_skill_get(args: argparse.Namespace) -> int:
     """
     Get details for a specific skill.
@@ -8146,6 +8216,35 @@ Examples:
     )
     skill_list_parser.add_argument("--json", action="store_true", help="Output raw JSON response")
 
+    # Tool access listing (issue #2102)
+    tool_access_parser = subparsers.add_parser(
+        "tool-access-list",
+        help="List which groups can see and call each tool",
+        epilog=(
+            "Examples:\n"
+            "  tool-access-list --query search\n"
+            "  tool-access-list --server-path /cloudflare-docs/ --json\n"
+            "  tool-access-list --group docs-readers --exclude-disabled"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    tool_access_parser.add_argument("--query", help="Match tool, server or group names")
+    tool_access_parser.add_argument("--server-path", help="Exact server path")
+    tool_access_parser.add_argument(
+        "--server-type", choices=["mcp", "openapi", "virtual"], help="Server type"
+    )
+    tool_access_parser.add_argument("--group", help="Exact registry or IdP group name")
+    tool_access_parser.add_argument(
+        "--exclude-disabled", action="store_true", help="Leave out disabled servers"
+    )
+    tool_access_parser.add_argument(
+        "--limit", type=int, default=20, help="Rows per page (1-500, default 20)"
+    )
+    tool_access_parser.add_argument(
+        "--offset", type=int, default=0, help="Rows to skip (default 0)"
+    )
+    tool_access_parser.add_argument("--json", action="store_true", help="Output raw JSON")
+
     # Skill get command
     skill_get_parser = subparsers.add_parser("skill-get", help="Get skill details")
     skill_get_parser.add_argument(
@@ -8985,6 +9084,7 @@ Examples:
         # Skill commands
         "skill-register": cmd_skill_register,
         "skill-list": cmd_skill_list,
+        "tool-access-list": cmd_tool_access_list,
         "skill-get": cmd_skill_get,
         "skill-delete": cmd_skill_delete,
         "skill-toggle": cmd_skill_toggle,

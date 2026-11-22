@@ -54,6 +54,7 @@ from registry.api.server_routes import router as servers_router
 from registry.api.skill_routes import router as skill_router
 from registry.api.system_routes import router as system_router
 from registry.api.system_routes import set_server_start_time
+from registry.api.tool_access_routes import router as tool_access_router
 from registry.api.virtual_server_routes import router as virtual_server_router
 from registry.api.wellknown_routes import cimd_router
 from registry.api.wellknown_routes import router as wellknown_router
@@ -1281,6 +1282,7 @@ app.include_router(federation_router, prefix="/api", tags=["federation"])
 app.include_router(skill_router, prefix="/api", tags=["skills"])
 app.include_router(config_router, prefix="/api/config", tags=["config"])
 app.include_router(virtual_server_router, prefix="/api", tags=["virtual-servers"])
+app.include_router(tool_access_router, prefix="/api", tags=["tool-access"])
 if apply_openapi_mcp_mode_gate(settings):
     app.include_router(openapi_server_router, prefix="/api", tags=["openapi-servers"])
     logger.info("OpenAPI MCP servers enabled; registered /api/openapi-servers routes")

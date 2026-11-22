@@ -38,6 +38,7 @@ from ..schemas.virtual_server_models import (
 )
 from ..services.tool_catalog_service import get_tool_catalog_service
 from ..services.virtual_server_service import get_virtual_server_service
+from ..services.visibility import user_can_list_virtual_server
 
 # Configure logging
 logging.basicConfig(
@@ -108,12 +109,7 @@ def _user_can_access_virtual_server(
     Returns:
         True if the user may access the virtual server.
     """
-    ui_permissions = user_context.get("ui_permissions", {})
-    list_virtual_perms = ui_permissions.get("list_virtual_server", [])
-    if user_context.get("is_admin") or "all" in list_virtual_perms:
-        return True
-    normalized_perms = {p.strip("/") for p in list_virtual_perms}
-    return normalized_path.strip("/") in normalized_perms
+    return user_can_list_virtual_server(user_context, normalized_path)
 
 
 def _require_virtual_server_access(

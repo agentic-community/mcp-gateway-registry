@@ -3,7 +3,7 @@
   "info": {
     "title": "MCP Gateway Registry",
     "description": "A registry and management system for Model Context Protocol (MCP) servers",
-    "version": "1.38.0"
+    "version": "1.39.0"
   },
   "paths": {
     "/api/version": {
@@ -8710,6 +8710,158 @@
         ]
       }
     },
+    "/api/tool-access": {
+      "get": {
+        "tags": [
+          "tool-access"
+        ],
+        "summary": "List which groups can see and call each tool",
+        "description": "List tools with the groups that can see them and the groups that can call them.\n\nAdmins and view_all holders get every tool. Anyone else gets the tools on\nservers they own, or an empty list. The listing is informational and\ngrants nothing.",
+        "operationId": "list_tool_access_api_tool_access_get",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Match tool, server or group names.",
+              "title": "Q"
+            },
+            "description": "Match tool, server or group names."
+          },
+          {
+            "name": "server_path",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Exact server path.",
+              "title": "Server Path"
+            },
+            "description": "Exact server path."
+          },
+          {
+            "name": "server_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "mcp",
+                    "openapi",
+                    "virtual"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "mcp, openapi or virtual.",
+              "title": "Server Type"
+            },
+            "description": "mcp, openapi or virtual."
+          },
+          {
+            "name": "group",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Exact registry or identity provider group name.",
+              "title": "Group"
+            },
+            "description": "Exact registry or identity provider group name."
+          },
+          {
+            "name": "include_disabled",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Include disabled servers.",
+              "default": true,
+              "title": "Include Disabled"
+            },
+            "description": "Include disabled servers."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolAccessListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
     "/api/openapi-servers": {
       "get": {
         "tags": [
@@ -16037,6 +16189,52 @@
   },
   "components": {
     "schemas": {
+      "AccessCondition": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "title": "Label",
+            "description": "What the check is, for display."
+          },
+          "groups": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Groups",
+            "description": "Registry groups that pass this check and are not already in 'alone'."
+          }
+        },
+        "type": "object",
+        "required": [
+          "label"
+        ],
+        "title": "AccessCondition",
+        "description": "One check a member must pass, and the groups that pass it."
+      },
+      "AccessSummary": {
+        "properties": {
+          "alone": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Alone",
+            "description": "Registry groups that grant this access by themselves."
+          },
+          "together": {
+            "items": {
+              "$ref": "#/components/schemas/AccessCondition"
+            },
+            "type": "array",
+            "title": "Together",
+            "description": "Checks a member must pass when no single group covers them all. Empty when combining groups adds nobody beyond 'alone'."
+          }
+        },
+        "type": "object",
+        "title": "AccessSummary",
+        "description": "Who has one kind of access (seeing or calling) to a tool.\n\nA user has access when they are in any group listed in ``alone``, or when\nthey are in at least one group from every entry in ``together``."
+      },
       "ActiveAgents": {
         "properties": {
           "daa": {
@@ -20529,6 +20727,11 @@
             "type": "boolean",
             "title": "List Tools Before Consent",
             "default": false
+          },
+          "re_register": {
+            "type": "boolean",
+            "title": "Re Register",
+            "default": false
           }
         },
         "type": "object",
@@ -21349,6 +21552,35 @@
         ],
         "title": "GroupListResponse",
         "description": "Response for listing groups."
+      },
+      "GroupRef": {
+        "properties": {
+          "group": {
+            "type": "string",
+            "title": "Group",
+            "description": "Registry group name (the scope document id)."
+          },
+          "idp_groups": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Idp Groups",
+            "description": "Identity provider group names in the group's group_mappings."
+          },
+          "is_admin": {
+            "type": "boolean",
+            "title": "Is Admin",
+            "description": "True when the group makes its members registry admins.",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "group"
+        ],
+        "title": "GroupRef",
+        "description": "A registry group and the identity provider groups mapped to it."
       },
       "GroupSummary": {
         "properties": {
@@ -27304,6 +27536,192 @@
         ],
         "title": "ToggleVirtualServerRequest",
         "description": "Request model for toggling virtual server enabled state."
+      },
+      "ToolAccessListResponse": {
+        "properties": {
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/ToolAccessRow"
+            },
+            "type": "array",
+            "title": "Rows"
+          },
+          "groups": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/GroupRef"
+            },
+            "type": "object",
+            "title": "Groups",
+            "description": "Identity provider names and admin flag of every group named on this page."
+          },
+          "total_count": {
+            "type": "integer",
+            "title": "Total Count",
+            "description": "Rows matching the filters, before paging."
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit",
+            "description": "Page size used."
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset",
+            "description": "Offset used."
+          },
+          "has_next": {
+            "type": "boolean",
+            "title": "Has Next",
+            "description": "True when more rows follow this page."
+          },
+          "generated_at": {
+            "type": "string",
+            "title": "Generated At",
+            "description": "ISO-8601 UTC time the rows were computed."
+          }
+        },
+        "type": "object",
+        "required": [
+          "total_count",
+          "limit",
+          "offset",
+          "has_next",
+          "generated_at"
+        ],
+        "title": "ToolAccessListResponse",
+        "description": "A page of the tool access listing.",
+        "example": {
+          "generated_at": "2026-11-22T18:00:00Z",
+          "groups": {
+            "docs-readers": {
+              "group": "docs-readers",
+              "idp_groups": [
+                "eng-docs"
+              ],
+              "is_admin": false
+            }
+          },
+          "has_next": false,
+          "limit": 50,
+          "offset": 0,
+          "rows": [
+            {
+              "blocked": false,
+              "can_call": {
+                "alone": [
+                  "docs-readers"
+                ],
+                "together": []
+              },
+              "can_see": {
+                "alone": [
+                  "docs-readers"
+                ],
+                "together": []
+              },
+              "enabled": true,
+              "server_name": "Cloudflare docs",
+              "server_path": "/cloudflare-docs/",
+              "server_type": "mcp",
+              "tool_name": "search_docs"
+            }
+          ],
+          "total_count": 1
+        }
+      },
+      "ToolAccessRow": {
+        "properties": {
+          "tool_name": {
+            "type": "string",
+            "title": "Tool Name",
+            "description": "Tool name a client calls (alias on a virtual server)."
+          },
+          "server_name": {
+            "type": "string",
+            "title": "Server Name",
+            "description": "Server display name."
+          },
+          "server_path": {
+            "type": "string",
+            "title": "Server Path",
+            "description": "Registry path of the server."
+          },
+          "server_type": {
+            "type": "string",
+            "enum": [
+              "mcp",
+              "openapi",
+              "virtual"
+            ],
+            "title": "Server Type",
+            "description": "mcp, openapi or virtual."
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "description": "Whether the server is enabled."
+          },
+          "blocked": {
+            "type": "boolean",
+            "title": "Blocked",
+            "description": "True when an admin or a security scan blocked the tool, so nobody can call it.",
+            "default": false
+          },
+          "blocked_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocked Source",
+            "description": "'admin' or 'security_scan' when blocked."
+          },
+          "backend_server_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Backend Server Path",
+            "description": "Virtual servers only: the backend server's path."
+          },
+          "backend_tool_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Backend Tool Name",
+            "description": "Virtual servers only: the tool's name on the backend server."
+          },
+          "can_see": {
+            "$ref": "#/components/schemas/AccessSummary",
+            "description": "Groups whose members see the tool in the registry UI, API and search."
+          },
+          "can_call": {
+            "$ref": "#/components/schemas/AccessSummary",
+            "description": "Groups whose members can call the tool through the gateway."
+          }
+        },
+        "type": "object",
+        "required": [
+          "tool_name",
+          "server_name",
+          "server_path",
+          "server_type",
+          "enabled"
+        ],
+        "title": "ToolAccessRow",
+        "description": "One tool on one server, with who can see it and who can call it."
       },
       "ToolMapping": {
         "properties": {

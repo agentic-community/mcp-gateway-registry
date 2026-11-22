@@ -151,6 +151,13 @@ from registry.common.session_cookie import (
     session_cookie_values,
     single_session_cookie,
 )
+from registry.common.tool_grants import (
+    has_wildcard,
+    normalize_name_list,
+    normalize_server_name,
+    server_names_match,
+    tool_call_allowed,
+)
 from registry.core.config import settings
 from registry.egress_auth.fallback_key import is_fallback_shaped, username_fallback_key
 from registry.egress_auth.service import canonical_auth_method
@@ -2626,7 +2633,7 @@ def _normalize_server_name(name: str) -> str:
     Returns:
         Normalized server name (without leading or trailing slashes)
     """
-    return name.strip("/") if name else name
+    return normalize_server_name(name)
 
 
 def _server_names_match(name1: str, name2: str) -> bool:
@@ -2641,10 +2648,8 @@ def _server_names_match(name1: str, name2: str) -> bool:
     Returns:
         True if names match (ignoring trailing slashes) or if name1 is '*', False otherwise
     """
-    normalized_name1 = _normalize_server_name(name1)
-    if normalized_name1 == "*":
-        return True
-    return normalized_name1 == _normalize_server_name(name2)
+    # Shared with the registry's tool access listing (issue #2102).
+    return server_names_match(name1, name2)
 
 
 async def _resolve_server_path(server_name: str) -> str:
@@ -2846,7 +2851,8 @@ async def validate_server_tool_access(
                         return True
 
                     # Check methods first
-                    allowed_methods = server_config.get("methods", [])
+                    # A bare string is a one-item list, never a substring test.
+                    allowed_methods = normalize_name_list(server_config.get("methods"))
                     logger.debug(f"  Allowed methods for server '{server_name}': {allowed_methods}")
                     logger.debug(f"  Checking if method '{method}' is in allowed methods...")
 
@@ -2898,18 +2904,18 @@ async def validate_server_tool_access(
                         continue
 
                     # Check tools if method not found in methods
-                    allowed_tools = server_config.get("tools", [])
+                    allowed_tools = normalize_name_list(server_config.get("tools"))
                     logger.debug(f"  Allowed tools for server '{server_name}': {allowed_tools}")
 
                     # Check if all tools are allowed (wildcard support)
-                    has_wildcard_tools = "all" in allowed_tools or "*" in allowed_tools
+                    has_wildcard_tools = has_wildcard(allowed_tools)
 
                     # For tools/call, check if the specific tool is allowed
                     if method == "tools/call" and tool_name:
                         logger.debug(
                             f"  Checking if tool '{tool_name}' is in allowed tools for tools/call..."
                         )
-                        if tool_name in allowed_tools or has_wildcard_tools:
+                        if tool_call_allowed(allowed_tools, tool_name):
                             logger.debug(f"  Tool '{tool_name}' found in allowed tools")
                             logger.debug(
                                 f"scope '{scope}' allows access to {server_name}.{method} for tool {tool_name}"
@@ -2934,9 +2940,7 @@ async def validate_server_tool_access(
                         # no methods list names. Wildcard-tool scopes allowed it
                         # through this branch before, so keep exactly that case.
                         transport_open = has_wildcard_tools and method in MCP_TRANSPORT_ENDPOINTS
-                        if transport_open or (
-                            isinstance(allowed_tools, list) and method in allowed_tools
-                        ):
+                        if transport_open or method in allowed_tools:
                             logger.debug(f"  Method '{method}' found in allowed tools")
                             logger.debug(f"scope '{scope}' allows access to {server_name}.{method}")
                             logger.info(

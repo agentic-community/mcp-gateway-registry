@@ -23,6 +23,7 @@ import { useAuth } from '../contexts/AuthContext';
 import axios from 'axios';
 import { isEgressAuthEnabled } from '../utils/egressAuth';
 import { DESKTOP_QUERY, useMediaQuery } from '../hooks/useMediaQuery';
+import { hasOwnToolAccessRows } from '../hooks/useToolAccess';
 
 interface SidebarProps {
   sidebarOpen: boolean;
@@ -106,6 +107,22 @@ const Sidebar: React.FC<SidebarProps> = ({ sidebarOpen, setSidebarOpen, stats, a
       active = false;
     };
   }, []);
+
+  // Tool access (issue #2102): admins and read-only admins always get the
+  // entry; anyone else gets it when they own at least one server with tools.
+  const seesAllToolAccess = user?.is_admin === true || user?.view_all === true;
+  const [ownsToolAccessRows, setOwnsToolAccessRows] = useState(false);
+  useEffect(() => {
+    if (!user || seesAllToolAccess) return undefined;
+    let active = true;
+    void hasOwnToolAccessRows().then(has => {
+      if (active) setOwnsToolAccessRows(has);
+    });
+    return () => {
+      active = false;
+    };
+  }, [user, seesAllToolAccess]);
+  const showToolAccess = seesAllToolAccess || ownsToolAccessRows;
 
   const filters = [
     { key: 'all', label: 'All Services', count: 'total' },
@@ -307,7 +324,17 @@ const fetchAdminTokens = async () => {
       ) : (
         /* Dashboard - Show user info, filters and stats */
         <>
-          <div className="border-b border-line p-4 md:p-5">{userCard(true)}</div>
+          <div className="border-b border-line p-4 md:p-5">
+            {userCard(true)}
+            {showToolAccess && (
+              <nav className="mt-3" aria-label="Access pages">
+                <Link to="/tool-access" className={clsx(NAV_ITEM_CLASS, NAV_ITEM_IDLE)} onClick={closeOnMobile}>
+                  <ShieldCheckIcon className="h-4 w-4" />
+                  <span>Tool access</span>
+                </Link>
+              </nav>
+            )}
+          </div>
 
           {/* Filters Section */}
           <div className="flex-1 p-4 md:p-5">
