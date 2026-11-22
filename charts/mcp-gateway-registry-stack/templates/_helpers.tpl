@@ -158,6 +158,32 @@ registry has no app key for the Secure flag.
 {{- end -}}
 
 {{/*
+Refuse a subchart SSRF allowlist override that differs from its global. The
+registry's health check and the auth-server's MCP proxy hop pin every upstream
+under the same SSRF profile, built in each process from SSRF_ALLOWED_HOSTS and
+GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS. Both subcharts render those from the
+globals when set, so a subchart-only value would leave the two services
+disagreeing: a private upstream passes the registry's health check and is then
+refused at the hop. Name the override instead of rendering that split. An empty
+hosts override and a false flag override are subchart defaults and ignored.
+*/}}
+{{- define "mcp-gateway-registry-stack.validateSsrfAllowlist" -}}
+{{- $globalHosts := toString (.Values.global.ssrfAllowedHosts | default "") -}}
+{{- $globalPrivate := eq (toString .Values.global.gatewayProxyAllowPrivateTargets) "true" -}}
+{{- range $chart := list "registry" "auth-server" -}}
+{{- $app := dig "app" dict (index $.Values $chart | default dict) -}}
+{{- $hosts := toString (dig "ssrfAllowedHosts" "" $app | default "") -}}
+{{- if and (ne $hosts "") (ne $hosts $globalHosts) -}}
+{{- fail (printf "%s.app.ssrfAllowedHosts is %q but global.ssrfAllowedHosts is %q. The registry health check and the auth-server MCP proxy hop must allow the same hosts, or a private upstream passes one and fails the other. Move the value to global.ssrfAllowedHosts and remove %s.app.ssrfAllowedHosts." $chart $hosts $globalHosts $chart) -}}
+{{- end -}}
+{{- $private := eq (toString (dig "gatewayProxyAllowPrivateTargets" false $app)) "true" -}}
+{{- if and $private (not $globalPrivate) -}}
+{{- fail (printf "%s.app.gatewayProxyAllowPrivateTargets is true but global.gatewayProxyAllowPrivateTargets is false. The registry and the auth-server must agree on it, or a private upstream passes the registry health check and fails the auth-server MCP proxy hop. Set global.gatewayProxyAllowPrivateTargets: true and remove %s.app.gatewayProxyAllowPrivateTargets." $chart $chart) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Guard chart-generated random secret value.
 
 `global.generateSecrets: true` (the default) generates a random value,

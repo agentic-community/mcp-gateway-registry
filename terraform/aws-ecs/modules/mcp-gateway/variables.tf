@@ -1782,7 +1782,7 @@ variable "a2a_reverse_proxy_enabled" {
 }
 
 variable "ssrf_allowed_hosts" {
-  description = "Comma-separated hostnames (or literal IPs) that may resolve to private addresses and still be accepted by the SSRF guard for MCP-server proxy_pass_url / A2A-agent URLs. The cloud metadata endpoint is never permitted."
+  description = "Comma-separated hostnames (or literal IPs) that may resolve to private addresses and still be accepted by the SSRF guard for MCP-server proxy_pass_url / A2A-agent URLs. Applied in the registry (registration, health check) and the auth-server (MCP proxy hop, generic proxy), so both make the same decision. The cloud metadata endpoint is never permitted."
   type        = string
   default     = ""
 }
@@ -2075,10 +2075,12 @@ variable "auth_server_extra_env" {
         "GATEWAY_GENERIC_STREAM_MAX_DURATION_SECONDS",
         "GATEWAY_GENERIC_STREAM_MAX_BYTES",
         "AWS_EC2_METADATA_DISABLED",
+        "SSRF_ALLOWED_HOSTS",
         "SSRF_ALLOWED_CIDRS",
+        "GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS",
       ], upper(trimspace(entry.name)))
     ])
-    error_message = "auth_server_extra_env must not override Terraform-managed generic-proxy, metadata-hardening or SSRF_ALLOWED_CIDRS variables; use the canonical variables instead."
+    error_message = "auth_server_extra_env must not override Terraform-managed generic-proxy, metadata-hardening or SSRF allowlist variables (SSRF_ALLOWED_HOSTS, SSRF_ALLOWED_CIDRS, GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS); use the canonical variables instead."
   }
 }
 
@@ -2267,7 +2269,7 @@ variable "gateway_canonical_namespace_enabled" {
 }
 
 variable "gateway_proxy_allow_private_targets" {
-  description = "Allow the generic proxy to reach private/internal network targets. Off by default to keep the SSRF egress guard fail-closed."
+  description = "Allow private/internal network targets through the SSRF guard's PROXY_PROFILE: registration and health checks in the registry, the MCP proxy hop and the generic proxy in the auth-server. Metadata endpoints stay denied. Off by default to keep the SSRF egress guard fail-closed; prefer ssrf_allowed_hosts / ssrf_allowed_cidrs."
   type        = bool
   default     = false
 }

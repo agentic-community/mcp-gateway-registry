@@ -334,6 +334,7 @@ working in those areas.
   configured header; missing/invalid/mismatched destinations return protocol-
   only headers. Actual ARD fetches use guarded transport; its domain wrapper
   delegates canonical URL/IP logic.
+- **Pin, do not just pre-check:** a URL check made before a connection (including one at token-mint time) does not stop a hostname that rebinds before the connect. Every connection to a registrant URL runs on a pinned transport: `guarded_async_client` for httpx, `GuardedHttpx2AsyncTransport` (`registry/utils/url_guard_httpx2.py`) for the MCP SDK's httpx2 client, and the auth server's `/mcp-proxy` hop for every MCP backend request, virtual ones included (nginx never `proxy_pass`es to a registrant URL). Pin that hop under the health check's profile (`proxy_profile_for_mcp_hop`, i.e. `PROXY_PROFILE` or the exact built-in), never a profile that admits private addresses by design, and give every process that builds it the same allowlist on every surface. A bare client is never correct for "trusted" internal traffic when the target comes from a registration.
 - **Gateway self-proxy:** a public URL is not automatically a valid backend.
   For A2A Pull Card, `url` is the advertised gateway route and `proxy_pass_url`
   is the real backend. A raw-path-equivalent echo on the advertised listener is

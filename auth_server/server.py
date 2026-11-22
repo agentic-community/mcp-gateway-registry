@@ -8451,6 +8451,17 @@ _INTERNAL_HOP_TOKEN_HEADERS: frozenset[str] = frozenset(
     }
 )
 
+# Gateway routing headers: what nginx asserted about the selected registration
+# (path, route mode, version, the virtual client URL) plus the marker that
+# authenticates them. They are inputs to /validate and the MCP proxy hop only.
+# A backend has no use for them, and the virtual client URL and the version
+# describe the caller's request rather than anything the registrant chose, so
+# they are stripped on every egress hop like the internal tokens.
+_GATEWAY_ROUTING_HEADERS: frozenset[str] = frozenset(
+    {name.lower() for name in _NGINX_REGISTRATION_HEADERS.values()}
+    | {NGINX_BINDING_SECRET_HEADER.lower()}
+)
+
 
 def _forward_headers(
     incoming: dict[str, str],
@@ -8489,6 +8500,10 @@ def _forward_headers(
         if lower in _INTERNAL_HOP_TOKEN_HEADERS:
             # Gateway-internal, single-hop credentials; see the set's comment.
             # Read the MCP hop's token off `request.headers`, never off this dict.
+            continue
+        if lower in _GATEWAY_ROUTING_HEADERS:
+            # nginx's registration assertions for this hop; see the set's
+            # comment. verify_mcp_proxy_token reads them off `request.headers`.
             continue
         if lower in ("x-body", "x-body-uninspectable"):
             # Gateway-internal body-capture headers set by capture_body.lua for
@@ -10446,34 +10461,43 @@ async def mcp_proxy(
         f"mcp_proxy: server={server_name} method={incoming_method} filter_enabled={filter_enabled} timeout={proxy_timeout}"
     )
 
-    # When the gateway injected a third-party credential, pin the egress
-    # connection: resolve+pin the IP (rebinding-safe) and hard-deny cloud/
-    # workload credential + metadata endpoints, so a repointed egress upstream
-    # cannot exfiltrate the injected credential to IMDS/ECS/EKS creds via a DNS
-    # rebind. Private / hostname-private MCP upstreams stay reachable. Non-egress
-    # traffic keeps the plain client (no injected credential to protect, and many
-    # internal upstreams legitimately resolve to private addresses).
+    # Every upstream hop is pinned: the guarded transport resolves the host,
+    # classifies every answer and connects only to the validated IP, so a
+    # hostname that rebinds after registration (or after /validate minted the
+    # hop token) cannot reach an address the registry would refuse. A check at
+    # mint time would not do this: the connect resolves the name again.
+    #
+    # The ordinary hop uses the profile the registry's health check uses for the
+    # same registration (proxy_profile_for_mcp_hop): PROXY_PROFILE, which
+    # admits a private upstream only through the operator allowlist
+    # (SSRF_ALLOWED_HOSTS / SSRF_ALLOWED_CIDRS / GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS),
+    # or the exact built-in registry-tools profile. A backend that passes the
+    # health check therefore passes here, and nothing else does. The
+    # egress-injected hop carries a third-party credential and keeps the
+    # credential-bearing egress profile.
     from registry.exceptions import UrlValidationError
     from registry.utils.url_guard import (
         EGRESS_UPSTREAM_PROFILE,
+        proxy_profile_for_mcp_hop,
         shared_guarded_async_client,
     )
 
-    # egress-injected: pooled + SSRF-guarded (keep-alive reuse; this pooled client
-    # is process-lived and must NOT be closed per request). non-egress: no injected
-    # credential to protect and many internal upstreams are private, so keep the
-    # per-call plain client (closed in the finally). Timeout is passed per-request.
-    if egress_token_injected:
-        proxy_client = shared_guarded_async_client(
-            profile=_egress_upstream_profile(
+    try:
+        # Inside the try: a registration that claims the built-in identity with an
+        # outbound URL that is not one of its exact URLs raises UrlValidationError,
+        # which is refused below like any blocked target.
+        # The egress hop admits the exact OpenAPI MCP built-in (issue #2022).
+        if egress_token_injected:
+            upstream_profile = _egress_upstream_profile(
                 registered_server, claims["upstream_url"], EGRESS_UPSTREAM_PROFILE
             )
-        )
-        close_proxy_client = False
-    else:
-        proxy_client = httpx.AsyncClient(timeout=proxy_timeout)
-        close_proxy_client = True
-    try:
+        else:
+            upstream_profile = proxy_profile_for_mcp_hop(
+                registered_server, claims["upstream_url"], upstream_url
+            )
+        # Pooled (keep-alive reuse). The pooled client is process-lived and must
+        # NOT be closed per request. Timeout is passed per-request.
+        proxy_client = shared_guarded_async_client(profile=upstream_profile)
         # The httpx timeout applies to each read, not to the whole exchange. An
         # upstream that keeps sending (SSE keep-alives) never trips it, so the
         # overall deadline is what releases the connection (#1890). nginx's
@@ -10535,11 +10559,11 @@ async def mcp_proxy(
     except HTTPException:
         raise
     except UrlValidationError as exc:
-        # The injected credential was about to be sent to a blocked destination
-        # (metadata/credential endpoint or an otherwise-denied target). Fail
-        # closed -- never forward the credential.
+        # The destination is a blocked one (metadata/credential endpoint or an
+        # otherwise-denied target), including after a rebind. Fail closed, and
+        # never forward an injected credential.
         logger.error(
-            "mcp_proxy: egress upstream %s blocked by egress SSRF guard: %s",
+            "mcp_proxy: upstream %s blocked by the SSRF guard: %s",
             redact_url(upstream_url),
             exc,
         )
@@ -10568,11 +10592,6 @@ async def mcp_proxy(
             status_code=502,
             detail="Upstream MCP server error",
         ) from exc
-    finally:
-        # The pooled (shared) client is process-lived and reused; only the
-        # per-call non-egress client is closed here.
-        if close_proxy_client:
-            await proxy_client.aclose()
 
     is_sse_response = _is_sse_content_type(content_type)
     should_filter = _should_filter_tools_list(

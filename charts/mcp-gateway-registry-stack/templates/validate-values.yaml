@@ -4,3 +4,4 @@ only fails the render when the values disagree across charts.
 */ -}}
 {{- include "mcp-gateway-registry-stack.validateSessionSettings" . -}}
 {{- include "mcp-gateway-registry-stack.validateOpenapiMcp" . -}}
+{{- include "mcp-gateway-registry-stack.validateSsrfAllowlist" . -}}

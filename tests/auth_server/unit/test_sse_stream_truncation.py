@@ -150,7 +150,7 @@ def _build_upstream_response(
 
 
 def _patch_upstream(upstream_response: MagicMock):
-    """Patch httpx.AsyncClient so mcp_proxy's stream chain yields this response."""
+    """Patch the pooled guarded client so mcp_proxy's stream chain yields this response."""
     stream_cm = AsyncMock()
     stream_cm.__aenter__ = AsyncMock(return_value=upstream_response)
     stream_cm.__aexit__ = AsyncMock(return_value=False)
@@ -160,7 +160,7 @@ def _patch_upstream(upstream_response: MagicMock):
     client.__aenter__ = AsyncMock(return_value=client)
     client.__aexit__ = AsyncMock(return_value=False)
 
-    return patch("auth_server.server.httpx.AsyncClient", return_value=client)
+    return patch("registry.utils.url_guard.shared_guarded_async_client", return_value=client)
 
 
 def _patch_scope_repo_allow_all():

@@ -417,6 +417,8 @@ app:
   #   ssrfAllowedHosts: comma-separated exact hostnames (least privilege; no
   #     wildcards, e.g. "obo-echo.<ns>.svc.cluster.local").
   # The cloud metadata address (169.254.169.254) is never permitted by either.
+  # For a standalone install. Under the stack chart set global.ssrfAllowedHosts,
+  # which wins over this value and reaches the auth-server's MCP proxy hop too.
   ssrfAllowedHosts: ""
   # For a standalone install. Under the stack chart set global.ssrfAllowedCidrs,
   # which wins over this value and reaches auth-server and mcpgw too. #2018

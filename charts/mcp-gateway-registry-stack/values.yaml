@@ -20,6 +20,23 @@ global:
   # stays for standalone installs. Cloud metadata/credential, link-local and
   # multicast addresses are never permitted.
   ssrfAllowedCidrs: ""
+  # SSRF guard hostname allowlist (SSRF_ALLOWED_HOSTS), set once for the registry
+  # and the auth-server. The registry's health check and the auth-server's MCP
+  # proxy hop apply the same SSRF profile to each upstream, so a private upstream
+  # listed only for the registry would pass its health check and then be refused
+  # at the hop. Comma-separated exact hostnames (no wildcards), e.g.
+  # "obo-echo.<ns>.svc.cluster.local". Wins over registry.app.ssrfAllowedHosts and
+  # auth-server.app.ssrfAllowedHosts, which stay for standalone installs; the
+  # stack refuses to render if either is set to a different value. Cloud
+  # metadata and workload-credential addresses are never permitted.
+  ssrfAllowedHosts: ""
+  # GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS for the registry and the auth-server.
+  # true admits any private/loopback upstream (metadata always denied) at
+  # registration, the health check, the MCP proxy hop and the generic proxy.
+  # Prefer ssrfAllowedHosts / ssrfAllowedCidrs. true here or in either
+  # subchart's app.gatewayProxyAllowPrivateTargets turns it on; the stack refuses
+  # to render if a subchart sets true while this is false.
+  gatewayProxyAllowPrivateTargets: false
   # Domain configuration - update this to your actual domain
   domain: "DOMAIN"
   # Name the session cookie __Host-mcp_gateway_session (Secure, Path=/, no
