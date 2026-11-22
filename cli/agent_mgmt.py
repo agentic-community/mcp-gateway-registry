@@ -295,11 +295,7 @@ def _make_request(
         for header_name, header_value in response.headers.items():
             # Hide sensitive headers
             if header_name.lower() in ["authorization", "x-scopes"]:
-                logger.info(
-                    f"    {header_name}: {header_value[:50]}..."
-                    if len(str(header_value)) > 50
-                    else f"    {header_name}: {header_value}"
-                )
+                logger.info(f"    {header_name}: <redacted len={len(str(header_value))}>")
             else:
                 logger.info(f"    {header_name}: {header_value}")
 
