@@ -12,6 +12,7 @@ from typing import Any
 from ..api.custom_entity_visibility import (
     _build_visibility_filter,
     _require_owner_or_admin,
+    _user_can_read_record,
     _user_can_view,
 )
 from ..core.config import settings
@@ -454,7 +455,7 @@ class CustomEntityService:
     ) -> CustomEntityRecord:
         """Fetch a single record, enforcing visibility (404 if not viewable)."""
         record = await self._get_entities().get(path)
-        if record is None or not _user_can_view(record, user_context):
+        if record is None or not _user_can_read_record(record, user_context):
             raise CustomEntityNotFoundError(path)
         return record
 
@@ -494,7 +495,7 @@ class CustomEntityService:
     ) -> dict:
         """Return {num_stars, rating_details} for a viewable record (404 otherwise)."""
         record = await self._get_entities().get(path)
-        if record is None or not _user_can_view(record, user_context):
+        if record is None or not _user_can_read_record(record, user_context):
             raise CustomEntityNotFoundError(path)
         return {
             "num_stars": record.num_stars,

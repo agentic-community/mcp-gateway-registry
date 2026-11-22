@@ -65,6 +65,7 @@ from ..utils.url_utils import (
 )
 from ._asset_id import resolve_asset_id
 from .github_auth import github_auth_provider as _github_auth
+from .visibility import can_skip_read_visibility
 
 # Configure logging
 logging.basicConfig(
@@ -1680,7 +1681,9 @@ class SkillService:
             tag=tag,
         )
 
-        if user_context and user_context.get("is_admin"):
+        # Admins and holders of the read-only view_all permission (issue #2099)
+        # see every skill. This method serves read paths only.
+        if can_skip_read_visibility(user_context):
             return all_skills
 
         # Discovery gate (list_skills). accessible_skills is derived at auth time

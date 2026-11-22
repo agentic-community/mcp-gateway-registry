@@ -257,6 +257,9 @@ UI permissions control what actions users can perform in the web interface and R
 | `create_<type>_entity` | Create records of a custom entity type | Record paths or `"all"` |
 | `modify_<type>_entity` | Edit records of a custom entity type | Record paths or `"all"` |
 | `delete_<type>_entity` | Delete records of a custom entity type | Record paths or `"all"` |
+| `view_all` | Read-only admin: see every server, virtual server, agent, skill and custom record, including private and group-restricted ones | `"all"` only; any other value grants nothing |
+
+`view_all` widens what a user can see on read paths and nothing else. It never makes a user an admin, grants no write, rating or health check, opens no Settings page, grants no gateway tool access, and leaves backend URLs and credentials redacted. Only an admin can create a group that holds it. See [How do I create a read-only admin?](faq/read-only-viewer-group.md#read-only-admin).
 
 ### How each operation is authorized
 

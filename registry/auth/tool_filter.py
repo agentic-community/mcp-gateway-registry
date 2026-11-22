@@ -16,6 +16,7 @@ import logging
 from typing import Any
 
 from ..core.config import settings
+from .asset_permissions import can_view_all
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,12 @@ def _is_admin_or_cross_server_wildcard(
     sentinel `{"*"}` under key "*" all skip pruning.
     """
     if user_context.get("is_admin"):
+        return True
+    # Holders of the read-only view_all permission (issue #2099) see every tool
+    # definition in REST and search responses. This helper only shapes registry
+    # responses; the gateway's own tools/list and tools/call checks are separate
+    # and unchanged, so view_all lets a holder see tools, never call them.
+    if can_view_all(user_context):
         return True
     servers = user_context.get("accessible_servers") or []
     if any(s in _WILDCARD_VALUES for s in servers):

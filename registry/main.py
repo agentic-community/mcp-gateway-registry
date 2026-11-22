@@ -64,6 +64,7 @@ from registry.audit.routes import router as audit_router
 from registry.audit.service import enforce_durable_audit_sink
 
 # Import auth dependencies
+from registry.auth.asset_permissions import can_view_all
 from registry.auth.dependencies import (
     nginx_proxied_auth,
 )
@@ -1451,6 +1452,8 @@ async def get_current_user(user_context: dict[str, Any] = Depends(nginx_proxied_
         "groups": user_context.get("groups", []),
         "can_modify_servers": user_context.get("can_modify_servers", False),
         "is_admin": user_context.get("is_admin", False),
+        # Read-only admin (issue #2099): sees every asset, changes nothing.
+        "view_all": can_view_all(user_context),
         "ui_permissions": ui_permissions,
         "accessible_servers": user_context.get("accessible_servers", []),
         "accessible_services": user_context.get("accessible_services", []),

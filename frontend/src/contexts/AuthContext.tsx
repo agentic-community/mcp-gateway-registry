@@ -44,6 +44,8 @@ interface User {
   provider?: string;
   can_modify_servers?: boolean;
   is_admin?: boolean;
+  // Read-only admin (issue #2099): sees every asset, changes nothing.
+  view_all?: boolean;
   ui_permissions?: UIPermissions;
 }
 
@@ -108,6 +110,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         provider: userData.provider,
         can_modify_servers: userData.can_modify_servers || false,
         is_admin: userData.is_admin || false,
+        view_all: userData.view_all === true,
         ui_permissions: userData.ui_permissions || {},
       });
 

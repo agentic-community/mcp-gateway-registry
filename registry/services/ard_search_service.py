@@ -18,7 +18,7 @@ import json
 import logging
 from typing import Any
 
-from ..auth.asset_permissions import user_has_asset_permission
+from ..auth.asset_permissions import user_can_discover_asset
 from ..repositories.factory import (
     get_agent_repository,
     get_search_repository,
@@ -267,7 +267,9 @@ async def search_and_scope(
         src = _src_for(path)
         if src is None:
             continue
-        if not await user_can_access_server(path, hit.get("server_name", ""), user_context):
+        if not await user_can_access_server(
+            path, hit.get("server_name", ""), user_context, honor_view_all=True
+        ):
             scoped_out += 1
             continue
         entry = ard_mapping.map_server(
@@ -291,7 +293,9 @@ async def search_and_scope(
         src = _src_for(path)
         if src is None:
             continue
-        if not user_can_access_agent_from_doc({"path": path, "agent_card": card}, user_context):
+        if not user_can_access_agent_from_doc(
+            {"path": path, "agent_card": card}, user_context, honor_view_all=True
+        ):
             scoped_out += 1
             continue
         entry = ard_mapping.map_agent(
@@ -319,7 +323,7 @@ async def search_and_scope(
         # branches above and the search_routes skill branch: a caller with no
         # list_skills grant sees no skills -- not even public ones -- before the
         # per-record visibility check. Fails closed.
-        if not user_has_asset_permission("skill", "list", skill_name, user_context):
+        if not user_can_discover_asset("skill", skill_name, user_context):
             scoped_out += 1
             continue
         allowed = await user_can_access_skill(
@@ -328,6 +332,7 @@ async def search_and_scope(
             hit.get("owner", ""),
             hit.get("allowed_groups", []) or [],
             user_context,
+            honor_view_all=True,
         )
         if not allowed:
             scoped_out += 1
@@ -419,7 +424,9 @@ async def browse(
         for path, doc in servers.items():
             if not _has_all_tags(doc.get("tags"), tags):
                 continue
-            if not await user_can_access_server(path, doc.get("server_name", ""), user_context):
+            if not await user_can_access_server(
+                path, doc.get("server_name", ""), user_context, honor_view_all=True
+            ):
                 continue
             e = ard_mapping.map_server(
                 path,
@@ -436,7 +443,9 @@ async def browse(
         for path, doc in agents.items():
             if not _has_all_tags(doc.get("tags"), tags):
                 continue
-            if not user_can_access_agent_from_doc({**doc, "path": path}, user_context):
+            if not user_can_access_agent_from_doc(
+                {**doc, "path": path}, user_context, honor_view_all=True
+            ):
                 continue
             e = ard_mapping.map_agent(
                 path,
@@ -456,7 +465,7 @@ async def browse(
             # browse branches and search_routes: a caller with no list_skills
             # grant sees no skills before the per-record visibility check. Fails
             # closed.
-            if not user_has_asset_permission("skill", "list", skill_name, user_context):
+            if not user_can_discover_asset("skill", skill_name, user_context):
                 continue
             allowed = await user_can_access_skill(
                 skill.path,
@@ -464,6 +473,7 @@ async def browse(
                 getattr(skill, "owner", "") or "",
                 list(getattr(skill, "allowed_groups", []) or []),
                 user_context,
+                honor_view_all=True,
             )
             if not allowed:
                 continue

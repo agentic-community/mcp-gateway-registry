@@ -400,11 +400,14 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
   // empty/404). Keep the scope names in sync with
   // registry/auth/asset_permissions.py. Declared here (before the tab-redirect
   // effect that uses it) so it precedes its first use.
+  // Read-only discovery gate for tabs and lists. A read-only admin (view_all,
+  // issue #2099) sees every tab. Write buttons use hasUiPermission, which does
+  // not honor view_all.
   const hasListAccess = useCallback((listScope: string): boolean => {
-    if (user?.is_admin) return true;
+    if (user?.is_admin || user?.view_all) return true;
     const granted = user?.ui_permissions?.[listScope];
     return Array.isArray(granted) && granted.length > 0;
-  }, [user?.is_admin, user?.ui_permissions]);
+  }, [user?.is_admin, user?.view_all, user?.ui_permissions]);
 
   // Pagination state (per entity type)
   const PAGE_SIZE = 50;

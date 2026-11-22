@@ -608,9 +608,11 @@ class DuplicateCheckService:
         path = str(document.get("path") or "")
         if entity_type == ENTITY_TYPE_SERVER:
             server_name = str(document.get("server_name") or document.get("name") or "")
-            return await user_can_access_server(path, server_name, user_context)
+            return await user_can_access_server(
+                path, server_name, user_context, honor_view_all=True
+            )
         if entity_type == ENTITY_TYPE_AGENT:
-            return user_can_access_agent_from_doc(document, user_context)
+            return user_can_access_agent_from_doc(document, user_context, honor_view_all=True)
         if entity_type == ENTITY_TYPE_SKILL:
             # Missing visibility is treated as "private" rather than
             # defaulted to "public": for the dedup advisory list we
@@ -627,6 +629,7 @@ class DuplicateCheckService:
                 owner=owner,
                 allowed_groups=allowed_groups,
                 user_context=user_context,
+                honor_view_all=True,
             )
         return False
 

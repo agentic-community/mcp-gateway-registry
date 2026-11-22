@@ -1,6 +1,15 @@
 # How do I create a read-only user who can see every server, agent and skill but change nothing?
 
-Create a group whose `ui_permissions` hold only `list_` and `get_` permissions, each set to `["all"]`, then create a user in that group. Members see every MCP server, virtual server, agent and skill in the registry UI and API. Any request to register, edit, enable, disable or delete returns HTTP 403.
+There are two ready-made groups, and the difference is private and group-restricted assets:
+
+| Group | Sees | File |
+| --- | --- | --- |
+| Read-only viewer | Every public asset, plus restricted ones shared with the user's own groups and private ones the user owns | [`cli/examples/read_only_viewer.json`](../../cli/examples/read_only_viewer.json) |
+| Read-only admin | Every asset, including other users' private and group-restricted ones | [`cli/examples/read_only_admin.json`](../../cli/examples/read_only_admin.json) |
+
+Neither group can change anything: any request to register, edit, enable, disable or delete returns HTTP 403. The rest of this page builds the viewer group; [Read-only admin](#read-only-admin) covers the second one.
+
+The viewer group's `ui_permissions` hold only `list_` and `get_` permissions, each set to `["all"]`. Members see every MCP server, virtual server, agent and skill that their visibility allows, in the registry UI and API.
 
 A `list_` or `get_` permission never makes a user an admin, even with `"all"`. The registry promotes a user to admin only when a group grants `"all"` on an action that starts with `register_`, `modify_`, `toggle_`, `delete_`, `publish_` or `create_` (see `is_admin_conferring_action` in [registry/auth/privileged_constants.py](../../registry/auth/privileged_constants.py)).
 
@@ -107,9 +116,55 @@ Log in as `admin-ro` and call `GET /api/auth/me`. The response shows `"is_admin"
 | `POST /api/servers/remove` | 403 |
 | `POST /api/servers/groups/import` | 403 |
 
+## Read-only admin
+
+The viewer group still respects each asset's own visibility, so its members never see another user's private agent, skill or custom record, or a group-restricted asset outside their groups. For a group that sees everything, grant the single `view_all` permission ([`cli/examples/read_only_admin.json`](../../cli/examples/read_only_admin.json)):
+
+```json
+{
+  "scope_name": "registry-read-only-admin",
+  "scope_type": "server_scope",
+  "description": "Read-only admin: sees every MCP server, virtual server, agent, skill and custom entity record, including private and group-restricted ones. No writes, no gateway tool access, no Settings pages; backend URLs and credentials stay hidden.",
+  "group_mappings": ["registry-read-only-admin"],
+  "server_access": [],
+  "ui_permissions": {
+    "view_all": ["all"]
+  },
+  "create_in_idp": true
+}
+```
+
+Import it the same way as the viewer group, as an admin:
+
+```bash
+uv run python api/registry_management.py \
+  --registry-url "$REGISTRY_URL" --token-file .token \
+  import-group --file cli/examples/read_only_admin.json
+```
+
+You can also tick **View all assets** under **Settings > IAM > Groups > Permissions**.
+
+Members of the group:
+
+- see every MCP server, virtual server, agent, skill and custom entity record, whatever its visibility, in lists, detail pages and search, and every tool on each server;
+- are not admins: `GET /api/auth/me` returns `"is_admin": false` and `"view_all": true`, and the UI shows "Read-only admin" and no Settings entry;
+- cannot register, edit, enable, disable, delete, rate or health-check anything they see only through `view_all`;
+- cannot call tools through the gateway, which still needs `server_access` grants;
+- get backend URLs, OAuth settings and credentials redacted, as any other non-admin does.
+
+Only the exact value `["all"]` counts. Any other value grants nothing. Only an admin can create or edit a group that holds it.
+
+A few reads stay closed to `view_all` alone, because they use stored credentials or change stored state:
+
+- A skill's content (`GET /api/skills/{path}/content`): fetching it uses the credential stored on the skill and records health and drift state. Members see the skill's details, but not its content, unless the skill is visible to them anyway.
+- A server's connection settings (`GET /api/servers/{path}/connect-config`), which carry decrypted custom headers.
+- A live tool-list fetch. Members get the stored tool list instead, so their reads never make the registry call a backend.
+
+Security-scan results reach members without the scanned backend URL and the scanner's output-file path, as for any non-admin.
+
 ## Limits
 
-- Pages that check for an admin, such as audit logs, IAM settings and the configuration pages, are all or nothing. A group cannot grant read-only access to them, so `admin-ro` does not see them.
+- Pages that check for an admin, such as audit logs, IAM settings and the configuration pages, are all or nothing. A group cannot grant read-only access to them, so neither group sees them, `view_all` included.
 - The group leaves out `health_check_service`, because a health check writes: it stores the server's new health status and tool list and rewrites the gateway's nginx configuration. Add `"health_check_service": ["all"]` if you accept that.
 - Each custom entity type has its own `list_<type>_entity` permission. Add one per type you want the user to see, for example `"list_dataset_entity": ["all"]`.
 

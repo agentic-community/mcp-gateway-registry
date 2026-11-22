@@ -22,7 +22,10 @@ from fastapi import (
 from pydantic import BaseModel
 
 from ..audit.context import set_audit_action
-from ..auth.asset_permissions import user_has_asset_permission
+from ..auth.asset_permissions import (
+    can_view_all,
+    user_has_asset_permission,
+)
 from ..auth.csrf import verify_csrf_token_flexible
 from ..auth.dependencies import nginx_proxied_auth
 from ..schemas.custom_entity_models import (
@@ -122,8 +125,14 @@ def _require_view_scope(
     type_name: str,
     user_context: dict,
     record_path: str | None = None,
+    *,
+    honor_view_all: bool = False,
 ) -> None:
     """Raise 404 (hide existence) if the caller lacks list access.
+
+    ``honor_view_all`` is True only on READ routes (list, get, rating): there a
+    holder of the read-only ``view_all`` permission (issue #2099) passes. It
+    defaults to False so a write route can never pick up the bypass by accident.
 
     Read gate for list/get/search/rating. The ``list_<type>_entity`` grant is
     per-record aware (parity with ``list_agents``): ``"all"``/type-name open the
@@ -138,6 +147,8 @@ def _require_view_scope(
     """
     from ..auth.dependencies import user_can_list_custom_entity_type
 
+    if honor_view_all and can_view_all(user_context):
+        return
     if not user_can_list_custom_entity_type(type_name, user_context, record_path):
         logger.info(
             "User %s denied list access to custom type %s (record=%s) -> 404",
@@ -208,13 +219,17 @@ async def list_custom_entities(
     limit: int = Query(100, ge=1, le=1000, description="Max records to return"),
 ) -> dict:
     """List records of a type, filtered to those the caller may see."""
-    _require_view_scope(type, user_context)
+    _require_view_scope(type, user_context, honor_view_all=True)
     # SECURITY: restrict_paths MUST be derived from _list_restrict_paths and
     # passed to list_records. _require_view_scope passes a record-scoped caller
     # (they hold at least one record path), so a whole-type read here would leak
     # every record. _list_restrict_paths returns None only for whole-type/admin;
     # a non-admin without the scope yields [] -> empty $in -> no records.
-    restrict_paths = _list_restrict_paths(type, user_context)
+    # A view_all holder (issue #2099) reads the whole type, as an admin does.
+    if can_view_all(user_context):
+        restrict_paths = None
+    else:
+        restrict_paths = _list_restrict_paths(type, user_context)
     service = _get_service()
     try:
         items, total = await service.list_records(
@@ -254,7 +269,7 @@ async def get_custom_entity(
 ) -> CustomEntityRecord:
     """Get a single record by type and uuid (404 if not viewable)."""
     path = f"/{type}/{uuid}"
-    _require_view_scope(type, user_context, record_path=path)
+    _require_view_scope(type, user_context, record_path=path, honor_view_all=True)
     service = _get_service()
     try:
         record = await service.get_record(path, user_context)
@@ -456,7 +471,7 @@ async def get_custom_entity_rating(
 ) -> dict:
     """Return {num_stars, rating_details} for a record the caller can view."""
     path = f"/{type}/{uuid}"
-    _require_view_scope(type, user_context, record_path=path)
+    _require_view_scope(type, user_context, record_path=path, honor_view_all=True)
     service = _get_service()
     try:
         return await service.get_rating(path, user_context)

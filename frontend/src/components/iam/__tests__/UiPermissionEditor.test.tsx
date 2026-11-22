@@ -73,3 +73,49 @@ describe('UiPermissionEditor mutation grants', () => {
     expect(screen.getByText(/CLI scope\s+import/i)).toBeInTheDocument();
   });
 });
+
+/**
+ * Read-only admin (issue #2099). The server honors view_all only for the exact
+ * "all" grant, so the checkbox must write "all", clear the key when unticked,
+ * and show as ticked only for that exact grant.
+ */
+describe('UiPermissionEditor view_all toggle', () => {
+  const baseProps = {
+    entityScopeGroups: [],
+    skillOptions: [],
+    skillsLoading: false,
+  };
+
+  function renderEditor(uiPermissions: Record<string, string>) {
+    const setPermValue = jest.fn();
+    render(
+      <UiPermissionEditor
+        {...baseProps}
+        uiPermissions={uiPermissions}
+        setPermValue={setPermValue}
+      />,
+    );
+    const checkbox = screen.getByLabelText(
+      (_, el) => el?.id === 'perm-view_all',
+    ) as HTMLInputElement;
+    return { setPermValue, checkbox };
+  }
+
+  it('grants view_all as "all" when ticked', () => {
+    const { setPermValue, checkbox } = renderEditor({});
+    fireEvent.click(checkbox);
+    expect(setPermValue).toHaveBeenCalledWith('view_all', 'all');
+  });
+
+  it('clears view_all when unticked', () => {
+    const { setPermValue, checkbox } = renderEditor({ view_all: 'all' });
+    expect(checkbox.checked).toBe(true);
+    fireEvent.click(checkbox);
+    expect(setPermValue).toHaveBeenCalledWith('view_all', '');
+  });
+
+  it('shows unticked for a value other than "all"', () => {
+    const { checkbox } = renderEditor({ view_all: 'some-agent' });
+    expect(checkbox.checked).toBe(false);
+  });
+});
