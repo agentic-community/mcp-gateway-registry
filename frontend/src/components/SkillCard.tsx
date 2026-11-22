@@ -31,6 +31,7 @@ import SkillResources from './SkillResources';
 import ProxyConnectButton from './ProxyConnectButton';
 import { SafeLink, safeMarkdownAnchor } from './SafeLink';
 import { toScanSummary } from '../utils/securityScan';
+import { readOnlyAdminDenial } from '../utils/readOnlyAdmin';
 
 /**
  * Props for the SkillCard component.
@@ -245,7 +246,10 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
     } catch (error: any) {
       console.error('Failed to fetch SKILL.md content:', error);
       const detail = error.response?.data?.detail;
-      if (error.response?.status === 409 && detail) {
+      const readOnlyAdminNote = readOnlyAdminDenial(error);
+      if (readOnlyAdminNote) {
+        setSkillMdContent(`> **SKILL.md not shown**\n>\n> ${readOnlyAdminNote}`);
+      } else if (error.response?.status === 409 && detail) {
         setSkillMdContent(`> **Content Drift Detected**\n>\n> ${detail}\n>\n> Re-register this skill to update the integrity baseline and re-enable it.`);
       } else if (onShowToast) {
         onShowToast(detail || 'Failed to load SKILL.md content', 'error');

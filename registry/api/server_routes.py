@@ -24,6 +24,7 @@ from pydantic import BaseModel
 from ..audit import set_audit_action
 from ..audit.request_id import sanitize_correlation_id
 from ..auth.asset_permissions import (
+    VIEW_ALL_CONNECT_CONFIG_DENIED,
     can_view_all,
     user_has_asset_permission,
 )
@@ -3358,9 +3359,14 @@ async def get_server_details(
     if service_path == "/all":
         if user_context["is_admin"]:
             return await server_service.get_all_servers()
-        all_accessible = await server_service.get_all_servers_with_permissions(
-            user_context["accessible_servers"]
-        )
+        # A view_all holder (issue #2099) reads every server, with the same
+        # non-admin redaction below as anyone else.
+        if can_view_all(user_context):
+            all_accessible = await server_service.get_all_servers()
+        else:
+            all_accessible = await server_service.get_all_servers_with_permissions(
+                user_context["accessible_servers"]
+            )
         # Strip internal backend URLs per server for non-admins in with-gateway
         # mode (this branch is non-admin only; admins returned above).
         if should_redact_backend_urls(user_context):
@@ -3530,7 +3536,9 @@ async def get_service_tools(
         all_servers_tools = {}
 
         # Get servers based on user permissions
-        if user_context["is_admin"]:
+        # Admins and view_all holders (issue #2099) read every server's STORED
+        # tool list here; this branch never fetches live.
+        if can_skip_read_visibility(user_context):
             all_servers = await server_service.get_all_servers()
         else:
             all_servers = await server_service.get_all_servers_with_permissions(
@@ -7332,10 +7340,12 @@ async def get_server_connect_config(
             service_path, accessible_servers
         )
         if not has_access:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You do not have access to this server",
+            detail = (
+                VIEW_ALL_CONNECT_CONFIG_DENIED
+                if can_view_all(user_context)
+                else "You do not have access to this server"
             )
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
 
     encrypted = server_info.get("custom_headers_encrypted") or []
     custom_headers = decrypt_custom_headers(encrypted)

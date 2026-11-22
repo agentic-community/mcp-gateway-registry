@@ -33,7 +33,11 @@ from fastapi import (
 from pydantic import BaseModel
 
 from ..audit.context import set_audit_action
-from ..auth.asset_permissions import user_has_asset_permission
+from ..auth.asset_permissions import (
+    VIEW_ALL_SKILL_CONTENT_DENIED,
+    can_view_all,
+    user_has_asset_permission,
+)
 from ..auth.csrf import verify_csrf_token_flexible
 from ..auth.dependencies import nginx_proxied_auth
 from ..core.config import settings
@@ -704,7 +708,8 @@ async def get_skill_content(
     # credential and records health and drift state (which can toggle the skill),
     # so holders of view_all alone keep today's rule here.
     if not _user_can_access_skill(skill, user_context):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+        detail = VIEW_ALL_SKILL_CONTENT_DENIED if can_view_all(user_context) else "Access denied"
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
 
     if skill.content_integrity and skill.content_integrity.drift_detected:
         raise HTTPException(

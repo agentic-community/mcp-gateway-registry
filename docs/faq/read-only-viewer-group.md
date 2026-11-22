@@ -160,7 +160,13 @@ A few reads stay closed to `view_all` alone, because they use stored credentials
 - A server's connection settings (`GET /api/servers/{path}/connect-config`), which carry decrypted custom headers.
 - A live tool-list fetch. Members get the stored tool list instead, so their reads never make the registry call a backend.
 
+For the first two, the API returns HTTP 403 with a detail that starts with "Not available with read-only admin access" and says why. The UI shows that note in place of the SKILL.md content and in the server's connection dialog.
+
 Security-scan results reach members without the scanned backend URL and the scanner's output-file path, as for any non-admin.
+
+### Through the registry's MCP tools
+
+`view_all` also applies to the registry's own MCP server (`airegistry-tools`), whose `search_registry`, `list_services`, `list_agents` and `list_skills` tools return every asset, with backend URLs redacted. Like any MCP server, it needs a `server_access` entry before members can connect, and the example group has none. `get_skill_content` stays closed for skills members see only through `view_all`, and returns `HTTP 403`.
 
 ## Limits
 

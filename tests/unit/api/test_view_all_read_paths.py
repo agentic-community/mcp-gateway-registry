@@ -183,7 +183,10 @@ def mock_server_service():
 @pytest.fixture
 def holder_client(mock_settings, mock_server_service):
     """A TestClient authenticated as a view_all holder."""
-    from registry.auth.csrf import verify_csrf_token_flexible
+    from registry.auth.csrf import (
+        verify_csrf_token_flexible,
+        verify_csrf_token_header_only,
+    )
     from registry.auth.dependencies import enhanced_auth, nginx_proxied_auth
     from registry.main import app
 
@@ -192,6 +195,7 @@ def holder_client(mock_settings, mock_server_service):
     app.dependency_overrides[enhanced_auth] = lambda: context
     # Skip CSRF so write routes are refused by authorization, the thing under test.
     app.dependency_overrides[verify_csrf_token_flexible] = lambda: None
+    app.dependency_overrides[verify_csrf_token_header_only] = lambda: None
     with (
         patch("registry.api.server_routes.server_service", mock_server_service),
         patch("registry.api.server_routes._apply_tool_visibility", AsyncMock()),
@@ -261,6 +265,7 @@ class TestHolderSensitiveRoutes:
         """Decrypted custom headers never reach a view_all holder."""
         response = holder_client.get("/api/servers/hidden/connect-config")
         assert response.status_code == 403
+        assert "csrf" not in response.text.lower()
 
     def test_security_scan_redacts_backend_url(self, holder_client, scan_result):
         scanner = MagicMock()
@@ -305,3 +310,77 @@ class TestHolderSensitiveRoutes:
         with patch("registry.api.skill_routes.get_skill_service", return_value=service):
             response = holder_client.get("/api/skills/hidden-skill/content")
         assert response.status_code == 403
+
+
+@pytest.mark.unit
+class TestHolderNotesAndAggregates:
+    """Clear refusal messages for holders, and the "all" aggregates (PR review items 2-3)."""
+
+    def test_connect_config_refusal_names_read_only_admin(self, holder_client):
+        from registry.auth.asset_permissions import VIEW_ALL_DENIED_PREFIX
+
+        response = holder_client.get("/api/servers/hidden/connect-config")
+        assert response.status_code == 403
+        assert response.json()["detail"].startswith(VIEW_ALL_DENIED_PREFIX)
+
+    def test_skill_content_refusal_names_read_only_admin(self, holder_client):
+        from registry.auth.asset_permissions import VIEW_ALL_DENIED_PREFIX
+
+        service = MagicMock()
+        service.get_skill = AsyncMock(return_value=_skill(VisibilityEnum.PRIVATE))
+        with patch("registry.api.skill_routes.get_skill_service", return_value=service):
+            response = holder_client.get("/api/skills/hidden-skill/content")
+        assert response.status_code == 403
+        assert response.json()["detail"].startswith(VIEW_ALL_DENIED_PREFIX)
+
+    def test_all_server_details_include_every_server_redacted(
+        self, holder_client, mock_server_service
+    ):
+        from registry.core.config import DeploymentMode
+
+        mock_server_service.get_all_servers = AsyncMock(
+            return_value={
+                "/hidden": {
+                    "server_name": "hidden",
+                    "path": "/hidden",
+                    "proxy_pass_url": "http://internal-backend:8080",
+                }
+            }
+        )
+        mock_server_service.get_all_servers_with_permissions = AsyncMock(return_value={})
+        with patch(
+            "registry.services.visibility.settings.deployment_mode",
+            DeploymentMode.WITH_GATEWAY,
+        ):
+            response = holder_client.get("/api/server_details/all")
+        assert response.status_code == 200
+        body = response.json()
+        assert "/hidden" in body
+        assert "proxy_pass_url" not in body["/hidden"]
+        mock_server_service.get_all_servers_with_permissions.assert_not_called()
+
+    def test_all_tools_uses_stored_lists_for_every_server(self, holder_client, mock_server_service):
+        mock_server_service.get_all_servers = AsyncMock(
+            return_value={
+                "/hidden": {
+                    "server_name": "hidden",
+                    "path": "/hidden",
+                    "tool_list": [{"name": "read_note"}],
+                }
+            }
+        )
+        mock_server_service.get_all_servers_with_permissions = AsyncMock(return_value={})
+        mock_server_service.is_service_enabled = AsyncMock(return_value=True)
+        mcp = MagicMock()
+        mcp.get_tools_from_server_with_server_info = AsyncMock()
+        with (
+            patch("registry.core.mcp_client.mcp_client_service", mcp),
+            patch(
+                "registry.api.server_routes.annotate_blocked_tools",
+                AsyncMock(side_effect=lambda _path, tools: tools),
+            ),
+        ):
+            response = holder_client.get("/api/servers/tools/all")
+        assert response.status_code == 200
+        assert [tool["name"] for tool in response.json()["tools"]] == ["read_note"]
+        mcp.get_tools_from_server_with_server_info.assert_not_called()
