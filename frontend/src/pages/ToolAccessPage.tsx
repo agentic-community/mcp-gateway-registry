@@ -278,8 +278,8 @@ const ToolAccessPage: React.FC = () => {
 
       {!error && data && total === 0 && (
         <div className="card p-6 text-sm text-fg-muted">
-          No tools to show. This page lists the tools on servers you own, or every tool if you are an admin or a
-          read-only admin.
+          No tools to show. Admins and read-only admins see every tool. Server owners see the tools on their own
+          servers when an admin turns that on.
         </div>
       )}
 

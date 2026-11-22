@@ -109,11 +109,13 @@ const Sidebar: React.FC<SidebarProps> = ({ sidebarOpen, setSidebarOpen, stats, a
   }, []);
 
   // Tool access (issue #2102): admins and read-only admins always get the
-  // entry; anyone else gets it when they own at least one server with tools.
+  // entry. Anyone else gets it only when the registry shows owners their own
+  // servers (TOOL_ACCESS_OWNER_VIEW=owned) and they own a server with tools.
   const seesAllToolAccess = user?.is_admin === true || user?.view_all === true;
+  const ownerViewOn = user?.tool_access_owner_view === true;
   const [ownsToolAccessRows, setOwnsToolAccessRows] = useState(false);
   useEffect(() => {
-    if (!user || seesAllToolAccess) return undefined;
+    if (!user || seesAllToolAccess || !ownerViewOn) return undefined;
     let active = true;
     void hasOwnToolAccessRows().then(has => {
       if (active) setOwnsToolAccessRows(has);
@@ -121,7 +123,7 @@ const Sidebar: React.FC<SidebarProps> = ({ sidebarOpen, setSidebarOpen, stats, a
     return () => {
       active = false;
     };
-  }, [user, seesAllToolAccess]);
+  }, [user, seesAllToolAccess, ownerViewOn]);
   const showToolAccess = seesAllToolAccess || ownsToolAccessRows;
 
   const filters = [

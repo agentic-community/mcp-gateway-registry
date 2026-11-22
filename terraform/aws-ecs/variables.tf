@@ -1682,6 +1682,17 @@ variable "health_check_interval_seconds" {
   }
 }
 
+variable "tool_access_owner_view" {
+  description = "What a server owner who is not an admin sees on the Tool access page and GET /api/tool-access: none (nothing; only admins and read-only admins see the listing) or owned (the tools on the servers they registered). Default none."
+  type        = string
+  default     = "none"
+
+  validation {
+    condition     = contains(["none", "owned"], var.tool_access_owner_view)
+    error_message = "tool_access_owner_view must be none or owned."
+  }
+}
+
 variable "tool_refresh_enabled" {
   description = "Fetch tools again from servers that stay healthy, on a schedule, so the stored tool list picks up description and input schema changes. Each registry task refreshes on its own, so upstream servers see one refresh per task per period. Default false."
   type        = bool

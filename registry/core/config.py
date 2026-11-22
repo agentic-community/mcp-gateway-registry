@@ -4,7 +4,7 @@ import re
 from datetime import UTC
 from enum import Enum
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 from urllib.parse import urlparse
 
 from pydantic import Field, ValidationInfo, field_validator
@@ -635,6 +635,30 @@ class Settings(BaseSettings):
             "is at least this value times health_check_interval_seconds."
         ),
     )
+    # Tool access listing (issue #2102)
+    tool_access_owner_view: Literal["none", "owned"] = Field(
+        default="none",
+        description=(
+            "What a server owner who is not an admin sees on the Tool access page "
+            "and GET /api/tool-access. 'none' (the default): nothing, so only "
+            "admins and read-only admins see which groups can use each tool. "
+            "'owned': the tools on the servers and virtual servers they "
+            "registered. Admins and view_all holders always see every tool."
+        ),
+    )
+
+    @field_validator("tool_access_owner_view", mode="before")
+    @classmethod
+    def _normalize_tool_access_owner_view(cls, v: object) -> object:
+        """Read a blank value as the default and accept any letter case.
+
+        Compose and Terraform pass an unset value as an empty string.
+        """
+        if isinstance(v, str):
+            cleaned = v.strip().lower()
+            return cleaned or "none"
+        return v
+
     tool_fetch_max_concurrency: int = Field(
         default=5,
         ge=1,

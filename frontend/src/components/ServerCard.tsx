@@ -319,8 +319,14 @@ const ToolAccessButton: React.FC<{ serverPath: string; serverName: string }> = (
 const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, onEdit, canModify, canHealthCheck = true, canToggle = true, canDelete, onRefreshSuccess, onShowToast, onServerUpdate, onDelete, authToken, egressConnect: egressConnectProp, onEgressChanged: onEgressChangedProp, openApiEnabled = false }) => {
   const { user } = useAuth();
   const isAdmin = user?.is_admin === true;
-  // A server synced from a peer registry has no local owner (issue #2102).
-  const isOwner = !!user?.username && server.registered_by === user.username && !server.sync_metadata;
+  // Owners get the button only when the registry shows them their own
+  // servers (TOOL_ACCESS_OWNER_VIEW=owned). A server synced from a peer
+  // registry has no local owner (issue #2102).
+  const isOwner =
+    user?.tool_access_owner_view === true &&
+    !!user?.username &&
+    server.registered_by === user.username &&
+    !server.sync_metadata;
   const canSeeToolAccess = isAdmin || user?.view_all === true || isOwner;
   const [showOpenApiDetails, setShowOpenApiDetails] = useState(false);
   const canManageOpenApi = openApiEnabled && isAdmin && !!server.openapi_server_slug;

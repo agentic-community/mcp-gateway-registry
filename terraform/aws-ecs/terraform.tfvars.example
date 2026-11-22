@@ -924,6 +924,11 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 # registry task refreshes on its own. Default: false
 # tool_refresh_enabled = false
 
+# What a server owner who is not an admin sees on the Tool access page:
+# none (nothing) or owned (the tools on the servers they registered).
+# Admins and read-only admins always see every tool. Default: none
+# tool_access_owner_view = "none"
+
 # Fetch each healthy server once every this many health cycles. With the
 # 300 s interval, 3 cycles is 15 minutes. Default: 3
 # tool_refresh_every_cycles = 3

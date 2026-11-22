@@ -234,141 +234,146 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].env[16].name
           value: TOOL_FETCH_MAX_CONCURRENCY
+      # TOOL_ACCESS_OWNER_VIEW (issue #2102, always rendered) follows the
+      # tool refresh trio, so every later index moved up by one.
       - equal:
           path: spec.template.spec.containers[0].env[17].name
-          value: MCP_ADVERTISED_SCOPES
+          value: TOOL_ACCESS_OWNER_VIEW
       - equal:
           path: spec.template.spec.containers[0].env[18].name
-          value: SSRF_ALLOWED_HOSTS
+          value: MCP_ADVERTISED_SCOPES
       - equal:
           path: spec.template.spec.containers[0].env[19].name
-          value: SSRF_ALLOWED_CIDRS
+          value: SSRF_ALLOWED_HOSTS
       - equal:
           path: spec.template.spec.containers[0].env[20].name
-          value: CIMD_PUBLISHER_ENABLED
+          value: SSRF_ALLOWED_CIDRS
       - equal:
           path: spec.template.spec.containers[0].env[21].name
-          value: CIMD_CACHE_TTL
+          value: CIMD_PUBLISHER_ENABLED
       - equal:
           path: spec.template.spec.containers[0].env[22].name
-          value: CIMD_CLIENT_NAME
+          value: CIMD_CACHE_TTL
       - equal:
           path: spec.template.spec.containers[0].env[23].name
-          value: CIMD_REDIRECT_URIS
+          value: CIMD_CLIENT_NAME
       - equal:
           path: spec.template.spec.containers[0].env[24].name
-          value: CIMD_SCOPE
+          value: CIMD_REDIRECT_URIS
       - equal:
           path: spec.template.spec.containers[0].env[25].name
-          value: CIMD_LOGO_URI
+          value: CIMD_SCOPE
       - equal:
           path: spec.template.spec.containers[0].env[26].name
-          value: CIMD_CONTACTS
+          value: CIMD_LOGO_URI
       - equal:
           path: spec.template.spec.containers[0].env[27].name
-          value: A2A_REVERSE_PROXY_ENABLED
+          value: CIMD_CONTACTS
       - equal:
           path: spec.template.spec.containers[0].env[28].name
-          value: IDE_OAUTH_CLIENT_ID
+          value: A2A_REVERSE_PROXY_ENABLED
       - equal:
           path: spec.template.spec.containers[0].env[29].name
-          value: IDE_OAUTH_CALLBACK_PORT
+          value: IDE_OAUTH_CLIENT_ID
       - equal:
           path: spec.template.spec.containers[0].env[30].name
-          value: IDE_CONNECT_SCOPE
+          value: IDE_OAUTH_CALLBACK_PORT
       - equal:
           path: spec.template.spec.containers[0].env[31].name
-          value: CUSTOM_ENTITY_TYPES_ENABLED
+          value: IDE_CONNECT_SCOPE
       - equal:
           path: spec.template.spec.containers[0].env[32].name
-          value: CUSTOM_TYPE_CACHE_TTL_SECONDS
+          value: CUSTOM_ENTITY_TYPES_ENABLED
       - equal:
           path: spec.template.spec.containers[0].env[33].name
-          value: MAX_CUSTOM_RECORDS_PER_TYPE
+          value: CUSTOM_TYPE_CACHE_TTL_SECONDS
       - equal:
           path: spec.template.spec.containers[0].env[34].name
-          value: MAX_CUSTOM_TYPES
+          value: MAX_CUSTOM_RECORDS_PER_TYPE
       - equal:
           path: spec.template.spec.containers[0].env[35].name
-          value: INTERNAL_TOKEN_TTL_SECONDS
+          value: MAX_CUSTOM_TYPES
       - equal:
           path: spec.template.spec.containers[0].env[36].name
-          value: INTERNAL_TOKEN_LEEWAY_SECONDS
+          value: INTERNAL_TOKEN_TTL_SECONDS
       - equal:
           path: spec.template.spec.containers[0].env[37].name
-          value: KEYCLOAK_ADMIN_PASSWORD
+          value: INTERNAL_TOKEN_LEEWAY_SECONDS
       - equal:
           path: spec.template.spec.containers[0].env[38].name
-          value: PF_ADMIN_URL
+          value: KEYCLOAK_ADMIN_PASSWORD
       - equal:
           path: spec.template.spec.containers[0].env[39].name
-          value: PF_ADMIN_USER
+          value: PF_ADMIN_URL
       - equal:
           path: spec.template.spec.containers[0].env[40].name
-          value: UPDATE_CHECK_ENABLED
+          value: PF_ADMIN_USER
       - equal:
           path: spec.template.spec.containers[0].env[41].name
-          value: UPDATE_CHECK_INTERVAL_HOURS
+          value: UPDATE_CHECK_ENABLED
       - equal:
           path: spec.template.spec.containers[0].env[42].name
-          value: AUDIT_LOG_REQUIRE_DURABLE
+          value: UPDATE_CHECK_INTERVAL_HOURS
       - equal:
           path: spec.template.spec.containers[0].env[43].name
+          value: AUDIT_LOG_REQUIRE_DURABLE
+      - equal:
+          path: spec.template.spec.containers[0].env[44].name
           value: RATE_LIMITING_ENABLED
       - equal:
-          path: spec.template.spec.containers[0].env[50].name
+          path: spec.template.spec.containers[0].env[51].name
           value: RATE_LIMIT_AGENT_FLOOR_PER_MIN
       - equal:
-          path: spec.template.spec.containers[0].env[51].name
+          path: spec.template.spec.containers[0].env[52].name
           value: MCP_TOKEN_DEFAULT_TTL_HOURS
       - equal:
-          path: spec.template.spec.containers[0].env[52].name
+          path: spec.template.spec.containers[0].env[53].name
           value: MCP_TOKEN_MAX_TTL_HOURS
       - equal:
-          path: spec.template.spec.containers[0].env[53].name
+          path: spec.template.spec.containers[0].env[54].name
           value: GATEWAY_GENERIC_PROXY_ENABLED
       - equal:
-          path: spec.template.spec.containers[0].env[54].name
+          path: spec.template.spec.containers[0].env[55].name
           value: GATEWAY_CANONICAL_NAMESPACE_ENABLED
       - equal:
-          path: spec.template.spec.containers[0].env[55].name
+          path: spec.template.spec.containers[0].env[56].name
           value: GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS
       - equal:
-          path: spec.template.spec.containers[0].env[56].name
+          path: spec.template.spec.containers[0].env[57].name
           value: GATEWAY_GENERIC_CLIENT_MAX_BODY_SIZE
       - equal:
-          path: spec.template.spec.containers[0].env[57].name
+          path: spec.template.spec.containers[0].env[58].name
           value: GATEWAY_PROXY_PREFIX
       - equal:
-          path: spec.template.spec.containers[0].env[58].name
+          path: spec.template.spec.containers[0].env[59].name
           value: GATEWAY_GENERIC_STREAM_READ_TIMEOUT_SECONDS
       - equal:
-          path: spec.template.spec.containers[0].env[59].name
+          path: spec.template.spec.containers[0].env[60].name
           value: AWS_EC2_METADATA_DISABLED
       - equal:
-          path: spec.template.spec.containers[0].env[60].name
+          path: spec.template.spec.containers[0].env[61].name
           value: SECURITY_BLOCK_ON_SCAN_FAILURE
       # Forward-proxy egress pair (issue #1832), always rendered, immediately
       # before the extraEnv append.
       - equal:
-          path: spec.template.spec.containers[0].env[61].name
+          path: spec.template.spec.containers[0].env[62].name
           value: EGRESS_FORWARD_PROXY_ENABLED
       - equal:
-          path: spec.template.spec.containers[0].env[62].name
+          path: spec.template.spec.containers[0].env[63].name
           value: EGRESS_FORWARD_PROXY_CA_BUNDLE
       # OpenAPI MCP settings (issue #2022), always rendered, after the
       # forward-proxy pair.
       - equal:
-          path: spec.template.spec.containers[0].env[63].name
+          path: spec.template.spec.containers[0].env[64].name
           value: OPENAPI_MCP_ENABLED
       - equal:
-          path: spec.template.spec.containers[0].env[69].name
+          path: spec.template.spec.containers[0].env[70].name
           value: OPENAPI_MCP_RECONCILE_INTERVAL_SECONDS
       - equal:
-          path: spec.template.spec.containers[0].env[70].name
+          path: spec.template.spec.containers[0].env[71].name
           value: MY_FLAG
       - equal:
-          path: spec.template.spec.containers[0].env[71].name
+          path: spec.template.spec.containers[0].env[72].name
           value: MY_SECRET_VAR
 
   - it: appends extraEnvFrom entries after chart-managed envFrom sources

@@ -359,6 +359,7 @@ module "mcp_gateway" {
   tool_refresh_enabled          = var.tool_refresh_enabled
   tool_refresh_every_cycles     = var.tool_refresh_every_cycles
   tool_fetch_max_concurrency    = var.tool_fetch_max_concurrency
+  tool_access_owner_view        = var.tool_access_owner_view
   mcp_proxy_max_body_bytes      = var.mcp_proxy_max_body_bytes
   mcp_proxy_timeout             = var.mcp_proxy_timeout
   tool_filter_audit_log_level   = var.tool_filter_audit_log_level

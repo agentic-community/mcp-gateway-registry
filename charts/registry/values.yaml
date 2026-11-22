@@ -346,6 +346,8 @@ app:
   toolRefreshEnabled: false # Fetch tools again from servers that stay healthy, on a schedule. Each replica refreshes on its own
   toolRefreshEveryCycles: 3 # Fetch each healthy server once every N health cycles (1-1000); 3 x 300 s = 15 min
   toolFetchMaxConcurrency: 5 # Most background tool fetches one replica runs at once (1-100)
+  # Tool access listing (issue #2102): what an owner who is not an admin sees. none or owned
+  toolAccessOwnerView: "none" # none: only admins and read-only admins; owned: owners also see their own servers' tools
   # Custom entity types (admin-defined, schema-driven catalog types)
   customEntityTypesEnabled: false # Main switch for dynamic tabs + endpoints; off = no behavior change
   customTypeCacheTtlSeconds: 60 # TTL (s) for the in-process custom-type descriptor cache

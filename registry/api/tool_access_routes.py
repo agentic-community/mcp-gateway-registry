@@ -4,7 +4,9 @@ Group names show how an organization is structured, so the listing is limited
 by caller:
 
 - Admins and holders of the read-only view_all permission see every row.
-- Anyone else sees the rows for servers and virtual servers they own.
+- When an admin sets TOOL_ACCESS_OWNER_VIEW=owned, anyone else sees the rows
+  for servers and virtual servers they own. The default ('none') shows them
+  nothing.
 
 A caller who owns nothing gets an empty list, not an error, so the response
 says nothing about which servers exist.
@@ -24,6 +26,7 @@ from fastapi import (
 
 from ..auth.asset_permissions import can_view_all
 from ..auth.dependencies import nginx_proxied_auth
+from ..core.config import settings
 from ..schemas.tool_access_models import (
     AccessSummary,
     GroupRef,
@@ -40,6 +43,7 @@ router = APIRouter()
 DEFAULT_LIMIT: int = 20
 MAX_LIMIT: int = 500
 MAX_QUERY_LENGTH: int = 200
+OWNER_VIEW_OWNED: str = "owned"
 
 
 def _sees_every_row(
@@ -128,6 +132,10 @@ async def _rows_for_caller(
         tier = "admin" if user_context.get("is_admin") else "view_all"
         return [b.row for b in data.rows], data.groups, tier
 
+    # Owners see their own servers' tools only when an admin opted in
+    # (TOOL_ACCESS_OWNER_VIEW=owned). The default shows them nothing.
+    if settings.tool_access_owner_view != OWNER_VIEW_OWNED:
+        return [], {}, "owner_view_off"
     username = user_context.get("username") or ""
     if not username:
         return [], {}, "none"

@@ -563,6 +563,8 @@ registry:
     toolRefreshEnabled: false # Fetch tools again from servers that stay healthy, on a schedule. Each replica refreshes on its own
     toolRefreshEveryCycles: 3 # Fetch each healthy server once every N health cycles (1-1000); 3 x 300 s = 15 min
     toolFetchMaxConcurrency: 5 # Most background tool fetches one replica runs at once (1-100)
+    # Tool access listing (issue #2102): what an owner who is not an admin sees. none or owned
+    toolAccessOwnerView: "none" # none: only admins and read-only admins; owned: owners also see their own servers' tools
     # Gateway generic-proxy feature (registry-consumed). Ships DISABLED. See the
     # auth-server section for the eleven auth-server-consumed knobs + the egress
     # NetworkPolicy that MUST be deployed before enabling.
