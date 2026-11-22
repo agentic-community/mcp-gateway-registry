@@ -109,6 +109,14 @@ def _paths(
     return [(r["server_path"], r["tool_name"]) for r in response.json()["rows"]]
 
 
+@pytest.fixture
+def owner_view_owned(monkeypatch):
+    """Turn on the owner view (TOOL_ACCESS_OWNER_VIEW=owned)."""
+    from registry.core.config import settings
+
+    monkeypatch.setattr(settings, "tool_access_owner_view", "owned")
+
+
 @pytest.mark.unit
 class TestCallerTiers:
     """Who gets which rows."""
@@ -123,20 +131,31 @@ class TestCallerTiers:
         for client, _ in _client_for(_context("ro", view_all=True)):
             assert client.get(ENDPOINT).json()["total_count"] == 4
 
-    def test_owner_gets_own_rows_only(self):
+    def test_owner_gets_nothing_by_default(self):
+        for client, build in _client_for(_context("alice")):
+            response = client.get(ENDPOINT)
+            assert response.status_code == 200
+            assert response.json()["total_count"] == 0
+            build.assert_not_awaited()
+
+    def test_view_all_holder_unaffected_by_owner_view(self):
+        for client, _ in _client_for(_context("ro", view_all=True)):
+            assert client.get(ENDPOINT).json()["total_count"] == 4
+
+    def test_owner_gets_own_rows_only(self, owner_view_owned):
         for client, build in _client_for(_context("alice")):
             response = client.get(ENDPOINT)
             assert _paths(response) == [("/alpha/", "a1"), ("/alpha/", "a2")]
             build.assert_awaited_once_with(owner="alice")
 
-    def test_non_owner_gets_empty_200(self):
+    def test_non_owner_gets_empty_200(self, owner_view_owned):
         for client, _ in _client_for(_context("nobody")):
             response = client.get(ENDPOINT)
             assert response.status_code == 200
             assert response.json()["rows"] == []
             assert response.json()["total_count"] == 0
 
-    def test_caller_without_username_gets_nothing(self):
+    def test_caller_without_username_gets_nothing(self, owner_view_owned):
         for client, build in _client_for(_context("")):
             assert client.get(ENDPOINT).json()["total_count"] == 0
             build.assert_not_awaited()
@@ -266,3 +285,33 @@ class TestCanSeeMatchesServerList:
             }
             context = dict(group.context, username=f"member-of-{group.name}")
             assert _server_list_tools(context, _servers()) == expected, group.name
+
+
+@pytest.mark.unit
+class TestOwnerViewSetting:
+    """TOOL_ACCESS_OWNER_VIEW parsing."""
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [("", "none"), ("none", "none"), ("owned", "owned"), (" OWNED ", "owned")],
+    )
+    def test_values(self, monkeypatch, raw, expected):
+        from registry.core.config import Settings
+
+        monkeypatch.setenv("TOOL_ACCESS_OWNER_VIEW", raw)
+        assert Settings(_env_file=None).tool_access_owner_view == expected
+
+    def test_default_is_none(self, monkeypatch):
+        from registry.core.config import Settings
+
+        monkeypatch.delenv("TOOL_ACCESS_OWNER_VIEW", raising=False)
+        assert Settings(_env_file=None).tool_access_owner_view == "none"
+
+    def test_unknown_value_stops_startup(self, monkeypatch):
+        from pydantic import ValidationError
+
+        from registry.core.config import Settings
+
+        monkeypatch.setenv("TOOL_ACCESS_OWNER_VIEW", "everyone")
+        with pytest.raises(ValidationError, match="tool_access_owner_view"):
+            Settings(_env_file=None)

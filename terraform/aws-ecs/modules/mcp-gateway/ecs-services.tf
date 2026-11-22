@@ -1596,6 +1596,10 @@ module "ecs_service_registry" {
           value = tostring(var.tool_refresh_enabled)
         },
         {
+          name  = "TOOL_ACCESS_OWNER_VIEW"
+          value = var.tool_access_owner_view
+        },
+        {
           name  = "TOOL_REFRESH_EVERY_CYCLES"
           value = tostring(var.tool_refresh_every_cycles)
         },

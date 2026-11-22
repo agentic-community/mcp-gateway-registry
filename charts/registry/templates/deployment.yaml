@@ -206,6 +206,10 @@ spec:
               value: {{ .Values.app.toolRefreshEveryCycles | toString | quote }}
             - name: TOOL_FETCH_MAX_CONCURRENCY
               value: {{ .Values.app.toolFetchMaxConcurrency | toString | quote }}
+            # Tool access listing (issue #2102). The registry rejects any value
+            # other than none or owned at startup.
+            - name: TOOL_ACCESS_OWNER_VIEW
+              value: {{ .Values.app.toolAccessOwnerView | default "none" | quote }}
             # DCR scope-allowlist alignment
             - name: MCP_ADVERTISED_SCOPES
               value: {{ .Values.app.mcpAdvertisedScopes | default "" | quote }}

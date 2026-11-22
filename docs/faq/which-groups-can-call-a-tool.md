@@ -10,10 +10,22 @@ The listing only reports access. To change it, edit the group under **Settings >
 |--------|---------------|
 | Admin | Every tool |
 | [Read-only admin](read-only-viewer-group.md#read-only-admin) (`view_all`) | Every tool |
-| Owner of a server or virtual server | The tools on the servers they registered |
+| Owner of a server or virtual server | Nothing by default; the tools on the servers they registered if an admin turns that on |
 | Anyone else | Nothing, and no sidebar entry |
 
-Server owners can also open the page from the **Who can use these tools** button on their server's card.
+Admins and read-only admins can also open the page from the **Who can use these tools** button on a server's card.
+
+## How do I let server owners see their own tools?
+
+Set `TOOL_ACCESS_OWNER_VIEW` to `owned` (the default is `none`):
+
+| Deployment | Setting |
+|------------|---------|
+| Docker Compose | `TOOL_ACCESS_OWNER_VIEW=owned` in `.env` |
+| Terraform (ECS) | `tool_access_owner_view = "owned"` in `terraform.tfvars` |
+| Helm | `registry.app.toolAccessOwnerView: owned` |
+
+Restart the registry. An owner who is not an admin then sees the tools on the servers they registered, gets the **Tool access** sidebar entry once they own a server with tools, and gets the card button on those servers. They still see nothing about servers they do not own.
 
 ## In the UI
 

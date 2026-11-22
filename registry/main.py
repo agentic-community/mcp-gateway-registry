@@ -1456,6 +1456,9 @@ async def get_current_user(user_context: dict[str, Any] = Depends(nginx_proxied_
         "is_admin": user_context.get("is_admin", False),
         # Read-only admin (issue #2099): sees every asset, changes nothing.
         "view_all": can_view_all(user_context),
+        # Tool access listing (issue #2102): whether owners who are not admins
+        # see their own servers' tools, so the UI can show or hide the links.
+        "tool_access_owner_view": settings.tool_access_owner_view == "owned",
         "ui_permissions": ui_permissions,
         "accessible_servers": user_context.get("accessible_servers", []),
         "accessible_services": user_context.get("accessible_services", []),

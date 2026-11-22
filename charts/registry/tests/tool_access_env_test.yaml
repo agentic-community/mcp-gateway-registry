@@ -1,0 +1,29 @@
+suite: tool access owner view env (issue #2102)
+templates:
+  - templates/deployment.yaml
+tests:
+  - it: renders TOOL_ACCESS_OWNER_VIEW=none by default
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: TOOL_ACCESS_OWNER_VIEW
+            value: "none"
+  - it: passes owned through when an operator opts in
+    set:
+      app:
+        toolAccessOwnerView: owned
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: TOOL_ACCESS_OWNER_VIEW
+            value: "owned"
+  - it: rejects TOOL_ACCESS_OWNER_VIEW in extraEnv because the chart manages it
+    set:
+      extraEnv:
+        - name: TOOL_ACCESS_OWNER_VIEW
+          value: owned
+    asserts:
+      - failedTemplate:
+          errorPattern: "TOOL_ACCESS_OWNER_VIEW"

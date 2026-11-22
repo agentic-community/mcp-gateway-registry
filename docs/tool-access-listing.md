@@ -12,12 +12,22 @@ Group names show how an organization is structured, so the registry limits who s
 |--------|------|
 | Admin | Every tool |
 | Read-only admin (`view_all`, see [read-only groups](faq/read-only-viewer-group.md#read-only-admin)) | Every tool |
-| Owner of a server or virtual server | The tools on the servers they registered |
+| Owner of a server or virtual server | None by default. With `TOOL_ACCESS_OWNER_VIEW=owned`, the tools on the servers they registered |
 | Anyone else | None |
 
-The owner of a server is the user in its `registered_by` field, and of a virtual server the user in `created_by`. A server synced from a peer registry has no local owner, because its `registered_by` names a user of the other registry.
+Admins and read-only admins get a **Tool access** entry in the sidebar, and a **Who can use these tools** button on each server card that opens the page filtered to that server.
 
-Admins, read-only admins and owners get a **Tool access** entry in the sidebar. Each server card also has a **Who can use these tools** button that opens the page filtered to that server.
+### Letting owners see their own servers
+
+Out of the box only admins and read-only admins see the listing. To let the owner of a server see which groups can use its tools, set `TOOL_ACCESS_OWNER_VIEW` to `owned`:
+
+| Deployment | Setting |
+|------------|---------|
+| Docker Compose | `TOOL_ACCESS_OWNER_VIEW=owned` in `.env` |
+| Terraform (ECS) | `tool_access_owner_view = "owned"` in `terraform.tfvars` |
+| Helm | `registry.app.toolAccessOwnerView: owned` |
+
+Owners then get the sidebar entry once they own a server with tools, and the card button on their own servers. The owner of a server is the user in its `registered_by` field, and of a virtual server the user in `created_by`. A server synced from a peer registry has no local owner, because its `registered_by` names a user of the other registry. The registry refuses to start if the value is anything other than `none` or `owned`.
 
 ## Reading a row
 
@@ -73,7 +83,7 @@ curl -sS "$REGISTRY_URL/api/tool-access?q=search&limit=20" \
 | `limit` | 20 | Rows per page, 1 to 500. |
 | `offset` | 0 | Rows to skip. |
 
-The response holds `rows`, `groups`, `total_count`, `limit`, `offset`, `has_next` and `generated_at`. Rows name registry groups only; `groups` gives the identity provider groups and admin flag of each group named on the page. The endpoint accepts a session cookie or a bearer token. Rows never include backend URLs, headers or credentials. A caller who may see no rows gets `200` with an empty list.
+The response holds `rows`, `groups`, `total_count`, `limit`, `offset`, `has_next` and `generated_at`. An owner gets an empty list unless `TOOL_ACCESS_OWNER_VIEW` is `owned`. Rows name registry groups only; `groups` gives the identity provider groups and admin flag of each group named on the page. The endpoint accepts a session cookie or a bearer token. Rows never include backend URLs, headers or credentials. A caller who may see no rows gets `200` with an empty list.
 
 ## CLI
 
