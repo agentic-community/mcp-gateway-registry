@@ -1890,9 +1890,9 @@ class RegistryClient:
         self.registry_url = registry_url.rstrip("/")
         self._token = token
 
-        # Redact token in logs - show only first 8 characters
-        redacted_token = f"{token[:8]}..." if len(token) > 8 else "***"
-        logger.info(f"Initialized RegistryClient for {self.registry_url} (token: {redacted_token})")
+        # Never log any part of the token, not even a prefix.
+        token_state = "token set" if token else "no token"
+        logger.info(f"Initialized RegistryClient for {self.registry_url} ({token_state})")
 
     def _get_headers(self) -> dict[str, str]:
         """

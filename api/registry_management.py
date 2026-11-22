@@ -390,11 +390,8 @@ def _mask_sensitive_fields(
         masked = {}
         for key, value in data.items():
             if key in fields_to_mask and value:
-                # Show first 3 chars followed by ...
-                if isinstance(value, str) and len(value) > 3:
-                    masked[key] = f"{value[:3]}..."
-                else:
-                    masked[key] = "***"
+                # Never show any part of a credential, not even a prefix.
+                masked[key] = "***"
             else:
                 masked[key] = _mask_sensitive_fields(value, fields_to_mask)
         return masked
@@ -469,9 +466,8 @@ def _get_jwt_token(aws_region: str | None = None, keycloak_url: str | None = Non
         if not token:
             raise RuntimeError("Empty token returned from get-m2m-token.sh")
 
-        # Redact token in logs - show only first 8 characters
-        redacted_token = f"{token[:8]}..." if len(token) > 8 else "***"
-        logger.debug(f"Successfully retrieved JWT token: {redacted_token}")
+        # Log that a token arrived, never any part of it.
+        logger.debug(f"Successfully retrieved JWT token ({len(token)} characters)")
         return token
 
     except subprocess.CalledProcessError as e:
@@ -704,9 +700,8 @@ def _create_client(args: argparse.Namespace) -> RegistryClient:
         if not token:
             raise RuntimeError(f"Empty token in file: {args.token_file}")
 
-        # Redact token in logs - show only first 8 characters
-        redacted_token = f"{token[:8]}..." if len(token) > 8 else "***"
-        logger.debug(f"Successfully loaded token from file: {redacted_token}")
+        # Log that a token was loaded, never any part of it.
+        logger.debug(f"Successfully loaded token from file ({len(token)} characters)")
     else:
         # Check parameters needed for token script
         aws_region = args.aws_region or os.getenv("AWS_REGION")
@@ -5430,8 +5425,7 @@ def cmd_peer_get(args: argparse.Namespace) -> int:
         # Mask federation token in non-JSON output
         fed_token = response.get("federation_token")
         if fed_token:
-            masked_token = f"{fed_token[:3]}..." if len(fed_token) > 3 else "***"
-            print(f"Fed Token:    {masked_token}")
+            print("Fed Token:    *** (set; use --json to see the full response)")
 
         whitelist_servers = response.get("whitelist_servers", [])
         if whitelist_servers:
