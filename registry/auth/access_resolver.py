@@ -44,56 +44,26 @@ class UserAccess:
     tools: ToolAllowlist = field(default_factory=dict)
 
 
-async def resolve_scope_access(
+def access_from_rules(
     user_scopes: list[str],
+    scope_rules: dict[str, list[dict]],
 ) -> UserAccess:
-    """Resolve `accessible_servers` and `accessible_tools` in one loop.
+    """Build UserAccess from server_access rules that are already loaded.
 
-    Wildcard semantics (mirrors auth_server/server.py):
-        - `server: "*"` / `server: "all"` at the rule level is a
-          cross-server wildcard. The sentinel "*" is registered in both
-          `servers` and `tools` so downstream callers can short-circuit
-          without knowing the concrete server name.
-        - `tools: ["all"]` / `tools: ["*"]` is a per-server wildcard and
-          is recorded as `{"*"}`.
-        - A missing `tools` key or a non-list value means "no tools
-          allowed" on that server (fail-closed). A startup audit in
-          `audit_legacy_scopes_on_startup` warns operators about the
-          legacy shape so they can migrate before the tightening bites.
-
-    Wildcards are sticky across scopes: once any scope grants wildcard on
-    a server, later scopes cannot narrow it. Non-wildcard tool sets are
-    unioned across scopes.
+    Pure version of :func:`resolve_scope_access` for callers that fetched the
+    rules themselves, such as the tool access listing (issue #2102), which
+    evaluates every group from one bulk read. Same semantics, no database
+    access.
 
     Args:
-        user_scopes: Flat list of user scope names.
+        user_scopes: Scope names, in the order they should be merged.
+        scope_rules: Mapping of scope name to its flattened server_access rules.
 
     Returns:
-        UserAccess. On scope-repo error, returns an empty UserAccess().
+        UserAccess for the given scopes.
     """
-    try:
-        from ..repositories.factory import get_scope_repository
-
-        scope_repo = get_scope_repository()
-    except Exception as exc:
-        logger.error("resolve_scope_access: scope repo unavailable: %s", exc, exc_info=True)
-        return UserAccess()
-
     servers: set[str] = set()
     tools: ToolAllowlist = {}
-
-    # Fetch every scope's rules in one round-trip rather than one per scope.
-    # The sticky-wildcard / union semantics below depend on iterating
-    # `user_scopes` in order, NOT on DB return order, so we look each scope
-    # up in the prefetched map while preserving the original loop. Do NOT
-    # "optimize" this into `for scope in scope_rules:` — dict order is the
-    # $in/sort order, not the user's scope order, and that would let a later
-    # restricted scope lose to an earlier wildcard (or vice versa).
-    try:
-        scope_rules = await scope_repo.get_server_scopes_bulk(user_scopes)
-    except Exception as exc:
-        logger.error("resolve_scope_access: get_server_scopes_bulk failed: %s", exc, exc_info=True)
-        return UserAccess()
 
     for scope in user_scopes:
         scope_config = scope_rules.get(scope)
@@ -161,15 +131,66 @@ async def resolve_scope_access(
             merged.update(str(t) for t in tool_rules)
             tools[server_name] = merged
 
-    tool_restricted = sum(1 for v in tools.values() if v != {"*"})
+    return UserAccess(servers=sorted(servers), tools=tools)
+
+
+async def resolve_scope_access(
+    user_scopes: list[str],
+) -> UserAccess:
+    """Resolve `accessible_servers` and `accessible_tools` in one loop.
+
+    Wildcard semantics (mirrors auth_server/server.py):
+        - `server: "*"` / `server: "all"` at the rule level is a
+          cross-server wildcard. The sentinel "*" is registered in both
+          `servers` and `tools` so downstream callers can short-circuit
+          without knowing the concrete server name.
+        - `tools: ["all"]` / `tools: ["*"]` is a per-server wildcard and
+          is recorded as `{"*"}`.
+        - A missing `tools` key or a non-list value means "no tools
+          allowed" on that server (fail-closed). A startup audit in
+          `audit_legacy_scopes_on_startup` warns operators about the
+          legacy shape so they can migrate before the tightening bites.
+
+    Wildcards are sticky across scopes: once any scope grants wildcard on
+    a server, later scopes cannot narrow it. Non-wildcard tool sets are
+    unioned across scopes.
+
+    Args:
+        user_scopes: Flat list of user scope names.
+
+    Returns:
+        UserAccess. On scope-repo error, returns an empty UserAccess().
+    """
+    try:
+        from ..repositories.factory import get_scope_repository
+
+        scope_repo = get_scope_repository()
+    except Exception as exc:
+        logger.error("resolve_scope_access: scope repo unavailable: %s", exc, exc_info=True)
+        return UserAccess()
+
+    # Fetch every scope's rules in one round-trip rather than one per scope.
+    # The sticky-wildcard / union semantics in access_from_rules depend on iterating
+    # `user_scopes` in order, NOT on DB return order, so we look each scope
+    # up in the prefetched map while preserving the original loop. Do NOT
+    # "optimize" this into `for scope in scope_rules:` — dict order is the
+    # $in/sort order, not the user's scope order, and that would let a later
+    # restricted scope lose to an earlier wildcard (or vice versa).
+    try:
+        scope_rules = await scope_repo.get_server_scopes_bulk(user_scopes)
+    except Exception as exc:
+        logger.error("resolve_scope_access: get_server_scopes_bulk failed: %s", exc, exc_info=True)
+        return UserAccess()
+
+    access = access_from_rules(user_scopes, scope_rules)
+    tool_restricted = sum(1 for v in access.tools.values() if v != {"*"})
     logger.info(
         "resolve_scope_access: scopes=%d servers=%d tool_restricted_servers=%d",
         len(user_scopes),
-        len(servers),
+        len(access.servers),
         tool_restricted,
     )
-
-    return UserAccess(servers=sorted(servers), tools=tools)
+    return access
 
 
 async def get_user_accessible_servers(

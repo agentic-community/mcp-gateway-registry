@@ -187,27 +187,23 @@ async def map_cognito_groups_to_scopes(groups: list[str]) -> list[str]:
     return unique_scopes
 
 
-async def get_ui_permissions_for_user(user_scopes: list[str]) -> dict[str, list[str]]:
-    """
-    Get UI permissions for a user based on their scopes - queries repository directly.
+def ui_permissions_from_configs(
+    user_scopes: list[str],
+    scope_configs: dict[str, dict],
+) -> dict[str, list[str]]:
+    """Merge already-loaded UI permission configs for the given scopes.
+
+    Pure version of :func:`get_ui_permissions_for_user` for callers that read
+    the configs themselves, such as the tool access listing (issue #2102).
 
     Args:
-        user_scopes: List of user's scopes (includes UI scope names like 'mcp-registry-admin')
+        user_scopes: Scope names to merge, in order.
+        scope_configs: Mapping of scope name to its ui_permissions dict.
 
     Returns:
-        Dict mapping UI actions to lists of services they can perform the action on
-        Example: {'list_service': ['mcpgw', 'auth_server'], 'toggle_service': ['mcpgw']}
+        Dict mapping UI actions to the services they apply to, "all" included.
     """
-    from ..repositories.factory import get_scope_repository
-
     ui_permissions: dict[str, set[str]] = {}
-    scope_repo = get_scope_repository()
-
-    # One round-trip for all scopes instead of one find_one per scope — on a
-    # remote cluster the per-scope fan-out dominated /api/auth/me latency for
-    # users with many groups. Iterate user_scopes (not the map) to keep the
-    # merge order deterministic.
-    scope_configs = await scope_repo.get_ui_scopes_bulk(user_scopes)
 
     for scope in user_scopes:
         scope_config = scope_configs.get(scope)
@@ -232,7 +228,31 @@ async def get_ui_permissions_for_user(user_scopes: list[str]) -> dict[str, list[
                         )
 
     # Convert sets back to lists
-    result = {k: list(v) for k, v in ui_permissions.items()}
+    return {k: list(v) for k, v in ui_permissions.items()}
+
+
+async def get_ui_permissions_for_user(user_scopes: list[str]) -> dict[str, list[str]]:
+    """
+    Get UI permissions for a user based on their scopes - queries repository directly.
+
+    Args:
+        user_scopes: List of user's scopes (includes UI scope names like 'mcp-registry-admin')
+
+    Returns:
+        Dict mapping UI actions to lists of services they can perform the action on
+        Example: {'list_service': ['mcpgw', 'auth_server'], 'toggle_service': ['mcpgw']}
+    """
+    from ..repositories.factory import get_scope_repository
+
+    scope_repo = get_scope_repository()
+
+    # One round-trip for all scopes instead of one find_one per scope — on a
+    # remote cluster the per-scope fan-out dominated /api/auth/me latency for
+    # users with many groups. ui_permissions_from_configs iterates user_scopes
+    # (not the map) to keep the merge order deterministic.
+    scope_configs = await scope_repo.get_ui_scopes_bulk(user_scopes)
+
+    result = ui_permissions_from_configs(user_scopes, scope_configs)
     logger.info(f"Final UI permissions for user: {result}")
     return result
 

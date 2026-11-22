@@ -1727,6 +1727,62 @@ class SkillListResponse(BaseModel):
     has_next: bool = Field(..., description="Whether more pages exist")
 
 
+class ToolAccessGroup(BaseModel):
+    """A registry group and its identity provider groups (issue #2102)."""
+
+    group: str = Field(..., description="Registry group name")
+    idp_groups: list[str] = Field(default_factory=list, description="Mapped IdP group names")
+    is_admin: bool = Field(False, description="True when the group grants registry admin")
+
+
+class ToolAccessCondition(BaseModel):
+    """One check a caller must pass, with the groups that pass it."""
+
+    label: str = Field(..., description="What the check is")
+    groups: list[str] = Field(default_factory=list, description="Registry groups that pass it")
+
+
+class ToolAccessSummary(BaseModel):
+    """Groups that grant one kind of access alone, and groups needed together."""
+
+    alone: list[str] = Field(
+        default_factory=list, description="Registry groups that grant it alone"
+    )
+    together: list[ToolAccessCondition] = Field(
+        default_factory=list, description="One group from each condition grants it"
+    )
+
+
+class ToolAccessRow(BaseModel):
+    """One tool on one server with who can see it and who can call it."""
+
+    tool_name: str = Field(..., description="Tool name a client calls")
+    server_name: str = Field(..., description="Server display name")
+    server_path: str = Field(..., description="Registry path of the server")
+    server_type: str = Field(..., description="mcp, openapi or virtual")
+    enabled: bool = Field(..., description="Whether the server is enabled")
+    blocked: bool = Field(False, description="True when the tool is blocked")
+    blocked_source: str | None = Field(None, description="admin or security_scan")
+    backend_server_path: str | None = Field(None, description="Virtual servers: backend path")
+    backend_tool_name: str | None = Field(None, description="Virtual servers: backend tool name")
+    can_see: ToolAccessSummary = Field(default_factory=ToolAccessSummary)
+    can_call: ToolAccessSummary = Field(default_factory=ToolAccessSummary)
+
+
+class ToolAccessListResponse(BaseModel):
+    """A page of GET /api/tool-access."""
+
+    rows: list[ToolAccessRow] = Field(default_factory=list, description="Rows on this page")
+    groups: dict[str, ToolAccessGroup] = Field(
+        default_factory=dict, description="Details of every group named on this page"
+    )
+    total_count: int = Field(0, description="Rows matching the filters")
+    limit: int = Field(..., description="Page size applied")
+    offset: int = Field(..., description="Offset applied")
+    has_next: bool = Field(..., description="Whether more pages exist")
+    generated_at: str = Field("", description="When the rows were computed")
+
+
 class SkillHealthResponse(BaseModel):
     """Response model for skill health check."""
 
@@ -5122,6 +5178,59 @@ class RegistryClient:
         result = response.json()
         logger.info(f"Skill registered successfully: {result.get('name')} at {result.get('path')}")
         return SkillCard(**result)
+
+    def list_tool_access(
+        self,
+        query: str | None = None,
+        server_path: str | None = None,
+        server_type: str | None = None,
+        group: str | None = None,
+        include_disabled: bool = True,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> ToolAccessListResponse:
+        """
+        List which groups can see and call each tool (issue #2102).
+
+        Admins and read-only admins get every tool; other callers get the
+        tools on servers they own.
+
+        Args:
+            query: Substring to match in tool, server or group names
+            server_path: Exact server path
+            server_type: mcp, openapi or virtual
+            group: Exact registry or identity provider group name
+            include_disabled: Include tools on disabled servers
+            limit: Rows per page (1-500)
+            offset: Rows to skip
+
+        Returns:
+            ToolAccessListResponse with one page of rows
+
+        Raises:
+            requests.HTTPError: If request fails
+        """
+        params: dict[str, str | int] = {
+            "limit": limit,
+            "offset": offset,
+            "include_disabled": "true" if include_disabled else "false",
+        }
+        if query:
+            params["q"] = query
+        if server_path:
+            params["server_path"] = server_path
+        if server_type:
+            params["server_type"] = server_type
+        if group:
+            params["group"] = group
+
+        response = self._make_request(method="GET", endpoint="/api/tool-access", params=params)
+        result = ToolAccessListResponse(**response.json())
+        logger.info(
+            f"Retrieved {len(result.rows)} tool access rows "
+            f"(total={result.total_count}, offset={result.offset}, has_next={result.has_next})"
+        )
+        return result
 
     def list_skills(
         self,

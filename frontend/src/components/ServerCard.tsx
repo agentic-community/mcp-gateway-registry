@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useInRouterContext, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import {
   WrenchScrewdriverIcon,
@@ -14,6 +14,7 @@ import {
   XMarkIcon,
   Cog6ToothIcon,
   KeyIcon,
+  UserGroupIcon,
 } from '@heroicons/react/24/outline';
 import PlugIcon from './icons/PlugIcon';
 import OpenApiServerDetailsModal from './OpenApiServerDetailsModal';
@@ -296,9 +297,31 @@ function EgressConnectButton({
   );
 }
 
+/** Opens the Tool access page filtered to one server (issue #2102). */
+const ToolAccessLink: React.FC<{ serverPath: string; serverName: string }> = ({ serverPath, serverName }) => {
+  const navigate = useNavigate();
+  return (
+    <button
+      onClick={() => navigate(`/tool-access?server_path=${encodeURIComponent(serverPath)}`)}
+      className="p-2 text-gray-400 hover:text-info-600 dark:hover:text-info-400 hover:bg-info-50 dark:hover:bg-info-700/50 rounded-lg transition-all duration-200 flex-shrink-0"
+      title="Who can use these tools"
+      aria-label={`Who can use the tools on ${serverName}`}
+    >
+      <UserGroupIcon className="h-4 w-4" />
+    </button>
+  );
+};
+
+/** Renders the link only inside a router; a card rendered standalone shows nothing. */
+const ToolAccessButton: React.FC<{ serverPath: string; serverName: string }> = (props) =>
+  useInRouterContext() ? <ToolAccessLink {...props} /> : null;
+
 const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, onEdit, canModify, canHealthCheck = true, canToggle = true, canDelete, onRefreshSuccess, onShowToast, onServerUpdate, onDelete, authToken, egressConnect: egressConnectProp, onEgressChanged: onEgressChangedProp, openApiEnabled = false }) => {
   const { user } = useAuth();
   const isAdmin = user?.is_admin === true;
+  // A server synced from a peer registry has no local owner (issue #2102).
+  const isOwner = !!user?.username && server.registered_by === user.username && !server.sync_metadata;
+  const canSeeToolAccess = isAdmin || user?.view_all === true || isOwner;
   const [showOpenApiDetails, setShowOpenApiDetails] = useState(false);
   const canManageOpenApi = openApiEnabled && isAdmin && !!server.openapi_server_slug;
   // Any user who can see an OpenAPI MCP server can manage their own keys for
@@ -821,6 +844,12 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
                 state={egressConnect}
                 onShowToast={onShowToast}
               />
+            )}
+
+            {/* Tool access (issue #2102): which groups can see and call this
+                server's tools. Admins, read-only admins and the owner only. */}
+            {canSeeToolAccess && !isArdDiscovery && (
+              <ToolAccessButton serverPath={server.path} serverName={server.name} />
             )}
 
             {/* Full JSON Details + Security Scan — interactive actions, hidden for
