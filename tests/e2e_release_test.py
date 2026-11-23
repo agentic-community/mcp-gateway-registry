@@ -51,6 +51,8 @@ from registry_client import (
     InternalServiceRegistration,
     RegistryClient,
     SkillRegistrationRequest,
+    ToolMapping,
+    VirtualServerCreateRequest,
 )
 
 # Configure logging with basicConfig
@@ -77,6 +79,15 @@ AWS_KB_MCP_SUFFIX: str = "/aws-kb-e2e/mcp"
 PLACEHOLDER_PROXY_URL: str = "https://example.com"
 
 MCP_PROTOCOL_VERSION: str = "2025-03-26"
+# Virtual MCP server test: one backend tool exposed under an alias.
+VIRTUAL_SERVER_PATH_PREFIX: str = "/virtual/e2e-release-"
+VIRTUAL_TOOL_ALIAS: str = "e2e_release_tool"
+# Tools the test can call with no arguments, preferred in this order.
+VIRTUAL_PREFERRED_TOOLS: tuple[str, ...] = ("healthcheck", "current_time_by_timezone")
+# nginx reloads after a debounce (about 5 s, longer with two replicas), so poll
+# for the new route instead of sleeping a fixed time.
+VIRTUAL_ROUTE_WAIT_SECONDS: int = 45
+VIRTUAL_ROUTE_POLL_SECONDS: int = 3
 MCP_REQUEST_TIMEOUT_SECONDS: int = 30
 
 
@@ -493,20 +504,21 @@ class ReleaseE2ETest:
             # Give nginx a moment to pick up the new route.
             time.sleep(3)
 
-            tool_count = self._list_external_tools(mcp_url)
+            tool_count = len(self._mcp_tool_names(mcp_url))
             return f"registered aws-kb and reached it through the proxy ({tool_count} tools listed)"
         except requests.exceptions.RequestException as exc:
             raise _SkipTest(f"External endpoint unreachable: {exc}")
         finally:
             self._safe_delete_server(AWS_KB_PATH)
 
-    def _list_external_tools(
+    def _mcp_tool_names(
         self,
         mcp_url: str,
-    ) -> int:
-        """List tools on an external MCP server via the protocol; return count.
+    ) -> list[str]:
+        """List tools on a gateway-exposed MCP server via the protocol; return names.
 
-        Raises requests exceptions on network failure so the caller can SKIP.
+        Raises requests exceptions on network failure so the caller can SKIP,
+        and RuntimeError on an HTTP or JSON-RPC error.
         """
         headers = {
             "X-Authorization": f"Bearer {self.token}",
@@ -531,7 +543,7 @@ class ReleaseE2ETest:
         )
         if init_resp.status_code != 200:
             raise RuntimeError(
-                f"external initialize returned HTTP {init_resp.status_code}: {init_resp.text[:200]}"
+                f"initialize returned HTTP {init_resp.status_code}: {init_resp.text[:200]}"
             )
         for key, value in init_resp.headers.items():
             if key.lower() == "mcp-session-id":
@@ -546,13 +558,129 @@ class ReleaseE2ETest:
         )
         if list_resp.status_code != 200:
             raise RuntimeError(
-                f"external tools/list returned HTTP {list_resp.status_code}: {list_resp.text[:200]}"
+                f"tools/list returned HTTP {list_resp.status_code}: {list_resp.text[:200]}"
             )
         body = _parse_sse_or_json(list_resp.text)
         if body is None or "error" in body:
-            raise RuntimeError(f"external tools/list error: {list_resp.text[:200]}")
+            raise RuntimeError(f"tools/list error: {list_resp.text[:200]}")
         tools = body.get("result", {}).get("tools", [])
-        return len(tools)
+        return [tool.get("name", "") for tool in tools if isinstance(tool, dict)]
+
+    def _wait_for_virtual_route(
+        self,
+        mcp_url: str,
+    ) -> list[str]:
+        """Poll tools/list on a new virtual server until nginx routes it.
+
+        Returns:
+            The tool names the virtual server lists.
+
+        Raises:
+            RuntimeError: If the route does not answer within VIRTUAL_ROUTE_WAIT_SECONDS.
+        """
+        deadline = time.time() + VIRTUAL_ROUTE_WAIT_SECONDS
+        last_error = ""
+        while time.time() < deadline:
+            try:
+                return self._mcp_tool_names(mcp_url)
+            except (RuntimeError, requests.exceptions.RequestException) as exc:
+                last_error = str(exc)
+                time.sleep(VIRTUAL_ROUTE_POLL_SECONDS)
+        raise RuntimeError(
+            f"virtual server not routable after {VIRTUAL_ROUTE_WAIT_SECONDS}s: {last_error}"
+        )
+
+    def _pick_virtual_backend(self) -> tuple[str, str]:
+        """Choose a backend server and tool for the virtual server test.
+
+        A virtual server can only map a tool the registry has stored for its
+        backend. Prefer airegistry-tools, then any enabled, healthy, local
+        server whose stored tools include a tool callable with no arguments.
+
+        Returns:
+            (backend server path, tool name).
+
+        Raises:
+            _SkipTest: If no server has a usable stored tool.
+        """
+        response = requests.get(
+            f"{self.registry_url}/api/servers",
+            headers={"Authorization": f"Bearer {self.token}"},
+            params={"limit": 2000, "include_tools": "true"},
+            timeout=MCP_REQUEST_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        candidates = []
+        for server in response.json().get("servers", []):
+            if not server.get("is_enabled") or server.get("health_status") != "healthy":
+                continue
+            if server.get("sync_metadata"):
+                continue
+            stored = {tool.get("name") for tool in server.get("tool_list") or []}
+            for tool in VIRTUAL_PREFERRED_TOOLS:
+                if tool in stored:
+                    preferred = server["path"].strip("/") == AIREGISTRY_TOOLS_PATH.strip("/")
+                    candidates.append((0 if preferred else 1, server["path"], tool))
+        if not candidates:
+            raise _SkipTest(
+                "no enabled, healthy server has a stored tool the test can call "
+                f"({', '.join(VIRTUAL_PREFERRED_TOOLS)})"
+            )
+        _, path, tool = sorted(candidates)[0]
+        return path, tool
+
+    def test_virtual_server(self) -> str:
+        """Create a virtual MCP server, list and call its aliased tool, then delete it.
+
+        The virtual server exposes one backend tool under an alias, so the test
+        covers the virtual route, tool renaming and the backend hop.
+        """
+        backend_path, backend_tool = self._pick_virtual_backend()
+        path = f"{VIRTUAL_SERVER_PATH_PREFIX}{self.suffix}"
+        mcp_url = f"{self.registry_url}{path}/mcp"
+        request = VirtualServerCreateRequest(
+            path=path,
+            server_name=f"E2E release virtual {self.suffix}",
+            description="E2E release test: virtual MCP server (safe to delete)",
+            tool_mappings=[
+                ToolMapping(
+                    tool_name=backend_tool,
+                    alias=VIRTUAL_TOOL_ALIAS,
+                    backend_server_path=backend_path,
+                )
+            ],
+            tags=["e2e-test"],
+        )
+        try:
+            self.client.create_virtual_server(request)
+            if not self.client.get_virtual_server(path).is_enabled:
+                self.client.toggle_virtual_server(path, enable=True)
+
+            names = self._wait_for_virtual_route(mcp_url)
+            if VIRTUAL_TOOL_ALIAS not in names:
+                raise RuntimeError(f"alias {VIRTUAL_TOOL_ALIAS} not in tools/list: {names}")
+            if backend_tool in names:
+                raise RuntimeError(f"backend name {backend_tool} leaked into tools/list")
+
+            result = self._mcp_call_tool(mcp_url, VIRTUAL_TOOL_ALIAS, {})
+            if result.get("isError"):
+                raise RuntimeError(f"tools/call through the virtual server failed: {result}")
+            text = _first_content_text(result)
+            if not text:
+                raise RuntimeError("tools/call through the virtual server returned no content")
+            return f"called {backend_path} {backend_tool} as {VIRTUAL_TOOL_ALIAS} through {path}"
+        finally:
+            self._safe_delete_virtual_server(path)
+
+    def _safe_delete_virtual_server(
+        self,
+        path: str,
+    ) -> None:
+        """Delete a virtual server, swallowing errors (cleanup best-effort)."""
+        try:
+            self.client.delete_virtual_server(path)
+        except Exception as exc:
+            logger.warning(f"Cleanup: could not delete virtual server {path}: {exc}")
 
     def _safe_delete_server(
         self,
@@ -599,6 +727,7 @@ class ReleaseE2ETest:
         self._run("6. Semantic Search", self.test_semantic_search)
         self._run("7. Security Scan", self.test_security_scan)
         self._run("8. External Server (aws-kb)", self.test_external_server)
+        self._run("9. Virtual MCP Server", self.test_virtual_server)
 
         return self._print_report()
 
