@@ -51,6 +51,27 @@ def _build_httpx2_proxy(
     )
 
 
+def _copy_request(
+    request: httpx2.Request,
+) -> httpx2.Request:
+    """Return a request to send that shares the body but not the URL or headers.
+
+    Args:
+        request: The request httpx2 handed to the transport.
+
+    Returns:
+        A new ``httpx2.Request`` with the same method, URL, headers, body
+        stream and extensions, safe to rewrite for pinning.
+    """
+    return httpx2.Request(
+        request.method,
+        request.url,
+        headers=request.headers.copy(),
+        stream=request.stream,
+        extensions=dict(request.extensions),
+    )
+
+
 class GuardedHttpx2AsyncTransport(_PinnedResolverMixin, httpx2.AsyncHTTPTransport):
     """``httpx2`` async transport that validates and pins every request.
 
@@ -97,7 +118,12 @@ class GuardedHttpx2AsyncTransport(_PinnedResolverMixin, httpx2.AsyncHTTPTranspor
             UrlValidationError: The target, or a redirect hop, is not permitted
                 under the profile. The request is never sent.
         """
-        routed = await self._route_request_async(request)  # type: ignore[arg-type]
+        # Pin a copy, never the caller's request: httpx2 stores the request it
+        # passed in as ``response.request``, and the MCP SDK resolves and judges
+        # a redirect against that URL. Rewriting it to the IP made a same-origin
+        # redirect back to the hostname look like a different origin.
+        outbound = _copy_request(request)
+        routed = await self._route_request_async(outbound)  # type: ignore[arg-type]
         if routed.proxy_url is None:
             return await super().handle_async_request(routed.request)  # type: ignore[arg-type]
         delegate = self._proxy_delegate(routed.proxy_url)

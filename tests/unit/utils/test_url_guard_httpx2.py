@@ -505,3 +505,80 @@ class TestProxyDelegate:
 
         stub.aclose.assert_awaited_once()
         assert transport._proxy_delegates == {}
+
+
+@pytest.mark.asyncio
+async def test_pinning_leaves_the_callers_request_unchanged(sent):
+    """Only the copy that reaches the pool carries the IP.
+
+    The caller (httpx2, then the MCP SDK) reads ``response.request.url`` to resolve
+    and judge a redirect. If pinning rewrote the caller's request, a same-origin
+    redirect to the hostname would look like a different origin and be refused.
+    """
+    transport = GuardedHttpx2AsyncTransport(guard_profile=PROXY_PROFILE)
+    original = _request("https://mcp.example.com/mcp/")
+
+    with patch.object(url_guard.socket, "getaddrinfo", _resolve_to(PUBLIC_IP)):
+        await transport.handle_async_request(original)
+
+    assert original.url.host == "mcp.example.com"
+    assert "sni_hostname" not in original.extensions
+    pinned = sent.call_args.args[0]
+    assert pinned is not original
+    assert pinned.url.host == PUBLIC_IP
+    assert pinned.headers["Host"] == "mcp.example.com"
+
+
+@pytest.mark.asyncio
+async def test_sdk_follows_a_same_origin_trailing_slash_redirect():
+    """The MCP SDK's own same-origin rule accepts a 307 from /mcp/ to /mcp.
+
+    Before the fix the pinned transport handed back a request whose URL was the
+    IP, so the SDK saw the hostname in Location as a different origin.
+    """
+    from mcp.shared._httpx_utils import stream_within_origin
+
+    seen: list[str] = []
+
+    async def backend(request: httpx2.Request) -> httpx2.Response:
+        seen.append(f"{request.url.host}{request.url.path}")
+        if request.url.path == "/mcp/":
+            return httpx2.Response(307, headers={"Location": "http://mcp.example.com:8000/mcp"})
+        return httpx2.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": {}})
+
+    send = AsyncMock(side_effect=backend)
+    transport = GuardedHttpx2AsyncTransport(guard_profile=EGRESS_UPSTREAM_PROFILE)
+    with (
+        patch.object(httpx2.AsyncHTTPTransport, "handle_async_request", send),
+        patch.object(url_guard.socket, "getaddrinfo", _resolve_to(PUBLIC_IP)),
+    ):
+        async with httpx2.AsyncClient(transport=transport) as client:
+            async with stream_within_origin(
+                client, "POST", "http://mcp.example.com:8000/mcp/", json={"jsonrpc": "2.0"}
+            ) as response:
+                status = response.status_code
+
+    assert status == 200
+    assert seen == [f"{PUBLIC_IP}/mcp/", f"{PUBLIC_IP}/mcp"]
+
+
+@pytest.mark.asyncio
+async def test_a_redirect_to_a_blocked_host_is_still_refused():
+    """Following same-origin redirects again does not weaken the guard on other hops."""
+    from mcp.shared._httpx_utils import stream_within_origin
+
+    async def backend(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(307, headers={"Location": "http://169.254.169.254/latest"})
+
+    transport = GuardedHttpx2AsyncTransport(guard_profile=EGRESS_UPSTREAM_PROFILE)
+    with (
+        patch.object(
+            httpx2.AsyncHTTPTransport, "handle_async_request", AsyncMock(side_effect=backend)
+        ),
+        patch.object(url_guard.socket, "getaddrinfo", _resolve_to(PUBLIC_IP)),
+    ):
+        async with httpx2.AsyncClient(transport=transport) as client:
+            async with stream_within_origin(
+                client, "POST", "http://mcp.example.com:8000/mcp/", json={}
+            ) as response:
+                assert response.status_code == 307
