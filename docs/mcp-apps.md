@@ -83,6 +83,7 @@ For direct MCP routes, nginx joins the registry's configured public `REGISTRY_UR
 The auth server signs this connector URL into the internal hop token and uses it to rewrite `resources/read` replies with a `.claudemcpcontent.com` domain.
 The URL keeps bare paths, trailing slashes, `ROOT_PATH` prefixes, escaped bytes, and query strings as sent.
 The registry's `REGISTRY_URL` must name the public origin; an internal registry service URL on the auth server does not select this origin.
+If the registry's `REGISTRY_URL` is not set, direct routes leave the backend's value unchanged.
 
 Client-supplied Host or connector headers cannot select the URL.
 The proxy requires the new nginx binding marker before signing a connector URL, so deploy the updated templates and regenerate nginx configuration with the auth-server change.
