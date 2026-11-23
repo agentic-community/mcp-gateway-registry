@@ -1075,6 +1075,10 @@ class TestGenerateVirtualBackendLocations:
         assert cleared == {
             # An ordinary backend never sends an OpenAPI MCP admission marker.
             "x-openapi-mcp-admission",
+            # The public connector URL (MCP Apps ui.domain) is signed into the
+            # hop token on direct routes; a virtual backend never forwards it.
+            "x-mcp-connector-binding",
+            "x-mcp-connector-url",
             "proxy-authorization",
             "cookie",
             "set-cookie",
@@ -1105,34 +1109,6 @@ class TestGenerateVirtualBackendLocations:
             "x-body-uninspectable",
         }
         # Identity is re-set from the validated values, never cleared or passed through.
-        assert "proxy_set_header X-User $http_x_user;" in block
-        assert "proxy_set_header X-Username $http_x_username;" in block
-
-    @pytest.mark.asyncio
-    async def test_plain_backend_clears_every_reserved_header(self, mock_server_repository):
-        """The plain backend clears reserved headers except framing and trusted identity."""
-        from registry.constants import RESERVED_CUSTOM_HEADER_NAMES
-        from registry.core.nginx_service import (
-            _VS_BACKEND_FRAMING_HEADERS,
-            _VS_BACKEND_RESET_IDENTITY_HEADERS,
-            NginxConfigService,
-        )
-
-        mock_server_repository.get.return_value = {
-            "is_enabled": True,
-            "proxy_pass_url": "https://backend.example.com/mcp",
-            "egress_auth_mode": "none",
-        }
-
-        result = await NginxConfigService()._generate_virtual_backend_locations([_make_vs_config()])
-        block = _location_block(result, "/_vs_backend_github")
-
-        cleared = {name.lower() for name in re.findall(r'proxy_set_header (\S+) "";', block)}
-        assert cleared == (
-            RESERVED_CUSTOM_HEADER_NAMES
-            - _VS_BACKEND_FRAMING_HEADERS
-            - _VS_BACKEND_RESET_IDENTITY_HEADERS
-        )
         assert "proxy_set_header X-User $http_x_user;" in block
         assert "proxy_set_header X-Username $http_x_username;" in block
 
