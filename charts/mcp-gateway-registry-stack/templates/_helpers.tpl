@@ -238,9 +238,13 @@ forward per-user-credential calls, or a pod with a looser guard.
 {{- fail (printf "registry.app.openapiMcpInternalUrl (%q) and auth-server.app.openapiMcpInternalUrl (%q) must be equal. Both services call the same openapi-mcp container." (toString $registryUrl) (toString $authServerUrl)) -}}
 {{- end -}}
 {{- if $stackEnabled -}}
+  {{- /* Compare what the registry pod renders: the stack globals win over registry.app. */ -}}
+  {{- $global := .Values.global | default dict -}}
+  {{- $registryHosts := dig "ssrfAllowedHosts" "" $global | default (dig "app" "ssrfAllowedHosts" "" $registry) -}}
+  {{- $registryPrivate := or (dig "gatewayProxyAllowPrivateTargets" false $global) (dig "app" "gatewayProxyAllowPrivateTargets" false $registry) -}}
   {{- $pairs := list
-        (list "app.ssrfAllowedHosts" (dig "app" "ssrfAllowedHosts" "" $registry) (dig "app" "ssrfAllowedHosts" "" $openapiMcp))
-        (list "app.gatewayProxyAllowPrivateTargets" (dig "app" "gatewayProxyAllowPrivateTargets" false $registry) (dig "app" "gatewayProxyAllowPrivateTargets" false $openapiMcp))
+        (list "ssrfAllowedHosts (global.ssrfAllowedHosts, else app.ssrfAllowedHosts)" $registryHosts (dig "app" "ssrfAllowedHosts" "" $openapiMcp))
+        (list "gatewayProxyAllowPrivateTargets (global, else app)" $registryPrivate (dig "app" "gatewayProxyAllowPrivateTargets" false $openapiMcp))
         (list "app.egressForwardProxyEnabled" (dig "app" "egressForwardProxyEnabled" false $registry) (dig "app" "egressForwardProxyEnabled" false $openapiMcp))
         (list "egressAuth.oauthTrustedIdpHosts / app.egressOauthTrustedIdpHosts" (dig "egressAuth" "oauthTrustedIdpHosts" "" $registry) (dig "app" "egressOauthTrustedIdpHosts" "" $openapiMcp)) -}}
   {{- range $pairs -}}
