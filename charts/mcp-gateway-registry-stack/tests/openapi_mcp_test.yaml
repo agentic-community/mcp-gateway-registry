@@ -162,7 +162,7 @@ tests:
           ssrfAllowedHosts: internal.example.test
     asserts:
       - failedTemplate:
-          errorPattern: "registry app.ssrfAllowedHosts is \"internal.example.test\" but openapiMcp has \"\""
+          errorPattern: "registry ssrfAllowedHosts .* is \"internal.example.test\" but openapiMcp has \"\""
 
   - it: fails when gatewayProxyAllowPrivateTargets differs
     templates:
@@ -186,6 +186,8 @@ tests:
     templates:
       - charts/openapiMcp/templates/deployment.yaml
     set:
+      global:
+        ssrfAllowedHosts: internal.example.test
       openapiMcp:
         enabled: true
         app:
@@ -196,13 +198,30 @@ tests:
       registry:
         app:
           openapiMcpEnabled: true
-          ssrfAllowedHosts: internal.example.test
     asserts:
       - contains:
           path: spec.template.spec.containers[0].env
           content:
             name: SSRF_ALLOWED_HOSTS
             value: internal.example.test
+
+  - it: fails when global.ssrfAllowedHosts differs from openapi-mcp
+    templates:
+      - templates/validate-values.yaml
+    set:
+      global:
+        ssrfAllowedHosts: internal.example.test
+      openapiMcp:
+        enabled: true
+      auth-server:
+        app:
+          openapiMcpEnabled: true
+      registry:
+        app:
+          openapiMcpEnabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "registry ssrfAllowedHosts .* is \"internal.example.test\" but openapiMcp has \"\""
 
   - it: leaves the OpenAPI MCP settings off the auth server by default
     templates:

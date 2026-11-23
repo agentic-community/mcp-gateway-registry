@@ -128,22 +128,22 @@ tests:
           value: "on"
     asserts:
       # NOTE: same assumptions as the test above, except app.openapiMcpEnabled=true,
-      # which renders two entries after SSRF_ALLOWED_CIDRS (issue #2022):
-      #   env[26] = SSRF_ALLOWED_CIDRS
-      #   env[27] = OPENAPI_MCP_ENABLED
-      #   env[28] = OPENAPI_MCP_INTERNAL_URL
-      #   env[29] = MY_FLAG (extraEnv[0])
-      - equal:
-          path: spec.template.spec.containers[0].env[26].name
-          value: SSRF_ALLOWED_CIDRS
-      - equal:
-          path: spec.template.spec.containers[0].env[27].name
-          value: OPENAPI_MCP_ENABLED
+      # which renders two entries after the SSRF allowlist trio (issue #2022):
+      #   env[28] = GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS
+      #   env[29] = OPENAPI_MCP_ENABLED
+      #   env[30] = OPENAPI_MCP_INTERNAL_URL
+      #   env[31] = MY_FLAG (extraEnv[0])
       - equal:
           path: spec.template.spec.containers[0].env[28].name
-          value: OPENAPI_MCP_INTERNAL_URL
+          value: GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS
       - equal:
           path: spec.template.spec.containers[0].env[29].name
+          value: OPENAPI_MCP_ENABLED
+      - equal:
+          path: spec.template.spec.containers[0].env[30].name
+          value: OPENAPI_MCP_INTERNAL_URL
+      - equal:
+          path: spec.template.spec.containers[0].env[31].name
           value: MY_FLAG
 
   - it: enables Entra overage recovery with a 300-second positive cache by default

@@ -352,6 +352,8 @@ spec:
               value: {{ .Values.global.ssrfAllowedHosts | default .Values.app.ssrfAllowedHosts | default "" | quote }}
             - name: SSRF_ALLOWED_CIDRS
               value: {{ .Values.global.ssrfAllowedCidrs | default .Values.app.ssrfAllowedCidrs | default "" | quote }}
+            - name: GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS
+              value: {{ or .Values.global.gatewayProxyAllowPrivateTargets .Values.app.gatewayProxyAllowPrivateTargets | default false | toString | quote }}
             # OpenAPI MCP servers (issue #2022): the mcp-proxy hop forwards
             # per-user-credential calls to the openapi-mcp container. Rendered
             # only when enabled. Never OPENAPI_MCP_SYNC_SECRET: the registry  # pragma: allowlist secret
@@ -362,8 +364,6 @@ spec:
             - name: OPENAPI_MCP_INTERNAL_URL
               value: {{ required "auth-server.app.openapiMcpInternalUrl must be set when app.openapiMcpEnabled is true" .Values.app.openapiMcpInternalUrl | quote }}
             {{- end }}
-            - name: GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS
-              value: {{ or .Values.global.gatewayProxyAllowPrivateTargets .Values.app.gatewayProxyAllowPrivateTargets | default false | toString | quote }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
