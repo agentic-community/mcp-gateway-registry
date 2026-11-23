@@ -48,7 +48,10 @@ from registry.utils.url_guard import (
     validate_server_path,
 )
 
-from .config import settings
+from .config import (
+    Settings,
+    settings,
+)
 from .metrics import (
     GATEWAY_GENERIC_BLOCKS_DROPPED,
     NGINX_CONFIG_WRITES,
@@ -278,6 +281,29 @@ _KEYCLOAK_CA_BUNDLE_DEFAULT: str = "/etc/nginx/certs/keycloak-ca.pem"
 # Depth of the certificate chain nginx will verify for an IdP upstream.
 # 2 accommodates a leaf signed by an intermediate under the supplied root.
 _IDP_SSL_VERIFY_DEPTH: int = 2
+
+
+def _mcp_connector_origin() -> str:
+    """Return the public origin nginx joins with $request_uri for MCP Apps.
+
+    The registry's REGISTRY_URL is public on every deployment surface, while
+    the auth server's may name an internal Helm service, so nginx builds the
+    connector URL from the registry's value. When REGISTRY_URL is not set the
+    field still holds its built-in default (http://localhost:8000), which no
+    client connects to; return nothing then, so the gateway leaves the page's
+    ui.domain alone instead of rewriting it to the hash of a localhost URL.
+
+    Returns:
+        An origin such as "https://gateway.example.com", or "" when
+        REGISTRY_URL is unset or is not an absolute http or https URL.
+    """
+    registry_url = settings.registry_url
+    if registry_url == Settings.model_fields["registry_url"].default:
+        return ""
+    if not origin_of_url(registry_url):
+        return ""
+    parsed = urlparse(registry_url)
+    return f"{parsed.scheme}://{parsed.netloc}"
 
 
 def _resolve_ca_bundle(
@@ -3395,15 +3421,14 @@ class NginxConfigService:
         # escaping here means legacy data persisted before validation existed
         # still cannot break out of a quoted directive context.
         safe_registered_path = self._sanitize_for_nginx_set(path.rstrip("/"))
-        # The registry's URL is public on every deployment surface; the auth
-        # server's REGISTRY_URL may instead name an internal Helm service.
-        connector_value = ""
-        if origin_of_url(settings.registry_url):
-            public_url = urlparse(settings.registry_url)
-            public_origin = self._sanitize_for_nginx_set(
-                f"{public_url.scheme}://{public_url.netloc}"
-            )
-            connector_value = f"{public_origin}$request_uri"
+        # MCP Apps connector URL: the registry's public origin plus the exact
+        # request URI, or nothing when REGISTRY_URL is unset.
+        connector_origin = _mcp_connector_origin()
+        connector_value = (
+            f"{self._sanitize_for_nginx_set(connector_origin)}$request_uri"
+            if connector_origin
+            else ""
+        )
 
         # For servers that need a per-server PRM (obo_exchange on any provider,
         # oauth_user on Entra only -- see server_needs_per_server_prm), the 401
