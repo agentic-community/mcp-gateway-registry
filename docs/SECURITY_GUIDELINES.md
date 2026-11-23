@@ -503,6 +503,20 @@ sanitizer that isn't called) is equivalent to no check.
   byte-exact deny-list. Decode exactly once (a doubly-encoded `%252e` stays
   literal and fails closed), clamp traversal at root, and put the normalization
   inside the single shared entrypoint so every consumer benefits.
+- **A check that names a privileged group uses the same identity rule as the
+  lookup that grants it.** Scope lookup compares group names in canonical form
+  (`registry/utils/group_names.py`: surrounding whitespace and slashes removed),
+  so `/registry-admins` resolves the same admin scope as `registry-admins`. A
+  guard, audit or forged-claim check that still compares the raw value against
+  `ADMIN_GROUP_MARKERS` or `_PRIVILEGED_SCOPE_NAMES` is blind to the slashed
+  spelling: the privileged-write guard let it through, the enrichment audit
+  logged nothing, and the token-mint forged-group check accepted it (#1801).
+  Canonicalize with `normalize_group_name` on both sides before any privileged
+  set membership test, and compare by equality, never substring, so
+  `org/registry-admins` stays a different group. Log the marker from the
+  constant set, never the stored or claimed value. A canonical match that would
+  widen access (an admin bypass) is a separate decision from one that refuses
+  or audits more; change the second kind freely, review the first.
 - **A virtual MCP server must inherit each mapped backend tool's block state at
   the execution boundary AND on discovery, including cached lists.** A mapping
   file and a 60-second enriched-tools cache contain tool metadata, not the
@@ -1200,6 +1214,11 @@ outbound HTTP call, auth gate, redaction, or secret check, use the helper below.
 A hand-rolled or copy-pasted variant is how these vulnerabilities get reopened —
 the drift between copies is the hole.
 
+- **IdP group identity → `registry/utils/group_names.py`.** Compare group
+  names with `normalize_group_name` / `normalize_group_names`, intersect a
+  caller's groups with `allowed_groups` through `groups_intersect`, and build a
+  MongoDB `$in` over stored group names with `group_name_variants`. Never
+  compare raw group strings in an authorization, visibility or audit decision.
 - **Outbound HTTP from any user/registry/federation-controlled URL →
   `registry/utils/url_guard.py`.** Never construct a bare `httpx.Client` /
   `httpx.AsyncClient` (or a third-party SDK client) for such fetches. Use

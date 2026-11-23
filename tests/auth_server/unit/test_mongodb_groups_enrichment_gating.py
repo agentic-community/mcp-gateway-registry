@@ -98,3 +98,35 @@ class TestPrivilegedEnrichmentAudit:
             result = await enrichment.enrich_groups_from_mongodb("svc", [])
         assert result == ["developers"]
         assert not any("privileged group" in rec.message for rec in caplog.records)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "stored", ["/registry-admins", "registry-admins/", " /mcp-registry-admin "]
+    )
+    async def test_slashed_privileged_group_grant_is_audited(self, caplog, stored):
+        """``/registry-admins`` resolves the admin scope, so it is audited too (review on #1801)."""
+        doc = {"client_id": "svc", "groups": [stored], "enabled": True}
+        with _patch_db_single_doc(doc), caplog.at_level("WARNING"):
+            await enrichment.enrich_groups_from_mongodb("svc", [])
+        audit = [rec.message for rec in caplog.records if "privileged group" in rec.message]
+        assert len(audit) == 1
+        assert stored not in audit[0]
+
+    @pytest.mark.asyncio
+    async def test_slashed_privileged_user_group_grant_is_audited(self, caplog):
+        """The user enrichment path applies the same identity rule as M2M."""
+        doc = {"username": "alice", "groups": ["/registry-admins"], "enabled": True}
+        with _patch_db_single_doc(doc), caplog.at_level("WARNING"):
+            result = await enrichment.enrich_user_groups_from_mongodb("alice", [], "ping")
+        assert result == ["/registry-admins"]
+        audit = [rec.message for rec in caplog.records if "privileged group" in rec.message]
+        assert len(audit) == 1
+        assert "/registry-admins" not in audit[0]
+
+    @pytest.mark.asyncio
+    async def test_unrelated_group_containing_marker_text_not_audited(self, caplog):
+        """Canonical equality, not substring: ``org/registry-admins`` is another group."""
+        doc = {"client_id": "svc", "groups": ["org/registry-admins"], "enabled": True}
+        with _patch_db_single_doc(doc), caplog.at_level("WARNING"):
+            await enrichment.enrich_groups_from_mongodb("svc", [])
+        assert not any("privileged group" in rec.message for rec in caplog.records)

@@ -6141,7 +6141,12 @@ async def _reconcile_context_against_session(
     session_group_set = set(session_groups)
 
     # A body may not claim any privileged group the session does not hold.
-    forged_privileged = (set(body_groups) & _A2A_ADMIN_MARKERS) - session_group_set
+    # Both sides are compared in canonical form: scope lookup treats
+    # "/registry-admins" as "registry-admins" (issue #1689), so an exact match
+    # would let a slashed spelling past this check.
+    forged_privileged = (set(normalize_group_names(body_groups)) & _A2A_ADMIN_MARKERS) - set(
+        normalize_group_names(session_groups)
+    )
     if forged_privileged:
         logger.warning(
             "Refusing token mint: request claimed privileged group(s) %s not held by session for '%s'",

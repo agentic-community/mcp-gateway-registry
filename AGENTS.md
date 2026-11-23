@@ -386,6 +386,11 @@ working in those areas.
   `"groups": "mcp-registry-admin"` a membership). One shared validator
   (`normalize_groups_claim`), applied in EVERY provider including the
   self-signed and userinfo paths.
+- **Group identity:** compare IdP group names in canonical form
+  (`registry/utils/group_names.py`) at every authorization, visibility,
+  privileged-guard and audit decision, on both sides, by equality. A raw
+  comparison against an admin marker misses `/registry-admins`, which the
+  scope lookup resolves to the admin scope.
 - **Per-user secret keys:** key a user's stored secrets on the IdP's immutable
   account id (`sub`; on an Okta access token, `uid`), never a username, email or
   login an account can change or a later account can reuse. One named function
