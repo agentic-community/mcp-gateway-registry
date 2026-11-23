@@ -7,7 +7,7 @@
 # unchanged so the container enforces exactly the registry's policy. They are
 # copied file by file; the rest of the registry (and its SECRET_KEY-validating
 # settings) never enters the image.
-FROM python:3.14.9-slim
+FROM python:3.15.2-slim
 
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
