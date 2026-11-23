@@ -59,6 +59,7 @@ from ..services.visibility import (
     can_skip_read_visibility,
     user_can_access_server,
 )
+from ..utils.group_names import groups_intersect
 
 # The same admin check the virtual server routes use: an explicit admin signal
 # only, never a per-server execute scope.
@@ -152,8 +153,7 @@ async def _can_read(
     if server.visibility == "private":
         return False
     if server.visibility == "group-restricted":
-        groups = set(user_context.get("groups") or [])
-        if not groups & set(server.allowed_groups):
+        if not groups_intersect(user_context.get("groups"), server.allowed_groups):
             return False
     return await user_can_access_server(
         server.path, server.name, user_context, honor_view_all=False

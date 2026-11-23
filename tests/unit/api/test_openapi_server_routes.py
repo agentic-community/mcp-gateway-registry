@@ -136,6 +136,16 @@ class TestReads:
 
         assert make_client(USER).get("/api/openapi-servers/weather-apis").status_code == 404
 
+    def test_group_restricted_matches_full_path_allowed_group(self, make_client, monkeypatch):
+        """``/eng`` in allowed_groups matches the session group ``eng`` (issue #1689)."""
+        monkeypatch.setattr(
+            routes.openapi_server_service,
+            "get_server_or_404",
+            AsyncMock(return_value=_server("group-restricted", ["/eng"])),
+        )
+
+        assert make_client(USER).get("/api/openapi-servers/weather-apis").status_code == 200
+
     def test_non_admin_gets_no_backend_urls(self, make_client, monkeypatch):
         monkeypatch.setattr(
             routes.openapi_server_service, "get_server_or_404", AsyncMock(return_value=_server())
