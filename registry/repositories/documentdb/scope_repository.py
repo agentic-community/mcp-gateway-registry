@@ -13,7 +13,11 @@ from ...auth.privileged_constants import (
     PRIVILEGED_SCOPE_NAMES,
     is_admin_conferring_action,
 )
-from ...utils.group_names import group_name_variants, normalize_group_name
+from ...utils.group_names import (
+    group_name_variants,
+    is_lookup_reachable,
+    normalize_group_name,
+)
 from ..interfaces import ScopeRepositoryBase
 from .client import get_collection_name, get_documentdb_client
 
@@ -386,13 +390,25 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
             async for doc in cursor:
                 # Include the canonical form of each stored name so the login
                 # filter's membership test matches a claim in either form
-                # (issue #1689). The "/name" query form is not needed here:
-                # the filter compares canonical names on both sides.
+                # (issue #1689). Only stored values the indexed lookup can
+                # find from the canonical name count: the session keeps the
+                # canonical name, so a group the lookup cannot resolve would
+                # be kept but grant no scope.
+                unreachable = 0
                 for stored in doc.get("group_mappings") or []:
-                    canonical = normalize_group_name(stored)
-                    if canonical:
-                        names.add(canonical)
-                        names.add(stored.strip())
+                    if not is_lookup_reachable(stored):
+                        unreachable += bool(normalize_group_name(stored))
+                        continue
+                    names.add(normalize_group_name(stored))
+                    names.add(stored)
+                if unreachable:
+                    logger.warning(
+                        "Scope '%s' has %d group mapping(s) the scope lookup cannot "
+                        "match (doubled slashes or padding); rewrite them in "
+                        "canonical form",
+                        doc.get("_id"),
+                        unreachable,
+                    )
             logger.debug(f"DocumentDB READ: Found {len(names)} distinct mapped group names")
             return names
         except Exception as e:

@@ -52,14 +52,16 @@ class TestBuildVisibilityFilter:
         assert {"visibility": "private", "owner": "alice"} in clauses
         assert {
             "visibility": "group-restricted",
-            "allowed_groups": {"$in": ["/g1", "g1"]},
+            "allowed_groups": {"$in": ["/g1", "/g1/", "g1", "g1/"]},
         } in clauses
 
     def test_filter_queries_every_stored_form_of_the_groups(self):
         """A record restricted to ``/team`` is found for a session carrying ``team``."""
         f = _build_visibility_filter({"username": "x", "groups": ["team", "/ops"]})
         group_clause = next(c for c in f["$or"] if c["visibility"] == "group-restricted")
-        assert group_clause["allowed_groups"] == {"$in": ["/ops", "/team", "ops", "team"]}
+        assert group_clause["allowed_groups"] == {
+            "$in": ["/ops", "/ops/", "/team", "/team/", "ops", "ops/", "team", "team/"]
+        }
 
     def test_filter_with_no_groups_matches_no_group_restricted_record(self):
         f = _build_visibility_filter({"username": "x", "groups": []})

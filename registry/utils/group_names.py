@@ -57,25 +57,33 @@ def normalize_group_names(groups: list[str]) -> list[str]:
     return result
 
 
+def _slash_forms(canonical: str) -> set[str]:
+    """Return the canonical name with each combination of single outer slashes."""
+    return {canonical, f"/{canonical}", f"{canonical}/", f"/{canonical}/"}
+
+
 def group_name_variants(groups: list[str]) -> list[str]:
     """Return every form a stored mapping might use for the given groups.
 
     Scope documents written before normalisation existed may hold the raw
-    claim, the canonical name, or the Keycloak full-path form (``/team``), and
-    a data migration is not worth the risk for a comparison this cheap.
-    Querying with all three forms matches any of them without touching stored
-    data, so a bare ``team`` claim finds a mapping stored as ``/team`` and a
-    ``/team`` claim finds one stored as ``team``. That keeps scope lookup in
-    agreement with the login filter, which canonicalises the stored names.
+    claim, the canonical name, or a slash-decorated form (``/team``,
+    ``team/``, ``/team/``), and a data migration is not worth the risk for a
+    comparison this cheap. Querying with all of them matches any of them
+    without touching stored data, so a bare ``team`` claim finds a mapping
+    stored as ``/team`` or ``team/`` and a ``/team`` claim finds one stored as
+    ``team``. That keeps scope lookup in agreement with the login filter,
+    which canonicalises the stored names.
 
-    A stored value with other decoration (a trailing slash, padding inside the
-    slashes) is not matched; rewrite such a mapping in canonical form.
+    A stored value with other decoration (doubled slashes, padding inside the
+    slashes) is not matched. ``is_lookup_reachable`` tells the login filter
+    which stored values those are, so it does not keep a group the lookup
+    cannot resolve.
 
     Args:
         groups: Raw group identifiers.
 
     Returns:
-        Sorted, de-duplicated list of the raw, canonical and leading-slash
+        Sorted, de-duplicated list of the raw, canonical and slash-decorated
         forms, with empties removed. Sorted so a query built from it is
         deterministic.
     """
@@ -86,10 +94,28 @@ def group_name_variants(groups: list[str]) -> list[str]:
             # A value that is empty once canonicalised ("", "/", whitespace)
             # names no group in any form, so none is queried.
             continue
-        variants.add(canonical)
-        variants.add(f"/{canonical}")
+        variants.update(_slash_forms(canonical))
         variants.add(group.strip())
     return sorted(variants)
+
+
+def is_lookup_reachable(stored: str) -> bool:
+    """Return True when a lookup by the canonical name finds this stored value.
+
+    The scope lookup queries ``group_name_variants`` of the canonical session
+    name with an exact ``$in`` match, so it finds a stored value only if that
+    value is one of the slash forms of its own canonical name. The login
+    filter uses this to keep exactly the groups the lookup can resolve.
+
+    Args:
+        stored: A group identifier as stored in a scope document.
+
+    Returns:
+        True if ``group_name_variants([normalize_group_name(stored)])``
+        contains ``stored`` unchanged.
+    """
+    canonical = normalize_group_name(stored)
+    return bool(canonical) and stored in _slash_forms(canonical)
 
 
 def groups_intersect(

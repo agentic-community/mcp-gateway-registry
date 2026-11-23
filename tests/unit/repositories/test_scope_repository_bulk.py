@@ -193,7 +193,11 @@ class TestGetGroupMappingsBulk:
         mock_collection.find.return_value = _make_cursor([])
         await repo.get_group_mappings_bulk(["g-b", "g-a", "g-b", ""])
         mock_collection.find.assert_called_once_with(
-            {"group_mappings": {"$in": ["/g-a", "/g-b", "g-a", "g-b"]}}
+            {
+                "group_mappings": {
+                    "$in": ["/g-a", "/g-a/", "/g-b", "/g-b/", "g-a", "g-a/", "g-b", "g-b/"]
+                }
+            }
         )
 
     async def test_returns_deduped_union_of_scope_ids(self, repo, mock_collection):
@@ -218,7 +222,11 @@ class TestGetGroupMappingsBulk:
         mock_collection.find.return_value = _make_cursor([])
         await repo.get_group_mappings_bulk(["/mcp-admins"])
         mock_collection.find.assert_called_once_with(
-            {"group_mappings": {"$in": ["/mcp-admins", "mcp-admins"]}}
+            {
+                "group_mappings": {
+                    "$in": ["/mcp-admins", "/mcp-admins/", "mcp-admins", "mcp-admins/"]
+                }
+            }
         )
 
     async def test_bare_claim_queries_full_path_form_too(self, repo, mock_collection):
@@ -226,7 +234,11 @@ class TestGetGroupMappingsBulk:
         mock_collection.find.return_value = _make_cursor([])
         await repo.get_group_mappings_bulk(["mcp-admins"])
         mock_collection.find.assert_called_once_with(
-            {"group_mappings": {"$in": ["/mcp-admins", "mcp-admins"]}}
+            {
+                "group_mappings": {
+                    "$in": ["/mcp-admins", "/mcp-admins/", "mcp-admins", "mcp-admins/"]
+                }
+            }
         )
 
 
@@ -289,3 +301,56 @@ class TestStoredFormIsFoundFromEitherClaimForm:
         mapped = await repo.get_all_mapped_group_names()
         assert "team" in mapped
         assert await repo.get_group_mappings_bulk(["team"]) == ["team-scope"]
+
+
+class TestTrailingSlashMappings:
+    """A mapping stored as ``team/`` resolves from the canonical session name.
+
+    The login filter canonicalises a ``team/`` claim to ``team``, and the
+    session stores ``team``. Before #1801 the raw claim matched the stored
+    ``team/`` exactly, so the lookup must still find it (review on #1801).
+    """
+
+    TRAILING = [
+        {"_id": "team-scope", "group_mappings": ["team/"]},
+        {"_id": "ops-scope", "group_mappings": ["/ops/"]},
+    ]
+
+    async def test_bulk_canonical_name_finds_trailing_slash_mapping(self):
+        repo = _repo_holding(self.TRAILING)
+        assert await repo.get_group_mappings_bulk(["team"]) == ["team-scope"]
+
+    async def test_single_canonical_name_finds_trailing_slash_mapping(self):
+        repo = _repo_holding(self.TRAILING)
+        assert await repo.get_group_mappings("team") == ["team-scope"]
+
+    async def test_canonical_name_finds_slashes_on_both_sides(self):
+        repo = _repo_holding(self.TRAILING)
+        assert await repo.get_group_mappings_bulk(["ops"]) == ["ops-scope"]
+
+    async def test_every_name_the_filter_keeps_resolves_to_a_scope(self):
+        repo = _repo_holding(self.TRAILING)
+        mapped = await repo.get_all_mapped_group_names()
+        canonical = {name for name in mapped if "/" not in name}
+        assert canonical == {"team", "ops"}
+        for name in canonical:
+            assert await repo.get_group_mappings_bulk([name]) != []
+
+
+class TestUnreachableMappingsAreNotKept:
+    """The filter does not keep a group the indexed lookup cannot resolve."""
+
+    async def test_doubled_slash_mapping_is_left_out_of_the_mapped_set(self):
+        repo = _repo_holding([{"_id": "s", "group_mappings": ["//team", "ok"]}])
+        assert await repo.get_all_mapped_group_names() == {"ok"}
+
+    async def test_padded_mapping_is_left_out_of_the_mapped_set(self):
+        repo = _repo_holding([{"_id": "s", "group_mappings": [" team "]}])
+        assert await repo.get_all_mapped_group_names() == set()
+
+    async def test_unreachable_mapping_is_logged_without_its_name(self, caplog):
+        repo = _repo_holding([{"_id": "s", "group_mappings": ["//secret-team"]}])
+        with caplog.at_level("WARNING"):
+            await repo.get_all_mapped_group_names()
+        assert any("cannot match" in r.getMessage() for r in caplog.records)
+        assert all("secret-team" not in r.getMessage() for r in caplog.records)

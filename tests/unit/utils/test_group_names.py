@@ -11,6 +11,7 @@ import pytest
 from registry.utils.group_names import (
     group_name_variants,
     groups_intersect,
+    is_lookup_reachable,
     normalize_group_name,
     normalize_group_names,
 )
@@ -81,19 +82,57 @@ class TestGroupNameVariants:
 
     def test_bare_name_also_yields_full_path_form(self):
         """A bare claim must find a mapping stored as ``/team``."""
-        assert group_name_variants(["team"]) == ["/team", "team"]
+        assert group_name_variants(["team"]) == ["/team", "/team/", "team", "team/"]
 
     def test_nested_path_yields_full_path_form(self):
-        assert group_name_variants(["parent/child"]) == ["/parent/child", "parent/child"]
+        assert group_name_variants(["parent/child"]) == [
+            "/parent/child",
+            "/parent/child/",
+            "parent/child",
+            "parent/child/",
+        ]
 
     def test_full_path_yields_raw_and_canonical(self):
-        assert group_name_variants(["/team"]) == ["/team", "team"]
+        assert group_name_variants(["/team"]) == ["/team", "/team/", "team", "team/"]
 
     def test_sorted_and_deduplicated(self):
-        assert group_name_variants(["/b", "a", "b", "/a"]) == ["/a", "/b", "a", "b"]
+        assert group_name_variants(["/b", "a", "b", "/a"]) == [
+            "/a",
+            "/a/",
+            "/b",
+            "/b/",
+            "a",
+            "a/",
+            "b",
+            "b/",
+        ]
 
     def test_empties_removed(self):
-        assert group_name_variants(["", "/", None, "x"]) == ["/x", "x"]  # type: ignore[list-item]
+        assert group_name_variants(["", "/", None, "x"]) == [  # type: ignore[list-item]
+            "/x",
+            "/x/",
+            "x",
+            "x/",
+        ]
+
+    def test_trailing_slash_claim_yields_every_form(self):
+        """``team/`` keeps its raw form and adds the others (review on #1801)."""
+        assert group_name_variants(["team/"]) == ["/team", "/team/", "team", "team/"]
+
+
+class TestIsLookupReachable:
+    """The login filter keeps a stored name only if the lookup can find it."""
+
+    @pytest.mark.parametrize("stored", ["team", "/team", "team/", "/team/", "org/team"])
+    def test_single_outer_slashes_are_reachable(self, stored: str):
+        assert is_lookup_reachable(stored) is True
+
+    @pytest.mark.parametrize("stored", ["//team", "team//", " team", "/ team /", "", "/"])
+    def test_other_decoration_and_blanks_are_not(self, stored: str):
+        assert is_lookup_reachable(stored) is False
+
+    def test_non_string_is_not(self):
+        assert is_lookup_reachable(None) is False  # type: ignore[arg-type]
 
 
 class TestGroupsIntersect:
