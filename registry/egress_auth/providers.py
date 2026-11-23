@@ -39,6 +39,58 @@ PROVIDER_REGISTRY: dict[str, OAuthProviderConfig] = {
         token_url="https://auth.atlassian.com/oauth/token",  # nosec B106 - public OAuth token endpoint URL, not a credential
         extra_authorize_params={"audience": "api.atlassian.com", "prompt": "consent"},
     ),
+    "atlassian-rovo": OAuthProviderConfig(
+        name="atlassian-rovo",
+        display_name="Atlassian Rovo MCP",
+        # Atlassian Rovo MCP v2 (https://mcp.atlassian.com/v2/mcp). Its
+        # authorization server issues MCP-audience tokens only to clients
+        # registered with RFC 7591 DCR, so the gateway registers its own public
+        # client (NONE style) per server instead of using a classic 3LO app. The
+        # registration endpoint is tenant-scoped, so it is discovered from the
+        # protected-resource metadata (RFC 9728) rather than pinned. Facts below
+        # were verified live against v2 on 2026-11-06:
+        #
+        # - DCR registration returns 201. The reply carries a client_secret
+        #   (client_secret_expires_at 0) even for token_endpoint_auth_method
+        #   "none"; the gateway does not persist it, PKCE is the proof.
+        # - The code exchange as a public client returns 200, and so does
+        #   refresh.
+        # - The token's aud is the DCR client_id plus the user's site and
+        #   workspace ARIs, not api.atlassian.com, so the classic ``audience``
+        #   parameter is not sent.
+        # - read:account is mandatory. An authorize request without it fails
+        #   only when the user submits consent, with invalid_request "Incorrect
+        #   request parameters", and nothing in the metadata says so. It is in
+        #   required_scopes, so an operator list that omits it still works. A
+        #   controlled sweep on the earlier v1 authv2 endpoint showed this one
+        #   scope decides the outcome; the consent screen's Read, Write and
+        #   Search groups have no effect.
+        # - No RFC 8707 ``resource`` parameter: the authv2 authorization server
+        #   rejected it with invalid_target.
+        # - v2 scopes are the granular *:agent-interface ones; there is no
+        #   read:jira-work. Confluence scopes are not defaulted; add them per
+        #   server when Confluence tools are wanted.
+        # - prompt=consent is not required: the flow succeeds without it. It is
+        #   kept so the consent screen and site picker always show, as for
+        #   ``atlassian``.
+        authorize_url="https://auth.atlassian.com/authorize",
+        token_url="https://auth.atlassian.com/oauth/token",  # nosec B106 - public OAuth token endpoint URL, not a credential
+        token_endpoint_auth_style=TokenEndpointAuthStyle.NONE,
+        extra_authorize_params={"prompt": "consent"},
+        requires_dcr=True,
+        protected_resource_metadata_url=(
+            "https://mcp.atlassian.com/.well-known/oauth-protected-resource/v2/mcp"
+        ),
+        default_scopes=[
+            "read:me",
+            "read:account",
+            "offline_access",
+            "read:jira:agent-interface",
+            "write:jira:agent-interface",
+            "search:jira:agent-interface",
+        ],
+        required_scopes=["read:account"],
+    ),
     "microsoft": OAuthProviderConfig(
         name="microsoft",
         display_name="Microsoft",

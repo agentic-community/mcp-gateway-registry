@@ -131,6 +131,8 @@ cat .oauth-tokens/vscode-mcp.json >> ~/.vscode/settings.json
 }
 ```
 
+The generated files still include `X-User-Pool-Id`, `X-Client-Id` and `X-Region`. The gateway ignores them: nginx sends them empty to the auth server, which validates the token with its own Cognito settings. Leaving them in the file does no harm.
+
 ### Roo Code Plugin - Enterprise Showcase
 
 Roo Code demonstrates the power of enterprise governance for AI development tools.

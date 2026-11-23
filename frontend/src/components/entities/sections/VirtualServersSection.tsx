@@ -41,15 +41,15 @@ const VirtualServersSection: React.FC<VirtualServersSectionProps> = ({
   return (
     <div className="mb-8">
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-xl font-bold text-gray-900 dark:text-white">
+        <h2 className="text-xl font-bold text-fg">
           Virtual MCP Servers
         </h2>
         {canModify && (
           <button
             onClick={onAdd}
-            className="inline-flex items-center px-4 py-2 text-sm font-medium text-white bg-teal-600 hover:bg-teal-700 rounded-lg transition-colors"
+            className="btn-primary"
           >
-            <PlusIcon className="h-4 w-4 mr-2" />
+            <PlusIcon className="h-4 w-4" />
             Add Virtual Server
           </button>
         )}
@@ -59,7 +59,7 @@ const VirtualServersSection: React.FC<VirtualServersSectionProps> = ({
         <EmptyState tone="error" title="Failed to load virtual servers" subtitle={error} />
       ) : loading ? (
         <div className="flex items-center justify-center py-12">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-teal-600"></div>
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-virtual-600"></div>
         </div>
       ) : servers.length === 0 ? (
         <EmptyState

@@ -8,7 +8,6 @@ from typing import Annotated, Any
 import httpx
 from fastapi import (
     APIRouter,
-    Cookie,
     Depends,
     Form,
     Header,
@@ -24,7 +23,11 @@ from pydantic import BaseModel
 
 from ..audit import set_audit_action
 from ..audit.request_id import sanitize_correlation_id
-from ..auth.asset_permissions import user_has_asset_permission
+from ..auth.asset_permissions import (
+    VIEW_ALL_CONNECT_CONFIG_DENIED,
+    can_view_all,
+    user_has_asset_permission,
+)
 from ..auth.csrf import (
     generate_csrf_token,
     verify_csrf_token_flexible,
@@ -32,16 +35,22 @@ from ..auth.csrf import (
 )
 from ..auth.dependencies import enhanced_auth, nginx_proxied_auth
 from ..auth.internal import validate_internal_auth
+from ..auth.session_cookie import (
+    SessionCookie,
+    request_session_cookie,
+)
 from ..auth.tool_filter import filter_tools_for_user
 from ..common.log_redaction import redact_mapping, redact_url
 from ..constants import VALID_AUTH_SCHEMES, DeploymentType, HealthStatus
 from ..core.config import DeploymentMode, settings
+from ..core.mcp_apps import count_mcp_app_tools
 from ..core.metrics import ASSET_ID_SUPPLIED_TOTAL
 from ..core.schemas import (
     AuthCredentialUpdateRequest,
     OAuthBackendConfigRequest,
     OAuthDiscoveryConfigRequest,
 )
+from ..exceptions import UrlValidationError
 from ..schemas.registry_card import LifecycleStatus
 from ..schemas.server_update_models import (
     SERVER_REGISTRANT_ONLY_FIELDS,
@@ -60,12 +69,19 @@ from ..services.lifecycle_events import (
     fire_scan_complete_event,
     user_can_change_lifecycle_status,
 )
+from ..services.openapi_ownership import managed_openapi_slug
 from ..services.registration_gate_service import check_registration_gate
-from ..services.security_scanner import security_scanner_service
+from ..services.security_pending import tags_after_passing_scan
+from ..services.security_scanner import (
+    scan_credential_expected,
+    security_scanner_service,
+)
 from ..services.server_service import server_service
 from ..services.tool_blocks import annotate_blocked_tools, hide_blocked_tools
 from ..services.visibility import (
+    can_skip_read_visibility,
     redact_oauth_config_for_non_owner,
+    redact_scan_result_for_non_admin,
     redact_server_backend_fields,
     should_redact_backend_urls,
 )
@@ -84,6 +100,7 @@ from ..utils.metadata_limits import (
     parse_metadata_json,
     validate_metadata_limits,
 )
+from ..utils.tool_list_hash import tool_list_hash
 from ._etag_utils import parse_if_match, updated_ms, weak_etag_for_timestamp
 
 logger = logging.getLogger(__name__)
@@ -459,6 +476,7 @@ async def _apply_tool_visibility(
     server_info["tool_list"] = filtered
     # Keep the badge/count consistent with what is actually rendered.
     server_info["num_tools"] = len(filtered)
+    server_info["num_mcp_app_tools"] = count_mcp_app_tools(filtered)
 
 
 async def _build_versions_list(
@@ -666,6 +684,101 @@ async def _apply_unsafe_scan_decision(
     return True
 
 
+async def _clear_server_security_pending(
+    path: str,
+    previous_scan: dict | None,
+) -> bool:
+    """Remove a scanner-set security-pending tag after a passing rescan (issue #2032).
+
+    Writes only the tags field, from a full copy of the stored server, the same
+    way tool discovery does, so nested secrets and the search index are intact.
+
+    Args:
+        path: The server path.
+        previous_scan: The latest stored scan result from before this rescan.
+
+    Returns:
+        True when the tag was removed.
+    """
+    server_info = await server_service.get_server_info(path)
+    if not server_info:
+        return False
+    new_tags = tags_after_passing_scan(server_info.get("tags"), previous_scan)
+    if new_tags is None:
+        return False
+    updated = server_info.copy()
+    updated["tags"] = new_tags
+    await server_service.update_server(path, updated, updated_fields=["tags"])
+    logger.info(f"Removed 'security-pending' from {path} after a passing rescan")
+    return True
+
+
+async def _add_server_security_pending(
+    path: str,
+) -> list[str] | None:
+    """Add the security-pending tag to a server after a failed scan.
+
+    Builds the write from a fresh read of the stored server, not from the
+    snapshot the scan was started with. update_server() decides whether to
+    re-pin the proxy target and clear upstream headers from the keys in the
+    dict it is given, so a stale snapshot would persist values derived from an
+    address that was changed while the scan ran. Only the tags field is written.
+
+    Args:
+        path: The server path.
+
+    Returns:
+        The stored tags after the write, or None when the server is gone or
+        already carries the tag.
+    """
+    server_info = await server_service.get_server_info(path)
+    if not server_info:
+        logger.warning(f"Server {path} not found when adding 'security-pending'")
+        return None
+    tags = list(server_info.get("tags") or [])
+    if "security-pending" in tags:
+        return None
+    tags.append("security-pending")
+    updated = server_info.copy()
+    updated["tags"] = tags
+    await server_service.update_server(path, updated, updated_fields=["tags"])
+    logger.info(f"Added 'security-pending' tag to {path}")
+    return tags
+
+
+def start_post_registration_tasks(
+    path: str,
+    proxy_pass_url: str,
+    server_entry: dict,
+    performed_by: str | None,
+    headers_list: list | None = None,
+    run_scan: bool = True,
+    run_health_check: bool = True,
+) -> None:
+    """Start the background steps every server registration runs.
+
+    The security scan, the immediate health check, and the registration
+    webhook (issue #742). Used by POST /api/servers/register and by OpenAPI MCP
+    servers (issue #2022), so both register a server the same way.
+    """
+    from ..health.service import health_service
+
+    if run_scan:
+        asyncio.create_task(
+            _perform_security_scan_on_registration(path, proxy_pass_url, server_entry, headers_list)
+        )
+    if run_health_check:
+        asyncio.create_task(health_service.perform_immediate_health_check(path))
+    asyncio.create_task(
+        send_registration_webhook(
+            event_type="registration",
+            registration_type="server",
+            card_data=strip_credentials_from_dict(server_entry),
+            performed_by=performed_by,
+        )
+    )
+
+
 async def _perform_security_scan_on_registration(
     path: str,
     proxy_pass_url: str,
@@ -713,6 +826,7 @@ async def _perform_security_scan_on_registration(
             headers=headers_json,
             timeout=scan_config.scan_timeout_seconds,
             mcp_endpoint=server_entry.get("mcp_endpoint"),
+            credential_expected=scan_credential_expected(server_entry),
         )
 
         # Handle unsafe servers
@@ -725,12 +839,13 @@ async def _perform_security_scan_on_registration(
 
             # Add security-pending tag if configured
             if scan_config.add_security_pending_tag:
-                current_tags = server_entry.get("tags", [])
-                if "security-pending" not in current_tags:
-                    current_tags.append("security-pending")
-                    server_entry["tags"] = current_tags
-                    await server_service.update_server(path, server_entry)
-                    logger.info(f"Added 'security-pending' tag to {path}")
+                # server_entry is a snapshot taken before the scan, so the write
+                # starts from the stored server instead (see the helper). The
+                # snapshot still gets the tag, because the webhook and the
+                # disable path below read it.
+                stored_tags = await _add_server_security_pending(path)
+                if stored_tags is not None:
+                    server_entry["tags"] = stored_tags
 
             # Disable server if configured. A scan that could not complete is not
             # an unsafe verdict: scan_server() reports is_safe=False with zero
@@ -781,16 +896,40 @@ async def _perform_security_scan_on_registration(
         )
 
 
+def _refuse_openapi_managed(
+    server_info: dict | None,
+    action: str,
+) -> None:
+    """409 for a generic route that would change a server an OpenAPI MCP server owns (issue #2022).
+
+    The OpenAPI MCP server service keeps this record in step with its own; a
+    generic edit, replace or remove would leave the two out of step. Toggle,
+    refresh, rescan, rating and the per-tool block stay allowed.
+    """
+    slug = managed_openapi_slug(server_info)
+    if slug is None:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=(
+            f"{(server_info or {}).get('path')} belongs to OpenAPI MCP server '{slug}'; "
+            f"{action} it under /api/openapi-servers/{slug}"
+        ),
+    )
+
+
 @router.get("/", response_class=HTMLResponse)
 async def read_root(
     request: Request,
     query: str | None = None,
-    session: Annotated[str | None, Cookie(alias=settings.session_cookie_name)] = None,
+    session: SessionCookie = None,
 ):
     """Main dashboard page showing services based on user permissions."""
     # Check authentication first and redirect if not authenticated
     if not session:
         logger.info("No session cookie at root route, redirecting to login")
+        # A refused duplicate gets both variants expired by
+        # SessionCookieIsolationMiddleware.
         return RedirectResponse(url="/login", status_code=302)
 
     try:
@@ -812,9 +951,10 @@ async def read_root(
     service_data = []
     search_query = query.lower() if query else ""
 
-    # Get servers based on user permissions
-    if user_context["is_admin"]:
-        # Admin users see all servers
+    # Get servers based on user permissions. Admins and view_all holders
+    # (issue #2099) see every server; this is a read.
+    sees_every_server = can_skip_read_visibility(user_context)
+    if sees_every_server:
         all_servers = await server_service.get_all_servers()
         logger.info(
             f"Admin user {user_context['username']} accessing all {len(all_servers)} servers"
@@ -852,7 +992,8 @@ async def read_root(
 
         # Check if user can list this service using technical name
         if (
-            "all" not in accessible_services
+            not sees_every_server
+            and "all" not in accessible_services
             and technical_name not in normalized_accessible_services
         ):
             logger.debug(
@@ -1010,7 +1151,11 @@ async def get_servers_json(
     is_admin = user_context.get("is_admin", False) if user_context else False
     accessible_servers_list = user_context.get("accessible_servers", []) if user_context else []
     accessible_services = user_context.get("accessible_services", []) if user_context else []
-    is_unrestricted = is_admin or "all" in accessible_servers_list or "all" in accessible_services
+    # Admins and view_all holders (issue #2099) read every server.
+    sees_every_server = is_admin or can_skip_read_visibility(user_context)
+    is_unrestricted = (
+        sees_every_server or "all" in accessible_servers_list or "all" in accessible_services
+    )
     # Redaction decision is per-request (admin + deployment mode), so compute
     # it once rather than per server row.
     redact_backend = should_redact_backend_urls(user_context)
@@ -1032,7 +1177,7 @@ async def get_servers_json(
         )
     else:
         # FALLBACK PATH: full fetch needed
-        if is_admin:
+        if sees_every_server:
             all_servers = await server_service.get_all_servers(exclude_tool_list=not include_tools)
         else:
             all_servers = await server_service.get_all_servers_with_permissions(
@@ -1125,9 +1270,13 @@ async def get_servers_json(
                 # listed (marked), so it still counts; the UI greys it instead of
                 # implying the server lost a tool.
                 _num_tools = len(_filtered_tools)
+                # Same rule for the MCP App badge: count only the UI tools this
+                # user can see, so the badge matches the tools modal.
+                _num_mcp_app_tools = count_mcp_app_tools(_filtered_tools)
             else:
                 _filtered_tools = []
                 _num_tools = server_info.get("num_tools", 0)
+                _num_mcp_app_tools = server_info.get("num_mcp_app_tools", 0)
             service_data.append(
                 {
                     "id": server_info.get("id"),
@@ -1138,6 +1287,9 @@ async def get_servers_json(
                     "is_enabled": is_enabled,
                     "tags": server_info.get("tags", []),
                     "num_tools": _num_tools,
+                    # MCP Apps: tools that open an interactive page. Per-user when
+                    # the tool list was loaded, else the count the health check stored.
+                    "num_mcp_app_tools": _num_mcp_app_tools,
                     "license": server_info.get("license", "N/A"),
                     "health_status": normalized_status,
                     "last_checked_iso": health_data["last_checked_iso"],
@@ -1151,6 +1303,10 @@ async def get_servers_json(
                     "mcp_server_version_updated_at": server_info.get(
                         "mcp_server_version_updated_at"
                     ),
+                    # Tool drift detection (issue #2050): changes whenever any
+                    # tool's definition changes, so a client can skip a re-read.
+                    "tool_list_hash": server_info.get("tool_list_hash"),
+                    "tool_list_changed_at": server_info.get("tool_list_changed_at"),
                     "sync_metadata": server_info.get("sync_metadata"),
                     # ARD discovery imports (issue #1296): link to the source's
                     # original descriptor (server.json) so a client can resolve +
@@ -2297,6 +2453,7 @@ async def internal_register_service(
 
     # Check if server exists and handle overwrite logic
     existing_server = await server_service.get_server_info(path)
+    _refuse_openapi_managed(existing_server, "replace")
     if existing_server and not overwrite:
         logger.debug(f"INTERNAL REGISTER: Server exists and overwrite=False for path {path}")
         return JSONResponse(
@@ -2494,6 +2651,7 @@ async def internal_remove_service(
 
     # Check if server exists
     server_info = await server_service.get_server_info(service_path)
+    _refuse_openapi_managed(server_info, "remove")
     if not server_info:
         logger.debug(f"INTERNAL REMOVE: Service not found at path '{service_path}'")
         return JSONResponse(
@@ -2794,6 +2952,7 @@ async def edit_server_submit(
 
     # Check if the server exists and get service name
     server_info = await server_service.get_server_info(service_path)
+    _refuse_openapi_managed(server_info, "edit")
     if not server_info:
         raise HTTPException(status_code=404, detail="Service path not found")
 
@@ -3200,9 +3359,14 @@ async def get_server_details(
     if service_path == "/all":
         if user_context["is_admin"]:
             return await server_service.get_all_servers()
-        all_accessible = await server_service.get_all_servers_with_permissions(
-            user_context["accessible_servers"]
-        )
+        # A view_all holder (issue #2099) reads every server, with the same
+        # non-admin redaction below as anyone else.
+        if can_view_all(user_context):
+            all_accessible = await server_service.get_all_servers()
+        else:
+            all_accessible = await server_service.get_all_servers_with_permissions(
+                user_context["accessible_servers"]
+            )
         # Strip internal backend URLs per server for non-admins in with-gateway
         # mode (this branch is non-admin only; admins returned above).
         if should_redact_backend_urls(user_context):
@@ -3225,7 +3389,7 @@ async def get_server_details(
         raise HTTPException(status_code=404, detail="Service path not registered")
 
     # For non-admin users, check if they have access to this specific server
-    if not user_context["is_admin"]:
+    if not can_skip_read_visibility(user_context):  # admins and view_all holders (#2099)
         if not await server_service.user_can_access_server_path(
             service_path, user_context["accessible_servers"]
         ):
@@ -3314,7 +3478,7 @@ async def get_server_canonical(
     is_admin = user_context.get("is_admin", False)
 
     # Non-admin callers may only export servers they can access.
-    if not is_admin:
+    if not can_skip_read_visibility(user_context):  # admins and view_all holders (#2099)
         if not await server_service.user_can_access_server_path(
             service_path, user_context.get("accessible_servers", [])
         ):
@@ -3372,7 +3536,9 @@ async def get_service_tools(
         all_servers_tools = {}
 
         # Get servers based on user permissions
-        if user_context["is_admin"]:
+        # Admins and view_all holders (issue #2099) read every server's STORED
+        # tool list here; this branch never fetches live.
+        if can_skip_read_visibility(user_context):
             all_servers = await server_service.get_all_servers()
         else:
             all_servers = await server_service.get_all_servers_with_permissions(
@@ -3423,11 +3589,26 @@ async def get_service_tools(
     if not server_info:
         raise HTTPException(status_code=404, detail="Service path not registered")
 
-    # For non-admin users, check if they have access to this specific server
-    if not user_context["is_admin"]:
+    # For non-admin users, check if they have access to this specific server.
+    # A view_all holder (issue #2099) without that access gets the STORED tool
+    # list only: the live fetch below sends the server's stored credential to the
+    # backend and rewrites the stored list, which view_all must not trigger.
+    if not user_context.get("is_admin"):
         if not await server_service.user_can_access_server_path(
             service_path, user_context["accessible_servers"]
         ):
+            if can_view_all(user_context):
+                stored_tools = await annotate_blocked_tools(
+                    service_path,
+                    filter_tools_for_user(
+                        server_info.get("server_name", ""),
+                        server_info.get("tool_list") or [],
+                        user_context,
+                        endpoint="tools_service",
+                        server_path=service_path,
+                    ),
+                )
+                return {"service_path": service_path, "tools": stored_tools, "cached": True}
             logger.warning(
                 f"User {user_context['username']} attempted to access tools for {service_path} without access"
             )
@@ -3479,17 +3660,22 @@ async def get_service_tools(
                 detail="Failed to fetch tools from MCP server. Service may be unhealthy.",
             )
 
-        # Update the server registry with the fresh tools
+        # Update the server registry with the fresh tools. Compare by hash, the
+        # same way the health loop does (issue #2050), so a change to any tool's
+        # name, description, schema or annotations is saved.
         new_tool_count = len(tool_list)
-        current_tool_count = server_info.get("num_tools", 0)
+        new_hash = tool_list_hash(tool_list)
 
-        if current_tool_count != new_tool_count or server_info.get("tool_list") != tool_list:
+        if tool_list_hash(server_info.get("tool_list")) != new_hash:
             logger.info(f"Updating tool list for {service_path}. New count: {new_tool_count}")
 
             # Update server info with fresh tools
             updated_server_info = server_info.copy()
             updated_server_info["tool_list"] = tool_list
             updated_server_info["num_tools"] = new_tool_count
+            updated_server_info["tool_list_hash"] = new_hash
+            if server_info.get("tool_list"):
+                updated_server_info["tool_list_changed_at"] = datetime.now(UTC).isoformat()
 
             # Save updated server info
             success = await server_service.update_server(service_path, updated_server_info)
@@ -4128,7 +4314,7 @@ async def generate_user_token(
         from ..auth.dependencies import get_user_session_data
 
         try:
-            session_cookie = request.cookies.get(settings.session_cookie_name)
+            session_cookie = request_session_cookie(request)
             logger.info(f"Session cookie present: {bool(session_cookie)}")
             session_data = await get_user_session_data(session_cookie)
             logger.info(
@@ -4457,7 +4643,6 @@ async def register_service_api(
     # with named status codes.
     from fastapi import status as fastapi_status
 
-    from ..health.service import health_service
     from ..utils.local_runtime_validation import (
         add_unpinned_warning_tag,
         parse_and_validate_local_runtime,
@@ -4759,6 +4944,7 @@ async def register_service_api(
 
     # Check if server exists and handle overwrite/version logic
     existing_server = await server_service.get_server_info(path)
+    _refuse_openapi_managed(existing_server, "replace")
 
     # Ownership guard: overwriting (or auto-versioning) an existing server
     # replaces another user's registration and can redirect its traffic. Only
@@ -4845,25 +5031,15 @@ async def register_service_api(
                 f"it appears in default search results or the gateway route."
             )
 
-        # Security scanning (non-blocking). Skipped for local stdio servers.
-        if not is_local:
-            asyncio.create_task(
-                _perform_security_scan_on_registration(
-                    path, proxy_pass_url, server_entry, headers_list
-                )
-            )
-
-        # Trigger async task for health check
-        asyncio.create_task(health_service.perform_immediate_health_check(path))
-
-        # Registration webhook (Issue #742)
-        asyncio.create_task(
-            send_registration_webhook(
-                event_type="registration",
-                registration_type="server",
-                card_data=strip_credentials_from_dict(server_entry),
-                performed_by=user_context.get("username"),
-            )
+        # Security scan (skipped for local stdio servers), health check and
+        # registration webhook, shared with OpenAPI MCP servers (issue #2022).
+        start_post_registration_tasks(
+            path,
+            proxy_pass_url,
+            server_entry,
+            user_context.get("username"),
+            headers_list=headers_list,
+            run_scan=not is_local,
         )
 
         return JSONResponse(
@@ -4875,6 +5051,11 @@ async def register_service_api(
             },
         )
 
+    except UrlValidationError:
+        # A URL the guard or the OpenAPI MCP ownership rule refused: the app's
+        # handler answers 400 with the reason. The catch-all below would turn
+        # it into a bare 500 that hides why the registration was refused.
+        raise
     except Exception as e:
         logger.error(f"Service registration failed type={type(e).__name__}")
         raise HTTPException(status_code=500, detail="Service registration failed")
@@ -4921,6 +5102,7 @@ async def update_server_auth_credential(
 
     # Look up the server first so the permission check can use its display name.
     existing_server = await server_service.get_server_info(server_path, include_credentials=True)
+    _refuse_openapi_managed(existing_server, "change the credential of")
     if not existing_server:
         return JSONResponse(
             status_code=404,
@@ -5144,6 +5326,7 @@ async def put_server_oauth_config(
         server_path = "/" + server_path
 
     existing_server = await server_service.get_server_info(server_path, include_credentials=True)
+    _refuse_openapi_managed(existing_server, "change the OAuth configuration of")
     if not existing_server:
         return JSONResponse(status_code=404, content={"error": "Server not found"})
 
@@ -5349,7 +5532,11 @@ async def put_server_oauth_discovery(
     An existing designation is preserved -- see below.
     """
     from ..egress_auth.service import vault_principal
-    from .egress_auth_routes import build_oauth_provider_config
+    from .egress_auth_routes import (
+        build_discovery_dcr_config,
+        build_oauth_provider_config,
+        provider_requires_dcr,
+    )
 
     set_audit_action(
         request,
@@ -5375,6 +5562,7 @@ async def put_server_oauth_discovery(
     if not server_path.startswith("/"):
         server_path = "/" + server_path
     existing_server = await server_service.get_server_info(server_path, include_credentials=True)
+    _refuse_openapi_managed(existing_server, "change the OAuth configuration of")
     if not existing_server:
         return JSONResponse(status_code=404, content={"error": "Server not found"})
 
@@ -5429,19 +5617,29 @@ async def put_server_oauth_discovery(
     # -- self-contained under Backend Auth, no egress_oauth dependency. Blank
     # client_secret keeps the stored ciphertext (edit).
     prior = (existing_server.get("oauth_discovery") or {}).get("oauth") or {}
-    oauth_cfg = build_oauth_provider_config(
-        provider=body.provider,
-        client_id=body.client_id,
-        client_secret=body.client_secret,
-        scopes=body.scopes,
-        custom_authorize_url=body.custom_authorize_url,
-        custom_token_url=body.custom_token_url,
-        custom_scope_separator=body.custom_scope_separator,
-        custom_token_auth_style=body.custom_token_auth_style,
-        custom_resource=body.custom_resource,
-        expected_issuer=body.expected_issuer,
-        prior_secret_encrypted=prior.get("client_secret_encrypted"),
-    )
+    if provider_requires_dcr(body.provider):
+        # No client can be typed in for a DCR provider: reuse the one the server's
+        # per-user egress save registered (same callback URL), or refuse with 400.
+        oauth_cfg = build_discovery_dcr_config(
+            server=existing_server,
+            provider=body.provider,
+            scopes=body.scopes,
+            expected_issuer=body.expected_issuer,
+        )
+    else:
+        oauth_cfg = build_oauth_provider_config(
+            provider=body.provider,
+            client_id=body.client_id,
+            client_secret=body.client_secret,
+            scopes=body.scopes,
+            custom_authorize_url=body.custom_authorize_url,
+            custom_token_url=body.custom_token_url,
+            custom_scope_separator=body.custom_scope_separator,
+            custom_token_auth_style=body.custom_token_auth_style,
+            custom_resource=body.custom_resource,
+            expected_issuer=body.expected_issuer,
+            prior_secret_encrypted=prior.get("client_secret_encrypted"),
+        )
     oauth_cfg["updated_at"] = datetime.now(UTC).isoformat()
 
     # Preserve an EXISTING designation. This endpoint both configures the provider
@@ -5561,6 +5759,7 @@ async def delete_server_oauth_discovery(
     if not server_path.startswith("/"):
         server_path = "/" + server_path
     existing_server = await server_service.get_server_info(server_path, include_credentials=True)
+    _refuse_openapi_managed(existing_server, "change the OAuth configuration of")
     if not existing_server:
         return JSONResponse(status_code=404, content={"error": "Server not found"})
     _check_server_permission(
@@ -5760,9 +5959,6 @@ async def remove_service_api(
       -F "path=/myservice"
     ```
     """
-    from ..health.service import health_service
-    from ..services.scope_service import remove_server_scopes
-
     # Set audit action for server removal
     set_audit_action(
         request, "delete", "server", resource_id=path, description=f"Remove server at {path}"
@@ -5778,6 +5974,7 @@ async def remove_service_api(
 
     # Check if server exists
     server_info = await server_service.get_server_info(path)
+    _refuse_openapi_managed(server_info, "remove")
     if not server_info:
         logger.warning(f"Service not found at path '{path}'")
         return JSONResponse(
@@ -5859,42 +6056,10 @@ async def remove_service_api(
             },
         )
 
-    logger.info(f"Service removed successfully: {path} by user {user_context.get('username')}")
+    # Search, nginx, scopes, webhook: shared with OpenAPI MCP servers (issue #2022).
+    from ..services.server_lifecycle import clean_up_removed_server
 
-    # Remove from DocumentDB search index
-    try:
-        from ..repositories.factory import get_search_repository
-
-        search_repo = get_search_repository()
-        await search_repo.remove_entity(path)
-    except Exception as e:
-        logger.warning(f"Failed to remove search index for {path}: {e}")
-
-    # Flush nginx config immediately (delete must take effect before response)
-    from ..core.nginx_service import nginx_reload_scheduler
-
-    nginx_reload_scheduler.mark_dirty()
-    await nginx_reload_scheduler.flush_now()
-
-    # Broadcast health status update to WebSocket clients
-    await health_service.broadcast_health_update(path)
-
-    # Remove server from scopes and reload auth server
-    try:
-        await remove_server_scopes(path)
-        logger.info(f"Successfully removed server {path} from scopes")
-    except Exception as e:
-        logger.warning(f"Failed to remove server {path} from scopes: {e}")
-
-    # Deletion webhook (Issue #742): server_info was fetched before removal
-    asyncio.create_task(
-        send_registration_webhook(
-            event_type="deletion",
-            registration_type="server",
-            card_data=strip_credentials_from_dict(server_info),
-            performed_by=user_context.get("username"),
-        )
-    )
+    await clean_up_removed_server(path, server_info, user_context.get("username"))
 
     return JSONResponse(
         status_code=200,
@@ -6659,7 +6824,7 @@ async def get_server_rating(
         )
 
     # For non-admin users, check if they have access to this specific server
-    if not user_context["is_admin"]:
+    if not can_skip_read_visibility(user_context):  # admins and view_all holders (#2099)
         if not await server_service.user_can_access_server_path(
             path, user_context["accessible_servers"]
         ):
@@ -6712,7 +6877,7 @@ async def get_server_security_scan(
         )
 
     # Check user permissions
-    if not user_context["is_admin"]:
+    if not can_skip_read_visibility(user_context):  # admins and view_all holders (#2099)
         if not await server_service.user_can_access_server_path(
             path, user_context["accessible_servers"]
         ):
@@ -6730,7 +6895,7 @@ async def get_server_security_scan(
             "The server may not have been scanned yet.",
         )
 
-    return scan_result
+    return redact_scan_result_for_non_admin(scan_result, user_context)
 
 
 @router.post("/servers/{path:path}/rescan")
@@ -6796,6 +6961,9 @@ async def rescan_server(
 
     from ..exceptions import UrlValidationError
 
+    # Read before scanning: the new result replaces it as the latest.
+    previous_scan = await security_scanner_service.get_scan_result(path)
+
     try:
         # Trigger security scan
         scan_result = await security_scanner_service.scan_server(
@@ -6806,6 +6974,7 @@ async def rescan_server(
             headers=headers_json,
             timeout=None,
             mcp_endpoint=server_info.get("mcp_endpoint"),
+            credential_expected=scan_credential_expected(server_info),
         )
 
         # Apply the per-tool block on rescan too, not just at registration.
@@ -6851,6 +7020,9 @@ async def rescan_server(
                     f"Server {path} passed rescan; reconciled tool blocks, "
                     f"{len(cleared)} override(s) remain"
                 )
+
+        if scan_result.is_safe:
+            await _clear_server_security_pending(path, previous_scan)
 
         # Return the scan result data
         return {
@@ -6957,6 +7129,7 @@ async def remove_server_version(
     # modify_service permission as PUT/PATCH /servers/{path}. nginx_proxied_auth
     # only authenticates; it does not authorize.
     existing_server = await server_service.get_server_info(decoded_path)
+    _refuse_openapi_managed(existing_server, "change the versions of")
     if not existing_server:
         raise HTTPException(status_code=404, detail="Service path not registered")
     _check_server_permission(
@@ -7023,6 +7196,7 @@ async def set_default_version(
     # the same modify_service permission as PUT/PATCH /servers/{path}.
     # nginx_proxied_auth only authenticates; it does not authorize.
     existing_server = await server_service.get_server_info(decoded_path)
+    _refuse_openapi_managed(existing_server, "change the versions of")
     if not existing_server:
         raise HTTPException(status_code=404, detail="Service path not registered")
     _check_server_permission(
@@ -7100,7 +7274,7 @@ async def get_server_versions(
         )
 
     # Access control — admins bypass; non-admins must be able to reach the server.
-    if not (user_context and user_context.get("is_admin")):
+    if not can_skip_read_visibility(user_context):  # admins and view_all holders (#2099)
         accessible_servers = user_context.get("accessible_servers", []) if user_context else []
         has_access = await server_service.user_can_access_server_path(
             decoded_path, accessible_servers
@@ -7157,16 +7331,21 @@ async def get_server_connect_config(
     if not server_info:
         raise HTTPException(status_code=404, detail="Service path not found")
 
+    # Not a view_all read (issue #2099): this route returns DECRYPTED custom
+    # headers, which can carry stored credentials. Only admins and users who can
+    # reach the server get them.
     if not user_context.get("is_admin"):
         accessible_servers = user_context.get("accessible_servers", [])
         has_access = await server_service.user_can_access_server_path(
             service_path, accessible_servers
         )
         if not has_access:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You do not have access to this server",
+            detail = (
+                VIEW_ALL_CONNECT_CONFIG_DENIED
+                if can_view_all(user_context)
+                else "You do not have access to this server"
             )
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
 
     encrypted = server_info.get("custom_headers_encrypted") or []
     custom_headers = decrypt_custom_headers(encrypted)
@@ -7232,6 +7411,7 @@ async def update_server_endpoint(
     path = _normalize_server_path(path)
 
     existing = await server_service.get_server_info(path, include_credentials=True)
+    _refuse_openapi_managed(existing, "replace")
     if not existing:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -7416,6 +7596,7 @@ async def patch_server_endpoint(
     path = _normalize_server_path(path)
 
     existing = await server_service.get_server_info(path, include_credentials=True)
+    _refuse_openapi_managed(existing, "edit")
     if not existing:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -7638,7 +7819,7 @@ async def get_server(
         )
 
     # Access control — admin users bypass checks
-    if not user_context.get("is_admin"):
+    if not can_skip_read_visibility(user_context):  # admins and view_all holders (#2099)
         accessible_servers = user_context.get("accessible_servers", [])
         has_access = await server_service.user_can_access_server_path(path, accessible_servers)
         if not has_access:

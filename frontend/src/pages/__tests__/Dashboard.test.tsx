@@ -1,4 +1,5 @@
 import React from 'react';
+import axios from 'axios';
 import { render, screen, fireEvent, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import Dashboard from '../Dashboard';
@@ -97,6 +98,11 @@ jest.mock('../../components/VirtualServerCard', () => {
   M.displayName = 'VirtualServerCard';
   return M;
 });
+jest.mock('../../components/OpenApiServerList', () => {
+  const M = () => <div data-testid="openapi-server-list" />;
+  M.displayName = 'OpenApiServerList';
+  return M;
+});
 // Other heavy children that aren't under test.
 jest.mock('../../components/DiscoverTab', () => {
   const M = () => <div data-testid="discover-tab" />;
@@ -171,7 +177,28 @@ beforeEach(() => {
   virtualState.loading = false;
   authUser = { username: 'admin', is_admin: true, can_modify_servers: true };
   registryFeatures = {};
+  // No built-in federation source is configured unless a test says so. Also
+  // keeps the Dashboard's background GETs from reaching the network and
+  // logging after a test has finished.
+  mockFederationConfig({});
 });
+
+afterEach(() => {
+  jest.restoreAllMocks();
+});
+
+/**
+ * Answer GET /api/federation/config with `config`. The Dashboard shows a
+ * built-in source tab (Anthropic, ASOR, AWS) only when that source is
+ * configured there. Every other GET keeps failing, as it does unmocked.
+ */
+function mockFederationConfig(config: Record<string, unknown>) {
+  jest.spyOn(axios, 'get').mockImplementation((url: string) =>
+    url === '/api/federation/config'
+      ? Promise.resolve({ data: config })
+      : Promise.reject(new Error(`unmocked GET ${url}`)),
+  );
+}
 
 describe('Dashboard entity collections', () => {
   it('renders server cards on the MCP Servers tab', () => {
@@ -265,17 +292,15 @@ describe('Dashboard entity collections', () => {
     expect(screen.getByText('PeerAgent')).toBeInTheDocument();
   });
 
-  it('renders the External Registries tab with federated cards grouped by type', () => {
-    stats.servers = [
-      makeServer('ExtServer', {
-        sync_metadata: { is_federated: true, source_peer_id: 'anthropic' },
-        tags: ['anthropic-registry'],
-      }),
-    ];
+  it('renders the External Registries tab with federated cards grouped by type', async () => {
+    mockFederationConfig({ anthropic: { enabled: true } });
+    // Anthropic federation marks imported servers with this tag (no peer sync_metadata).
+    stats.servers = [makeServer('ExtServer', { tags: ['anthropic-registry'] })];
     renderDashboard();
     fireEvent.click(screen.getByRole('button', { name: 'External Registries' }));
-    // The federated server shows under the Servers subsection.
-    expect(screen.getByRole('heading', { name: 'Servers' })).toBeInTheDocument();
+    // The federated server shows under the Servers subsection of the Anthropic tab.
+    expect(await screen.findByRole('heading', { name: 'Servers' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Anthropic' })).toBeInTheDocument();
     expect(screen.getByText('ExtServer')).toBeInTheDocument();
   });
 
@@ -299,5 +324,34 @@ describe('Dashboard entity collections', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Agent Skills' }));
     expect(screen.getByTestId('skill-card')).toBeInTheDocument();
     expect(screen.queryByTestId('server-card')).not.toBeInTheDocument();
+  });
+});
+
+
+describe('Dashboard OpenAPI MCP servers view (issue #2022)', () => {
+  it('hides the OpenAPI tab when the feature flag is off', () => {
+    registryFeatures = { openapi_servers: false };
+    renderDashboard();
+    expect(screen.queryByRole('button', { name: 'OpenAPI MCP Servers' })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('openapi-server-list')).not.toBeInTheDocument();
+  });
+
+  it('hides the OpenAPI tab when the backend omits the flag', () => {
+    renderDashboard();
+    expect(screen.queryByRole('button', { name: 'OpenAPI MCP Servers' })).not.toBeInTheDocument();
+  });
+
+  it('hides the OpenAPI tab from a non-admin even when the flag is on', () => {
+    registryFeatures = { openapi_servers: true };
+    authUser = { username: 'dev', is_admin: false, can_modify_servers: true };
+    renderDashboard();
+    expect(screen.queryByRole('button', { name: 'OpenAPI MCP Servers' })).not.toBeInTheDocument();
+  });
+
+  it('renders the OpenAPI list for an admin when the flag is on', () => {
+    registryFeatures = { openapi_servers: true };
+    renderDashboard();
+    fireEvent.click(screen.getByRole('button', { name: 'OpenAPI MCP Servers' }));
+    expect(screen.getByTestId('openapi-server-list')).toBeInTheDocument();
   });
 });

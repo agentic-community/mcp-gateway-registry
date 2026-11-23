@@ -1,6 +1,6 @@
 import React from 'react';
 import FormField from './FormField';
-import { fieldClass, FIELD_FOCUS } from './formClasses';
+import { FIELD } from './formClasses';
 
 export type LifecycleStatus = 'active' | 'draft' | 'deprecated' | 'beta';
 
@@ -8,7 +8,6 @@ interface StatusFieldProps {
   value: LifecycleStatus;
   onChange: (status: LifecycleStatus) => void;
   label?: string;
-  accent?: keyof typeof FIELD_FOCUS;
 }
 
 /**
@@ -19,14 +18,13 @@ const StatusField: React.FC<StatusFieldProps> = ({
   value,
   onChange,
   label = 'Lifecycle Status',
-  accent = 'purple',
 }) => {
   return (
     <FormField label={label}>
       <select
         value={value}
         onChange={(e) => onChange(e.target.value as LifecycleStatus)}
-        className={fieldClass(accent)}
+        className={FIELD}
       >
         <option value="active">Active</option>
         <option value="draft">Draft</option>

@@ -72,6 +72,13 @@ export interface RegistryEcsServiceProps {
   readonly serviceConnectNamespaceArn: string;
   /** Service Connect configuration */
   readonly serviceConnect: ServiceConnectEntry;
+  /**
+   * Extra Service Connect aliases advertised alongside the primary one. Each
+   * `portName` must match an entry in `additionalPorts`. Used for the
+   * registry's internal egress-token vend listener, which is reachable as
+   * `registry:8091` task-to-task but never fronted by the ALB.
+   */
+  readonly additionalServiceConnect?: ServiceConnectEntry[];
   /** Environment variables for the container */
   readonly environment: Record<string, string>;
   /** Secrets (ECS secret references) */
@@ -308,6 +315,25 @@ export class RegistryEcsService extends Construct {
       }
     }
 
+    // A Service Connect alias naming a port the container never maps is
+    // rejected by ECS at deploy time with a message that does not name the
+    // port, so catch it at synth.
+    if (props.additionalServiceConnect) {
+      const mapped = new Set([
+        props.serviceConnect.portName,
+        ...(props.additionalPorts ?? []).map((p) => p.name),
+      ]);
+      const unmapped = props.additionalServiceConnect
+        .map((entry) => entry.portName)
+        .filter((name) => !mapped.has(name));
+      if (unmapped.length > 0) {
+        throw new Error(
+          `${props.serviceName}: additionalServiceConnect names port(s) ${unmapped.join(', ')} ` +
+          `that are not in additionalPorts (mapped: ${[...mapped].join(', ')}).`,
+        );
+      }
+    }
+
     // EFS mount points
     if (props.efsVolumes) {
       for (const vol of props.efsVolumes) {
@@ -335,14 +361,14 @@ export class RegistryEcsService extends Construct {
       circuitBreaker: { enable: true, rollback: true },
       serviceConnectConfiguration: {
         namespace: props.serviceConnectNamespaceArn,
-        services: [
-          {
-            portMappingName: props.serviceConnect.portName,
-            dnsName: props.serviceConnect.dnsName,
-            discoveryName: props.serviceConnect.discoveryName,
-            port: props.serviceConnect.port,
-          },
-        ],
+        services: [props.serviceConnect, ...(props.additionalServiceConnect ?? [])].map(
+          (entry) => ({
+            portMappingName: entry.portName,
+            dnsName: entry.dnsName,
+            discoveryName: entry.discoveryName,
+            port: entry.port,
+          }),
+        ),
       },
     });
 

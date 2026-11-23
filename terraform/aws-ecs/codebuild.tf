@@ -27,6 +27,7 @@ locals {
     "mcp-gateway-auth-server",
     "mcp-gateway-currenttime",
     "mcp-gateway-mcpgw",
+    "mcp-gateway-openapi-mcp",
     "mcp-gateway-realserverfaketools",
     "mcp-gateway-flight-booking-agent",
     "mcp-gateway-travel-assistant-agent",

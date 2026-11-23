@@ -15,6 +15,7 @@ from typing import Any
 from fastapi import HTTPException
 
 from ..schemas.custom_entity_models import CustomEntityRecord
+from ..services.visibility import can_skip_read_visibility
 from ..utils.group_names import group_name_variants, groups_intersect
 
 
@@ -28,8 +29,10 @@ def _build_visibility_filter(
     this dict has no top-level ``entity_type`` key, so it never clobbers the
     type discriminator.
     """
-    if user_context.get("is_admin"):
-        return None  # admin sees all
+    # Admins and view_all holders (issue #2099) see every record. This filter
+    # only serves the list/count read path (CustomEntityService.list_records).
+    if can_skip_read_visibility(user_context):
+        return None
     username = user_context.get("username", "")
     groups = user_context.get("groups", []) or []
     return {
@@ -46,6 +49,21 @@ def _build_visibility_filter(
     }
 
 
+def _user_can_read_record(
+    record: CustomEntityRecord,
+    user_context: dict,
+) -> bool:
+    """Single-record check for READ paths (get, get rating).
+
+    Admins and view_all holders (issue #2099) may read every record; everyone
+    else gets exactly ``_user_can_view``. Lockstep with
+    ``_build_visibility_filter``, which applies the same bypass.
+    """
+    if can_skip_read_visibility(user_context):
+        return True
+    return _user_can_view(record, user_context)
+
+
 def _user_can_view(
     record: CustomEntityRecord,
     user_context: dict,
@@ -55,7 +73,9 @@ def _user_can_view(
     Same public / private-owner / group-restricted logic, evaluated in Python
     against one record. Branch order MUST match the filter's ``$or`` clauses.
     Used by GET single: a record the caller can't see returns 404 (not 403 —
-    don't disclose existence).
+    don't disclose existence). Also the gate for WRITE paths (update, upstream
+    headers, delete, rate), which must not honor ``view_all``; read paths go
+    through ``_user_can_read_record``.
     """
     if user_context.get("is_admin"):
         return True

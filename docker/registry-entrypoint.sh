@@ -334,6 +334,21 @@ if [ -d "/app/frontend/build" ]; then
         || echo "RUM: resolver failed unexpectedly; leaving existing/stub rum.js" >&2
 fi
 
+# --- Optional UI branding archive ---
+# UI_BRANDING_ARCHIVE_B64 holds a base64-encoded .tar.gz of the flat branding
+# folder (logos, favicon, manifest.json, theme.css). The writer validates every
+# member and extracts it into UI_BRANDING_DIR (default /app/branding), which the
+# registry serves at {ROOT_PATH}/branding/<name>. Unlike RUM this step is not
+# advisory: an archive that cannot be applied is a configuration error, so
+# startup fails with the writer's message. Both variables are read from the
+# environment by the writer, never passed on argv.
+if [ -n "${UI_BRANDING_ARCHIVE_B64}" ]; then
+    if ! /app/.venv/bin/python -m registry.utils.branding_writer; then
+        echo "ERROR: UI_BRANDING_ARCHIVE_B64 could not be applied (see the message above). Fix or unset it." >&2
+        exit 1
+    fi
+fi
+
 # --- Start Background Services ---
 # Export embeddings configuration for the registry service
 export EMBEDDINGS_PROVIDER=$EMBEDDINGS_PROVIDER

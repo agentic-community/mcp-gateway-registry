@@ -111,19 +111,19 @@ const CustomTypeListPicker: React.FC<CustomTypeListPickerProps> = ({
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between">
-        <label className="block text-xs font-medium text-gray-600 dark:text-gray-300">
+        <label className="block text-xs font-medium text-fg-muted">
           List {displayName}
         </label>
         <label
           htmlFor={`all-list_${typeName}_entity`}
-          className="flex items-center space-x-1.5 text-xs text-gray-500 dark:text-gray-400 cursor-pointer"
+          className="flex items-center space-x-1.5 text-xs text-fg-subtle cursor-pointer"
         >
           <input
             id={`all-list_${typeName}_entity`}
             type="checkbox"
             checked={grantsAll}
             onChange={(e) => setAll(e.target.checked)}
-            className="h-3.5 w-3.5 rounded border-gray-300 dark:border-gray-600 text-purple-600 focus:ring-purple-500"
+            className="h-3.5 w-3.5 rounded border-line-strong text-purple-600 focus:ring-focus"
           />
           <span>All</span>
         </label>
@@ -136,14 +136,14 @@ const CustomTypeListPicker: React.FC<CustomTypeListPickerProps> = ({
                 <span
                   key={path}
                   className="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full
-                             bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200"
+                             bg-surface-hover text-fg"
                   title={path}
                 >
                   {labelForPath(path)}
                   <button
                     type="button"
                     onClick={() => removePath(path)}
-                    className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+                    className="text-fg-subtle hover:text-fg"
                     aria-label={`Remove ${labelForPath(path)}`}
                   >
                     <XMarkIcon className="h-3 w-3" />

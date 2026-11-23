@@ -107,12 +107,9 @@ KEYCLOAK_ADMIN_PASSWORD=YourSecureAdminPassword123!
 INITIAL_ADMIN_PASSWORD=YourSecureAdminPassword123!  # MUST match KEYCLOAK_ADMIN_PASSWORD
 KEYCLOAK_DB_PASSWORD=SecureKeycloakDB123!
 
-# Session cookie security (CRITICAL for local development)
-# For HTTP access (localhost): MUST be false
-SESSION_COOKIE_SECURE=false
-
-# For HTTPS access (production): set to true
-# SESSION_COOKIE_SECURE=true
+# Session cookie security: the default true works for http://localhost and
+# for HTTPS. The cookie is Secure on HTTPS and never Secure on plain HTTP.
+SESSION_COOKIE_SECURE=true
 
 # Leave these as defaults
 KEYCLOAK_URL=http://localhost:8080

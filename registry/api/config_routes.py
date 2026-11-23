@@ -100,6 +100,8 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("mcp_proxy_max_body_bytes", "MCP Proxy Max Body Bytes", False),
             ("mcp_proxy_timeout", "MCP Proxy Timeout (seconds)", False),
             ("tool_filter_audit_log_level", "Tool Filter Audit Log Level", False),
+            # Tool access listing (issue #2102)
+            ("tool_access_owner_view", "Tool Access Owner View", False),
             ("internal_token_ttl_seconds", "MCP Proxy Token TTL (seconds)", False),
             ("internal_token_leeway_seconds", "MCP Proxy Token Leeway (seconds)", False),
             ("secret_key", "Secret Key", True),
@@ -208,6 +210,9 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
         "fields": [
             ("health_check_interval_seconds", "Check Interval", False),
             ("health_check_timeout_seconds", "Check Timeout", False),
+            ("tool_refresh_enabled", "Tool Refresh Enabled", False),
+            ("tool_refresh_every_cycles", "Tool Refresh Every N Cycles", False),
+            ("tool_fetch_max_concurrency", "Max Concurrent Tool Fetches", False),
         ],
     },
     "websocket": {
@@ -422,6 +427,20 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("max_custom_types", "Max Custom Types (0 = unlimited)", False),
         ],
     },
+    "openapi_mcp": {
+        "title": "OpenAPI MCP Servers",
+        "order": 31,
+        "fields": [
+            ("openapi_mcp_enabled", "Enabled", False),
+            ("openapi_mcp_internal_url", "Container URL", False),
+            ("openapi_mcp_sync_secret", "Sync Secret", True),
+            ("openapi_mcp_max_servers", "Max Servers", False),
+            ("openapi_mcp_max_targets_per_server", "Max Targets Per Server", False),
+            ("openapi_mcp_max_tools_per_target", "Max Tools Per Target", False),
+            ("openapi_mcp_spec_max_bytes", "Max Spec Size (bytes)", False),
+            ("openapi_mcp_reconcile_interval_seconds", "Reconcile Interval (s)", False),
+        ],
+    },
     "update_check": {
         "title": "Update Check",
         "order": 24,
@@ -503,6 +522,7 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
         "fields": [
             ("rum_snippet_b64", "RUM Snippet (base64)", True),
             ("rum_allowed_hosts", "RUM Allowed Hosts", False),
+            ("ui_branding_dir", "UI Branding Folder", False),
         ],
     },
     "gateway_generic_proxy": {
@@ -1008,6 +1028,7 @@ async def get_config(
             "federation": settings.registry_mode == RegistryMode.FULL,
             "gateway_proxy": settings.deployment_mode == DeploymentMode.WITH_GATEWAY,
             "custom_types": settings.custom_entity_types_enabled,
+            "openapi_servers": settings.openapi_mcp_enabled,
         },
         "custom_types": await _custom_type_tabs(),
     }

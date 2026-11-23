@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pymongo.errors import DuplicateKeyError
 from starlette.datastructures import Headers
+from starlette.requests import Request as StarletteRequest
 
 from registry.audit.middleware import AuditMiddleware
 from registry.audit.models import Identity, RegistryApiAccessRecord, Request, Response
@@ -193,13 +194,17 @@ class TestMiddlewareDoesNotTrustClientHeader:
 
         middleware.audit_logger.log_event = AsyncMock(side_effect=_fake_log_event)
 
-        request = MagicMock()
-        request.url.path = "/api/registry/servers"
-        request.method = "POST"
-        request.headers = Headers({"X-Request-ID": x_request_id})
-        request.query_params = {}
-        request.cookies = {}
-        request.state = MagicMock(spec=[])  # no user_context/audit_action
+        # A real request, so the session cookie reader finds no cookie in a real
+        # scope instead of a MagicMock attribute that would read as a session.
+        request = StarletteRequest(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/api/registry/servers",
+                "query_string": b"",
+                "headers": Headers({"X-Request-ID": x_request_id}).raw,
+            }
+        )
 
         async def _call_next(_req):
             resp = MagicMock()

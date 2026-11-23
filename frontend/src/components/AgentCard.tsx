@@ -236,11 +236,11 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
   const getStatusIcon = () => {
     switch (agent.status) {
       case 'healthy':
-        return <CheckCircleIcon className="h-4 w-4 text-green-500" />;
+        return <CheckCircleIcon className="h-4 w-4 text-success-500" />;
       case 'healthy-auth-expired':
-        return <CheckCircleIcon className="h-4 w-4 text-orange-500" />;
+        return <CheckCircleIcon className="h-4 w-4 text-warning-500" />;
       case 'unhealthy':
-        return <XCircleIcon className="h-4 w-4 text-red-500" />;
+        return <XCircleIcon className="h-4 w-4 text-danger-500" />;
       default:
         return <QuestionMarkCircleIcon className="h-4 w-4 text-gray-400" />;
     }
@@ -249,9 +249,9 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
   const getTrustLevelColor = () => {
     switch (agent.trust_level) {
       case 'trusted':
-        return 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400 border border-green-200 dark:border-green-700';
+        return 'bg-success-100 text-success-800 dark:bg-success-900/30 dark:text-success-400 border border-success-200 dark:border-success-700';
       case 'verified':
-        return 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400 border border-blue-200 dark:border-blue-700';
+        return 'bg-info-100 text-info-800 dark:bg-info-900/30 dark:text-info-400 border border-info-200 dark:border-info-700';
       case 'community':
       default:
         return 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-600';
@@ -375,17 +375,17 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
     }
     // Red: scan failed or any vulnerabilities found
     if (securityScanResult.scan_failed) {
-      return { Icon: ShieldExclamationIcon, color: 'text-red-500 dark:text-red-400', title: 'Security scan failed' };
+      return { Icon: ShieldExclamationIcon, color: 'text-danger-500 dark:text-danger-400', title: 'Security scan failed' };
     }
     const hasVulnerabilities = securityScanResult.critical_issues > 0 ||
       securityScanResult.high_severity > 0 ||
       securityScanResult.medium_severity > 0 ||
       securityScanResult.low_severity > 0;
     if (hasVulnerabilities) {
-      return { Icon: ShieldExclamationIcon, color: 'text-red-500 dark:text-red-400', title: 'Security issues found' };
+      return { Icon: ShieldExclamationIcon, color: 'text-danger-500 dark:text-danger-400', title: 'Security issues found' };
     }
     // Green: scan passed with no vulnerabilities
-    return { Icon: ShieldCheckIcon, color: 'text-green-500 dark:text-green-400', title: 'Security scan passed' };
+    return { Icon: ShieldCheckIcon, color: 'text-success-500 dark:text-success-400', title: 'Security scan passed' };
   };
 
   const handlePullCard = useCallback(async () => {
@@ -456,7 +456,7 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
 
   return (
     <>
-      <div className="group rounded-2xl shadow-sm hover:shadow-xl transition-all duration-300 h-full flex flex-col bg-gradient-to-br from-cyan-50 to-blue-50 dark:from-cyan-900/20 dark:to-blue-900/20 border-2 border-cyan-200 dark:border-cyan-700 hover:border-cyan-300 dark:hover:border-cyan-600">
+      <div className="group rounded-2xl shadow-sm hover:shadow-xl transition-all duration-300 h-full flex flex-col bg-gradient-to-br from-agent-50 to-agent-50 dark:from-agent-900/20 dark:to-agent-900/20 border-2 border-agent-200 dark:border-agent-700 hover:border-agent-300 dark:hover:border-agent-600">
         {showDeleteConfirm ? (
           /* Delete Confirmation - replaces card content when active */
           <div className="p-5 h-full flex flex-col justify-center">
@@ -484,14 +484,14 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
                     )}
                     {/* Check if this is an ASOR agent */}
                     {(agent.tags?.includes('asor') || (agent as any).provider === 'ASOR') && (
-                      <span className="px-2 py-0.5 text-xs font-semibold bg-gradient-to-r from-orange-100 to-red-100 text-orange-700 dark:from-orange-900/30 dark:to-red-900/30 dark:text-orange-300 rounded-full flex-shrink-0 border border-orange-200 dark:border-orange-600">
+                      <span className="px-2 py-0.5 text-xs font-semibold bg-gradient-to-r from-info-100 to-info-100 text-info-700 dark:from-info-900/30 dark:to-info-900/30 dark:text-info-300 rounded-full flex-shrink-0 border border-info-200 dark:border-info-600">
                         ASOR
                       </span>
                     )}
                     {/* Proxied badge - served through the gateway generic hop */}
                     {agent.is_proxied && (
                       <span
-                        className="px-2 py-0.5 text-xs font-semibold bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300 rounded-full flex-shrink-0 border border-cyan-200 dark:border-cyan-600"
+                        className="px-2 py-0.5 text-xs font-semibold bg-info-100 text-info-700 dark:bg-info-900/30 dark:text-info-300 rounded-full flex-shrink-0 border border-info-200 dark:border-info-600"
                         title={
                           agent.proxy_client_url
                             ? `Clients connect at ${agent.proxy_client_url}` +
@@ -504,13 +504,13 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
                     )}
                     {/* A2A tag badge (for AgentCore imported agents) */}
                     {agent.tags?.includes('a2a') && (
-                      <span className="px-2 py-0.5 text-xs font-semibold bg-gradient-to-r from-emerald-100 to-teal-100 text-emerald-700 dark:from-emerald-900/30 dark:to-teal-900/30 dark:text-emerald-300 rounded-full flex-shrink-0 border border-emerald-200 dark:border-emerald-600">
+                      <span className="px-2 py-0.5 text-xs font-semibold bg-gradient-to-r from-success-100 to-success-100 text-success-700 dark:from-success-900/30 dark:to-success-900/30 dark:text-success-300 rounded-full flex-shrink-0 border border-success-200 dark:border-success-600">
                         A2A
                       </span>
                     )}
                     {/* Supported Protocol Badge */}
                     {agent.supported_protocol === 'a2a' && !agent.tags?.includes('a2a') && (
-                      <span className="inline-flex items-center px-2 py-0.5 text-xs font-medium bg-cyan-50 dark:bg-cyan-900/30 text-cyan-700 dark:text-cyan-300 rounded border border-cyan-200 dark:border-cyan-700">
+                      <span className="inline-flex items-center px-2 py-0.5 text-xs font-medium bg-agent-50 dark:bg-agent-900/30 text-agent-700 dark:text-agent-300 rounded border border-agent-200 dark:border-agent-700">
                         A2A Protocol
                       </span>
                     )}
@@ -523,7 +523,7 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
                     {agent.visibility && (
                       <span className={`px-2 py-0.5 text-xs font-semibold rounded-full flex-shrink-0 flex items-center gap-1 ${
                         agent.visibility === 'public'
-                          ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400 border border-blue-200 dark:border-blue-700'
+                          ? 'bg-info-100 text-info-800 dark:bg-info-900/30 dark:text-info-400 border border-info-200 dark:border-info-700'
                           : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-600'
                       }`}>
                         {getVisibilityIcon()}
@@ -532,11 +532,11 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
                     )}
                     {/* Registry source badge - only show for federated (peer registry) items */}
                     {isFederatedAgent && (
-                      <span className="px-2 py-0.5 text-xs font-semibold bg-gradient-to-r from-violet-100 to-purple-100 text-violet-700 dark:from-violet-900/30 dark:to-purple-900/30 dark:text-violet-300 rounded-full flex-shrink-0 border border-violet-200 dark:border-violet-600" title={`Synced from ${peerRegistryId}`}>
+                      <span className="px-2 py-0.5 text-xs font-semibold bg-gradient-to-r from-purple-100 to-purple-100 text-purple-700 dark:from-purple-900/30 dark:to-purple-900/30 dark:text-purple-300 rounded-full flex-shrink-0 border border-purple-200 dark:border-purple-600" title={`Synced from ${peerRegistryId}`}>
                         {peerRegistryId?.toUpperCase().replace('PEER-REGISTRY-', '').replace('PEER-', '')}
                         {/* ARD marker — this peer is an ai-catalog (ARD) registry. */}
                         {isArdDiscovery && (
-                          <span className="ml-1 text-[10px] font-bold text-violet-500 dark:text-violet-400" title="ARD (ai-catalog.json) registry">
+                          <span className="ml-1 text-[10px] font-bold text-purple-500 dark:text-purple-400" title="ARD (ai-catalog.json) registry">
                             ARD
                           </span>
                         )}
@@ -544,13 +544,13 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
                     )}
                     {/* Orphaned badge - agent no longer exists on peer registry */}
                     {isOrphanedAgent && (
-                      <span className="px-2 py-0.5 text-xs font-semibold bg-gradient-to-r from-red-100 to-rose-100 text-red-700 dark:from-red-900/30 dark:to-rose-900/30 dark:text-red-300 rounded-full flex-shrink-0 border border-red-200 dark:border-red-600" title="No longer exists on peer registry">
+                      <span className="px-2 py-0.5 text-xs font-semibold bg-gradient-to-r from-danger-100 to-danger-100 text-danger-700 dark:from-danger-900/30 dark:to-danger-900/30 dark:text-danger-300 rounded-full flex-shrink-0 border border-danger-200 dark:border-danger-600" title="No longer exists on peer registry">
                         ORPHANED
                       </span>
                     )}
                     {/* Discovery badge - ARD discovery-only import (metadata only) */}
                     {isArdDiscovery && (
-                      <span className="px-2 py-0.5 text-xs font-semibold bg-gradient-to-r from-slate-100 to-gray-100 text-slate-700 dark:from-slate-900/30 dark:to-gray-900/30 dark:text-slate-300 rounded-full flex-shrink-0 border border-slate-200 dark:border-slate-600" title="Discovery-only import — resolve and connect at the source registry">
+                      <span className="px-2 py-0.5 text-xs font-semibold bg-gradient-to-r from-gray-100 to-gray-100 text-gray-700 dark:from-gray-900/30 dark:to-gray-900/30 dark:text-gray-300 rounded-full flex-shrink-0 border border-gray-200 dark:border-gray-600" title="Discovery-only import — resolve and connect at the source registry">
                         Discovery
                       </span>
                     )}
@@ -562,7 +562,7 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
                     </div>
                   )}
 
-                  <code className="text-xs text-gray-600 dark:text-gray-300 bg-gray-50 dark:bg-gray-800/50 px-2 py-1 rounded font-mono">
+                  <code className="text-xs text-fg-muted bg-gray-500/10 px-2 py-1 rounded font-mono">
                     {agent.path}
                   </code>
                   {agent.version && (
@@ -575,7 +575,7 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
                       href={agent.url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="mt-2 inline-flex items-center gap-1 text-xs text-cyan-700 dark:text-cyan-300 break-all hover:underline"
+                      className="mt-2 inline-flex items-center gap-1 text-xs text-agent-700 dark:text-agent-300 break-all hover:underline"
                     >
                       <span className="font-mono">{agent.url}</span>
                     </SafeLink>
@@ -623,7 +623,7 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
                         setLoadingDetails(false);
                       }
                     }}
-                    className="p-2 text-gray-400 hover:text-blue-600 dark:hover:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-700/50 rounded-lg transition-all duration-200 flex-shrink-0"
+                    className="p-2 text-gray-400 hover:text-info-600 dark:hover:text-info-300 hover:bg-info-50 dark:hover:bg-info-700/50 rounded-lg transition-all duration-200 flex-shrink-0"
                     title="View full agent details (JSON)"
                   >
                     <InformationCircleIcon className="h-4 w-4" />
@@ -635,7 +635,7 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
                 {canDelete && !isArdDiscovery && (
                   <button
                     onClick={() => setShowDeleteConfirm(true)}
-                    className="p-2 text-gray-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-700/50 rounded-lg transition-all duration-200 flex-shrink-0"
+                    className="p-2 text-gray-400 hover:text-danger-600 dark:hover:text-danger-400 hover:bg-danger-50 dark:hover:bg-danger-700/50 rounded-lg transition-all duration-200 flex-shrink-0"
                     title="Delete agent"
                     aria-label={`Delete ${agent.name}`}
                   >
@@ -656,7 +656,7 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
                   href={ardSourceUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="mb-4 inline-flex items-center gap-1 text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                  className="mb-4 inline-flex items-center gap-1 text-xs text-info-600 dark:text-info-400 hover:underline"
                 >
                   View at source ↗
                 </SafeLink>
@@ -668,13 +668,13 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
                   {agent.tags.slice(0, 3).map((tag) => (
                     <span
                       key={tag}
-                      className="px-2 py-1 text-xs font-medium bg-cyan-50 dark:bg-cyan-900/30 text-cyan-700 dark:text-cyan-300 rounded"
+                      className="px-2 py-1 text-xs font-medium bg-agent-50 dark:bg-agent-900/30 text-agent-700 dark:text-agent-300 rounded"
                     >
                       #{tag}
                     </span>
                   ))}
                   {agent.tags.length > 3 && (
-                    <span className="px-2 py-1 text-xs font-medium bg-gray-50 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded">
+                    <span className="px-2 py-1 text-xs font-medium bg-gray-500/10 text-fg-muted rounded">
                       +{agent.tags.length - 3}
                     </span>
                   )}
@@ -704,7 +704,7 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
             )}
 
             {/* Footer */}
-            <div className="mt-auto px-5 py-4 border-t border-cyan-100 dark:border-cyan-700 bg-cyan-50/50 dark:bg-cyan-900/30 rounded-b-2xl">
+            <div className="mt-auto px-5 py-4 border-t border-agent-100 dark:border-agent-700 bg-agent-50/50 dark:bg-agent-900/30 rounded-b-2xl">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-4">
                   {/* Status Indicators — entirely hidden for ARD discovery-only
@@ -715,7 +715,7 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
                       <div className="flex items-center gap-2">
                         <div className={`w-3 h-3 rounded-full ${
                           agent.enabled
-                            ? 'bg-green-400 shadow-lg shadow-green-400/30'
+                            ? 'bg-success-400 shadow-lg shadow-success-400/30'
                             : 'bg-gray-300 dark:bg-gray-600'
                         }`} />
                         <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -723,17 +723,17 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
                         </span>
                       </div>
 
-                      <div className="w-px h-4 bg-cyan-200 dark:bg-cyan-600" />
+                      <div className="w-px h-4 bg-agent-200 dark:bg-agent-600" />
 
                       <div className="flex items-center gap-2">
                         <div className={`w-3 h-3 rounded-full ${
                           agent.status === 'healthy'
-                            ? 'bg-emerald-400 shadow-lg shadow-emerald-400/30'
+                            ? 'bg-success-400 shadow-lg shadow-success-400/30'
                             : agent.status === 'healthy-auth-expired'
-                            ? 'bg-orange-400 shadow-lg shadow-orange-400/30'
+                            ? 'bg-warning-400 shadow-lg shadow-warning-400/30'
                             : agent.status === 'unhealthy'
-                            ? 'bg-red-400 shadow-lg shadow-red-400/30'
-                            : 'bg-amber-400 shadow-lg shadow-amber-400/30'
+                            ? 'bg-danger-400 shadow-lg shadow-danger-400/30'
+                            : 'bg-warning-400 shadow-lg shadow-warning-400/30'
                         }`} />
                         <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
                           {agent.status === 'healthy' ? 'Healthy' :
@@ -774,7 +774,7 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
                     <button
                       onClick={handleRefreshHealth}
                       disabled={loadingRefresh}
-                      className="p-2.5 text-gray-500 hover:text-cyan-600 dark:hover:text-cyan-400 hover:bg-cyan-50 dark:hover:bg-cyan-900/20 rounded-lg transition-all duration-200 disabled:opacity-50"
+                      className="p-2.5 text-fg-subtle hover:text-agent-600 dark:hover:text-agent-400 hover:bg-agent-50 dark:hover:bg-agent-900/20 rounded-lg transition-all duration-200 disabled:opacity-50"
                       title="Refresh agent health status"
                     >
                       <ArrowPathIcon className={`h-4 w-4 ${loadingRefresh ? 'animate-spin' : ''}`} />
@@ -786,7 +786,7 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
                     <button
                       onClick={handlePullCard}
                       disabled={loadingPullCard}
-                      className="p-2.5 text-gray-500 hover:text-cyan-600 dark:hover:text-cyan-400 hover:bg-cyan-50 dark:hover:bg-cyan-900/20 rounded-lg transition-all duration-200 disabled:opacity-50"
+                      className="p-2.5 text-fg-subtle hover:text-agent-600 dark:hover:text-agent-400 hover:bg-agent-50 dark:hover:bg-agent-900/20 rounded-lg transition-all duration-200 disabled:opacity-50"
                       title="Pull latest agent card from remote"
                       aria-label="Pull latest agent card"
                     >
@@ -807,9 +807,9 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
                         }}
                         className="sr-only peer"
                       />
-                      <div className={`relative w-12 h-6 rounded-full transition-colors duration-200 ease-in-out ${
+                      <div className={`relative w-12 h-6 rounded-full transition-colors duration-200 ease-in-out peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-focus ${
                         agent.enabled
-                          ? 'bg-cyan-600'
+                          ? 'bg-agent-600'
                           : 'bg-gray-300 dark:bg-gray-600'
                       }`}>
                         <div className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform duration-200 ease-in-out ${

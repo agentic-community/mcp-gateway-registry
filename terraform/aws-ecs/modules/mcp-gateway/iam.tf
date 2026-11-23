@@ -46,7 +46,9 @@ resource "aws_iam_policy" "ecs_secrets_access" {
             aws_secretsmanager_secret.grafana_admin_password[0].arn
           ] : [],
           var.enable_observability && var.otel_otlp_endpoint != "" ? [aws_secretsmanager_secret.otlp_exporter_headers[0].arn] : [],
-          var.egress_credential_encryption_key != "" ? [aws_secretsmanager_secret.egress_credential_encryption_key[0].arn] : []
+          var.egress_credential_encryption_key != "" ? [aws_secretsmanager_secret.egress_credential_encryption_key[0].arn] : [],
+          # Operator-supplied credentials injected through `secrets` (secrets.tf).
+          [for name in local.container_secret_names : aws_secretsmanager_secret.container_secret[name].arn]
         )
       },
       {
@@ -316,6 +318,43 @@ resource "aws_iam_policy" "ecs_exec_task" {
           "ssmmessages:OpenDataChannel"
         ]
         Resource = "*"
+      }
+    ]
+  })
+
+  tags = local.common_tags
+}
+
+
+# Read access to the OpenAPI MCP sync secret only (issue #2022). Attached to the
+# task execution roles of the registry and openapi-mcp services, and to no other
+# service, so the auth server and mcpgw cannot read it. The openapi-mcp task gets
+# no other Secrets Manager grant.
+resource "aws_iam_policy" "openapi_mcp_sync_secret_access" {
+  count       = var.openapi_mcp_enabled ? 1 : 0
+  name_prefix = "${local.name_prefix}-openapi-mcp-sync-"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:GetSecretValue"
+        ]
+        Resource = [
+          aws_secretsmanager_secret.openapi_mcp_sync_secret[0].arn
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "kms:Decrypt",
+          "kms:DescribeKey"
+        ]
+        Resource = [
+          aws_kms_key.secrets.arn
+        ]
       }
     ]
   })

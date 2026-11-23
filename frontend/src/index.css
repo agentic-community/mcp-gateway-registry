@@ -1,36 +1,363 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * Design tokens.
+ *
+ * Every color the app paints comes from a CSS custom property declared here, so
+ * light mode, dark mode and the high-contrast palette are a change of variable
+ * values rather than a change of markup. Values are space-separated RGB
+ * channels so Tailwind opacity modifiers keep working (`bg-gray-900/50`).
+ *
+ * Two layers:
+ *   1. Palette ramps: the raw 50..950 scales Tailwind utilities resolve to.
+ *      `--gray-*` and `--primary-*` (also aliased as `purple`) are the neutral
+ *      and brand ramps. `--success-*`, `--warning-*`, `--danger-*` and
+ *      `--info-*` carry status meaning. `--server-*`, `--agent-*`, `--skill-*`,
+ *      `--virtual-*` and `--custom-*` color each registry entity type. One ramp
+ *      serves both modes, the same way Tailwind's built-in palettes do: light
+ *      mode paints with the low steps, dark mode with the high steps via
+ *      `dark:` variants.
+ *   2. Semantic tokens (`--color-*`): role-named values that DO change per mode.
+ *      New and shared surfaces (layout chrome, `.card`, `.input`, buttons, the
+ *      audit grid) use these through the `canvas`, `surface`, `line`, `fg` and
+ *      `accent` Tailwind colors so they never need a `dark:` twin.
+ *
+ * This list of variables is the public theming contract: a deployment's
+ * branding `theme.css` (docs/ui-branding.md) overrides these names and only
+ * these names. Renaming one is a breaking change.
+ */
 @layer base {
+  :root {
+    color-scheme: light;
+
+    /* Neutral ramp: cool gray, tuned so text-gray-500 on white passes WCAG AA. */
+    --gray-25: 252 252 253;
+    --gray-50: 249 250 251;
+    --gray-100: 242 244 247;
+    --gray-200: 234 236 240;
+    --gray-300: 208 213 221;
+    --gray-400: 152 162 179;
+    --gray-500: 102 112 133;
+    --gray-600: 71 84 103;
+    --gray-700: 52 64 84;
+    --gray-800: 29 41 57;
+    --gray-900: 16 24 40;
+    --gray-950: 12 17 29;
+
+    /* Brand ramp: violet anchored on the logo (#6b46c1 at 600, #9f7aea at 400). */
+    --primary-50: 247 244 255;
+    --primary-100: 239 233 254;
+    --primary-200: 221 208 251;
+    --primary-300: 193 168 245;
+    --primary-400: 159 122 234;
+    --primary-500: 134 94 222;
+    --primary-600: 107 70 193;
+    --primary-700: 91 54 172;
+    --primary-800: 74 45 138;
+    --primary-900: 59 36 112;
+    --primary-950: 36 21 74;
+
+    /* Status ramps. Defaults are the Tailwind palettes the UI used before tokens. */
+    --success-50: 236 253 245;
+    --success-100: 209 250 229;
+    --success-200: 167 243 208;
+    --success-300: 110 231 183;
+    --success-400: 52 211 153;
+    --success-500: 16 185 129;
+    --success-600: 5 150 105;
+    --success-700: 4 120 87;
+    --success-800: 6 95 70;
+    --success-900: 6 78 59;
+    --success-950: 2 44 34;
+
+    /* Warning (amber). */
+    --warning-50: 255 251 235;
+    --warning-100: 254 243 199;
+    --warning-200: 253 230 138;
+    --warning-300: 252 211 77;
+    --warning-400: 251 191 36;
+    --warning-500: 245 158 11;
+    --warning-600: 217 119 6;
+    --warning-700: 180 83 9;
+    --warning-800: 146 64 14;
+    --warning-900: 120 53 15;
+    --warning-950: 69 26 3;
+
+    /* Danger (red). */
+    --danger-50: 254 242 242;
+    --danger-100: 254 226 226;
+    --danger-200: 254 202 202;
+    --danger-300: 252 165 165;
+    --danger-400: 248 113 113;
+    --danger-500: 239 68 68;
+    --danger-600: 220 38 38;
+    --danger-700: 185 28 28;
+    --danger-800: 153 27 27;
+    --danger-900: 127 29 29;
+    --danger-950: 69 10 10;
+
+    /* Info (blue). */
+    --info-50: 239 246 255;
+    --info-100: 219 234 254;
+    --info-200: 191 219 254;
+    --info-300: 147 197 253;
+    --info-400: 96 165 250;
+    --info-500: 59 130 246;
+    --info-600: 37 99 235;
+    --info-700: 29 78 216;
+    --info-800: 30 64 175;
+    --info-900: 30 58 138;
+    --info-950: 23 37 84;
+
+    /* Entity ramps: one per registry entity type, used by cards and type badges. */
+    --agent-50: 236 254 255;
+    --agent-100: 207 250 254;
+    --agent-200: 165 243 252;
+    --agent-300: 103 232 249;
+    --agent-400: 34 211 238;
+    --agent-500: 6 182 212;
+    --agent-600: 8 145 178;
+    --agent-700: 14 116 144;
+    --agent-800: 21 94 117;
+    --agent-900: 22 78 99;
+    --agent-950: 8 51 68;
+
+    /* Agent skills (amber). */
+    --skill-50: 255 251 235;
+    --skill-100: 254 243 199;
+    --skill-200: 253 230 138;
+    --skill-300: 252 211 77;
+    --skill-400: 251 191 36;
+    --skill-500: 245 158 11;
+    --skill-600: 217 119 6;
+    --skill-700: 180 83 9;
+    --skill-800: 146 64 14;
+    --skill-900: 120 53 15;
+    --skill-950: 69 26 3;
+
+    /* Virtual MCP servers (teal). */
+    --virtual-50: 240 253 250;
+    --virtual-100: 204 251 241;
+    --virtual-200: 153 246 228;
+    --virtual-300: 94 234 212;
+    --virtual-400: 45 212 191;
+    --virtual-500: 20 184 166;
+    --virtual-600: 13 148 136;
+    --virtual-700: 15 118 110;
+    --virtual-800: 17 94 89;
+    --virtual-900: 19 78 74;
+    --virtual-950: 4 47 46;
+
+    /* Custom entity types (blue). */
+    --custom-50: 239 246 255;
+    --custom-100: 219 234 254;
+    --custom-200: 191 219 254;
+    --custom-300: 147 197 253;
+    --custom-400: 96 165 250;
+    --custom-500: 59 130 246;
+    --custom-600: 37 99 235;
+    --custom-700: 29 78 216;
+    --custom-800: 30 64 175;
+    --custom-900: 30 58 138;
+    --custom-950: 23 37 84;
+
+    /* MCP servers follow the brand unless a theme overrides them. */
+    --server-50: var(--primary-50);
+    --server-100: var(--primary-100);
+    --server-200: var(--primary-200);
+    --server-300: var(--primary-300);
+    --server-400: var(--primary-400);
+    --server-500: var(--primary-500);
+    --server-600: var(--primary-600);
+    --server-700: var(--primary-700);
+    --server-800: var(--primary-800);
+    --server-900: var(--primary-900);
+    --server-950: var(--primary-950);
+    /* Semantic tokens, light mode. */
+    --color-canvas: var(--gray-50);
+    --color-surface: 255 255 255;
+    --color-surface-muted: var(--gray-50);
+    --color-surface-hover: var(--gray-100);
+    --color-surface-overlay: 255 255 255;
+    --color-line: var(--gray-200);
+    --color-line-strong: var(--gray-300);
+    --color-fg: var(--gray-900);
+    --color-fg-muted: var(--gray-600);
+    --color-fg-subtle: var(--gray-500);
+    --color-accent: var(--primary-600);
+    --color-accent-hover: var(--primary-700);
+    --color-accent-fg: 255 255 255;
+    --color-accent-text: var(--primary-600);
+    --color-accent-soft: var(--primary-50);
+    --color-accent-soft-fg: var(--primary-700);
+    --color-focus: var(--primary-500);
+    --color-danger: 217 45 32;
+    --color-danger-hover: 180 35 24;
+    --color-danger-soft: 254 243 242;
+    --color-danger-soft-fg: 180 35 24;
+
+    --shadow-color: 16 24 40;
+    --focus-ring-width: 2px;
+    /* Corner radius of buttons and inputs, and of cards (.btn-*, .input, .card). */
+    --radius-control: 0.5rem;
+    --radius-card: 0.75rem;
+
+    /* Type. A branding theme can @font-face a font from its own folder and point these at it. */
+    --font-sans: 'Inter Variable', 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  }
+
+  html.dark {
+    color-scheme: dark;
+
+    --color-canvas: var(--gray-900);
+    --color-surface: var(--gray-800);
+    --color-surface-muted: var(--gray-900);
+    --color-surface-hover: var(--gray-700);
+    --color-surface-overlay: var(--gray-800);
+    --color-line: var(--gray-700);
+    --color-line-strong: var(--gray-600);
+    --color-fg: var(--gray-50);
+    --color-fg-muted: var(--gray-300);
+    --color-fg-subtle: var(--gray-400);
+    --color-accent: var(--primary-600);
+    --color-accent-hover: var(--primary-500);
+    --color-accent-fg: 255 255 255;
+    --color-accent-text: var(--primary-300);
+    /* Solid blends of primary-900 / red-900 over gray-800, so alpha modifiers stay valid. */
+    --color-accent-soft: 43 39 82;
+    --color-accent-soft-fg: var(--primary-200);
+    --color-focus: var(--primary-400);
+    --color-danger: 240 68 56;
+    --color-danger-hover: 249 112 102;
+    --color-danger-soft: 62 40 46;
+    --color-danger-soft-fg: 253 162 155;
+
+    --shadow-color: 0 0 0;
+  }
+
+  /*
+   * High-contrast palette (ThemeName 'high-contrast'). Pulls the mid-tone
+   * neutrals toward the text end of the ramp in each mode, so borders, muted
+   * text and placeholders all gain contrast without touching any component.
+   */
+  html.high-contrast:not(.dark) {
+    --gray-200: 208 213 221;
+    --gray-300: 152 162 179;
+    --gray-400: 102 112 133;
+    --gray-500: 71 84 103;
+    --gray-600: 52 64 84;
+    --color-fg-muted: var(--gray-800);
+    --color-fg-subtle: var(--gray-700);
+    --color-line: var(--gray-400);
+    --color-line-strong: var(--gray-600);
+    --focus-ring-width: 3px;
+  }
+
+  html.high-contrast.dark {
+    --gray-300: 234 236 240;
+    --gray-400: 208 213 221;
+    --gray-500: 152 162 179;
+    --gray-600: 102 112 133;
+    --color-fg-muted: var(--gray-200);
+    --color-fg-subtle: var(--gray-300);
+    --color-line: var(--gray-500);
+    --color-line-strong: var(--gray-400);
+    --focus-ring-width: 3px;
+  }
+
   html {
-    font-family: 'Inter', system-ui, sans-serif;
+    font-family: var(--font-sans);
+    font-feature-settings: 'cv11', 'ss01';
+    -webkit-text-size-adjust: 100%;
+    text-rendering: optimizeLegibility;
+    scrollbar-gutter: stable;
   }
 
   body {
     margin: 0;
+    background-color: rgb(var(--color-canvas));
+    color: rgb(var(--color-fg));
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+  }
+
+  ::selection {
+    background-color: rgb(var(--primary-500) / 0.3);
+  }
+
+  /*
+   * Keyboard focus is always visible and always the same ring, independent of
+   * the per-component `focus:ring-*` classes that predate this file.
+   */
+  :focus-visible {
+    outline: var(--focus-ring-width) solid rgb(var(--color-focus));
+    outline-offset: 2px;
+  }
+
+  :focus:not(:focus-visible) {
+    outline: none;
+  }
+
+  /* Native scrollbars follow the active mode instead of staying light. */
+  * {
+    scrollbar-color: rgb(var(--gray-400) / 0.5) transparent;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
   }
 }
 
 @layer components {
+  .btn-base {
+    @apply inline-flex items-center justify-center gap-2 rounded-control px-4 py-2 text-sm font-medium
+      transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
   .btn-primary {
-    @apply bg-primary-600 hover:bg-primary-700 text-white font-medium px-4 py-2 rounded-lg transition-colors duration-200;
+    @apply btn-base bg-accent text-accent-fg shadow-sm hover:bg-accent-hover;
   }
 
   .btn-secondary {
-    @apply bg-gray-100 hover:bg-gray-200 text-gray-900 font-medium px-4 py-2 rounded-lg transition-colors duration-200;
+    @apply btn-base border border-line-strong bg-surface text-fg shadow-sm hover:bg-surface-hover;
+  }
+
+  .btn-danger {
+    @apply btn-base bg-danger text-white shadow-sm hover:bg-danger-hover;
+  }
+
+  .btn-ghost {
+    @apply btn-base text-fg-muted hover:bg-surface-hover hover:text-fg;
+  }
+
+  /* Square icon-only button used in toolbars and the app header. */
+  .btn-icon {
+    @apply inline-flex h-9 w-9 items-center justify-center rounded-lg text-fg-subtle transition-colors
+      duration-150 hover:bg-surface-hover hover:text-fg disabled:cursor-not-allowed disabled:opacity-50;
   }
 
   .card {
-    @apply bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700;
+    @apply rounded-card border border-line bg-surface shadow-sm;
   }
 
   .input {
-    @apply block w-full px-3 py-2 border border-gray-300 rounded-lg placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent;
+    @apply block w-full rounded-control border border-line-strong bg-surface px-3 py-2 text-sm text-fg shadow-sm
+      placeholder:text-fg-subtle focus:border-accent focus:outline-none focus:ring-2 focus:ring-focus/40
+      disabled:cursor-not-allowed disabled:opacity-60;
+  }
+
+  .label {
+    @apply mb-1 block text-xs font-medium text-fg-muted;
   }
 
   /* Line clamp utilities for text truncation */
@@ -70,7 +397,7 @@
     scrollbar-color: transparent transparent;
   }
   .discover-scroll:hover {
-    scrollbar-color: rgba(100, 100, 140, 0.3) transparent;
+    scrollbar-color: rgb(var(--gray-400) / 0.4) transparent;
   }
   .discover-scroll::-webkit-scrollbar {
     width: 6px;
@@ -83,9 +410,9 @@
     border-radius: 3px;
   }
   .discover-scroll:hover::-webkit-scrollbar-thumb {
-    background: rgba(100, 100, 140, 0.3);
+    background: rgb(var(--gray-400) / 0.4);
   }
   .discover-scroll::-webkit-scrollbar-thumb:hover {
-    background: rgba(100, 100, 140, 0.5);
+    background: rgb(var(--gray-400) / 0.6);
   }
 }

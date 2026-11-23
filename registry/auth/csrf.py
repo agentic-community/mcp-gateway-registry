@@ -12,6 +12,10 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from ..core.config import settings
 from .dependencies import resolve_session_from_cookie
+from .session_cookie import (
+    request_carries_session_cookie,
+    request_session_cookie,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -75,13 +79,47 @@ def validate_csrf_token(
 
 async def _resolve_session_id(request: Request) -> str | None:
     """Resolve the request's session cookie to the underlying session_id."""
-    cookie = request.cookies.get(settings.session_cookie_name)
+    cookie = request_session_cookie(request)
     if not cookie:
         return None
     data = await resolve_session_from_cookie(cookie)
     if not data:
         return None
     return data.get("session_id")
+
+
+async def _cookie_session_id(
+    request: Request,
+) -> str | None:
+    """Return the session_id a CSRF token must match, or None for a request with no session cookie.
+
+    A request that carries the session cookie, even more than once or with an
+    empty value, is a browser request with ambient credentials. It must
+    resolve to a session; skipping CSRF for it would rest on the registry and
+    ``/validate`` agreeing that the cookie is no session, which a transient
+    store error or a duplicate breaks.
+
+    Args:
+        request: The incoming request.
+
+    Returns:
+        The resolved session_id, or None when the request has no session cookie.
+
+    Raises:
+        HTTPException: 403 when the request carries the session cookie and it
+            does not resolve to a session.
+    """
+    if not request_carries_session_cookie(request):
+        logger.debug("No session cookie present, skipping CSRF check (non-browser client)")
+        return None
+    session_id = await _resolve_session_id(request)
+    if not session_id:
+        logger.warning("CSRF validation failed: the session cookie does not resolve to a session")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="CSRF validation failed: no valid session; sign in again",
+        )
+    return session_id
 
 
 async def verify_csrf_token(
@@ -116,21 +154,13 @@ async def verify_csrf_token_flexible(
 ) -> None:
     """FastAPI dependency that validates CSRF token from header or form.
 
-    Skips CSRF validation when no session cookie is present, as the request is
-    from a non-browser client (e.g. Bearer token auth) and CSRF attacks
-    require a browser session with cookies.
+    Skips CSRF validation only when the request carries no session cookie, as
+    it is from a non-browser client (e.g. Bearer token auth) and CSRF attacks
+    require a browser session with cookies. A request that carries the session
+    cookie must resolve to a session and present its token, or gets a 403.
     """
-    cookie = request.cookies.get(settings.session_cookie_name)
-    if not cookie:
-        logger.debug("No session cookie present, skipping CSRF check (non-browser client)")
-        return
-
-    session_id = await _resolve_session_id(request)
-    if not session_id:
-        # Cookie was present but unresolvable (legacy format, expired,
-        # tampered). Treat the same as no-session for CSRF purposes; the
-        # downstream auth dependency will already reject with 401 anyway.
-        logger.debug("Session cookie present but unresolved; skipping CSRF check")
+    session_id = await _cookie_session_id(request)
+    if session_id is None:
         return
 
     csrf_token = request.headers.get("X-CSRF-Token")
@@ -170,26 +200,18 @@ async def verify_csrf_token_header_only(
       like the CLI or an external integration), CSRF is skipped. Bearer
       auth is already not accessible to browser XHR from a third-party
       origin without the explicit token, so CSRF is not applicable.
-    - If the request carries a session cookie, the X-CSRF-Token header
-      MUST be present AND valid. Absent or invalid token returns 403.
+    - If the request carries a session cookie, it MUST resolve to a session
+      and the X-CSRF-Token header MUST be present AND valid for it. Anything
+      else returns 403.
 
     Rationale: browsers attach cookies to cross-origin GET requests made
     with credentials:"include" even without the CSRF header. Requiring
     the header closes that read vector.
     """
-    cookie = request.cookies.get(settings.session_cookie_name)
-    if not cookie:
-        return
-
-    # Resolve the cookie to the underlying session_id before validating. The
-    # CSRF token is signed with the resolved session_id (see generate_csrf_token
-    # in auth/routes.py), NOT the raw cookie blob, so comparing against the raw
-    # cookie always fails. This mirrors verify_csrf_token / _flexible above.
-    session_id = await _resolve_session_id(request)
-    if not session_id:
-        # Cookie present but unresolvable (legacy/expired/tampered). Skip CSRF
-        # here; the downstream auth dependency rejects with 401 anyway.
-        logger.debug("Session cookie present but unresolved; skipping CSRF check")
+    # The CSRF token is signed with the resolved session_id (see
+    # generate_csrf_token in auth/routes.py), NOT the raw cookie blob.
+    session_id = await _cookie_session_id(request)
+    if session_id is None:
         return
 
     token = request.headers.get("X-CSRF-Token")

@@ -1,3 +1,5 @@
+import { ToolAnnotations } from './toolAnnotations';
+
 /**
  * Shared Virtual MCP Server type definitions for the MCP Gateway Registry frontend.
  *
@@ -157,4 +159,6 @@ export interface ResolvedTool {
   description: string;
   input_schema: Record<string, unknown>;
   required_scopes: string[];
+  // MCP tool annotations the backend server declared (advisory, not verified).
+  annotations?: ToolAnnotations | null;
 }

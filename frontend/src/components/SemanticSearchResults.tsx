@@ -71,7 +71,7 @@ const ToolSchemaModal: React.FC<ToolSchemaModalProps> = ({
           </div>
           <button
             onClick={onClose}
-            className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded-lg transition-colors"
+            className="btn-icon"
           >
             <XMarkIcon className="h-5 w-5" />
           </button>
@@ -150,7 +150,7 @@ const ServerDetailsModal: React.FC<ServerDetailsModalProps> = ({
                 {server.server_name}
               </h3>
               {isFederatedServer && peerRegistryId && (
-                <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-200 border border-cyan-200 dark:border-cyan-700">
+                <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-info-100 text-info-700 dark:bg-info-900/40 dark:text-info-200 border border-info-200 dark:border-info-700">
                   {peerRegistryId}
                 </span>
               )}
@@ -159,7 +159,7 @@ const ServerDetailsModal: React.FC<ServerDetailsModalProps> = ({
           </div>
           <button
             onClick={onClose}
-            className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded-lg transition-colors"
+            className="btn-icon"
           >
             <XMarkIcon className="h-5 w-5" />
           </button>
@@ -223,7 +223,7 @@ const ServerDetailsModal: React.FC<ServerDetailsModalProps> = ({
             <div className="flex items-center gap-2">
               <div className={`w-3 h-3 rounded-full ${
                 server.is_enabled
-                  ? 'bg-green-400 shadow-lg shadow-green-400/30'
+                  ? 'bg-success-400 shadow-lg shadow-success-400/30'
                   : 'bg-gray-300 dark:bg-gray-600'
               }`} />
               <span className="text-sm text-gray-700 dark:text-gray-300">
@@ -326,13 +326,13 @@ const SkillContentModal: React.FC<SkillContentModalProps> = ({
             <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
               {skill.skill_name}
             </h3>
-            <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-200 border border-amber-200 dark:border-amber-600">
+            <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-skill-100 text-skill-700 dark:bg-skill-900/40 dark:text-skill-200 border border-skill-200 dark:border-skill-600">
               SKILL
             </span>
           </div>
           <button
             onClick={onClose}
-            className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded-lg transition-colors"
+            className="btn-icon"
           >
             <XMarkIcon className="h-5 w-5" />
           </button>
@@ -345,7 +345,7 @@ const SkillContentModal: React.FC<SkillContentModalProps> = ({
               href={skill.skill_md_url}
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center gap-1 text-sm text-amber-700 dark:text-amber-300 hover:underline"
+              className="flex items-center gap-1 text-sm text-skill-700 dark:text-skill-300 hover:underline"
             >
               <ArrowTopRightOnSquareIcon className="h-4 w-4" />
               View Skill
@@ -356,7 +356,7 @@ const SkillContentModal: React.FC<SkillContentModalProps> = ({
               href={skill.repository_url}
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center gap-1 text-sm text-amber-700 dark:text-amber-300 hover:underline"
+              className="flex items-center gap-1 text-sm text-skill-700 dark:text-skill-300 hover:underline"
             >
               <ArrowTopRightOnSquareIcon className="h-4 w-4" />
               View Repo
@@ -366,7 +366,7 @@ const SkillContentModal: React.FC<SkillContentModalProps> = ({
             <>
               <button
                 onClick={handleCopy}
-                className="flex items-center gap-1 text-sm text-gray-600 dark:text-gray-400 hover:text-amber-700 dark:hover:text-amber-300 transition-colors"
+                className="flex items-center gap-1 text-sm text-gray-600 dark:text-gray-400 hover:text-skill-700 dark:hover:text-skill-300 transition-colors"
                 title="Copy to clipboard"
               >
                 <ClipboardIcon className="h-4 w-4" />
@@ -374,7 +374,7 @@ const SkillContentModal: React.FC<SkillContentModalProps> = ({
               </button>
               <button
                 onClick={handleDownload}
-                className="flex items-center gap-1 text-sm text-gray-600 dark:text-gray-400 hover:text-amber-700 dark:hover:text-amber-300 transition-colors"
+                className="flex items-center gap-1 text-sm text-gray-600 dark:text-gray-400 hover:text-skill-700 dark:hover:text-skill-300 transition-colors"
                 title="Download SKILL.md"
               >
                 <ArrowDownTrayIcon className="h-4 w-4" />
@@ -387,11 +387,11 @@ const SkillContentModal: React.FC<SkillContentModalProps> = ({
         <div className="p-4 overflow-auto flex-1">
           {loading ? (
             <div className="flex items-center justify-center py-12">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-amber-600"></div>
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-skill-600"></div>
             </div>
           ) : error ? (
-            <div className="text-center py-12 text-gray-500">
-              <p className="text-red-500">{error}</p>
+            <div className="text-center py-12 text-fg-muted">
+              <p className="text-danger-500">{error}</p>
               {skill.skill_md_url && (
                 <p className="mt-2 text-sm">
                   Try visiting the{' '}
@@ -399,7 +399,7 @@ const SkillContentModal: React.FC<SkillContentModalProps> = ({
                     href={skill.skill_md_url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-amber-600 hover:underline"
+                    className="text-skill-600 hover:underline"
                   >
                     source URL
                   </SafeLink>{' '}
@@ -429,12 +429,12 @@ const SkillContentModal: React.FC<SkillContentModalProps> = ({
                 </div>
               )}
               {/* Markdown Body */}
-              <div className="prose prose-sm dark:prose-invert max-w-none prose-headings:text-amber-800 dark:prose-headings:text-amber-200 prose-a:text-amber-600 dark:prose-a:text-amber-400 prose-code:bg-gray-100 dark:prose-code:bg-gray-900 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-pre:bg-gray-100 dark:prose-pre:bg-gray-900">
+              <div className="prose prose-sm dark:prose-invert max-w-none prose-headings:text-skill-800 dark:prose-headings:text-skill-200 prose-a:text-skill-600 dark:prose-a:text-skill-400 prose-code:bg-gray-100 dark:prose-code:bg-gray-900 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-pre:bg-gray-100 dark:prose-pre:bg-gray-900">
                 <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: safeMarkdownAnchor }}>{body}</ReactMarkdown>
               </div>
             </>
           ) : (
-            <div className="text-center py-12 text-gray-500">
+            <div className="text-center py-12 text-fg-muted">
               <p>Could not load SKILL.md content.</p>
             </div>
           )}
@@ -494,7 +494,7 @@ const VirtualServerDetailsModal: React.FC<VirtualServerDetailsModalProps> = ({
               <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
                 {virtualServer.server_name}
               </h3>
-              <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-200 border border-indigo-200 dark:border-indigo-600">
+              <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-virtual-100 text-virtual-700 dark:bg-virtual-900/40 dark:text-virtual-200 border border-virtual-200 dark:border-virtual-600">
                 VIRTUAL
               </span>
             </div>
@@ -502,7 +502,7 @@ const VirtualServerDetailsModal: React.FC<VirtualServerDetailsModalProps> = ({
           </div>
           <button
             onClick={onClose}
-            className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded-lg transition-colors"
+            className="btn-icon"
           >
             <XMarkIcon className="h-5 w-5" />
           </button>
@@ -515,16 +515,16 @@ const VirtualServerDetailsModal: React.FC<VirtualServerDetailsModalProps> = ({
                 Endpoint URL
               </p>
               <div className="flex items-center gap-2 bg-gray-50 dark:bg-gray-900/50 rounded-lg p-2">
-                <code className="flex-1 text-sm text-indigo-600 dark:text-indigo-400 font-mono break-all">
+                <code className="flex-1 text-sm text-virtual-600 dark:text-virtual-400 font-mono break-all">
                   {virtualServer.endpoint_url}
                 </code>
                 <button
                   onClick={handleCopyEndpoint}
-                  className="flex-shrink-0 p-2 text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 rounded-lg transition-colors"
+                  className="flex-shrink-0 p-2 text-gray-400 hover:text-virtual-600 dark:hover:text-virtual-400 hover:bg-virtual-50 dark:hover:bg-virtual-900/30 rounded-lg transition-colors"
                   title="Copy endpoint URL"
                 >
                   {copiedEndpoint ? (
-                    <span className="text-xs text-green-600 dark:text-green-400 font-medium">Copied!</span>
+                    <span className="text-xs text-success-600 dark:text-success-400 font-medium">Copied!</span>
                   ) : (
                     <ClipboardIcon className="h-4 w-4" />
                   )}
@@ -553,7 +553,7 @@ const VirtualServerDetailsModal: React.FC<VirtualServerDetailsModalProps> = ({
                 {virtualServer.tags.map((tag) => (
                   <span
                     key={tag}
-                    className="px-2.5 py-1 text-xs rounded-full bg-indigo-50 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-200"
+                    className="px-2.5 py-1 text-xs rounded-full bg-virtual-50 text-virtual-700 dark:bg-virtual-900/40 dark:text-virtual-200"
                   >
                     {tag}
                   </span>
@@ -592,13 +592,13 @@ const VirtualServerDetailsModal: React.FC<VirtualServerDetailsModalProps> = ({
                       <button
                         type="button"
                         onClick={() => toggleToolExpand(tool.tool_name)}
-                        className="w-full p-3 text-left hover:bg-gray-100 dark:hover:bg-gray-800/50 transition-colors"
+                        className="w-full p-3 text-left hover:bg-gray-100 dark:hover:bg-gray-700/60 transition-colors"
                       >
                         <div className="flex items-center justify-between">
                           <span className="font-medium text-gray-900 dark:text-white">{tool.tool_name}</span>
                           <div className="flex items-center gap-2">
                             {tool.relevance_score !== undefined && (
-                              <span className="text-xs text-indigo-600 dark:text-indigo-400">
+                              <span className="text-xs text-virtual-600 dark:text-virtual-400">
                                 {Math.round(Math.min(tool.relevance_score, 1) * 100)}%
                               </span>
                             )}
@@ -644,7 +644,7 @@ const VirtualServerDetailsModal: React.FC<VirtualServerDetailsModalProps> = ({
             <div className="flex items-center gap-2">
               <div className={`w-3 h-3 rounded-full ${
                 virtualServer.is_enabled
-                  ? 'bg-green-400 shadow-lg shadow-green-400/30'
+                  ? 'bg-success-400 shadow-lg shadow-success-400/30'
                   : 'bg-gray-300 dark:bg-gray-600'
               }`} />
               <span className="text-sm text-gray-700 dark:text-gray-300">
@@ -658,7 +658,7 @@ const VirtualServerDetailsModal: React.FC<VirtualServerDetailsModalProps> = ({
             <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">
               Match Score
             </p>
-            <span className="inline-flex items-center rounded-full bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-200 px-3 py-1 text-xs font-semibold">
+            <span className="inline-flex items-center rounded-full bg-virtual-100 text-virtual-700 dark:bg-virtual-900/40 dark:text-virtual-200 px-3 py-1 text-xs font-semibold">
               {Math.round(Math.min(virtualServer.relevance_score, 1) * 100)}% match
             </span>
           </div>
@@ -684,14 +684,14 @@ const VirtualServerResultCard: React.FC<VirtualServerResultCardProps> = ({
   const hasMoreTools = tools.length > 3;
 
   return (
-    <div className="rounded-2xl border-2 border-indigo-200 dark:border-indigo-700 bg-gradient-to-br from-indigo-50 to-purple-50 dark:from-indigo-900/20 dark:to-purple-900/20 p-5 shadow-sm hover:shadow-md transition-shadow">
+    <div className="rounded-2xl border-2 border-virtual-200 dark:border-virtual-700 bg-gradient-to-br from-virtual-50 to-purple-50 dark:from-virtual-900/20 dark:to-purple-900/20 p-5 shadow-sm hover:shadow-md transition-shadow">
       <div className="flex items-start justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
             <p className="text-base font-semibold text-gray-900 dark:text-white">
               {virtualServer.server_name}
             </p>
-            <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-200 border border-indigo-200 dark:border-indigo-600">
+            <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-virtual-100 text-virtual-700 dark:bg-virtual-900/40 dark:text-virtual-200 border border-virtual-200 dark:border-virtual-600">
               VIRTUAL
             </span>
           </div>
@@ -701,12 +701,12 @@ const VirtualServerResultCard: React.FC<VirtualServerResultCardProps> = ({
           <button
             type="button"
             onClick={onViewDetails}
-            className="p-2 text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-700/30 rounded-lg transition-colors"
+            className="p-2 text-gray-400 hover:text-virtual-600 dark:hover:text-virtual-300 hover:bg-virtual-50 dark:hover:bg-virtual-700/30 rounded-lg transition-colors"
             title="View virtual server details"
           >
             <InformationCircleIcon className="h-4 w-4" />
           </button>
-          <span className="inline-flex items-center rounded-full bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-200 px-3 py-1 text-xs font-semibold">
+          <span className="inline-flex items-center rounded-full bg-virtual-100 text-virtual-700 dark:bg-virtual-900/40 dark:text-virtual-200 px-3 py-1 text-xs font-semibold">
             {Math.round(Math.min(virtualServer.relevance_score, 1) * 100)}% match
           </span>
         </div>
@@ -721,7 +721,7 @@ const VirtualServerResultCard: React.FC<VirtualServerResultCardProps> = ({
           {virtualServer.tags.slice(0, 6).map((tag) => (
             <span
               key={tag}
-              className="px-2.5 py-1 text-[11px] rounded-full bg-indigo-50 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-200"
+              className="px-2.5 py-1 text-[11px] rounded-full bg-virtual-50 text-virtual-700 dark:bg-virtual-900/40 dark:text-virtual-200"
             >
               {tag}
             </span>
@@ -731,7 +731,7 @@ const VirtualServerResultCard: React.FC<VirtualServerResultCardProps> = ({
 
       {/* Tools Section */}
       {tools.length > 0 && (
-        <div className="mt-4 border-t border-dashed border-indigo-200 dark:border-indigo-700 pt-3">
+        <div className="mt-4 border-t border-dashed border-virtual-200 dark:border-virtual-700 pt-3">
           <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">
             Tools ({tools.length})
           </p>
@@ -741,7 +741,7 @@ const VirtualServerResultCard: React.FC<VirtualServerResultCardProps> = ({
                 <div className="flex-1 min-w-0">
                   <span className="font-medium text-gray-900 dark:text-white">{tool.tool_name}</span>
                   {tool.relevance_score !== undefined && (
-                    <span className="ml-2 text-xs text-indigo-600 dark:text-indigo-400">
+                    <span className="ml-2 text-xs text-virtual-600 dark:text-virtual-400">
                       {Math.round(Math.min(tool.relevance_score, 1) * 100)}%
                     </span>
                   )}
@@ -758,7 +758,7 @@ const VirtualServerResultCard: React.FC<VirtualServerResultCardProps> = ({
             <button
               type="button"
               onClick={() => setShowAllTools(!showAllTools)}
-              className="mt-2 text-xs text-indigo-600 dark:text-indigo-400 hover:underline"
+              className="mt-2 text-xs text-virtual-600 dark:text-virtual-400 hover:underline"
             >
               {showAllTools ? 'Show less' : `+${tools.length - 3} more tools...`}
             </button>
@@ -882,7 +882,7 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
       </div>
 
       {error && (
-        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-500/40 dark:bg-red-900/30 dark:text-red-200">
+        <div className="rounded-lg border border-danger-200 bg-danger-50 px-4 py-3 text-sm text-danger-700 dark:border-danger-500/40 dark:bg-danger-900/30 dark:text-danger-200">
           {error}
         </div>
       )}
@@ -904,7 +904,7 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
         <section className="space-y-4">
           <div className="flex items-center justify-between">
             <h4 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-              Matching Servers <span className="text-sm font-normal text-gray-500">({servers.length})</span>
+              Matching Servers <span className="text-sm font-normal text-fg-subtle">({servers.length})</span>
             </h4>
           </div>
           <div
@@ -938,19 +938,19 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
                       </p>
                       {/* Registry source badge - only show for federated (peer registry) items */}
                       {isFederatedServer && (
-                        <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-200 border border-cyan-200 dark:border-cyan-700">
+                        <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-info-100 text-info-700 dark:bg-info-900/40 dark:text-info-200 border border-info-200 dark:border-info-700">
                           {peerRegistryId}
                         </span>
                       )}
                       {/* Orphaned badge */}
                       {isOrphanedServer && (
-                        <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-200 border border-red-200 dark:border-red-700" title="No longer exists on peer registry">
+                        <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-danger-100 text-danger-700 dark:bg-danger-900/40 dark:text-danger-200 border border-danger-200 dark:border-danger-700" title="No longer exists on peer registry">
                           ORPHANED
                         </span>
                       )}
                       {/* Discovery badge — ARD discovery-only import (metadata only) */}
                       {isArdDiscovery && (
-                        <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 border border-slate-200 dark:border-slate-600" title="Discovery-only import — resolve and connect at the source registry">
+                        <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300 border border-gray-200 dark:border-gray-600" title="Discovery-only import — resolve and connect at the source registry">
                           Discovery
                         </span>
                       )}
@@ -974,7 +974,7 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
                         <button
                           type="button"
                           onClick={() => window.open(ardSourceUrl, '_blank', 'noopener,noreferrer')}
-                          className="p-2 text-gray-400 hover:text-blue-600 dark:hover:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-700/30 rounded-lg transition-colors"
+                          className="p-2 text-gray-400 hover:text-info-600 dark:hover:text-info-300 hover:bg-info-50 dark:hover:bg-info-700/30 rounded-lg transition-colors"
                           title="View at source"
                         >
                           <ArrowTopRightOnSquareIcon className="h-4 w-4" />
@@ -984,7 +984,7 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
                       <button
                         type="button"
                         onClick={() => setConfigServer(server)}
-                        className="p-2 text-gray-400 hover:text-green-600 dark:hover:text-green-300 hover:bg-green-50 dark:hover:bg-green-700/30 rounded-lg transition-colors"
+                        className="p-2 text-gray-400 hover:text-success-600 dark:hover:text-success-300 hover:bg-success-50 dark:hover:bg-success-700/30 rounded-lg transition-colors"
                         title="Open MCP configuration"
                       >
                         <CogIcon className="h-4 w-4" />
@@ -1030,7 +1030,7 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
                           <button
                             type="button"
                             onClick={() => openToolSchema(server.path, server.server_name, tool.tool_name)}
-                            className="flex-shrink-0 p-1 text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 rounded transition-colors"
+                            className="flex-shrink-0 p-1 text-gray-400 hover:text-info-600 dark:hover:text-info-400 rounded transition-colors"
                             title="View input schema"
                           >
                             <InformationCircleIcon className="h-4 w-4" />
@@ -1057,7 +1057,7 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
         <section className="space-y-4">
           <div className="flex items-center justify-between">
             <h4 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-              Matching Tools <span className="text-sm font-normal text-gray-500">({tools.length})</span>
+              Matching Tools <span className="text-sm font-normal text-fg-subtle">({tools.length})</span>
             </h4>
           </div>
           <div
@@ -1088,12 +1088,12 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
                       serverName: tool.server_name,
                       schema: tool.inputSchema || null
                     })}
-                    className="p-1.5 text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg transition-colors"
+                    className="p-1.5 text-gray-400 hover:text-info-600 dark:hover:text-info-400 hover:bg-info-50 dark:hover:bg-info-900/30 rounded-lg transition-colors"
                     title="View input schema"
                   >
                     <InformationCircleIcon className="h-4 w-4" />
                   </button>
-                  <span className="inline-flex items-center rounded-full bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200 px-3 py-1 text-xs font-semibold">
+                  <span className="inline-flex items-center rounded-full bg-info-100 text-info-700 dark:bg-info-900/40 dark:text-info-200 px-3 py-1 text-xs font-semibold">
                     {formatPercent(tool.relevance_score)} match
                   </span>
                 </div>
@@ -1107,7 +1107,7 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
         <section className="space-y-4">
           <div className="flex items-center justify-between">
             <h4 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-              Matching Agents <span className="text-sm font-normal text-gray-500">({agents.length})</span>
+              Matching Agents <span className="text-sm font-normal text-fg-subtle">({agents.length})</span>
             </h4>
           </div>
           <div
@@ -1142,7 +1142,7 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
               return (
               <div
                 key={agent.path}
-                className="rounded-2xl border border-cyan-200 dark:border-cyan-900/40 bg-white dark:bg-gray-800 p-5 shadow-sm hover:shadow-md transition-shadow"
+                className="rounded-2xl border border-agent-200 dark:border-agent-900/40 bg-white dark:bg-gray-800 p-5 shadow-sm hover:shadow-md transition-shadow"
               >
                 <div className="flex items-start justify-between gap-4">
                   <div>
@@ -1152,13 +1152,13 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
                       </p>
                       {/* Registry source badge - only show for federated (peer registry) items */}
                       {isFederatedAgent && (
-                        <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-200 border border-violet-200 dark:border-violet-700">
+                        <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-200 border border-purple-200 dark:border-purple-700">
                           {peerRegistryId}
                         </span>
                       )}
                       {/* Orphaned badge */}
                       {isOrphanedAgent && (
-                        <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-200 border border-red-200 dark:border-red-700" title="No longer exists on peer registry">
+                        <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-danger-100 text-danger-700 dark:bg-danger-900/40 dark:text-danger-200 border border-danger-200 dark:border-danger-700" title="No longer exists on peer registry">
                           ORPHANED
                         </span>
                       )}
@@ -1171,12 +1171,12 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
                     <button
                       type="button"
                       onClick={() => openAgentDetails(agent)}
-                      className="p-2 text-gray-400 hover:text-cyan-600 dark:hover:text-cyan-300 hover:bg-cyan-50 dark:hover:bg-cyan-700/30 rounded-lg transition-colors"
+                      className="p-2 text-gray-400 hover:text-agent-600 dark:hover:text-agent-300 hover:bg-agent-50 dark:hover:bg-agent-700/30 rounded-lg transition-colors"
                       title="View full agent details"
                     >
                       <InformationCircleIcon className="h-4 w-4" />
                     </button>
-                    <span className="inline-flex items-center rounded-full bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-200 px-3 py-1 text-xs font-semibold">
+                    <span className="inline-flex items-center rounded-full bg-agent-100 text-agent-700 dark:bg-agent-900/40 dark:text-agent-200 px-3 py-1 text-xs font-semibold">
                       {formatPercent(agent.relevance_score)} match
                     </span>
                   </div>
@@ -1203,7 +1203,7 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
                     {agentTags.slice(0, 6).map((tag: string) => (
                       <span
                         key={tag}
-                        className="px-2.5 py-1 text-[11px] rounded-full bg-cyan-50 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-200"
+                        className="px-2.5 py-1 text-[11px] rounded-full bg-agent-50 text-agent-700 dark:bg-agent-900/40 dark:text-agent-200"
                       >
                         {tag}
                       </span>
@@ -1215,7 +1215,7 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
                   {(card.ans_metadata || card.ansMetadata) ? (
                     <ANSBadge ansMetadata={card.ans_metadata || card.ansMetadata} compact />
                   ) : (
-                    <span className="font-semibold text-cyan-700 dark:text-cyan-200">
+                    <span className="font-semibold text-agent-700 dark:text-agent-200">
                       {agentTrustLevel}
                     </span>
                   )}
@@ -1232,7 +1232,7 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
         <section className="space-y-4">
           <div className="flex items-center justify-between">
             <h4 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-              Matching Skills <span className="text-sm font-normal text-gray-500">({skills.length})</span>
+              Matching Skills <span className="text-sm font-normal text-fg-subtle">({skills.length})</span>
             </h4>
           </div>
           <div
@@ -1242,7 +1242,7 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
             {skills.map((skill) => (
               <div
                 key={skill.path}
-                className="rounded-2xl border-2 border-amber-200 dark:border-amber-700 bg-gradient-to-br from-amber-50 to-orange-50 dark:from-amber-900/20 dark:to-orange-900/20 p-5 shadow-sm hover:shadow-md transition-shadow"
+                className="rounded-2xl border-2 border-skill-200 dark:border-skill-700 bg-gradient-to-br from-skill-50 to-skill-50 dark:from-skill-900/20 dark:to-skill-900/20 p-5 shadow-sm hover:shadow-md transition-shadow"
               >
                 <div className="flex items-start justify-between gap-4">
                   <div>
@@ -1250,7 +1250,7 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
                       <p className="text-base font-semibold text-gray-900 dark:text-white">
                         {skill.skill_name}
                       </p>
-                      <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-200 border border-amber-200 dark:border-amber-600">
+                      <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-skill-100 text-skill-700 dark:bg-skill-900/40 dark:text-skill-200 border border-skill-200 dark:border-skill-600">
                         SKILL
                       </span>
                     </div>
@@ -1262,12 +1262,12 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
                     <button
                       type="button"
                       onClick={() => setDetailsSkill(skill)}
-                      className="p-2 text-gray-400 hover:text-amber-600 dark:hover:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-700/30 rounded-lg transition-colors"
+                      className="p-2 text-gray-400 hover:text-skill-600 dark:hover:text-skill-300 hover:bg-skill-50 dark:hover:bg-skill-700/30 rounded-lg transition-colors"
                       title="View SKILL.md content"
                     >
                       <InformationCircleIcon className="h-4 w-4" />
                     </button>
-                    <span className="inline-flex items-center rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-200 px-3 py-1 text-xs font-semibold">
+                    <span className="inline-flex items-center rounded-full bg-skill-100 text-skill-700 dark:bg-skill-900/40 dark:text-skill-200 px-3 py-1 text-xs font-semibold">
                       {formatPercent(skill.relevance_score)} match
                     </span>
                   </div>
@@ -1282,7 +1282,7 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
                     {skill.tags.slice(0, 6).map((tag) => (
                       <span
                         key={tag}
-                        className="px-2.5 py-1 text-[11px] rounded-full bg-amber-50 text-amber-700 dark:bg-amber-900/40 dark:text-amber-200"
+                        className="px-2.5 py-1 text-[11px] rounded-full bg-skill-50 text-skill-700 dark:bg-skill-900/40 dark:text-skill-200"
                       >
                         {tag}
                       </span>
@@ -1296,7 +1296,7 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
                       <span>by {skill.author}</span>
                     )}
                     {skill.version && (
-                      <span className="text-amber-600 dark:text-amber-400">v{skill.version}</span>
+                      <span className="text-skill-600 dark:text-skill-400">v{skill.version}</span>
                     )}
                   </div>
                   <span>{skill.is_enabled ? 'Enabled' : 'Disabled'}</span>
@@ -1311,7 +1311,7 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
         <section className="space-y-4">
           <div className="flex items-center justify-between">
             <h4 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-              Matching Virtual Servers <span className="text-sm font-normal text-gray-500">({virtualServers.length})</span>
+              Matching Virtual Servers <span className="text-sm font-normal text-fg-subtle">({virtualServers.length})</span>
             </h4>
           </div>
           <div
@@ -1333,7 +1333,7 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
         <section className="space-y-4">
           <div className="flex items-center justify-between">
             <h4 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-              Matching Custom Entities <span className="text-sm font-normal text-gray-500">({custom.length})</span>
+              Matching Custom Entities <span className="text-sm font-normal text-fg-subtle">({custom.length})</span>
             </h4>
           </div>
           <div
@@ -1343,7 +1343,7 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
             {custom.map((record) => (
               <div
                 key={record.path}
-                className="rounded-2xl border-2 border-teal-200 dark:border-teal-700 bg-gradient-to-br from-teal-50 to-emerald-50 dark:from-teal-900/20 dark:to-emerald-900/20 p-5 shadow-sm hover:shadow-md transition-shadow"
+                className="rounded-2xl border-2 border-custom-200 dark:border-custom-700 bg-gradient-to-br from-custom-50 to-custom-50 dark:from-custom-900/20 dark:to-custom-900/20 p-5 shadow-sm hover:shadow-md transition-shadow"
               >
                 <div className="flex items-start justify-between gap-4">
                   <div>
@@ -1351,7 +1351,7 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
                       <p className="text-base font-semibold text-gray-900 dark:text-white">
                         {record.name}
                       </p>
-                      <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-200 border border-teal-200 dark:border-teal-600 uppercase">
+                      <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-custom-100 text-custom-700 dark:bg-custom-900/40 dark:text-custom-200 border border-custom-200 dark:border-custom-600 uppercase">
                         {humanize(record.entity_type)}
                       </span>
                     </div>
@@ -1359,7 +1359,7 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
                       {record.visibility || 'public'}
                     </p>
                   </div>
-                  <span className="inline-flex items-center rounded-full bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-200 px-3 py-1 text-xs font-semibold">
+                  <span className="inline-flex items-center rounded-full bg-custom-100 text-custom-700 dark:bg-custom-900/40 dark:text-custom-200 px-3 py-1 text-xs font-semibold">
                     {formatPercent(record.relevance_score)} match
                   </span>
                 </div>
@@ -1373,7 +1373,7 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
                     {record.tags.slice(0, 6).map((tag) => (
                       <span
                         key={tag}
-                        className="px-2.5 py-1 text-[11px] rounded-full bg-teal-50 text-teal-700 dark:bg-teal-900/40 dark:text-teal-200"
+                        className="px-2.5 py-1 text-[11px] rounded-full bg-custom-50 text-custom-700 dark:bg-custom-900/40 dark:text-custom-200"
                       >
                         {tag}
                       </span>

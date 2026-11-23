@@ -52,7 +52,16 @@ from internal_request_token import (
     verify_mcp_proxy_token,
 )
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
+from jsonrpc_body import (
+    AmbiguousJsonRpcBodyError,
+    parse_jsonrpc_body,
+)
 from jwt.api_jwk import PyJWK
+from mcp_apps_domain import RESOURCES_READ_METHOD as MCP_APPS_RESOURCES_READ_METHOD
+from mcp_apps_domain import claude_ui_domain as mcp_apps_claude_ui_domain
+from mcp_apps_domain import connector_url as mcp_apps_connector_url
+from mcp_apps_domain import gateway_public_origins as mcp_apps_gateway_public_origins
+from mcp_apps_domain import rewrite_ui_domains as mcp_apps_rewrite_ui_domains
 from metrics_middleware import add_auth_metrics_middleware
 from starlette.background import BackgroundTask
 
@@ -101,6 +110,7 @@ except ImportError:
 
 # Import provider factory
 from providers.base import normalize_groups_claim
+from providers.cognito import resolve_cognito_domain_prefix
 from providers.factory import get_auth_provider
 from pydantic import (
     BaseModel,
@@ -134,6 +144,20 @@ from registry.common.request_origin import (
 )
 from registry.common.scopes_loader import reload_scopes_config
 from registry.common.secret_key import validate_secret_key, validate_signing_secret
+from registry.common.session_cookie import (
+    SessionCookieAttributes,
+    join_cookie_fields,
+    session_cookie_attributes,
+    session_cookie_values,
+    single_session_cookie,
+)
+from registry.common.tool_grants import (
+    has_wildcard,
+    normalize_name_list,
+    normalize_server_name,
+    server_names_match,
+    tool_call_allowed,
+)
 from registry.core.config import settings
 from registry.egress_auth.fallback_key import is_fallback_shaped, username_fallback_key
 from registry.egress_auth.service import canonical_auth_method
@@ -145,7 +169,11 @@ from registry.repositories.factory import get_scope_repository, get_server_repos
 from registry.utils.group_names import normalize_group_name, normalize_group_names
 from registry.utils.logging_setup import setup_logging as _setup_logging
 from registry.utils.request_utils import get_client_ip
-from registry.utils.url_guard import PROXY_PROFILE, guarded_async_client
+from registry.utils.url_guard import (
+    PROXY_PROFILE,
+    guarded_async_client,
+    is_builtin_airegistry_tools_outbound_url,
+)
 
 # Let setup_logging resolve the file path from settings.log_dir /
 # {service_name}.log. Honors APP_LOG_DIR overrides and the new
@@ -1327,6 +1355,28 @@ def _refuse_cross_origin_cookie_request(
     )
 
 
+def _expire_other_session_cookie_variant(
+    response: Response,
+    cookie: SessionCookieAttributes,
+) -> None:
+    """Expire the host-only session cookie when the login callback set one with a Domain.
+
+    A browser keeps a host-only cookie and one with a Domain as two cookies, so
+    after ``SESSION_COOKIE_DOMAIN`` changes from empty to a domain it would send
+    both, and both services refuse a duplicated session cookie. The login takes
+    its Domain from ``SESSION_COOKIE_DOMAIN``, so a host-only login has no
+    configured domain whose cookie it could expire. A domain the deployment no
+    longer names, or one another host under the parent domain set, is unknown
+    here and stays.
+
+    Args:
+        response: The login callback response.
+        cookie: The session cookie attributes the login set the cookie with.
+    """
+    for expiry in cookie.expiries_of_other_variants():
+        response.delete_cookie(**expiry)
+
+
 def _generic_write_csrf_refused(
     is_generic_request: bool,
     http_verb: str,
@@ -1343,7 +1393,7 @@ def _generic_write_csrf_refused(
       - the caller authenticated with an ambient session cookie (not a Bearer
         token a programmatic client sets explicitly).
 
-    A browser carrying only an mcp_gateway_session cookie therefore cannot make a
+    A browser carrying only a session cookie therefore cannot make a
     cross-site DELETE/PUT/PATCH to a proxied resource; Bearer callers are exempt.
     """
     if not (is_generic_request and require_bearer):
@@ -1967,7 +2017,9 @@ def _evaluate_redirect(
             return True, "allowlist_match"
         return False, "not_in_allowlist"
 
-    cookie_domain = os.environ.get("SESSION_COOKIE_DOMAIN", "").strip()
+    # The login sets the session cookie on settings.session_cookie_domain, which
+    # also loads .env; os.environ would miss a domain set only there.
+    cookie_domain = (settings.session_cookie_domain or "").strip()
     allowed = _is_redirect_within_cookie_domain(url, cookie_domain, request)
     return allowed, "cookie_domain"
 
@@ -2326,9 +2378,15 @@ async def validate_session_cookie(cookie_value: str) -> dict[str, Any]:
         raise ValueError("Session cookie validation not configured")
 
     try:
-        # Decrypt cookie (max_age=28800 for 8 hours). The cookie now carries
-        # only an opaque session_id; the full record lives server-side.
-        payload = signer.loads(cookie_value, max_age=28800)
+        # The cookie carries only an opaque session_id; the full record lives
+        # server-side. SESSION_MAX_AGE_SECONDS bounds the signature's age, as
+        # in the registry, and with the __Host- prefix the salt names the
+        # cookie, so a value signed for another cookie name is refused.
+        payload = signer.loads(
+            cookie_value,
+            max_age=settings.session_max_age_seconds,
+            salt=settings.session_cookie_signing_salt,
+        )
 
         # Reject legacy dict-payload cookies (forces re-login post-rollout).
         if not isinstance(payload, str):
@@ -2581,7 +2639,7 @@ def _normalize_server_name(name: str) -> str:
     Returns:
         Normalized server name (without leading or trailing slashes)
     """
-    return name.strip("/") if name else name
+    return normalize_server_name(name)
 
 
 def _server_names_match(name1: str, name2: str) -> bool:
@@ -2596,10 +2654,8 @@ def _server_names_match(name1: str, name2: str) -> bool:
     Returns:
         True if names match (ignoring trailing slashes) or if name1 is '*', False otherwise
     """
-    normalized_name1 = _normalize_server_name(name1)
-    if normalized_name1 == "*":
-        return True
-    return normalized_name1 == _normalize_server_name(name2)
+    # Shared with the registry's tool access listing (issue #2102).
+    return server_names_match(name1, name2)
 
 
 async def _resolve_server_path(server_name: str) -> str:
@@ -2801,7 +2857,8 @@ async def validate_server_tool_access(
                         return True
 
                     # Check methods first
-                    allowed_methods = server_config.get("methods", [])
+                    # A bare string is a one-item list, never a substring test.
+                    allowed_methods = normalize_name_list(server_config.get("methods"))
                     logger.debug(f"  Allowed methods for server '{server_name}': {allowed_methods}")
                     logger.debug(f"  Checking if method '{method}' is in allowed methods...")
 
@@ -2853,18 +2910,18 @@ async def validate_server_tool_access(
                         continue
 
                     # Check tools if method not found in methods
-                    allowed_tools = server_config.get("tools", [])
+                    allowed_tools = normalize_name_list(server_config.get("tools"))
                     logger.debug(f"  Allowed tools for server '{server_name}': {allowed_tools}")
 
                     # Check if all tools are allowed (wildcard support)
-                    has_wildcard_tools = "all" in allowed_tools or "*" in allowed_tools
+                    has_wildcard_tools = has_wildcard(allowed_tools)
 
                     # For tools/call, check if the specific tool is allowed
                     if method == "tools/call" and tool_name:
                         logger.debug(
                             f"  Checking if tool '{tool_name}' is in allowed tools for tools/call..."
                         )
-                        if tool_name in allowed_tools or has_wildcard_tools:
+                        if tool_call_allowed(allowed_tools, tool_name):
                             logger.debug(f"  Tool '{tool_name}' found in allowed tools")
                             logger.debug(
                                 f"scope '{scope}' allows access to {server_name}.{method} for tool {tool_name}"
@@ -2889,9 +2946,7 @@ async def validate_server_tool_access(
                         # no methods list names. Wildcard-tool scopes allowed it
                         # through this branch before, so keep exactly that case.
                         transport_open = has_wildcard_tools and method in MCP_TRANSPORT_ENDPOINTS
-                        if transport_open or (
-                            isinstance(allowed_tools, list) and method in allowed_tools
-                        ):
+                        if transport_open or method in allowed_tools:
                             logger.debug(f"  Method '{method}' found in allowed tools")
                             logger.debug(f"scope '{scope}' allows access to {server_name}.{method}")
                             logger.info(
@@ -4281,17 +4336,19 @@ async def validate_request(request: Request):
     Validate a request by extracting configuration from headers and validating the bearer token.
 
     Expected headers:
-    - Authorization: Bearer <token>
-    - X-User-Pool-Id: <user_pool_id>
-    - X-Client-Id: <client_id>
-    - X-Region: <region> (optional, defaults to us-east-1)
+    - Authorization: Bearer <token> (or X-Authorization), or the session cookie
     - X-Original-URL: <original_url> (optional, for scope validation)
+
+    The configured provider validates a bearer token with its own settings. The
+    request never chooses them: X-User-Pool-Id, X-Client-Id and X-Region are
+    ignored, and nginx sends them empty.
 
     Returns:
         HTTP 200 with user info headers if valid, HTTP 401/403 if invalid
 
     Raises:
-        HTTPException: If the token is missing, invalid, or configuration is incomplete
+        HTTPException: If the token is missing or invalid, or the configured
+            provider cannot validate tokens (500).
     """
 
     # Capture start time for MCP audit logging
@@ -4368,10 +4425,8 @@ async def validate_request(request: Request):
                 headers={"WWW-Authenticate": "Bearer", "Connection": "close"},
             )
 
-        cookie_header = request.headers.get("Cookie", "")
-        user_pool_id = request.headers.get("X-User-Pool-Id")
-        client_id = request.headers.get("X-Client-Id")
-        region = request.headers.get("X-Region", "us-east-1")
+        # Every Cookie field, so a cookie an HTTP/2 client sent in a later field counts.
+        cookie_header = join_cookie_fields(request.headers.getlist("cookie"))
         body = request.headers.get("X-Body")
         # capture_body.lua sets this when the request body was too large to buffer
         # in memory and spilled to a temp file, so no X-Body could be captured.
@@ -4471,6 +4526,12 @@ async def validate_request(request: Request):
         # to the unprivileged "initialize" method (that would authorize a body
         # whose real method we could not read) -- fail closed below instead.
         body_parse_failed = False
+        # True when the body was refused because a case-insensitive backend
+        # decoder could read it differently than this check does (ambiguous or
+        # duplicate keys). Kept separate from body_parse_failed so the refusal
+        # returns a clean 403 the client can read, not a 400 that nginx
+        # auth_request collapses to an opaque 500 (issue tracked separately).
+        body_ambiguous = False
         try:
             if body:
                 payload_text = body  # .decode('utf-8')
@@ -4479,7 +4540,9 @@ async def validate_request(request: Request):
                 # credentials, API keys, or PII. Log only the size and, once
                 # parsed, the non-sensitive method name + request id.
                 logger.debug("Request payload received (%d chars)", len(payload_text))
-                request_payload = json.loads(payload_text)
+                # Strict parse: a body a case-insensitive backend decoder would
+                # read differently from Python is refused, not authorized.
+                request_payload = parse_jsonrpc_body(payload_text)
                 if logger.isEnabledFor(logging.DEBUG) and isinstance(request_payload, dict):
                     logger.debug(
                         "JSON-RPC request: method=%s id=%s",
@@ -4491,6 +4554,9 @@ async def validate_request(request: Request):
         except UnicodeDecodeError as e:
             logger.warning(f"Could not decode body as UTF-8: {e}")
             body_parse_failed = True
+        except AmbiguousJsonRpcBodyError as e:
+            logger.warning(f"Refusing JSON-RPC payload with ambiguous keys: {e}")
+            body_ambiguous = True
         except json.JSONDecodeError as e:
             logger.warning(f"Could not parse JSON RPC payload: {e}")
             body_parse_failed = True
@@ -4512,21 +4578,21 @@ async def validate_request(request: Request):
         # Log specific headers for debugging with masked sensitive data
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
-                "Key Headers: Authorization=%s, Cookie=%s, "
-                "User-Pool-Id=%s, Client-Id=%s, Region=%s, Original-URL=%s",
+                "Key Headers: Authorization=%s, Cookie=%s, Original-URL=%s",
                 bool(authorization),
                 bool(cookie_header),
-                mask_sensitive_id(user_pool_id) if user_pool_id else "None",
-                mask_sensitive_id(client_id) if client_id else "None",
-                region,
                 original_url,
             )
 
         logger.debug("Server Name from URL: %s", server_name_from_url)
 
         # Only activate static token auth when there is no session cookie
-        # (UI uses cookies, CLI uses Bearer)
-        has_session_cookie = cookie_header and "mcp_gateway_session=" in cookie_header
+        # (UI uses cookies, CLI uses Bearer). A session cookie the header carries
+        # more than once is refused and counts as none: another host under the
+        # parent domain can add the second one, so neither can be trusted.
+        session_cookie_name = settings.session_cookie_effective_name
+        session_cookie = single_session_cookie(cookie_header, session_cookie_name)
+        has_session_cookie = session_cookie is not None
 
         # Federation static token auth: scoped access to federation/peer endpoints only
         # Check this BEFORE the full admin static token
@@ -4707,7 +4773,7 @@ async def validate_request(request: Request):
         entra_graph_groups_resolved = False
 
         # Log which cookie names are present on the inbound /validate request.
-        # Distinguishes "browser didn't send mcp_gateway_session" (cookie scope
+        # Distinguishes "browser didn't send the session cookie" (cookie scope
         # / jar collision) from "nginx stripped it" (sub-request config drift)
         # when diagnosing spurious 401s.
         if cookie_header:
@@ -4718,21 +4784,16 @@ async def validate_request(request: Request):
                     if c.strip() and "=" in c
                 }
             )
-            mgs_count = cookie_header.count("mcp_gateway_session=")
             logger.info(
                 f"Cookie names present: {cookie_names} "
-                f"(mcp_gateway_session occurrences: {mgs_count})"
+                f"({session_cookie_name} occurrences: "
+                f"{len(session_cookie_values(cookie_header, session_cookie_name))})"
             )
 
-        # FIRST: Check for session cookie if present
-        if "mcp_gateway_session=" in cookie_header:
+        # FIRST: Check for session cookie if present (and sent once).
+        if session_cookie is not None:
             logger.info("Session cookie detected, attempting session validation")
-            # Extract cookie value
-            cookie_value = None
-            for cookie in cookie_header.split(";"):
-                if cookie.strip().startswith("mcp_gateway_session="):
-                    cookie_value = cookie.strip().split("=", 1)[1]
-                    break
+            cookie_value = session_cookie
 
             if cookie_value:
                 try:
@@ -4820,29 +4881,13 @@ async def validate_request(request: Request):
                             f"Token validation successful using {auth_provider.__class__.__name__}"
                         )
                     else:
-                        # Fallback to old validation for compatibility
-                        if not user_pool_id:
-                            logger.warning("Missing X-User-Pool-Id header for Cognito validation")
-                            raise HTTPException(
-                                status_code=400,
-                                detail="Missing X-User-Pool-Id header",
-                                headers={"Connection": "close"},
-                            )
-
-                        if not client_id:
-                            logger.warning("Missing X-Client-Id header for Cognito validation")
-                            raise HTTPException(
-                                status_code=400,
-                                detail="Missing X-Client-Id header",
-                                headers={"Connection": "close"},
-                            )
-
-                        # Use old validator for backward compatibility
-                        validation_result = validator.validate_token(
-                            access_token=access_token,
-                            user_pool_id=user_pool_id,
-                            client_id=client_id,
-                            region=region,
+                        # Every provider in providers/factory.py implements
+                        # validate_token. One that does not cannot validate the
+                        # bearer, so refuse it rather than trusting anything the
+                        # request says about how to validate it.
+                        raise RuntimeError(
+                            f"authentication provider {auth_provider.__class__.__name__} "
+                            "has no validate_token; refusing the bearer token"
                         )
 
             except ValueError as e:
@@ -5211,6 +5256,25 @@ async def validate_request(request: Request):
                         "Request body too large to authorize; scope validation "
                         "requires an in-memory body"
                     ),
+                    headers={"Connection": "close"},
+                )
+
+            # Fail closed on an ambiguous body (a case-insensitive backend could
+            # read it as a different call than this check does). Deny with 403 so
+            # the client gets a clean denial: nginx auth_request forwards 403 but
+            # collapses 400 to an opaque 500. The payload is unparseable here, so
+            # no JSON-RPC error body is attached and nginx returns its plain 403.
+            if body_ambiguous:
+                logger.warning(
+                    "Access denied for user %s to %s - request body is ambiguous "
+                    "(keys a case-insensitive backend could read differently); "
+                    "failing closed",
+                    hash_username(validation_result.get("username", "")),
+                    server_name,
+                )
+                raise HTTPException(
+                    status_code=403,
+                    detail="Request body could not be authorized",
                     headers={"Connection": "close"},
                 )
 
@@ -5792,13 +5856,9 @@ async def get_auth_config():
         else:
             return {
                 "auth_type": "cognito",
-                "description": "Header-based Cognito token validation",
-                "required_headers": [
-                    "Authorization: Bearer <token>",
-                    "X-User-Pool-Id: <pool_id>",
-                    "X-Client-Id: <client_id>",
-                ],
-                "optional_headers": ["X-Region: <region> (default: us-east-1)"],
+                "description": "Cognito JWT token validation",
+                "required_headers": ["Authorization: Bearer <token>"],
+                "optional_headers": [],
                 "provider_info": provider_info,
             }
     except Exception as e:
@@ -6631,12 +6691,69 @@ def _resolve_okta_endpoints(
             okta[field] = Template(okta[field]).safe_substitute(OKTA_OAUTH2_BASE_URL=base)
 
 
+# The one session key oauth2_providers.yml ships, as shipped. It expands to
+# SESSION_COOKIE_DOMAIN, so it cannot disagree with the domain the login uses.
+_SESSION_DOMAIN_PLACEHOLDER: str = "${SESSION_COOKIE_DOMAIN}"
+# Every session cookie key an edited yml may still set, with what decides it now.
+_IGNORED_SESSION_KEYS: dict[str, str] = {
+    "secure": "set SESSION_COOKIE_SECURE",
+    "max_age_seconds": "set SESSION_MAX_AGE_SECONDS",
+    "cookie_name": "set SESSION_COOKIE_NAME",
+    "domain": "set SESSION_COOKIE_DOMAIN",
+    "samesite": "always SameSite=Lax",
+    "httponly": "always HttpOnly",
+}
+
+
+def _check_provider_session_block(
+    oauth2_config: dict[str, Any],
+) -> None:
+    """Refuse an oauth2_providers.yml ``session`` block that sets a cookie key the login ignores.
+
+    The shared settings are the one source of the session cookie, and SameSite
+    and HttpOnly are fixed, so a yml value would be ignored without notice.
+    The yml ships in the image and no deployment surface mounts it, so only an
+    operator who mounts an edited copy reaches this. The shipped
+    ``domain: "${SESSION_COOKIE_DOMAIN}"``, or an empty domain, loads.
+
+    Args:
+        oauth2_config: The provider configuration before environment expansion.
+
+    Raises:
+        ValueError: The block sets one of the keys; the message names each one
+            and the variable to set instead.
+    """
+    session = oauth2_config.get("session") or {}
+    ignored = [
+        key
+        for key in _IGNORED_SESSION_KEYS
+        if key in session
+        and not (
+            key == "domain" and str(session[key] or "").strip() in ("", _SESSION_DOMAIN_PLACEHOLDER)
+        )
+    ]
+    if ignored:
+        listed = "; ".join(f"session.{key} ({_IGNORED_SESSION_KEYS[key]})" for key in ignored)
+        raise ValueError(
+            "oauth2_providers.yml sets session cookie keys the auth server does not read: "
+            f"{listed}. Remove them from the session block, keep "
+            f'domain: "{_SESSION_DOMAIN_PLACEHOLDER}" as shipped, and set the variables on '
+            "the registry and the auth server."
+        )
+
+
 # Load OAuth2 providers configuration
 def load_oauth2_config():
-    """Load the OAuth2 providers configuration from oauth2_providers.yml"""
+    """Load the OAuth2 providers configuration from oauth2_providers.yml.
+
+    Raises:
+        ValueError: The configuration is unusable, for example a ``session``
+            block that sets a session cookie key the settings own.
+    """
     oauth2_file = Path(__file__).parent / "oauth2_providers.yml"
     with open(oauth2_file) as f:
         config = yaml.safe_load(f)
+    _check_provider_session_block(config)
 
     # Resolve only an active Entra provider; disabled settings cannot break
     # another IdP's login. Active Entra misconfiguration fails at startup.
@@ -6697,15 +6814,9 @@ def auto_derive_cognito_domain(user_pool_id: str) -> str:
     """
     Auto-derive Cognito domain from User Pool ID.
 
-    Example: us-east-1_KmP5A3La3 → us-east-1kmp5a3la3
+    Example: us-east-1_KmP5A3La3 becomes us-east-1kmp5a3la3
     """
-    if not user_pool_id:
-        return ""
-
-    # Remove underscore and convert to lowercase
-    domain = user_pool_id.replace("_", "").lower()
-    logger.info(f"Auto-derived Cognito domain '{domain}' from user pool ID '{user_pool_id}'")
-    return domain
+    return resolve_cognito_domain_prefix(None, user_pool_id)
 
 
 def substitute_env_vars(config):
@@ -6718,13 +6829,13 @@ def substitute_env_vars(config):
         try:
             # Handle special case for auto-derived Cognito domain
             if "COGNITO_DOMAIN:-auto" in config:
-                # Check if COGNITO_DOMAIN is set, if not auto-derive from user pool ID
-                cognito_domain = os.environ.get("COGNITO_DOMAIN")
-                if not cognito_domain:
-                    user_pool_id = os.environ.get("COGNITO_USER_POOL_ID", "")
-                    cognito_domain = auto_derive_cognito_domain(user_pool_id)
-
-                # Replace the template with the derived domain
+                # Same resolution as the Cognito provider, so the browser login
+                # URLs and the provider's own endpoints agree. Empty, unset and
+                # "auto" all derive the prefix from the user pool id.
+                cognito_domain = resolve_cognito_domain_prefix(
+                    os.environ.get("COGNITO_DOMAIN"),
+                    os.environ.get("COGNITO_USER_POOL_ID", ""),
+                )
                 config = config.replace("${COGNITO_DOMAIN:-auto}", cognito_domain)
 
             template = Template(config)
@@ -7714,7 +7825,7 @@ async def oauth2_callback(
         # session_id in the browser cookie. This prevents cookie-size failures
         # for IdPs that return large groups claims (e.g. Entra ID with many
         # group memberships) and keeps id_token off the client entirely.
-        session_max_age = OAUTH2_CONFIG.get("session", {}).get("max_age_seconds", 28800)
+        session_max_age = settings.session_max_age_seconds
         # id_token is encrypted at rest server-side and required for OIDC SSO
         # logout (id_token_hint).
         from session_store import create_session
@@ -7732,7 +7843,7 @@ async def oauth2_callback(
             subject=mapped_user.get("subject"),
             entra_graph_groups_resolved=entra_graph_groups_resolved,
         )
-        registry_session = signer.dumps(session_id)
+        registry_session = signer.dumps(session_id, salt=settings.session_cookie_signing_salt)
 
         # Redirect to registry with session cookie
         redirect_url = temp_session_data.get(
@@ -7755,54 +7866,27 @@ async def oauth2_callback(
             redirect_url = "/"
         response = RedirectResponse(url=redirect_url, status_code=302)
 
-        # Set registry-compatible session cookie
-        # Check if HTTPS is terminated at load balancer/CloudFront
+        # Set registry-compatible session cookie. HTTPS may be terminated at a
+        # load balancer or CloudFront, which is_request_https accounts for.
         is_https = is_request_https(request)
-
-        # Secure-by-default: the Secure flag is enabled unless an operator has
-        # explicitly set session.secure to false for a plain-HTTP local dev
-        # stack. A missing config key must NOT silently drop the flag, so the
-        # code-level fallback is True (fail closed). The flag is only actually
-        # emitted when the inbound request is HTTPS, because a browser rejects a
-        # Secure Set-Cookie sent over plain HTTP.
-        cookie_secure_config = OAUTH2_CONFIG.get("session", {}).get("secure", True)
-        cookie_secure = cookie_secure_config and is_https
-        # SameSite MUST remain "lax" for the OAuth login flow. The session
-        # cookie is set on the callback response, which is reached via a
-        # top-level cross-site navigation from the IdP. A "strict" cookie is
-        # NOT sent on such cross-site navigations, so the browser would drop it
-        # and login would silently fail. Do not "harden" this to Strict; CSRF
-        # is defended separately by the CSRF token, not by SameSite=Strict.
-        cookie_samesite = OAUTH2_CONFIG.get("session", {}).get("samesite", "lax")
-        cookie_domain = OAUTH2_CONFIG.get("session", {}).get("domain", "")
-
-        # Handle domain configuration - only use explicitly configured values
-        # Empty string or placeholder means no domain attribute (exact host only)
-        if not cookie_domain or cookie_domain == "${SESSION_COOKIE_DOMAIN}":
-            cookie_domain = None
-            logger.info("No cookie domain configured - cookie will be set for exact host only")
-        else:
-            logger.info("Using explicitly configured cookie domain")
-
-        logger.info(
-            f"Auth server setting session cookie: is_https={is_https}, domain={'configured' if cookie_domain else 'not set'}, x-forwarded-proto={request.headers.get('x-forwarded-proto', 'not set')}, request_scheme={request.url.scheme}"
+        # Every attribute, and the expiry of the other variant, comes from the
+        # function the registry's expiries use: the effective name, Path=/,
+        # SESSION_COOKIE_DOMAIN (none with the __Host- prefix), Secure from
+        # SESSION_COOKIE_SECURE on HTTPS, SameSite=Lax, HttpOnly, and Max-Age
+        # SESSION_MAX_AGE_SECONDS.
+        cookie = session_cookie_attributes(
+            name=settings.session_cookie_effective_name,
+            is_https=is_https,
+            secure=settings.session_cookie_secure,
+            domain=settings.session_cookie_domain,
+            host_prefix=settings.session_cookie_host_prefix,
+            max_age=session_max_age,
         )
-
-        cookie_params = {
-            "key": "mcp_gateway_session",  # Same as registry SESSION_COOKIE_NAME
-            "value": registry_session,
-            "max_age": session_max_age,
-            "httponly": OAUTH2_CONFIG.get("session", {}).get("httponly", True),
-            "samesite": cookie_samesite,
-            "secure": cookie_secure,
-            "path": "/",  # Ensure cookie is sent for all paths
-        }
-
-        # Only set domain if configured or inferred (for cross-subdomain cookies)
-        if cookie_domain:
-            cookie_params["domain"] = cookie_domain
-
-        response.set_cookie(**cookie_params)
+        logger.info(
+            f"Auth server setting session cookie: secure={cookie.set_cookie['secure']}, is_https={is_https}, domain={'configured' if cookie.set_cookie['domain'] else 'not set'}, x-forwarded-proto={request.headers.get('x-forwarded-proto', 'not set')}, request_scheme={request.url.scheme}"
+        )
+        response.set_cookie(value=registry_session, **cookie.set_cookie)
+        _expire_other_session_cookie_variant(response, cookie)
 
         # Clear temporary OAuth2 session. The cookie was set without a
         # domain attribute, so delete must also omit domain to match.
@@ -8166,26 +8250,124 @@ _FORWARDED_RESPONSE_HEADERS: frozenset[str] = frozenset(
 )
 
 
+_SSE_EVENT_TERMINATOR: bytes = b"\n\n"
+_SSE_EVENT_TERMINATOR_CRLF: bytes = b"\r\n\r\n"
+
+
+class _UpstreamStreamTruncated(Exception):
+    """The upstream closed a chunked response before its terminating chunk.
+
+    Carries the bytes received so far, so a caller that can still use them --
+    an SSE stream whose earlier events completed cleanly -- can deliver them
+    instead of discarding a response that was mostly received.
+
+    Args:
+        partial: Body bytes read before the stream was cut.
+    """
+
+    def __init__(
+        self,
+        partial: bytes,
+    ) -> None:
+        super().__init__("upstream closed the response body before its terminating chunk")
+        self.partial = partial
+
+
+def _complete_events_only(
+    partial: bytes,
+) -> bytes:
+    """Return the prefix of a truncated SSE body made of complete events.
+
+    An event counts as complete only once its blank-line terminator arrived,
+    so a stream cut mid-`data:` cannot reach the caller as a half frame. This
+    also keeps truncation fail-closed for the tools/list filter: an event cut
+    in half is dropped, so a partial list can only ever lose tools rather than
+    expose ones the filter had not seen yet.
+
+    Args:
+        partial: Body bytes read before the stream was cut.
+
+    Returns:
+        The complete-event prefix, or empty when no event ever completed.
+    """
+    lf = partial.rfind(_SSE_EVENT_TERMINATOR)
+    crlf = partial.rfind(_SSE_EVENT_TERMINATOR_CRLF)
+    if crlf > lf:
+        return partial[: crlf + len(_SSE_EVENT_TERMINATOR_CRLF)]
+    if lf >= 0:
+        return partial[: lf + len(_SSE_EVENT_TERMINATOR)]
+    return b""
+
+
+def _has_jsonrpc_response(
+    body: bytes,
+) -> bool:
+    """Whether any complete SSE event in the body carries a JSON-RPC response.
+
+    A truncated stream can end after notifications but before the response to
+    the request. Delivering that as a 200 leaves an MCP client waiting for an
+    answer that never arrives, so the caller treats it the same as a stream in
+    which no event completed.
+
+    Args:
+        body: Complete-event prefix returned by `_complete_events_only`.
+
+    Returns:
+        True when a `data:` payload is a JSON object with an `id` and either a
+        `result` or an `error`.
+    """
+    for line in body.decode("utf-8", errors="replace").splitlines():
+        if not line.startswith("data:"):
+            continue
+        try:
+            message = json.loads(line[len("data:") :].strip())
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(message, dict) or "id" not in message:
+            continue
+        if "result" in message or "error" in message:
+            return True
+    return False
+
+
 async def _read_bounded(
     response: httpx.Response,
     max_bytes: int,
+    *,
+    partial_on_truncation: bool = False,
 ) -> bytes:
     """Read upstream body in chunks, enforcing an upper size bound.
 
-    Raises HTTPException(413) if total bytes exceed max_bytes.
+    Args:
+        response: Streaming upstream response to read.
+        max_bytes: Refuse the body once it exceeds this many bytes.
+        partial_on_truncation: When True, an upstream that closes a chunked
+            stream without its terminating chunk raises
+            `_UpstreamStreamTruncated` carrying what arrived. When False the
+            httpx error propagates untouched, which is what callers that
+            cannot use a partial body want.
+
+    Raises:
+        HTTPException: 413 if total bytes exceed max_bytes.
+        _UpstreamStreamTruncated: only when partial_on_truncation is True.
     """
     size = 0
     chunks: list[bytes] = []
-    async for chunk in response.aiter_bytes(chunk_size=64 * 1024):
-        size += len(chunk)
-        if size > max_bytes:
-            raise HTTPException(
-                status_code=413,
-                detail=(
-                    f"Upstream tools/list response exceeded {max_bytes} bytes; refusing to buffer."
-                ),
-            )
-        chunks.append(chunk)
+    try:
+        async for chunk in response.aiter_bytes():
+            size += len(chunk)
+            if size > max_bytes:
+                raise HTTPException(
+                    status_code=413,
+                    detail=(
+                        f"Upstream tools/list response exceeded {max_bytes} bytes; refusing to buffer."
+                    ),
+                )
+            chunks.append(chunk)
+    except httpx.RemoteProtocolError as exc:
+        if not partial_on_truncation:
+            raise
+        raise _UpstreamStreamTruncated(b"".join(chunks)) from exc
     return b"".join(chunks)
 
 
@@ -8203,6 +8385,37 @@ async def _read_bounded(
 # claim (first path segment). This is NOT a general relay feature -- external
 # servers that need an upstream credential use the egress vault.
 _INTERNAL_INGRESS_RELAY_SERVERS: frozenset[str] = frozenset({"airegistry-tools"})
+
+
+def _relays_ingress_auth(
+    registered_server: str,
+    upstream_url: str | None,
+) -> bool:
+    """Return whether this MCP proxy hop may relay the caller's ingress bearer.
+
+    Both the signed server name and the signed upstream URL must be the
+    built-in registry-tools server. The name alone is not enough: an admin can
+    repoint the /airegistry-tools/ registration, and the caller's token must
+    not follow it to another host.
+
+    Args:
+        registered_server: The verified ``server`` claim (case-preserving).
+        upstream_url: The verified ``upstream_url`` claim, before any route
+            suffix is appended.
+
+    Returns:
+        True only for the exact built-in name and destination.
+    """
+    if registered_server.lower() not in _INTERNAL_INGRESS_RELAY_SERVERS:
+        return False
+    if is_builtin_airegistry_tools_outbound_url(upstream_url):
+        return True
+    logger.warning(
+        "mcp_proxy: server=%s is not at the built-in destination; not relaying the caller's token",
+        registered_server,
+    )
+    return False
+
 
 # Proxy-context headers describe the client -> Gateway hop (scheme, host, port,
 # path prefix as seen by nginx/an ingress LB) and must not be copied onto the
@@ -8244,6 +8457,17 @@ _INTERNAL_HOP_TOKEN_HEADERS: frozenset[str] = frozenset(
     }
 )
 
+# Gateway routing headers: what nginx asserted about the selected registration
+# (path, route mode, version, the virtual client URL) plus the marker that
+# authenticates them. They are inputs to /validate and the MCP proxy hop only.
+# A backend has no use for them, and the virtual client URL and the version
+# describe the caller's request rather than anything the registrant chose, so
+# they are stripped on every egress hop like the internal tokens.
+_GATEWAY_ROUTING_HEADERS: frozenset[str] = frozenset(
+    {name.lower() for name in _NGINX_REGISTRATION_HEADERS.values()}
+    | {NGINX_BINDING_SECRET_HEADER.lower()}
+)
+
 
 def _forward_headers(
     incoming: dict[str, str],
@@ -8282,6 +8506,10 @@ def _forward_headers(
         if lower in _INTERNAL_HOP_TOKEN_HEADERS:
             # Gateway-internal, single-hop credentials; see the set's comment.
             # Read the MCP hop's token off `request.headers`, never off this dict.
+            continue
+        if lower in _GATEWAY_ROUTING_HEADERS:
+            # nginx's registration assertions for this hop; see the set's
+            # comment. verify_mcp_proxy_token reads them off `request.headers`.
             continue
         if lower in ("x-body", "x-body-uninspectable"):
             # Gateway-internal body-capture headers set by capture_body.lua for
@@ -9619,6 +9847,10 @@ async def _authorize_forwarded_mcp_body(
         unauthenticated-for-this-server caller is still denied.
       * ``tools/call`` requires the specific tool named in ``params.name`` to
         be allowed; a missing/blank tool name is rejected.
+      * A body with a repeated key, or with an envelope or ``params`` key that
+        a case-insensitive decoder would read as a different member, is
+        rejected (``parse_jsonrpc_body``): the backend could run a call other
+        than the one authorized here.
 
     Args:
         registered_server: The path verified in the signed proxy token;
@@ -9641,11 +9873,11 @@ async def _authorize_forwarded_mcp_body(
 
     if request_body:
         try:
-            payload = json.loads(request_body.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            payload = parse_jsonrpc_body(request_body)
+        except (UnicodeDecodeError, json.JSONDecodeError, AmbiguousJsonRpcBodyError) as exc:
             logger.warning(
                 "mcp_proxy: rejecting forwarded body for server=%s that is not "
-                "parseable JSON-RPC (cannot authorize): %s",
+                "unambiguous JSON-RPC (cannot authorize): %s",
                 registered_server,
                 exc,
             )
@@ -9722,6 +9954,30 @@ async def _authorize_forwarded_mcp_body(
     )
 
 
+def _egress_upstream_profile(
+    registered_server: str,
+    signed_upstream_url: str,
+    default_profile,
+):
+    """SSRF profile for the credential-injected upstream hop.
+
+    An OpenAPI MCP server's upstream is the openapi-mcp container, whose hostname
+    the guard reserves; the exact-identity profile admits only that server's own
+    /s/<slug>/mcp path there (issue #2022). Every other upstream keeps the
+    egress-upstream profile.
+    """
+    from registry.utils.url_guard import (
+        BUILTIN_OPENAPI_MCP_PROFILE,
+        is_builtin_openapi_mcp_target,
+    )
+
+    if is_builtin_openapi_mcp_target(
+        "mcp_server", "/" + registered_server.strip("/"), signed_upstream_url
+    ):
+        return BUILTIN_OPENAPI_MCP_PROFILE
+    return default_profile
+
+
 @app.post("/mcp-proxy/{server_name:path}", dependencies=[Depends(verify_mcp_proxy_token)])
 async def mcp_proxy(
     server_name: str,
@@ -9780,10 +10036,13 @@ async def mcp_proxy(
     incoming_payload: object = None
     try:
         if request_body:
-            incoming_payload = json.loads(request_body.decode("utf-8"))
+            incoming_payload = parse_jsonrpc_body(request_body)
             if isinstance(incoming_payload, dict):
                 incoming_method = incoming_payload.get("method")
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except (UnicodeDecodeError, json.JSONDecodeError, AmbiguousJsonRpcBodyError):
+        # The forwarded-body check below refuses an ambiguous body; leave the
+        # payload unset so the consent-retry rewrite never re-serializes it.
+        incoming_payload = None
         incoming_method = None
     except Exception as exc:
         logger.debug(f"mcp_proxy: could not parse incoming body as JSON-RPC: {exc}")
@@ -9814,7 +10073,9 @@ async def mcp_proxy(
     # ``registered_server`` stays the case-preserving claim: it is the identity
     # /validate authorized, and scope matching is case-sensitive. Only the relay
     # allowlist lookup is case-folded.
-    relay_ingress_auth = registered_server.lower() in _INTERNAL_INGRESS_RELAY_SERVERS
+    # The destination check uses the signed claim, not ``upstream_url``, which
+    # may already carry a route suffix appended above.
+    relay_ingress_auth = _relays_ingress_auth(registered_server, claims["upstream_url"])
     forward_headers = _forward_headers(
         dict(request.headers),
         relay_authorization=relay_ingress_auth,
@@ -10206,30 +10467,43 @@ async def mcp_proxy(
         f"mcp_proxy: server={server_name} method={incoming_method} filter_enabled={filter_enabled} timeout={proxy_timeout}"
     )
 
-    # When the gateway injected a third-party credential, pin the egress
-    # connection: resolve+pin the IP (rebinding-safe) and hard-deny cloud/
-    # workload credential + metadata endpoints, so a repointed egress upstream
-    # cannot exfiltrate the injected credential to IMDS/ECS/EKS creds via a DNS
-    # rebind. Private / hostname-private MCP upstreams stay reachable. Non-egress
-    # traffic keeps the plain client (no injected credential to protect, and many
-    # internal upstreams legitimately resolve to private addresses).
+    # Every upstream hop is pinned: the guarded transport resolves the host,
+    # classifies every answer and connects only to the validated IP, so a
+    # hostname that rebinds after registration (or after /validate minted the
+    # hop token) cannot reach an address the registry would refuse. A check at
+    # mint time would not do this: the connect resolves the name again.
+    #
+    # The ordinary hop uses the profile the registry's health check uses for the
+    # same registration (proxy_profile_for_mcp_hop): PROXY_PROFILE, which
+    # admits a private upstream only through the operator allowlist
+    # (SSRF_ALLOWED_HOSTS / SSRF_ALLOWED_CIDRS / GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS),
+    # or the exact built-in registry-tools profile. A backend that passes the
+    # health check therefore passes here, and nothing else does. The
+    # egress-injected hop carries a third-party credential and keeps the
+    # credential-bearing egress profile.
     from registry.exceptions import UrlValidationError
     from registry.utils.url_guard import (
         EGRESS_UPSTREAM_PROFILE,
+        proxy_profile_for_mcp_hop,
         shared_guarded_async_client,
     )
 
-    # egress-injected: pooled + SSRF-guarded (keep-alive reuse; this pooled client
-    # is process-lived and must NOT be closed per request). non-egress: no injected
-    # credential to protect and many internal upstreams are private, so keep the
-    # per-call plain client (closed in the finally). Timeout is passed per-request.
-    if egress_token_injected:
-        proxy_client = shared_guarded_async_client(profile=EGRESS_UPSTREAM_PROFILE)
-        close_proxy_client = False
-    else:
-        proxy_client = httpx.AsyncClient(timeout=proxy_timeout)
-        close_proxy_client = True
     try:
+        # Inside the try: a registration that claims the built-in identity with an
+        # outbound URL that is not one of its exact URLs raises UrlValidationError,
+        # which is refused below like any blocked target.
+        # The egress hop admits the exact OpenAPI MCP built-in (issue #2022).
+        if egress_token_injected:
+            upstream_profile = _egress_upstream_profile(
+                registered_server, claims["upstream_url"], EGRESS_UPSTREAM_PROFILE
+            )
+        else:
+            upstream_profile = proxy_profile_for_mcp_hop(
+                registered_server, claims["upstream_url"], upstream_url
+            )
+        # Pooled (keep-alive reuse). The pooled client is process-lived and must
+        # NOT be closed per request. Timeout is passed per-request.
+        proxy_client = shared_guarded_async_client(profile=upstream_profile)
         # The httpx timeout applies to each read, not to the whole exchange. An
         # upstream that keeps sending (SSE keep-alives) never trips it, so the
         # overall deadline is what releases the connection (#1890). nginx's
@@ -10246,11 +10520,44 @@ async def mcp_proxy(
                 timeout=proxy_timeout,
             ) as upstream_response,
         ):
-            # Buffer with the same cap whether or not we filter, so a
-            # pathological upstream cannot DoS the proxy.
-            body_bytes = await _read_bounded(upstream_response, max_body_bytes)
-            status_code = upstream_response.status_code
+            # The content type decides whether a truncated stream is still
+            # usable, so read it before the body. httpx exposes headers while
+            # the body is still streaming.
             content_type = upstream_response.headers.get("content-type", "application/json")
+            # Buffer with the same cap whether or not we filter, so a
+            # pathological upstream cannot DoS the proxy. An SSE stream gets
+            # the partial-on-truncation read: closing the connection is one
+            # way a server ends an event stream, and the events that did
+            # complete are a valid answer.
+            try:
+                body_bytes = await _read_bounded(
+                    upstream_response,
+                    max_body_bytes,
+                    partial_on_truncation=_is_sse_content_type(content_type),
+                )
+            except _UpstreamStreamTruncated as exc:
+                complete_bytes = _complete_events_only(exc.partial)
+                if not complete_bytes or not _has_jsonrpc_response(complete_bytes):
+                    logger.error(
+                        "mcp_proxy: upstream %s closed the SSE stream before a JSON-RPC "
+                        "response arrived (%d bytes buffered, %d in complete events)",
+                        redact_url(upstream_url),
+                        len(exc.partial),
+                        len(complete_bytes),
+                    )
+                    raise HTTPException(
+                        status_code=502,
+                        detail="Upstream MCP server error",
+                    ) from exc
+                logger.warning(
+                    "mcp_proxy: upstream %s closed the SSE stream early; delivering the "
+                    "%d bytes of complete events out of %d received",
+                    redact_url(upstream_url),
+                    len(complete_bytes),
+                    len(exc.partial),
+                )
+                body_bytes = complete_bytes
+            status_code = upstream_response.status_code
             # Snapshot upstream headers BEFORE leaving the stream context. httpx
             # releases response.headers when the async-with block exits; reading
             # them afterwards returns an empty mapping and Mcp-Session-Id is lost.
@@ -10258,12 +10565,12 @@ async def mcp_proxy(
     except HTTPException:
         raise
     except UrlValidationError as exc:
-        # The injected credential was about to be sent to a blocked destination
-        # (metadata/credential endpoint or an otherwise-denied target). Fail
-        # closed -- never forward the credential.
+        # The destination is a blocked one (metadata/credential endpoint or an
+        # otherwise-denied target), including after a rebind. Fail closed, and
+        # never forward an injected credential.
         logger.error(
-            "mcp_proxy: egress upstream %s blocked by egress SSRF guard: %s",
-            upstream_url,
+            "mcp_proxy: upstream %s blocked by the SSRF guard: %s",
+            redact_url(upstream_url),
             exc,
         )
         raise HTTPException(
@@ -10271,14 +10578,14 @@ async def mcp_proxy(
             detail="Upstream MCP server blocked by egress policy",
         ) from exc
     except httpx.TimeoutException as exc:
-        logger.error(f"mcp_proxy: upstream timeout for {upstream_url}: {exc}")
+        logger.error(f"mcp_proxy: upstream timeout for {redact_url(upstream_url)}: {exc}")
         raise HTTPException(
             status_code=504,
             detail="Upstream MCP server timed out",
         ) from exc
     except TimeoutError as exc:
         logger.error(
-            f"mcp_proxy: upstream response for {upstream_url} not complete "
+            f"mcp_proxy: upstream response for {redact_url(upstream_url)} not complete "
             f"after the {proxy_timeout}s overall deadline"
         )
         raise HTTPException(
@@ -10286,16 +10593,11 @@ async def mcp_proxy(
             detail="Upstream MCP server timed out",
         ) from exc
     except httpx.HTTPError as exc:
-        logger.error(f"mcp_proxy: upstream error for {upstream_url}: {exc}")
+        logger.error(f"mcp_proxy: upstream error for {redact_url(upstream_url)}: {exc}")
         raise HTTPException(
             status_code=502,
             detail="Upstream MCP server error",
         ) from exc
-    finally:
-        # The pooled (shared) client is process-lived and reused; only the
-        # per-call non-egress client is closed here.
-        if close_proxy_client:
-            await proxy_client.aclose()
 
     is_sse_response = _is_sse_content_type(content_type)
     should_filter = _should_filter_tools_list(
@@ -10328,6 +10630,16 @@ async def mcp_proxy(
             "mcp_proxy: egress server=%s upstream 401 with injected token; "
             "dropped upstream WWW-Authenticate to avoid cross-resource PRM mismatch",
             server_name,
+        )
+
+    if _should_rewrite_mcp_apps_ui_domain(direct_route, incoming_method, status_code):
+        # MCP Apps: Claude shows a page only when its ui.domain matches the URL the
+        # user connected to, which is the gateway's, not the backend's.
+        body_bytes = _rewrite_mcp_apps_ui_domain(
+            body_bytes,
+            is_sse_response,
+            server_name,
+            request.url.query,
         )
 
     if not should_filter:
@@ -10392,6 +10704,61 @@ async def mcp_proxy(
         parsed["result"] = result
 
     return JSONResponse(content=parsed, status_code=status_code, headers=response_headers)
+
+
+def _should_rewrite_mcp_apps_ui_domain(
+    direct_route: bool,
+    method: str | None,
+    status_code: int,
+) -> bool:
+    """Return True for a reply whose MCP Apps ui.domain should be rewritten.
+
+    Only successful resources/read replies on a direct route. On a virtual
+    server's backend hop the client connected to the virtual URL, which this
+    hop does not know, so the value is left alone.
+    """
+    if not direct_route:
+        return False
+    if method != MCP_APPS_RESOURCES_READ_METHOD:
+        return False
+    return 200 <= status_code < 300
+
+
+def _rewrite_mcp_apps_ui_domain(
+    body_bytes: bytes,
+    is_sse: bool,
+    route_path: str,
+    query: str,
+) -> bytes:
+    """Point a resources/read page's Claude ui.domain at the gateway URL.
+
+    Returns the body unchanged when no public gateway URL is configured or the
+    reply has no Claude-format ui.domain. See auth_server/mcp_apps_domain.py.
+
+    Args:
+        body_bytes: The upstream reply body.
+        is_sse: True when the reply is text/event-stream.
+        route_path: The path after the gateway origin, as nginx forwarded it.
+        query: The request's query string.
+
+    Returns:
+        The body to forward.
+    """
+    origins = mcp_apps_gateway_public_origins()
+    if not origins:
+        return body_bytes
+    urls = [mcp_apps_connector_url(origin, route_path, query) for origin in origins]
+    keep_domains = frozenset(mcp_apps_claude_ui_domain(url) for url in urls)
+    rewritten = mcp_apps_rewrite_ui_domains(
+        body_bytes,
+        is_sse,
+        mcp_apps_claude_ui_domain(urls[0]),
+        keep_domains,
+    )
+    if rewritten is None:
+        return body_bytes
+    logger.info(f"mcp_proxy: rewrote MCP Apps ui.domain for {redact_url(urls[0])}")
+    return rewritten
 
 
 def _safe_parse_body(
@@ -11266,9 +11633,12 @@ async def generic_proxy(
             # transport resolves + validates + PINS the connection IP inside the
             # transport call for the request AND every redirect hop, so a hostname
             # that rebinds to a private/metadata IP between registration and fetch
-            # is blocked at connect time. PROXY_PROFILE shares the same egress
-            # policy (incl. gateway_proxy_allow_private_targets) the registration
-            # guard uses, so fetch-time and register-time decisions agree.
+            # is blocked at connect time. PROXY_PROFILE is the same policy the
+            # registration guard uses, but it is built from THIS process's
+            # settings: every deploy surface passes SSRF_ALLOWED_CIDRS here (#2018),
+            # while SSRF_ALLOWED_HOSTS and gateway_proxy_allow_private_targets reach
+            # the registry only. A target admitted at registration by hostname or by
+            # that flag is therefore refused here (fails closed, 502).
             # follow_redirects=False (second-SSRF guard): a 30x is returned to the
             # client verbatim (Location forwarded via the allowlist); the next hop
             # re-enters the gateway and is re-authorized. Auto-following would

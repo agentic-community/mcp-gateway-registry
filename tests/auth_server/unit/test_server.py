@@ -1019,6 +1019,90 @@ class TestValidateEndpoint:
             assert data["username"] == "testuser"
 
     @patch("auth_server.server.get_auth_provider")
+    def test_validate_ignores_forged_cognito_headers(
+        self,
+        mock_get_provider,
+        mock_cognito_provider,
+        auth_env_vars,
+        mock_scope_repository_with_data,
+    ):
+        """A request with forged X-User-Pool-Id/X-Client-Id/X-Region validates as one without."""
+        mock_get_provider.return_value = mock_cognito_provider
+        import auth_server.server as server_module
+
+        request_headers = {
+            "Authorization": "Bearer test-token",
+            "X-Original-URL": "https://example.com/test-server/mcp",
+        }
+        forged = {
+            "X-User-Pool-Id": "us-east-1_ATTACKERPOOL",
+            "X-Client-Id": "attacker-client",
+            "X-Region": "eu-west-1",
+        }
+        identity_headers = ("x-user", "x-username", "x-client-id", "x-scopes", "x-auth-method")
+        with patch(
+            "auth_server.server.get_scope_repository", return_value=mock_scope_repository_with_data
+        ):
+            client = TestClient(server_module.app)
+            plain = client.get("/validate", headers=request_headers)
+            with_forged = client.get("/validate", headers={**request_headers, **forged})
+
+        assert (with_forged.status_code, with_forged.json()) == (plain.status_code, plain.json())
+        assert {h: with_forged.headers.get(h) for h in identity_headers} == {
+            h: plain.headers.get(h) for h in identity_headers
+        }
+        assert (
+            mock_cognito_provider.validate_token.call_args_list[0]
+            == (mock_cognito_provider.validate_token.call_args_list[1])
+        )
+
+    @patch("auth_server.server.get_auth_provider")
+    def test_validate_refuses_a_provider_without_validate_token(
+        self,
+        mock_get_provider,
+        auth_env_vars,
+        mock_scope_repository_with_data,
+    ):
+        """A provider that cannot validate tokens fails closed instead of trusting client headers.
+
+        The removed fallback validated the bearer against whatever Cognito pool
+        and client the request named, so a caller could pick a pool it controls.
+        """
+        import auth_server.server as server_module
+
+        mock_get_provider.return_value = MagicMock(spec=["get_provider_info"])
+        header_validator = MagicMock(
+            return_value={
+                "valid": True,
+                "method": "cognito",
+                "username": "attacker",
+                "groups": [],
+                "scopes": [],
+                "client_id": "attacker-client",
+                "data": {},
+            }
+        )
+        with (
+            patch.object(server_module.validator, "validate_token", header_validator),
+            patch(
+                "auth_server.server.get_scope_repository",
+                return_value=mock_scope_repository_with_data,
+            ),
+        ):
+            response = TestClient(server_module.app, raise_server_exceptions=False).get(
+                "/validate",
+                headers={
+                    "Authorization": "Bearer attacker-pool-token",
+                    "X-Original-URL": "https://example.com/test-server/mcp",
+                    "X-User-Pool-Id": "us-east-1_ATTACKERPOOL",
+                    "X-Client-Id": "attacker-client",
+                },
+            )
+
+        assert response.status_code == 500, response.text
+        header_validator.assert_not_called()
+
+    @patch("auth_server.server.get_auth_provider")
     def test_validate_a2a_agent_request_allowed(
         self,
         mock_get_provider,
@@ -6747,37 +6831,6 @@ class TestAuthorizeForwardedMcpBody:
         assert exc_info.value.status_code == 403
 
 
-class TestSessionCookieSecureDefault:
-    """Verify the session cookie Secure flag resolves fail-closed.
-
-    The callback handler computes the Secure flag as
-    ``OAUTH2_CONFIG.get("session", {}).get("secure", True) and is_https``.
-    These tests pin the two properties that matter for security: a missing
-    ``session.secure`` config key defaults to Secure (True), and the flag is
-    never emitted over plain HTTP (a browser would reject a Secure cookie set
-    on an HTTP response).
-    """
-
-    @staticmethod
-    def _resolve_cookie_secure(session_config: dict, is_https: bool) -> bool:
-        """Mirror the auth_server callback's Secure-flag resolution."""
-        cookie_secure_config = session_config.get("secure", True)
-        return cookie_secure_config and is_https
-
-    def test_missing_secure_key_defaults_to_secure_over_https(self) -> None:
-        """A config with no session.secure key must default to Secure=True."""
-        assert self._resolve_cookie_secure({}, is_https=True) is True
-
-    def test_explicit_false_disables_secure_for_dev(self) -> None:
-        """An operator can still opt out for a plain-HTTP dev stack."""
-        assert self._resolve_cookie_secure({"secure": False}, is_https=True) is False
-
-    def test_secure_never_set_over_plain_http(self) -> None:
-        """Even secure-by-default must not emit Secure over plain HTTP."""
-        assert self._resolve_cookie_secure({}, is_https=False) is False
-        assert self._resolve_cookie_secure({"secure": True}, is_https=False) is False
-
-
 class TestForwardHeadersIngressStrip:
     """Egress ingress-auth policy (issue #1266): client auth headers are ingress
     credentials, stripped on egress. Cookie is ALWAYS stripped; Authorization
@@ -6945,6 +6998,58 @@ class TestForwardHeadersProxyContextStrip:
         assert out.get("X-Forwarded-For") == "203.0.113.5"
 
 
+class TestForwardHeadersRoutingHeaderStrip:
+    """nginx's registration assertions are hop inputs, never backend headers.
+
+    Every MCP backend request now reaches the backend through /mcp-proxy, virtual
+    ones included. The virtual location sets X-Registered-Server-Path and
+    X-Registered-Route-Mode for the hop's route check, and a subrequest can also
+    inherit a client-sent X-Virtual-Original-URL or X-Resolved-Version. None of
+    them is for the backend, so the hop drops all of them.
+    """
+
+    def _forward(self, incoming, relay=False):
+        from auth_server.server import _forward_headers
+
+        return _forward_headers(incoming, relay_authorization=relay)
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "X-Registered-Server-Path",
+            "X-Registered-Route-Mode",
+            "X-Resolved-Version",
+            "X-Virtual-Original-URL",
+            "X-Validate-Binding-Secret",
+            "x-virtual-original-url",
+        ],
+    )
+    def test_strips_each_routing_header(self, name):
+        out = self._forward({name: "x", "Accept": "y"})
+
+        assert name.lower() not in {k.lower() for k in out}
+        assert out.get("Accept") == "y"
+
+    def test_strips_them_for_the_builtin_relay_too(self):
+        """relay_authorization re-admits the caller's bearer only, nothing else."""
+        out = self._forward(
+            {
+                "Authorization": "Bearer t",
+                "X-Registered-Server-Path": "/airegistry-tools",
+                "X-Virtual-Original-URL": "https://gw/virtual/x?token=secret",
+            },
+            relay=True,
+        )
+
+        assert set(k.lower() for k in out) == {"authorization"}
+
+    def test_matches_the_registration_header_map(self):
+        """A header added to _NGINX_REGISTRATION_HEADERS is stripped without a second edit."""
+        from auth_server.server import _GATEWAY_ROUTING_HEADERS, _NGINX_REGISTRATION_HEADERS
+
+        assert {h.lower() for h in _NGINX_REGISTRATION_HEADERS.values()} <= _GATEWAY_ROUTING_HEADERS
+
+
 class TestForwardHeadersInternalTokenStrip:
     """The gateway-internal hop tokens must never be copied onto the egress hop.
 
@@ -6987,20 +7092,24 @@ class TestForwardHeadersInternalTokenStrip:
 
 
 class TestInternalRelayDecision:
-    """The mcp_proxy relay decision keys on the verified `server` claim (first
-    path segment), matches the hardcoded internal set exactly, and normalizes
-    case. Mirrors the inline logic in mcp_proxy (issue #1266).
+    """The mcp_proxy relay decision (issue #1266, hardened in #2060) needs the
+    verified `server` claim to be exactly the internal server (case-folded) AND
+    the verified upstream URL to be the built-in destination.
     """
 
-    def _decides_relay(self, server_claim):
-        from auth_server.server import _INTERNAL_INGRESS_RELAY_SERVERS
+    BUILTIN_URL = "http://mcpgw-server:8003/"
 
-        # Mirror mcp_proxy: registered_server = (claims.get("server") or "").lower()
-        registered_server = (server_claim or "").lower()
-        return registered_server in _INTERNAL_INGRESS_RELAY_SERVERS
+    def _decides_relay(self, server_claim, upstream_url=BUILTIN_URL):
+        from auth_server.server import _relays_ingress_auth
+
+        return _relays_ingress_auth(server_claim or "", upstream_url)
 
     def test_exact_internal_server_relays(self):
         assert self._decides_relay("airegistry-tools") is True
+
+    def test_virtual_route_mcp_endpoint_relays(self):
+        """The virtual backend hop signs the /mcp endpoint, not the base URL."""
+        assert self._decides_relay("airegistry-tools", "http://mcpgw-server:8003/mcp") is True
 
     def test_case_insensitive_match(self):
         assert self._decides_relay("AiRegistry-Tools") is True
@@ -7024,6 +7133,70 @@ class TestInternalRelayDecision:
         """A federated copy (e.g. server claim 'ai-registry' from /ai-registry/...)
         is a different first path segment and must NOT relay."""
         assert self._decides_relay("ai-registry") is False
+
+    @pytest.mark.parametrize(
+        ("upstream_url", "virtual_backend", "relayed"),
+        [
+            ("http://mcpgw-server:8003/", False, True),
+            ("http://mcpgw-server:8003/mcp", True, True),
+            ("https://elsewhere.example.com/mcp", False, False),
+        ],
+    )
+    def test_mcp_proxy_handler_applies_destination_check(
+        self,
+        upstream_url,
+        virtual_backend,
+        relayed,
+    ):
+        """Drive the real /mcp-proxy/ route: the bearer reaches the upstream only
+        when the signed destination is the built-in one (issue #2060)."""
+        import auth_server.server as server_module
+
+        upstream_resp = _build_mock_upstream_response(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            body=b'{"jsonrpc":"2.0","id":1,"result":{}}',
+        )
+        headers = _mcp_proxy_token_headers(
+            server_name="airegistry-tools",
+            upstream_url=upstream_url,
+            virtual_backend=virtual_backend,
+        )
+        headers["X-Authorization"] = "Bearer caller-token"
+
+        with (
+            _patch_httpx_async_client(upstream_resp) as client_cls,
+            _patch_scope_repo_allow_all(),
+            patch.object(server_module, "_read_mcp_filter_enabled", return_value=False),
+            patch.object(server_module.settings, "egress_auth_enabled", False),
+        ):
+            response = TestClient(server_module.app).post(
+                "/mcp-proxy/airegistry-tools/",
+                json={"jsonrpc": "2.0", "id": 1, "method": "initialize"},
+                headers=headers,
+            )
+            sent = client_cls.return_value.stream.call_args.kwargs["headers"]
+
+        assert response.status_code == 200
+        sent_names = {name.lower() for name in sent}
+        assert ("x-authorization" in sent_names) is relayed
+        assert "x-internal-token" not in sent_names
+
+    @pytest.mark.parametrize(
+        "upstream_url",
+        [
+            "https://elsewhere.example.com/mcp",
+            "http://mcpgw-server:9000/",
+            "http://mcpgw-server:8003/other",
+            "http://mcpgw-server:8003/mcp?tenant=other",
+            "http://user@mcpgw-server:8003/",
+            "",
+            None,
+        ],
+    )
+    def test_repointed_destination_does_not_relay(self, upstream_url):
+        """The right name at the wrong destination never gets the caller's token."""
+        assert self._decides_relay("airegistry-tools", upstream_url) is False
 
 
 # =============================================================================

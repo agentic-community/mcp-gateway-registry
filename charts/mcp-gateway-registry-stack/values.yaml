@@ -8,12 +8,72 @@ global:
   image:
     # Container registry (host + optional namespace), e.g. "public.ecr.aws/p3v1o3c6"
     registry: public.ecr.aws/p3v1o3c6
-    tag: 1.36.0
+    tag: 1.38.2
     pullPolicy: IfNotPresent
   # When installing chart from repository, add --set global.chartVersion=$(git rev-parse HEAD) to add the git hash to a configmap for debugging
   chartVersion:
+  # SSRF guard CIDR allowlist (SSRF_ALLOWED_CIDRS), set once for registry,
+  # auth-server and mcpgw so the three cannot drift. Comma-separated ranges for
+  # internal MCP servers (e.g. the cluster service CIDR "172.20.0.0/16"); a listed
+  # range also admits reserved IPv4 inside it, such as Istio ServiceEntry VIPs in
+  # "240.240.0.0/16" (#2018). Wins over each subchart's app.ssrfAllowedCidrs, which
+  # stays for standalone installs. Cloud metadata/credential, link-local and
+  # multicast addresses are never permitted.
+  ssrfAllowedCidrs: ""
+  # SSRF guard hostname allowlist (SSRF_ALLOWED_HOSTS), set once for the registry
+  # and the auth-server. The registry's health check and the auth-server's MCP
+  # proxy hop apply the same SSRF profile to each upstream, so a private upstream
+  # listed only for the registry would pass its health check and then be refused
+  # at the hop. Comma-separated exact hostnames (no wildcards), e.g.
+  # "obo-echo.<ns>.svc.cluster.local". Wins over registry.app.ssrfAllowedHosts and
+  # auth-server.app.ssrfAllowedHosts, which stay for standalone installs; the
+  # stack refuses to render if either is set to a different value. Cloud
+  # metadata and workload-credential addresses are never permitted.
+  ssrfAllowedHosts: ""
+  # GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS for the registry and the auth-server.
+  # true admits any private/loopback upstream (metadata always denied) at
+  # registration, the health check, the MCP proxy hop and the generic proxy.
+  # Prefer ssrfAllowedHosts / ssrfAllowedCidrs. true here or in either
+  # subchart's app.gatewayProxyAllowPrivateTargets turns it on; the stack refuses
+  # to render if a subchart sets true while this is false.
+  gatewayProxyAllowPrivateTargets: false
   # Domain configuration - update this to your actual domain
   domain: "DOMAIN"
+  # Name the session cookie __Host-mcp_gateway_session (Secure, Path=/, no
+  # Domain) so no sibling subdomain can set or overwrite it. This one value
+  # sets SESSION_COOKIE_HOST_PREFIX for both the registry and the
+  # auth-server, which must agree. Requires global.ingress.tls=true,
+  # global.sessionCookieSecure=true, and an empty global.sessionCookieDomain;
+  # the subcharts then render SESSION_COOKIE_DOMAIN empty. Do not set
+  # registry.app.sessionCookieHostPrefix or auth-server.app.sessionCookieHostPrefix:
+  # the chart refuses one that differs from this value. Turning it on signs
+  # every user out once. See docs/design/cookie-security-design.md.
+  sessionCookieHostPrefix: false
+  # Mark the session cookie Secure on HTTPS requests; it is never Secure on
+  # plain HTTP. This one value sets SESSION_COOKIE_SECURE for both the registry
+  # and the auth-server, which must agree. Do not set
+  # auth-server.app.sessionCookieSecure: the chart refuses one that differs
+  # from this value.
+  sessionCookieSecure: true
+  # Session lifetime in seconds: how long the auth-server stores a session and
+  # the session cookie Max-Age, and how long the registry accepts the cookie
+  # signature. Must be a positive integer. This one value sets
+  # SESSION_MAX_AGE_SECONDS for both the registry and the auth-server, which
+  # must agree. Do not set registry.app.sessionMaxAgeSeconds or
+  # auth-server.app.sessionMaxAgeSeconds: the chart refuses one that differs
+  # from this value.
+  sessionMaxAgeSeconds: 28800
+  # Session cookie Domain attribute. Leave empty to default to
+  # ".<global.domain>" (cookie valid across all subdomains of the deployment
+  # domain). Override to a specific hostname (e.g. "mcpregistry.example.com")
+  # to scope tighter, or to a different parent (e.g. ".team.example.com") if
+  # this stack lives under a subdomain. This one value sets
+  # SESSION_COOKIE_DOMAIN for both the registry and the auth-server, which
+  # must agree: two domains leave the browser two session cookies, which both
+  # refuse. Do not set registry.app.sessionCookieDomain or
+  # auth-server.app.sessionCookieDomain: the chart refuses one that differs
+  # from the domain it renders (this value, or ".<global.domain>" when empty).
+  sessionCookieDomain: ""
   # Security settings
   # secretKey: If not provided, a random 64-character key is auto-generated
   # and shared between auth-server and registry via a shared secret.
@@ -55,7 +115,13 @@ global:
   #   mongodb.password
   #   global.federation.staticToken / .encryptionKey  (federation only)
   #   registry.egressAuth.markerSecret
+  #   openapiMcp.syncSecret.value  (OpenAPI MCP servers only)
   generateSecrets: true
+  # OpenAPI MCP servers (issue #2022). Name a Secret you manage that holds
+  # OPENAPI_MCP_SYNC_SECRET to stop the chart creating openapi-mcp-sync-secret.
+  # Both the registry and openapi-mcp read it.
+  openapiMcp:
+    existingSyncSecret: ""
   # Federation configuration - shared between registry and auth-server
   federation:
     staticTokenAuthEnabled: false # If not provided, defaults to false
@@ -378,14 +444,6 @@ registry:
     # extra configuration. See docs/forward-proxy-egress.md before turning it on.
     # egressForwardProxyEnabled: false
     replicas: 2 # set to > 1 replica for high availability
-    # Session cookie Domain attribute. Leave empty to default to
-    # ".<global.domain>" (cookie valid across all subdomains of the
-    # deployment domain). Override to a specific hostname (e.g.
-    # "mcpregistry.example.com") to scope tighter, or to a different
-    # parent (e.g. ".team.example.com") if this stack lives under a
-    # subdomain. Keep this in sync with auth-server.app.sessionCookieDomain
-    # below — both services read the same cookie.
-    sessionCookieDomain: ""
     # Deployment mode: with-gateway (nginx integration) or registry-only (catalog only)
     deploymentMode: with-gateway
     # Registry mode: full, skills-only, mcp-servers-only, agents-only
@@ -517,6 +575,13 @@ registry:
     # Tool-level access control (issue #1026)
     mcpToolsListFilterEnabled: true # Registry-side awareness of the MCP tools/list filter (also read by auth-server)
     toolFilterAuditLogLevel: "INFO" # Audit log level for tool-prune events (DEBUG, INFO, WARNING)
+    # Health checks and tool list refresh (issue #2050)
+    healthCheckIntervalSeconds: 300 # Seconds between health checks of every server; also one tool refresh cycle
+    toolRefreshEnabled: false # Fetch tools again from servers that stay healthy, on a schedule. Each replica refreshes on its own
+    toolRefreshEveryCycles: 3 # Fetch each healthy server once every N health cycles (1-1000); 3 x 300 s = 15 min
+    toolFetchMaxConcurrency: 5 # Most background tool fetches one replica runs at once (1-100)
+    # Tool access listing (issue #2102): what an owner who is not an admin sees. none or owned
+    toolAccessOwnerView: "none" # none: only admins and read-only admins; owned: owners also see their own servers' tools
     # Gateway generic-proxy feature (registry-consumed). Ships DISABLED. See the
     # auth-server section for the eleven auth-server-consumed knobs + the egress
     # NetworkPolicy that MUST be deployed before enabling.
@@ -536,6 +601,15 @@ registry:
     customEntityTypesEnabled: false # Main switch for dynamic tabs + endpoints; off = no behavior change
     customTypeCacheTtlSeconds: 60 # TTL (s) for the in-process custom-type descriptor cache
     maxCustomRecordsPerType: 0 # Soft cap on records per type (0 = unlimited); rejects create at cap
+    # OpenAPI MCP servers (issue #2022). Must equal openapiMcp.enabled and
+    # auth-server.app.openapiMcpEnabled below; a render-time check fails when
+    # they differ.
+    openapiMcpEnabled: false
+    openapiMcpMaxServers: 10 # 1 to 100
+    openapiMcpMaxTargetsPerServer: 10 # 1 to 50
+    openapiMcpMaxToolsPerTarget: 100 # 1 to 500
+    openapiMcpSpecMaxBytes: 5242880 # 1 KiB to 20 MiB
+    openapiMcpReconcileIntervalSeconds: 60 # 10 to 3600
     # PRM `scopes_supported` override. Default matches Keycloak-DCR setup
     # (Claude Code, Claude.ai, Cursor) — the three scopes are present in every
     # Keycloak realm by default, so DCR succeeds. Set to "" to derive from the
@@ -630,10 +704,36 @@ registry:
   #   key: ca-bundle.pem
   #   mountPath: /etc/ssl/mcp-gateway
 
+  # Runtime UI branding (logos, favicon, colors, named themes, fonts) without an
+  # image rebuild. Create the ConfigMap yourself from a branding folder:
+  #   kubectl create configmap registry-branding --from-file=./branding/
+  # The whole ConfigMap is mounted read-only at mountPath and the chart sets
+  # UI_BRANDING_DIR to it; edits reach the pod without a restart. See
+  # docs/ui-branding.md.
+  # branding:
+  #   enabled: true
+  #   existingConfigMap: registry-branding
+  #   mountPath: /app/branding
+
   # Extra env vars / envFrom sources appended to the registry container.
   # See charts/registry/values.yaml for validation rules, reserved names,
   # and footgun warnings. These values are forwarded to the registry
   # subchart unchanged.
+  extraEnv: []
+  extraEnvFrom: []
+# OpenAPI MCP servers (issue #2022, disabled by default). Deploys one
+# openapi-mcp pod that serves REST APIs from OpenAPI specs as MCP servers. Only
+# the registry and auth-server pods can reach it (NetworkPolicy). Set
+# registry.app.openapiMcpEnabled and auth-server.app.openapiMcpEnabled to the
+# same value. The SSRF settings under openapiMcp.app must match the
+# registry's (ssrfAllowedHosts, gatewayProxyAllowPrivateTargets,
+# egressOauthTrustedIdpHosts, egressForwardProxyEnabled); a render-time check
+# fails when they differ. global.ssrfAllowedCidrs applies to both.
+# See charts/openapi-mcp/values.yaml for every field.
+openapiMcp:
+  enabled: false
+  app:
+    replicas: 1 # Must be 1
   extraEnv: []
   extraEnvFrom: []
 # MCPGW MCP server configuration.
@@ -688,9 +788,6 @@ auth-server:
     # extra configuration. See docs/forward-proxy-egress.md before turning it on.
     # egressForwardProxyEnabled: false
     replicas: 2 # set to > 1 replica for high availability
-    # Session cookie Domain attribute. See registry.app.sessionCookieDomain
-    # above for guidance — keep these two in sync.
-    sessionCookieDomain: ""
     # Internal JWT configuration
     jwtIssuer: "mcp-auth-server" # Issuer claim for internal JWT tokens
     jwtAudience: "mcp-registry" # Audience claim for internal JWT tokens
@@ -717,6 +814,11 @@ auth-server:
     # SHARED master switch. Stack rendering fails unless this exactly matches
     # registry.app.gatewayGenericProxyEnabled and an egress policy is declared.
     gatewayGenericProxyEnabled: false
+    # OpenAPI MCP servers (issue #2022). The mcp-proxy hop forwards
+    # per-user-credential calls to the openapi-mcp container. Must equal
+    # openapiMcp.enabled and registry.app.openapiMcpEnabled; a render-time check
+    # fails when they differ. The auth server never receives the sync secret.
+    openapiMcpEnabled: false
     genericProxyTokenTtlSeconds: 30
     genericProxyMaxBodyBytes: "10485760" # string to avoid Helm float sci-notation
     gatewayGenericRequireBearerForWrites: true

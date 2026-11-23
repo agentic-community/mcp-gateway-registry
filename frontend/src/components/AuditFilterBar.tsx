@@ -273,16 +273,17 @@ const AuditFilterBar: React.FC<AuditFilterBarProps> = ({
   );
 
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-4 mb-4">
-      <div className="flex items-center gap-2 mb-4">
-        <FunnelIcon className="h-5 w-5 text-gray-500 dark:text-gray-400" />
-        <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">
-          Filters
+    <div className="card p-4">
+      <div className="mb-4 flex items-center gap-2">
+        <FunnelIcon className="h-4 w-4 text-fg-subtle" />
+        <h3 className="text-sm font-semibold text-fg">
+          Server filters
         </h3>
         {hasActiveFilters && (
           <button
             onClick={handleClearFilters}
-            className="ml-auto flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+            type="button"
+            className="ml-auto flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-fg-muted transition-colors hover:bg-surface-hover hover:text-fg"
           >
             <XMarkIcon className="h-4 w-4" />
             Clear filters
@@ -290,26 +291,29 @@ const AuditFilterBar: React.FC<AuditFilterBarProps> = ({
         )}
         {onRefresh && (
           <button
+            type="button"
             onClick={onRefresh}
             disabled={loading}
-            className="ml-2 p-1.5 text-gray-500 hover:text-blue-600 dark:text-gray-400 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded transition-colors disabled:opacity-50"
+            className={`btn-icon h-8 w-8 ${hasActiveFilters ? '' : 'ml-auto'}`}
             title="Refresh"
+            aria-label="Refresh audit data"
           >
             <ArrowPathIcon className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
         )}
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
         {/* Stream Selector */}
         <div>
-          <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+          <label htmlFor="audit-filter-stream" className="label">
             Log Stream
           </label>
           <select
+            id="audit-filter-stream"
             value={filters.stream}
             onChange={handleStreamChange}
-            className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            className="input"
           >
             <option value="registry_api">Registry API</option>
             <option value="mcp_access">MCP Access</option>
@@ -319,27 +323,29 @@ const AuditFilterBar: React.FC<AuditFilterBarProps> = ({
 
         {/* Date Range - From */}
         <div>
-          <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+          <label htmlFor="audit-filter-from" className="label">
             From Date
           </label>
           <input
+            id="audit-filter-from"
             type="datetime-local"
             value={filters.from || ''}
             onChange={handleFromChange}
-            className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            className="input"
           />
         </div>
 
         {/* Date Range - To */}
         <div>
-          <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+          <label htmlFor="audit-filter-to" className="label">
             To Date
           </label>
           <input
+            id="audit-filter-to"
             type="datetime-local"
             value={filters.to || ''}
             onChange={handleToChange}
-            className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            className="input"
           />
         </div>
 
@@ -348,7 +354,7 @@ const AuditFilterBar: React.FC<AuditFilterBarProps> = ({
             this control is a free-text search: the dropdown says so and the
             typed value is committed with Enter. */}
         <div>
-          <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+          <label className="label">
             Username
           </label>
           <SearchableSelect
@@ -361,7 +367,7 @@ const AuditFilterBar: React.FC<AuditFilterBarProps> = ({
             isLoading={optionsLoading}
             allowCustom={true}
             specialOptions={[{ value: '', label: 'All Users' }]}
-            focusColor="focus:ring-blue-500"
+            focusColor="focus:ring-focus/40"
             emptyMessage={
               isTokenMintStream
                 ? 'Token mint identities are not listed. Type a username, UPN, object id or sub and press Enter to search.'
@@ -369,7 +375,7 @@ const AuditFilterBar: React.FC<AuditFilterBarProps> = ({
             }
           />
           {isTokenMintStream && (
-            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            <p className="mt-1 text-xs text-fg-subtle">
               Free-text search: press Enter to search for the identity you typed.
             </p>
           )}
@@ -377,13 +383,14 @@ const AuditFilterBar: React.FC<AuditFilterBarProps> = ({
 
         {/* Operation / MCP Method Filter */}
         <div>
-          <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+          <label htmlFor="audit-filter-operation" className="label">
             {isTokenMintStream ? 'Token Kind' : isMcpStream ? 'MCP Method' : 'Operation'}
           </label>
           <select
+            id="audit-filter-operation"
             value={filters.operation || ''}
             onChange={handleOperationChange}
-            className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            className="input"
           >
             {operationOptions.map((opt) => (
               <option key={opt.value} value={opt.value}>
@@ -395,7 +402,7 @@ const AuditFilterBar: React.FC<AuditFilterBarProps> = ({
 
         {/* Resource Type / Server Name Filter */}
         <div>
-          <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+          <label htmlFor={isMcpStream ? undefined : 'audit-filter-resource'} className="label">
             {isMcpStream ? 'Server Name' : 'Resource Type'}
           </label>
           {isMcpStream ? (
@@ -407,13 +414,14 @@ const AuditFilterBar: React.FC<AuditFilterBarProps> = ({
               isLoading={optionsLoading}
               allowCustom={true}
               specialOptions={[{ value: '', label: 'All Servers' }]}
-              focusColor="focus:ring-blue-500"
+              focusColor="focus:ring-focus/40"
             />
           ) : (
             <select
+              id="audit-filter-resource"
               value={filters.resourceType || ''}
               onChange={handleResourceTypeChange}
-              className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              className="input"
             >
               {resourceTypeOptions.map((opt) => (
                 <option key={opt.value} value={opt.value}>
@@ -426,13 +434,14 @@ const AuditFilterBar: React.FC<AuditFilterBarProps> = ({
 
         {/* Status Code Range Filter */}
         <div>
-          <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+          <label htmlFor="audit-filter-status" className="label">
             Status Code
           </label>
           <select
+            id="audit-filter-status"
             value={getStatusPresetValue()}
             onChange={handleStatusPresetChange}
-            className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            className="input"
           >
             {STATUS_PRESETS.map((opt) => (
               <option key={opt.value} value={opt.value}>

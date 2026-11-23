@@ -10,6 +10,14 @@ interface BannerState {
   hint_set: boolean;
 }
 
+const PROVIDER_CHOICES: { value: Hint; label: string }[] = [
+  { value: 'aws', label: 'AWS' },
+  { value: 'azure', label: 'Azure' },
+  { value: 'gcp', label: 'GCP' },
+  { value: 'on_premises', label: 'On-premises' },
+  { value: 'other', label: 'Other' },
+];
+
 export const CloudProviderBanner: React.FC = () => {
   const [shouldShow, setShouldShow] = useState(false);
 
@@ -46,56 +54,31 @@ export const CloudProviderBanner: React.FC = () => {
     <div
       role="region"
       aria-label="Deployment environment"
-      className="bg-indigo-900/40 border border-indigo-700/50 rounded-lg p-3 my-3 mx-6"
+      className="mx-4 mt-4 rounded-xl border border-info-200 bg-info-50 p-4 sm:mx-6 lg:mx-8 dark:border-info-500/30 dark:bg-info-500/10"
     >
-      <p className="text-sm text-indigo-200 mb-1">
+      <p className="mb-1 text-sm font-medium text-info-900 dark:text-info-100">
         Help us improve: where is this registry deployed?
       </p>
-      <p className="text-xs text-indigo-300 mb-2">
+      <p className="mb-3 text-xs text-info-700 dark:text-info-300">
         Automatic detection could not identify this environment. Your answer is saved for this
-        registry. To set it at deploy time instead, use <code>MCP_CLOUD_PROVIDER</code> (Docker or
-        ECS) or <code>app.mcpCloudProvider</code> (Helm).
+        registry. To set it at deploy time instead, use <code className="font-mono">MCP_CLOUD_PROVIDER</code> (Docker or
+        ECS) or <code className="font-mono">app.mcpCloudProvider</code> (Helm).
       </p>
-      <div className="flex flex-wrap gap-2 items-center">
-        <button
-          type="button"
-          onClick={() => submit('aws')}
-          className="px-3 py-1 bg-gray-700 text-gray-200 text-xs font-medium rounded hover:bg-gray-600 focus:outline-none focus:ring-1 focus:ring-gray-500"
-        >
-          AWS
-        </button>
-        <button
-          type="button"
-          onClick={() => submit('azure')}
-          className="px-3 py-1 bg-gray-700 text-gray-200 text-xs font-medium rounded hover:bg-gray-600 focus:outline-none focus:ring-1 focus:ring-gray-500"
-        >
-          Azure
-        </button>
-        <button
-          type="button"
-          onClick={() => submit('gcp')}
-          className="px-3 py-1 bg-gray-700 text-gray-200 text-xs font-medium rounded hover:bg-gray-600 focus:outline-none focus:ring-1 focus:ring-gray-500"
-        >
-          GCP
-        </button>
-        <button
-          type="button"
-          onClick={() => submit('on_premises')}
-          className="px-3 py-1 bg-gray-700 text-gray-200 text-xs font-medium rounded hover:bg-gray-600 focus:outline-none focus:ring-1 focus:ring-gray-500"
-        >
-          On-premises
-        </button>
-        <button
-          type="button"
-          onClick={() => submit('other')}
-          className="px-3 py-1 bg-gray-700 text-gray-200 text-xs font-medium rounded hover:bg-gray-600 focus:outline-none focus:ring-1 focus:ring-gray-500"
-        >
-          Other
-        </button>
+      <div className="flex flex-wrap items-center gap-2">
+        {PROVIDER_CHOICES.map(({ value, label }) => (
+          <button
+            key={value}
+            type="button"
+            onClick={() => submit(value)}
+            className="btn-secondary px-3 py-1 text-xs"
+          >
+            {label}
+          </button>
+        ))}
         <button
           type="button"
           onClick={() => submit('declined')}
-          className="text-xs text-gray-500 hover:text-gray-300 focus:outline-none ml-2"
+          className="ml-1 rounded px-2 py-1 text-xs text-info-700 hover:text-info-900 dark:text-info-300 dark:hover:text-info-100"
         >
           Dismiss
         </button>

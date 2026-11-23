@@ -17,6 +17,41 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+# COGNITO_DOMAIN values that mean "derive the prefix from the user pool id".
+# Docker Compose passes the literal "auto" when the variable is unset; Terraform
+# and Helm pass an empty string.
+_DERIVE_DOMAIN_VALUES: frozenset[str] = frozenset({"", "auto"})
+
+
+def resolve_cognito_domain_prefix(
+    configured_domain: str | None,
+    user_pool_id: str | None,
+) -> str:
+    """Return the hosted-UI domain prefix to build Cognito endpoint URLs from.
+
+    The browser login URLs (oauth2_providers.yml) and the provider's own
+    endpoints must agree, so both resolve the prefix through this function.
+
+    Args:
+        configured_domain: The COGNITO_DOMAIN value. Empty, unset or "auto"
+            means derive it from the user pool id.
+        user_pool_id: The COGNITO_USER_POOL_ID value.
+
+    Returns:
+        The configured prefix, or the user pool id lower-cased with the
+        underscore removed (us-east-1_KmP5A3La3 becomes us-east-1kmp5a3la3).
+        The derived prefix works only if the pool's domain uses it. Empty when
+        there is nothing to derive from.
+    """
+    domain = (configured_domain or "").strip()
+    if domain.lower() not in _DERIVE_DOMAIN_VALUES:
+        return domain
+    if not user_pool_id:
+        return ""
+    derived = user_pool_id.replace("_", "").lower()
+    logger.info(f"Derived Cognito domain prefix '{derived}' from user pool id '{user_pool_id}'")
+    return derived
+
 
 class CognitoProvider(AuthProvider):
     """AWS Cognito authentication provider implementation."""
@@ -100,11 +135,8 @@ class CognitoProvider(AuthProvider):
         self._jwks_cache_ttl: int = 3600  # 1 hour
 
         # Cognito endpoints
-        if domain:
-            self.cognito_domain = f"https://{domain}.auth.{region}.amazoncognito.com"
-        else:
-            user_pool_id_clean = user_pool_id.replace("_", "")
-            self.cognito_domain = f"https://{user_pool_id_clean}.auth.{region}.amazoncognito.com"
+        domain_prefix = resolve_cognito_domain_prefix(domain, user_pool_id)
+        self.cognito_domain = f"https://{domain_prefix}.auth.{region}.amazoncognito.com"
 
         self.token_url = f"{self.cognito_domain}/oauth2/token"
         self.auth_url = f"{self.cognito_domain}/oauth2/authorize"

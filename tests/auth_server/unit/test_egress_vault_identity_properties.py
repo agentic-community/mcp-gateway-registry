@@ -825,7 +825,7 @@ def _login(
     client.cookies.clear()
     return _Login(
         status_code=response.status_code,
-        cookie=response.cookies.get(server_module.settings.session_cookie_name),
+        cookie=response.cookies.get(server_module.settings.session_cookie_effective_name),
         store=store,
         set_cookie_headers=response.headers.get_list("set-cookie"),
         location=response.headers.get("location"),
@@ -841,9 +841,9 @@ def _session_cookie_header(
         cookie: The session cookie value the login set.
 
     Returns:
-        The header, under the session cookie name.
+        The header, under the effective session cookie name.
     """
-    return {"Cookie": f"{server_module.settings.session_cookie_name}={cookie}"}
+    return {"Cookie": f"{server_module.settings.session_cookie_effective_name}={cookie}"}
 
 
 def _cookie_result(

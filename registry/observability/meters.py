@@ -170,6 +170,21 @@ tool_execution_total = _meter.create_counter(
     unit="1",
 )
 
+# Background tool fetches (issue #2050). Attributes: trigger (first_check,
+# recovered, empty, refresh, manual) and result (changed, unchanged, failed,
+# timeout, skipped_in_flight). No server path, to keep cardinality bounded.
+tool_fetch_total = _meter.create_counter(
+    name="mcpgw_registry_tool_fetch_total",
+    description="Background MCP tool list fetches, by trigger and result",
+    unit="1",
+)
+
+tool_fetch_duration_ms = _meter.create_histogram(
+    name="mcpgw_registry_tool_fetch_duration",
+    description="Time to fetch, compare and save one server's tool list",
+    unit="ms",
+)
+
 health_check_total = _meter.create_counter(
     name="health_check_total",
     description="Health check probe count",
@@ -753,6 +768,70 @@ ard_ingestion_duration_ms = _meter.create_histogram(
 ard_trust_mismatch_total = _meter.create_counter(
     name="mcpgw_ard_trust_mismatch_total",
     description="ARD domain-anchored trust mismatches by source_id and policy",
+    unit="1",
+)
+
+
+# OpenAPI MCP servers (issue #2022). Labels carry slugs and error codes,
+# never tool names, so the series count stays bounded by the server and
+# target limits.
+openapi_mcp_operation_total = _meter.create_counter(
+    name="mcpgw_openapi_mcp_operation_total",
+    description="OpenAPI MCP server and target create/update/delete calls by outcome",
+    unit="1",
+)
+openapi_mcp_operation_duration_ms = _meter.create_histogram(
+    name="mcpgw_openapi_mcp_operation_duration",
+    description="OpenAPI MCP CRUD latency, including spec fetch, push and tool refresh",
+    unit="ms",
+)
+openapi_mcp_spec_fetch_total = _meter.create_counter(
+    name="mcpgw_openapi_mcp_spec_fetch_total",
+    description="OpenAPI spec fetches by result",
+    unit="1",
+)
+openapi_mcp_sync_push_total = _meter.create_counter(
+    name="mcpgw_openapi_mcp_sync_push_total",
+    description="Pushes of server state to the openapi-mcp container by result and trigger",
+    unit="1",
+)
+openapi_mcp_reconcile_drift_total = _meter.create_counter(
+    name="mcpgw_openapi_mcp_reconcile_drift_total",
+    description="Drift the reconciler found between stored and running servers",
+    unit="1",
+)
+
+
+def _openapi_mcp_state_callback(
+    options: Any,
+):
+    """Stored servers and targets (as of the last reconcile pass) and container reachability.
+
+    Reports nothing while the feature is off: reachability starts at 0, so an
+    alert on "container_reachable stays at 0" would otherwise fire on every
+    deployment that never enabled OpenAPI MCP servers.
+    """
+    try:
+        from registry.core.config import settings
+        from registry.services import openapi_mcp_reconciler as reconciler
+
+        if getattr(settings, "openapi_mcp_enabled", False) is not True:
+            return
+
+        yield metrics.Observation(reconciler.stored_server_count(), {"kind": "servers"})
+        yield metrics.Observation(reconciler.stored_target_count(), {"kind": "targets"})
+        yield metrics.Observation(
+            1 if reconciler.container_reachable() else 0, {"kind": "container_reachable"}
+        )
+    except Exception as exc:  # pragma: no cover - defensive; never break export
+        logger.debug(f"openapi_mcp state callback failed: {exc}")
+        return
+
+
+_meter.create_observable_gauge(
+    name="mcpgw_openapi_mcp_state",
+    callbacks=[_openapi_mcp_state_callback],
+    description="OpenAPI MCP servers: stored servers, stored targets, and container reachability (1 or 0)",
     unit="1",
 )
 

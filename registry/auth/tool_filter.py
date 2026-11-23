@@ -16,6 +16,7 @@ import logging
 from typing import Any
 
 from ..core.config import settings
+from .asset_permissions import can_view_all
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,12 @@ def _is_admin_or_cross_server_wildcard(
     sentinel `{"*"}` under key "*" all skip pruning.
     """
     if user_context.get("is_admin"):
+        return True
+    # Holders of the read-only view_all permission (issue #2099) see every tool
+    # definition in REST and search responses. This helper only shapes registry
+    # responses; the gateway's own tools/list and tools/call checks are separate
+    # and unchanged, so view_all lets a holder see tools, never call them.
+    if can_view_all(user_context):
         return True
     servers = user_context.get("accessible_servers") or []
     if any(s in _WILDCARD_VALUES for s in servers):
@@ -247,6 +254,41 @@ def filter_tools_for_user(
             pruned=pruned,
         )
     return kept
+
+
+def tool_visible_without_audit(
+    server_name: str,
+    tool_name: str,
+    user_context: dict,
+    *,
+    server_path: str | None = None,
+) -> bool:
+    """Return True when filter_tools_for_user would keep this one tool.
+
+    Same rules as :func:`filter_tools_for_user`, but it writes no audit event
+    or prune log. The tool access listing (issue #2102) evaluates every group
+    against every tool and is not a user's own read, so it must not emit one
+    prune event per check. Keep the two functions in step: a parity test
+    compares them.
+
+    Args:
+        server_name: Display or technical server name.
+        tool_name: The tool to check.
+        user_context: A user context with ``accessible_tools``.
+        server_path: Optional registered path, tried first in the lookup.
+
+    Returns:
+        True if the tool is visible.
+    """
+    if _is_admin_or_cross_server_wildcard(user_context):
+        return True
+    accessible_tools = user_context.get("accessible_tools") or {}
+    allow = _lookup_allowlist(accessible_tools, server_path, server_name)
+    if not allow:
+        return False
+    if allow == _WILDCARD_SENTINEL:
+        return True
+    return tool_name in allow
 
 
 def tool_allowed_for_user(

@@ -19,11 +19,13 @@ from typing import Any
 
 import certifi
 
+from ..auth.openapi_mcp_sync import ADMISSION_HEADER
 from ..common.log_redaction import redact_url
 from ..core.config import settings
 from ..core.endpoint_utils import get_endpoint_url
 from ..repositories.factory import get_security_scan_repository
 from ..schemas.security import SecurityScanConfig, SecurityScanResult
+from .openapi_ownership import admission_headers
 from .scanner_llm_analyzer import (
     MCP_SCANNER_LITELLM_STANDIN,
     LLMAnalyzerUnavailableError,
@@ -39,6 +41,8 @@ OUTPUT_DIR = PROJECT_ROOT / "security_scans"
 # Name of the environment variable carrying the scan credential to the child. Private to
 # this module and the shim below; deliberately NOT one of mcp-scanner's own variables.
 _SCANNER_BEARER_ENV = "MCP_GATEWAY_SCAN_BEARER"  # nosec B105 - env var name, not a secret
+# The OpenAPI MCP admission marker, handed over the same way as the bearer token.
+_SCANNER_ADMISSION_ENV = "MCP_GATEWAY_SCAN_ADMISSION"  # nosec B105 - env var name, not a secret
 
 # Python source run inside the scanner subprocess, after the litellm stand-in. It fixes
 # when mcp-scanner falls back from MCP 2026-07-28 to the initialize handshake.
@@ -90,13 +94,20 @@ _SCANNER_SHIM = (
         "import os,sys;"
         "from mcpscanner.cli import cli_entry_point;"
         f"_t=os.environ.pop({_SCANNER_BEARER_ENV!r},None);"
-        "sys.argv=['mcp-scanner']+sys.argv[1:]+(['--bearer-token',_t] if _t else []);"
+        f"_a=os.environ.pop({_SCANNER_ADMISSION_ENV!r},None);"
+        "sys.argv=['mcp-scanner']+sys.argv[1:]+(['--bearer-token',_t] if _t else [])"
+        f"+(['--header',{ADMISSION_HEADER + ': '!r}+_a] if _a else []);"
         "sys.exit(cli_entry_point())"
     )
 )
 
 
-def _scan_failure_message(exc: BaseException, headers: str | None) -> str:
+def _scan_failure_message(
+    exc: BaseException,
+    headers: str | None,
+    credential_expected: bool | None = None,
+    appended_mcp_path: bool = False,
+) -> str:
     """Build the failure string the UI's scan modal shows.
 
     This is the one place an operator reads about a failed scan, so it has to carry
@@ -119,13 +130,47 @@ def _scan_failure_message(exc: BaseException, headers: str | None) -> str:
     if isinstance(exc, LLMAnalyzerUnavailableError):
         return str(exc)
     message = f"security scan failed ({type(exc).__name__})"
-    if not headers:
+    # Issue #2032: the hint used to appear on every unauthenticated failure, even
+    # for a server configured with no credential at all, where it points the wrong
+    # way. None means the caller did not say, which keeps the old behavior.
+    if not headers and credential_expected is not False:
         message += (
             " - the scan ran without a credential. A server that requires "
             "authentication will refuse it. Check this server's scan/discovery "
             "credential, then rescan."
         )
+    # The scanner reports only "connection cancelled", never the HTTP status, so
+    # name the registry's own guess instead. Nothing from the URL goes into this
+    # message: it is shown in the UI and a URL can carry secrets.
+    if appended_mcp_path:
+        message += (
+            " - the registry added /mcp to the server URL to reach its MCP endpoint. "
+            "If the endpoint is at a different path, set mcp_endpoint, then rescan."
+        )
     return message
+
+
+def scan_credential_expected(
+    server_info: dict | None,
+) -> bool:
+    """Return True when the server is configured to scan with a credential.
+
+    Mirrors the resolver behind the scan's credential (backend_oauth.with_bearer
+    and the static header fallback): a backend auth scheme, a designated OAuth
+    discovery identity, or an OBO exchange.
+
+    Args:
+        server_info: The server record.
+
+    Returns:
+        True when one of those is configured.
+    """
+    info = server_info or {}
+    if (info.get("auth_scheme") or "none") != "none":
+        return True
+    if (info.get("oauth_discovery") or {}).get("enabled"):
+        return True
+    return info.get("egress_auth_mode") == "obo_exchange"
 
 
 def _extract_bearer_token_from_headers(headers: str) -> str | None:
@@ -273,6 +318,7 @@ class SecurityScannerService:
         headers: str | None = None,
         timeout: int | None = None,
         mcp_endpoint: str | None = None,
+        credential_expected: bool | None = None,
     ) -> SecurityScanResult:
         """
         Scan an MCP server for security vulnerabilities.
@@ -286,6 +332,9 @@ class SecurityScannerService:
             timeout: Scan timeout in seconds (overrides config)
             mcp_endpoint: Optional explicit MCP endpoint URL. If set, used directly
                 instead of appending /mcp to server_url.
+            credential_expected: Whether the server is configured with a scan
+                credential (see scan_credential_expected). Decides whether a failed
+                unauthenticated scan blames the credential. None keeps the hint.
 
         Returns:
             SecurityScanResult containing scan results
@@ -332,10 +381,16 @@ class SecurityScannerService:
 
         # Resolve endpoint URL using centralized utility
         # Priority: explicit mcp_endpoint > URL detection > append /mcp
+        registered_url = server_url
         server_url = get_endpoint_url(
             proxy_pass_url=server_url,
             transport_type="streamable-http",
             mcp_endpoint=mcp_endpoint,
+        )
+        # True when the registry guessed the endpoint by adding /mcp, which is
+        # what a scan of the wrong URL usually comes down to.
+        appended_mcp_path = not mcp_endpoint and server_url.rstrip("/") != registered_url.rstrip(
+            "/"
         )
 
         safe_server_url = redact_url(server_url)
@@ -367,6 +422,9 @@ class SecurityScannerService:
                 api_key=api_key,
                 headers=headers,
                 timeout=timeout,
+                admission=admission_headers(server_path, registered_url, server_url).get(
+                    ADMISSION_HEADER
+                ),
             )
 
             # Analyze results
@@ -405,7 +463,12 @@ class SecurityScannerService:
             RuntimeError,
             UrlValidationError,
         ) as exc:
-            failure = _scan_failure_message(exc, headers)
+            failure = _scan_failure_message(
+                exc,
+                headers,
+                credential_expected=credential_expected,
+                appended_mcp_path=appended_mcp_path,
+            )
             logger.error(
                 f"Security scan failed endpoint={safe_server_url} type={type(exc).__name__} "
                 f"authenticated={bool(headers)}",
@@ -437,7 +500,12 @@ class SecurityScannerService:
             await self._scan_repo.create(result.model_dump())
             return result
         except Exception as exc:
-            failure = _scan_failure_message(exc, headers)
+            failure = _scan_failure_message(
+                exc,
+                headers,
+                credential_expected=credential_expected,
+                appended_mcp_path=appended_mcp_path,
+            )
             logger.error(
                 f"Unexpected security scan failure endpoint={safe_server_url} "
                 f"type={type(exc).__name__} authenticated={bool(headers)}",
@@ -473,6 +541,7 @@ class SecurityScannerService:
         api_key: str | None = None,
         headers: str | None = None,
         timeout: int | None = None,
+        admission: str | None = None,
     ) -> dict:
         """
         Run mcp-scanner command and return raw output.
@@ -485,6 +554,8 @@ class SecurityScannerService:
             api_key: OpenAI API key for LLM-based analysis
             headers: JSON string of headers to include in requests
             timeout: Scan timeout in seconds
+            admission: The OpenAPI MCP admission marker, for a scan of an
+                OpenAPI MCP server's hub. Passed through the environment.
 
         Returns:
             Dictionary containing analysis results and tool results
@@ -539,6 +610,9 @@ class SecurityScannerService:
                 env[_SCANNER_BEARER_ENV] = bearer_token
         if api_key:
             env["MCP_SCANNER_LLM_API_KEY"] = api_key
+        if admission:
+            # The OpenAPI MCP container refuses a hub call without its marker.
+            env[_SCANNER_ADMISSION_ENV] = admission
 
         # Run scanner with timeout
         try:

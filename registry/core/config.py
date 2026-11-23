@@ -1,16 +1,27 @@
+import ipaddress
 import logging
 import re
 from datetime import UTC
 from enum import Enum
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 from urllib.parse import urlparse
 
 from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from registry.common.request_origin import normalize_origin
-from registry.common.secret_key import validate_secret_key
+from registry.common.secret_key import (
+    validate_secret_key,
+    validate_signing_secret,
+)
+from registry.common.session_cookie import (
+    DEFAULT_SESSION_COOKIE_NAME,
+    check_host_prefix_settings,
+    check_session_cookie_name,
+    effective_session_cookie_name,
+    session_cookie_signing_salt,
+)
 from registry.constants import (
     MAX_EMBEDDINGS_EXTRA_HEADERS,
     REGISTRY_MANAGED_EMBEDDINGS_HEADERS,
@@ -177,16 +188,45 @@ class Settings(BaseSettings):
         description="Comma-separated allowlist of hosts the RUM snippet may reference (script src and beacon endpoints). If set, the snippet is rejected (fail closed) when it references any host not on the list. Empty disables the check.",
     )
 
+    # Runtime UI branding folder (logos, favicon, manifest.json, theme.css)
+    ui_branding_dir: str | None = Field(
+        default=None,
+        description="Directory holding the UI branding files served at {ROOT_PATH}/branding/<name>. Flat folder, no subdirectories. When unset, resolves to /app/branding in the container and ./branding in local dev. The entrypoint extracts UI_BRANDING_ARCHIVE_B64 into this directory when that variable is set.",
+    )
+
     # Auth settings
     secret_key: str = ""
-    session_cookie_name: str = "mcp_gateway_session"
-    session_max_age_seconds: int = 60 * 60 * 8  # 8 hours
-    # Secure-by-default: the session cookie carries the Secure flag so browsers
-    # only transmit it over HTTPS. Operators running a plain-HTTP local dev
-    # stack can explicitly opt out with SESSION_COOKIE_SECURE=false; every other
-    # deployment stays protected without extra configuration.
+    # Read by both services (the auth server shares this class). The configured
+    # SESSION_COOKIE_NAME; every reader and writer of the cookie uses
+    # session_cookie_effective_name, which adds the __Host- prefix when it is on.
+    # Validated in __init__ so both services refuse a name a browser would not keep.
+    session_cookie_name: str = DEFAULT_SESSION_COOKIE_NAME
+    session_max_age_seconds: int = Field(
+        default=60 * 60 * 8,
+        description=(
+            "Browser session lifetime in seconds, default 8 hours. The auth server "
+            "stores the session for this long and gives the session cookie this "
+            "Max-Age; the registry and the auth server refuse a cookie signed longer "
+            "ago. Set the same value on both services. Must be positive."
+        ),
+    )
+    # Secure-by-default: on an HTTPS request the session cookie carries the
+    # Secure flag exactly when this is true. On plain HTTP it never does (a
+    # browser drops a Secure cookie set over HTTP), so a localhost stack needs
+    # no opt-out. The auth server's login and the registry's expiries both
+    # decide through session_cookie_secure_flag.
     session_cookie_secure: bool = True
     session_cookie_domain: str | None = None  # e.g., ".example.com" for cross-subdomain sharing
+    session_cookie_host_prefix: bool = Field(
+        default=False,
+        description=(
+            "Name the session cookie __Host-<SESSION_COOKIE_NAME> and set it Secure, "
+            "Path=/ and without Domain, so no sibling subdomain can set or overwrite "
+            "it. Requires SESSION_COOKIE_SECURE=true and an empty SESSION_COOKIE_DOMAIN; "
+            "startup fails otherwise. Turning it on renames the cookie, which signs "
+            "every user out once. Read by the registry and the auth server."
+        ),
+    )
 
     # CORS allowlist. Comma-separated list of exact origins (scheme + host +
     # optional port) permitted to make credentialed cross-origin requests to
@@ -451,6 +491,55 @@ class Settings(BaseSettings):
         ),
     )
 
+    # OpenAPI MCP servers (issue #2022): REST APIs served as MCP servers by the
+    # openapi-mcp container. See docs/design/openapi-mcp-servers-design.md.
+    openapi_mcp_enabled: bool = Field(
+        default=False,
+        description=(
+            "Serve REST APIs as MCP servers through the openapi-mcp container. "
+            "Requires DEPLOYMENT_MODE=with-gateway and a REGISTRY_MODE that includes "
+            "MCP servers; otherwise the registry turns it off at startup and logs why."
+        ),
+    )
+    openapi_mcp_internal_url: str = Field(
+        default="http://openapi-mcp:9876",
+        description=(
+            "Internal URL of the openapi-mcp container, used by the registry and nginx. "
+            "Its host is reserved in the SSRF guard for OpenAPI MCP servers only."
+        ),
+    )
+    openapi_mcp_sync_secret: str = Field(
+        default="",
+        description=(
+            "Signs registry-to-container sync tokens. Required when the feature is on. "
+            "At least 32 characters, and different from SECRET_KEY."
+        ),
+    )
+    openapi_mcp_max_servers: int = Field(
+        default=10, ge=1, le=100, description="Most OpenAPI MCP servers a deployment can have."
+    )
+    openapi_mcp_max_targets_per_server: int = Field(
+        default=10, ge=1, le=50, description="Most REST targets on one OpenAPI MCP server."
+    )
+    openapi_mcp_max_tools_per_target: int = Field(
+        default=100,
+        ge=1,
+        le=500,
+        description="Most tools one target may produce after its include filters.",
+    )
+    openapi_mcp_spec_max_bytes: int = Field(
+        default=5_242_880,
+        ge=1024,
+        le=20_971_520,
+        description="Largest OpenAPI spec the registry will fetch, in bytes.",
+    )
+    openapi_mcp_reconcile_interval_seconds: int = Field(
+        default=60,
+        ge=10,
+        le=3600,
+        description="Seconds between full reconcile passes against the container.",
+    )
+
     # LiteLLM-specific settings (only used when embeddings_provider='litellm')
     # For Bedrock: Set to None and configure AWS credentials via standard methods
     # (IAM roles, AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY env vars, or ~/.aws/credentials)
@@ -525,6 +614,60 @@ class Settings(BaseSettings):
         300  # 5 minutes for automatic background checks (configurable via env var)
     )
     health_check_timeout_seconds: int = 2  # Very fast timeout for user-driven actions
+
+    # Tool list refresh (issue #2050)
+    tool_refresh_enabled: bool = Field(
+        default=False,
+        description=(
+            "Fetch tools from servers that stay healthy, on a schedule, so the "
+            "stored tool list picks up description and schema changes. Off by "
+            "default because each refresh opens an MCP session to the upstream "
+            "server. Each registry replica refreshes on its own."
+        ),
+    )
+    tool_refresh_every_cycles: int = Field(
+        default=3,
+        ge=1,
+        le=1000,
+        description=(
+            "Fetch each healthy server once every this many health cycles. Each "
+            "server starts on a random cycle so fetches spread evenly. The period "
+            "is at least this value times health_check_interval_seconds."
+        ),
+    )
+    # Tool access listing (issue #2102)
+    tool_access_owner_view: Literal["none", "owned"] = Field(
+        default="none",
+        description=(
+            "What a server owner who is not an admin sees on the Tool access page "
+            "and GET /api/tool-access. 'none' (the default): nothing, so only "
+            "admins and read-only admins see which groups can use each tool. "
+            "'owned': the tools on the servers and virtual servers they "
+            "registered. Admins and view_all holders always see every tool."
+        ),
+    )
+
+    @field_validator("tool_access_owner_view", mode="before")
+    @classmethod
+    def _normalize_tool_access_owner_view(cls, v: object) -> object:
+        """Read a blank value as the default and accept any letter case.
+
+        Compose and Terraform pass an unset value as an empty string.
+        """
+        if isinstance(v, str):
+            cleaned = v.strip().lower()
+            return cleaned or "none"
+        return v
+
+    tool_fetch_max_concurrency: int = Field(
+        default=5,
+        ge=1,
+        le=100,
+        description=(
+            "Most background tool fetches one registry process runs at once. "
+            "Applies to first checks, recoveries, refreshes and the UI refresh."
+        ),
+    )
 
     # WebSocket performance settings
     max_websocket_connections: int = 100  # Reasonable limit for development/testing
@@ -771,7 +914,10 @@ class Settings(BaseSettings):
             "Comma-separated CIDR ranges whose addresses the SSRF guard accepts "
             "for proxy_pass_url / agent URLs even though they are private (e.g. "
             "'10.0.0.0/8,192.168.0.0/16'). Use for internal MCP-server subnets. "
-            "The cloud metadata address 169.254.169.254 is never permitted."
+            "A listed range can also admit reserved IPv4 addresses it contains, such "
+            "as Istio's auto-allocated ServiceEntry range '240.240.0.0/16'. "
+            "Cloud metadata/credential, link-local, unspecified and multicast "
+            "addresses are never permitted."
         ),
     )
 
@@ -1404,6 +1550,35 @@ class Settings(BaseSettings):
             )
         return bounded
 
+    @field_validator("session_max_age_seconds")
+    @classmethod
+    def _require_positive_session_lifetime(
+        cls,
+        v: int,
+    ) -> int:
+        """Refuse a session lifetime of zero or less (fail closed).
+
+        Both services build these settings at startup, so either one refuses
+        to start rather than set cookies that expire at once or sign sessions
+        nobody can verify.
+
+        Args:
+            v: The configured lifetime in seconds.
+
+        Returns:
+            The lifetime, unchanged.
+
+        Raises:
+            ValueError: The lifetime is zero or negative.
+        """
+        if v <= 0:
+            raise ValueError(
+                f"SESSION_MAX_AGE_SECONDS must be a positive number of seconds, got {v}. "
+                "Set it to the browser session lifetime (default 28800, 8 hours) on the "
+                "registry and the auth server, or unset it."
+            )
+        return v
+
     # Demo server configuration
     disable_ai_registry_tools_server: bool = Field(
         default=False,
@@ -1572,7 +1747,7 @@ class Settings(BaseSettings):
             "state-changing verb (anything but GET/HEAD/OPTIONS) on a generic "
             "route is refused (403 at /validate, before any token mint) if the "
             "caller authenticated with a session cookie rather than a Bearer "
-            "token. A browser carrying only an ambient mcp_gateway_session cookie "
+            "token. A browser carrying only an ambient session cookie "
             "therefore cannot perform cross-site DELETE/PUT/PATCH; programmatic "
             "Bearer callers are unaffected. Relax only for a trusted same-site "
             "deployment. Consumed by the auth-server."
@@ -1851,7 +2026,8 @@ class Settings(BaseSettings):
         description=(
             "Max total connections per pooled egress httpx client (shared across "
             "OBO/3LO/vend/OAuth-callback/MCP-proxy-stream/health). Bounds FD and "
-            "ephemeral-port use under burst."
+            "ephemeral-port use under burst. Every in-flight MCP tool call through "
+            "the auth-server holds one connection for up to MCP_PROXY_TIMEOUT."
         ),
     )
     egress_http_pool_max_keepalive: int = Field(
@@ -2486,8 +2662,53 @@ class Settings(BaseSettings):
             self.egress_credential_encryption_key
         )
         self._validate_egress_auth_config()
+        self._validate_openapi_mcp_config()
         self._validate_embeddings_extra_header_slots()
         self._validate_embeddings_model_name()
+        # The auth server reads these same fields, so both services set and read
+        # the session cookie under one name, and both refuse to start with a
+        # __Host- prefix browsers would reject.
+        check_host_prefix_settings(
+            self.session_cookie_host_prefix,
+            self.session_cookie_secure,
+            self.session_cookie_domain,
+        )
+        self.session_cookie_name = check_session_cookie_name(self.session_cookie_name)
+        if not self.session_cookie_secure:
+            # SESSION_COOKIE_SECURE alone decides Secure on HTTPS. A deployment that
+            # copied an old example with "false" would otherwise lose Secure without a
+            # trace, so say it at every start of both services.
+            logging.getLogger(__name__).warning(
+                "SESSION_COOKIE_SECURE is false: the session cookie is sent without the "
+                "Secure attribute even over HTTPS. Set SESSION_COOKIE_SECURE=true for any "
+                "deployment reachable over HTTPS; plain-HTTP development needs no change, "
+                "because the cookie is never Secure on plain HTTP."
+            )
+
+    @property
+    def session_cookie_effective_name(self) -> str:
+        """The name both services set and read the session cookie under.
+
+        ``SESSION_COOKIE_NAME``, with ``__Host-`` in front when
+        ``SESSION_COOKIE_HOST_PREFIX`` is true.
+        """
+        return effective_session_cookie_name(
+            self.session_cookie_name,
+            self.session_cookie_host_prefix,
+        )
+
+    @property
+    def session_cookie_signing_salt(self) -> str | None:
+        """The salt both services sign and check the session cookie value with.
+
+        None (the serializer's default) with ``SESSION_COOKIE_HOST_PREFIX``
+        off; with it on, a salt naming the effective cookie name, so a value
+        signed for another name is refused.
+        """
+        return session_cookie_signing_salt(
+            self.session_cookie_effective_name,
+            self.session_cookie_host_prefix,
+        )
 
     def _raw_embeddings_extra_header_slots(self) -> list[tuple[int, str]]:
         """Return (slot number, stripped value) for every populated header slot."""
@@ -2608,6 +2829,42 @@ class Settings(BaseSettings):
             )
         return stripped
 
+    def _validate_openapi_mcp_config(self) -> None:
+        """URL checks for OpenAPI MCP servers. Runs only when the feature is on.
+
+        The auth server shares this class and also sets OPENAPI_MCP_ENABLED (its
+        mcp-proxy hop reaches the container for per-user credentials), but it
+        must never hold the sync secret. So the secret is checked in
+        apply_openapi_mcp_mode_gate, which only the registry runs.
+        """
+        if not self.openapi_mcp_enabled:
+            return
+        parsed = urlparse(self.openapi_mcp_internal_url)
+        if (
+            parsed.scheme not in ("http", "https")
+            or not parsed.hostname
+            or parsed.path not in ("", "/")
+            or parsed.query
+            or parsed.fragment
+            or parsed.username
+            or parsed.password
+        ):
+            raise ValueError(
+                "OPENAPI_MCP_INTERNAL_URL must be an http or https origin with a host and "
+                f"no path, query, fragment or credentials (for example "
+                f"http://openapi-mcp:9876); got {self.openapi_mcp_internal_url!r}."
+            )
+        try:
+            ipaddress.ip_address(parsed.hostname)
+        except ValueError:
+            pass
+        else:
+            raise ValueError(
+                "OPENAPI_MCP_INTERNAL_URL must name the container by hostname, not an IP "
+                "address: the SSRF guard reserves that hostname for OpenAPI MCP servers."
+            )
+        self.openapi_mcp_internal_url = self.openapi_mcp_internal_url.rstrip("/")
+
     def _validate_egress_auth_config(self) -> None:
         """Cross-field startup checks for the egress credential vault.
 
@@ -2710,6 +2967,19 @@ class Settings(BaseSettings):
         if self.is_local_dev:
             return Path.cwd() / "registry" / "templates"
         return self.container_registry_dir / "templates"
+
+    @property
+    def branding_dir(self) -> Path:
+        """Resolve the UI branding folder.
+
+        Resolution order: UI_BRANDING_DIR when set, else ./branding in local
+        dev mode, else /app/branding in the container.
+        """
+        if self.ui_branding_dir:
+            return Path(self.ui_branding_dir)
+        if self.is_local_dev:
+            return Path.cwd() / "branding"
+        return self.container_app_dir / "branding"
 
     @property
     def nginx_config_path(self) -> Path:
@@ -2894,6 +3164,52 @@ def _validate_mode_combination(
         return (DeploymentMode.REGISTRY_ONLY, RegistryMode.SKILLS_ONLY, True)
 
     return (deployment_mode, registry_mode, False)
+
+
+def _validate_openapi_mcp_sync_secret(
+    settings_instance: "Settings",
+) -> None:
+    """Fail startup on a missing or weak sync secret, or one equal to SECRET_KEY. Registry only."""
+    secret = validate_signing_secret(
+        settings_instance.openapi_mcp_sync_secret, "OPENAPI_MCP_SYNC_SECRET"
+    )
+    if secret == settings_instance.secret_key:
+        raise ValueError(
+            "OPENAPI_MCP_SYNC_SECRET must differ from SECRET_KEY: the openapi-mcp "
+            "container holds the sync secret and must never hold the master key."
+        )
+    object.__setattr__(settings_instance, "openapi_mcp_sync_secret", secret)
+
+
+def apply_openapi_mcp_mode_gate(
+    settings_instance: "Settings",
+) -> bool:
+    """Turn OpenAPI MCP servers off when the deployment cannot serve them.
+
+    The feature needs the gateway (nginx routes agent traffic to the container)
+    and a registry mode that includes MCP servers. Uses the corrected mode
+    combination, because router registration runs before the lifespan applies
+    the correction.
+
+    Returns:
+        True when the feature stays on, False when it is off.
+    """
+    if not settings_instance.openapi_mcp_enabled:
+        return False
+    deployment_mode, registry_mode, _ = _validate_mode_combination(
+        settings_instance.deployment_mode, settings_instance.registry_mode
+    )
+    reason = None
+    if deployment_mode == DeploymentMode.REGISTRY_ONLY:
+        reason = "DEPLOYMENT_MODE is registry-only, so no gateway routes to the container"
+    elif registry_mode not in (RegistryMode.FULL, RegistryMode.MCP_SERVERS_ONLY):
+        reason = f"REGISTRY_MODE={registry_mode.value} turns MCP servers off"
+    if reason is None:
+        _validate_openapi_mcp_sync_secret(settings_instance)
+        return True
+    logger.warning(f"OPENAPI_MCP_ENABLED=true ignored: {reason}. OpenAPI MCP servers are off.")
+    object.__setattr__(settings_instance, "openapi_mcp_enabled", False)
+    return False
 
 
 def _print_config_warning_banner(

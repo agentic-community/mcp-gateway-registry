@@ -3,6 +3,7 @@ import type {
   LocalRuntimeFormData,
   LocalRuntimeFormType,
 } from '../utils/localRuntime';
+import { CHECKBOX, FIELD, FIELD_ERROR, LABEL } from './formFields';
 
 
 interface LocalRuntimeFormPanelProps {
@@ -31,12 +32,9 @@ interface LocalRuntimeFormPanelProps {
 }
 
 
-const DEFAULT_INPUT_CLASS =
-  'block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 ' +
-  'rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white ' +
-  'focus:ring-purple-500 focus:border-purple-500';
-const DEFAULT_LABEL_CLASS = 'block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1';
-const DEFAULT_ERROR_CLASS = 'mt-1 text-sm text-red-500 dark:text-red-400';
+const DEFAULT_INPUT_CLASS = FIELD;
+const DEFAULT_LABEL_CLASS = LABEL;
+const DEFAULT_ERROR_CLASS = FIELD_ERROR;
 
 
 /**
@@ -104,7 +102,7 @@ const LocalRuntimeFormPanel: React.FC<LocalRuntimeFormPanelProps> = ({
       <h4 className="font-medium text-gray-900 dark:text-white mb-3">Launch Recipe</h4>
 
       {runtime.type === 'command' && (
-        <div className="mb-3 p-3 rounded-md bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 text-sm text-yellow-900 dark:text-yellow-100">
+        <div className="mb-3 p-3 rounded-md bg-warning-50 dark:bg-warning-900/20 border border-warning-200 dark:border-warning-800 text-sm text-warning-900 dark:text-warning-100">
           Warning: command type executes an arbitrary binary on every developer&apos;s machine.
           Only register commands you trust.
         </div>
@@ -129,7 +127,7 @@ const LocalRuntimeFormPanel: React.FC<LocalRuntimeFormPanelProps> = ({
           <label className={labelClass}>{packageLabel}</label>
           <input
             type="text"
-            className={`${inputClass} ${errors.package ? 'border-red-500' : ''}`}
+            className={`${inputClass} ${errors.package ? 'border-danger-500' : ''}`}
             value={runtime.package}
             onChange={(e) => update({ package: e.target.value })}
             placeholder={packagePlaceholder}
@@ -158,7 +156,7 @@ const LocalRuntimeFormPanel: React.FC<LocalRuntimeFormPanelProps> = ({
             <label className={labelClass}>Image Digest (recommended)</label>
             <input
               type="text"
-              className={`${inputClass} ${errors.image_digest ? 'border-red-500' : ''}`}
+              className={`${inputClass} ${errors.image_digest ? 'border-danger-500' : ''}`}
               value={runtime.image_digest}
               onChange={(e) => update({ image_digest: e.target.value })}
               placeholder="sha256:..."
@@ -185,7 +183,7 @@ const LocalRuntimeFormPanel: React.FC<LocalRuntimeFormPanelProps> = ({
               <button
                 type="button"
                 onClick={() => removeArg(idx)}
-                className="text-red-500 hover:text-red-700 px-2"
+                className="text-danger-500 hover:text-danger-700 dark:text-danger-400 dark:hover:text-danger-300 px-2"
               >
                 ×
               </button>
@@ -202,7 +200,7 @@ const LocalRuntimeFormPanel: React.FC<LocalRuntimeFormPanelProps> = ({
 
         <div className="md:col-span-2">
           <label className={labelClass}>Environment Variables</label>
-          <div className="mb-2 p-3 rounded-md bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 text-xs text-amber-900 dark:text-amber-100">
+          <div className="mb-2 p-3 rounded-md bg-warning-50 dark:bg-warning-900/20 border border-warning-200 dark:border-warning-800 text-xs text-warning-900 dark:text-warning-100">
             <strong>Visibility note:</strong> values you put here are visible
             to every authenticated registry user (they need them to render
             the Connect modal), and may appear in process listings
@@ -239,6 +237,7 @@ const LocalRuntimeFormPanel: React.FC<LocalRuntimeFormPanelProps> = ({
               <label className="flex items-center gap-1 text-xs text-gray-700 dark:text-gray-300 whitespace-nowrap">
                 <input
                   type="checkbox"
+                  className={CHECKBOX}
                   checked={row.required}
                   onChange={(e) => updateEnvRow(idx, {
                     required: e.target.checked,
@@ -250,7 +249,7 @@ const LocalRuntimeFormPanel: React.FC<LocalRuntimeFormPanelProps> = ({
               <button
                 type="button"
                 onClick={() => removeEnvRow(idx)}
-                className="text-red-500 hover:text-red-700 px-2"
+                className="text-danger-500 hover:text-danger-700 dark:text-danger-400 dark:hover:text-danger-300 px-2"
               >
                 ×
               </button>

@@ -1,0 +1,14 @@
+{
+  "server_name": "Atlassian Rovo MCP",
+  "description": "Atlassian's hosted Rovo MCP server, v2 (Jira and Confluence). Uses per-user egress OAuth (3LO): each user connects their own Atlassian account once, the gateway vaults the user token and injects it on egress. Atlassian issues tokens for this server only to clients registered with Dynamic Client Registration, so configure egress OAuth after registration via POST /servers/atlassian-rovo/egress-auth with egress_provider=atlassian-rovo and no client_id or client_secret: the gateway registers its own client. An Atlassian organization admin must also allow the gateway domain (see Atlassian Rovo MCP in docs/egress-credential-vault.md). Set append_mcp_path=false: proxy_pass_url already ends in the /mcp transport segment.",
+  "path": "/atlassian-rovo",
+  "proxy_pass_url": "https://mcp.atlassian.com/v2/mcp",
+  "tags": ["atlassian", "jira", "confluence", "rovo", "egress-oauth", "public-client", "pkce"],
+  "auth_scheme": "none",
+  "supported_transports": ["streamable-http"],
+  "append_mcp_path": false,
+  "status": "active",
+  "provider_organization": "Atlassian",
+  "provider_url": "https://www.atlassian.com",
+  "visibility": "public"
+}

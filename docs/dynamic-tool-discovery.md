@@ -415,6 +415,7 @@ _Coming soon._
 2. **Rich Descriptions**: Provide detailed tool descriptions with use cases
 3. **Proper Schemas**: Include comprehensive parameter schemas
 4. **Consistent Naming**: Follow naming conventions for better discoverability
+5. **Tool Annotations**: Declare `readOnlyHint` and `destructiveHint` on each tool. The registry stores them and returns them in search results, so agents can decide when to ask a person first. See [MCP Tool Annotations](tool-annotations.md).
 
 ### For Agent Developers
 
@@ -422,6 +423,7 @@ _Coming soon._
 2. **Fallback Handling**: Implement fallbacks when no suitable tools are found
 3. **Authentication**: Always include proper authentication parameters
 4. **Error Handling**: Handle tool discovery and invocation errors gracefully
+5. **Annotations Are Advisory**: Search results carry each tool's `annotations` as the server declared them. Only skip confirmation on `readOnlyHint` from servers you trust. See [MCP Tool Annotations](tool-annotations.md).
 
 ### For System Administrators
 

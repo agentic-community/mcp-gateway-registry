@@ -391,10 +391,10 @@ const DataExport: React.FC<DataExportProps> = ({ onShowToast }) => {
       </div>
 
       {/* Sensitive data warning banner */}
-      <div className="mb-6 flex items-start gap-3 rounded-lg border border-amber-300 dark:border-amber-700
-                      bg-amber-50 dark:bg-amber-900/20 px-4 py-3">
-        <ExclamationTriangleIcon className="h-5 w-5 text-amber-500 dark:text-amber-400 flex-shrink-0 mt-0.5" />
-        <p className="text-sm text-amber-800 dark:text-amber-300">
+      <div className="mb-6 flex items-start gap-3 rounded-lg border border-warning-300 dark:border-warning-700
+                      bg-warning-50 dark:bg-warning-900/20 px-4 py-3">
+        <ExclamationTriangleIcon className="h-5 w-5 text-warning-500 dark:text-warning-400 flex-shrink-0 mt-0.5" />
+        <p className="text-sm text-warning-800 dark:text-warning-300">
           Exported data may contain sensitive information such as email addresses,
           client IDs, and configuration details. Handle exported files with care.
         </p>
@@ -438,7 +438,7 @@ const DataExport: React.FC<DataExportProps> = ({ onShowToast }) => {
                 <td className="px-6 py-4 whitespace-nowrap text-right">
                   <div className="flex items-center justify-end gap-2">
                     {downloadingAll && completedInZip.has(collection.id) && (
-                      <CheckCircleIcon className="h-5 w-5 text-green-500" />
+                      <CheckCircleIcon className="h-5 w-5 text-success-500" />
                     )}
                     <button
                       onClick={() => handleDownload(collection)}

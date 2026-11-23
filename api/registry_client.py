@@ -162,6 +162,16 @@ class ServerDetail(BaseModel):
     url: str = Field(..., description="Service URL")
     is_enabled: bool = Field(..., description="Whether service is enabled")
     num_tools: int = Field(..., description="Number of tools")
+    num_mcp_app_tools: int = Field(
+        default=0, description="Number of tools that open an MCP App page"
+    )
+    tool_list_hash: str | None = Field(
+        None,
+        description="SHA-256 over the server's tool definitions; changes when any tool changes",
+    )
+    tool_list_changed_at: str | None = Field(
+        None, description="When tool discovery last saved a changed tool list (ISO 8601 UTC)"
+    )
     health_status: str = Field(..., description="Health status")
     last_health_check: datetime | None = Field(None, description="Last health check timestamp")
     status: str = Field(
@@ -186,6 +196,16 @@ class ServerDetailResponse(BaseModel):
     proxy_pass_url: str | None = Field(None, description="Backend URL")
     tags: list[str] = Field(default_factory=list, description="Server tags")
     num_tools: int = Field(default=0, description="Number of tools")
+    num_mcp_app_tools: int = Field(
+        default=0, description="Number of tools that open an MCP App page"
+    )
+    tool_list_hash: str | None = Field(
+        None,
+        description="SHA-256 over the server's tool definitions; changes when any tool changes",
+    )
+    tool_list_changed_at: str | None = Field(
+        None, description="When tool discovery last saved a changed tool list (ISO 8601 UTC)"
+    )
     tool_list: list[dict[str, Any]] = Field(default_factory=list, description="Tool definitions")
     is_enabled: bool = Field(default=False, description="Whether server is enabled")
     health_status: str | None = Field(None, description="Health status")
@@ -197,7 +217,7 @@ class ServerDetailResponse(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    @field_validator("num_tools", mode="before")
+    @field_validator("num_tools", "num_mcp_app_tools", mode="before")
     @classmethod
     def _default_num_tools(cls, value: Any) -> Any:
         """Coerce a null num_tools to 0.
@@ -980,6 +1000,13 @@ class MatchingToolResult(BaseModel):
     inputSchema: dict[str, Any] | None = Field(
         None, description="JSON Schema for tool input parameters"
     )
+    annotations: dict[str, Any] | None = Field(
+        None,
+        description=(
+            "MCP tool annotations the server declared (readOnlyHint, destructiveHint, "
+            "idempotentHint, openWorldHint, title). Advisory, not verified by the registry"
+        ),
+    )
 
 
 class SyncMetadata(BaseModel):
@@ -1056,6 +1083,13 @@ class ToolSearchResult(BaseModel):
         ),
     )
     match_context: str | None = Field(None, description="Why this tool matched")
+    annotations: dict[str, Any] | None = Field(
+        None,
+        description=(
+            "MCP tool annotations the server declared (readOnlyHint, destructiveHint, "
+            "idempotentHint, openWorldHint, title). Advisory, not verified by the registry"
+        ),
+    )
     # Endpoint URL for the parent MCP server
     endpoint_url: str | None = Field(
         None, description="URL for agents to connect to the parent MCP server"
@@ -1693,6 +1727,62 @@ class SkillListResponse(BaseModel):
     has_next: bool = Field(..., description="Whether more pages exist")
 
 
+class ToolAccessGroup(BaseModel):
+    """A registry group and its identity provider groups (issue #2102)."""
+
+    group: str = Field(..., description="Registry group name")
+    idp_groups: list[str] = Field(default_factory=list, description="Mapped IdP group names")
+    is_admin: bool = Field(False, description="True when the group grants registry admin")
+
+
+class ToolAccessCondition(BaseModel):
+    """One check a caller must pass, with the groups that pass it."""
+
+    label: str = Field(..., description="What the check is")
+    groups: list[str] = Field(default_factory=list, description="Registry groups that pass it")
+
+
+class ToolAccessSummary(BaseModel):
+    """Groups that grant one kind of access alone, and groups needed together."""
+
+    alone: list[str] = Field(
+        default_factory=list, description="Registry groups that grant it alone"
+    )
+    together: list[ToolAccessCondition] = Field(
+        default_factory=list, description="One group from each condition grants it"
+    )
+
+
+class ToolAccessRow(BaseModel):
+    """One tool on one server with who can see it and who can call it."""
+
+    tool_name: str = Field(..., description="Tool name a client calls")
+    server_name: str = Field(..., description="Server display name")
+    server_path: str = Field(..., description="Registry path of the server")
+    server_type: str = Field(..., description="mcp, openapi or virtual")
+    enabled: bool = Field(..., description="Whether the server is enabled")
+    blocked: bool = Field(False, description="True when the tool is blocked")
+    blocked_source: str | None = Field(None, description="admin or security_scan")
+    backend_server_path: str | None = Field(None, description="Virtual servers: backend path")
+    backend_tool_name: str | None = Field(None, description="Virtual servers: backend tool name")
+    can_see: ToolAccessSummary = Field(default_factory=ToolAccessSummary)
+    can_call: ToolAccessSummary = Field(default_factory=ToolAccessSummary)
+
+
+class ToolAccessListResponse(BaseModel):
+    """A page of GET /api/tool-access."""
+
+    rows: list[ToolAccessRow] = Field(default_factory=list, description="Rows on this page")
+    groups: dict[str, ToolAccessGroup] = Field(
+        default_factory=dict, description="Details of every group named on this page"
+    )
+    total_count: int = Field(0, description="Rows matching the filters")
+    limit: int = Field(..., description="Page size applied")
+    offset: int = Field(..., description="Offset applied")
+    has_next: bool = Field(..., description="Whether more pages exist")
+    generated_at: str = Field("", description="When the rows were computed")
+
+
 class SkillHealthResponse(BaseModel):
     """Response model for skill health check."""
 
@@ -1800,9 +1890,9 @@ class RegistryClient:
         self.registry_url = registry_url.rstrip("/")
         self._token = token
 
-        # Redact token in logs - show only first 8 characters
-        redacted_token = f"{token[:8]}..." if len(token) > 8 else "***"
-        logger.info(f"Initialized RegistryClient for {self.registry_url} (token: {redacted_token})")
+        # Never log any part of the token, not even a prefix.
+        token_state = "token set" if token else "no token"
+        logger.info(f"Initialized RegistryClient for {self.registry_url} ({token_state})")
 
     def _get_headers(self) -> dict[str, str]:
         """
@@ -1858,6 +1948,7 @@ class RegistryClient:
             or endpoint.startswith("/api/peers")
             or endpoint.startswith("/api/skills")
             or endpoint.startswith("/api/virtual-servers")
+            or endpoint.startswith("/api/openapi-servers")
             or endpoint.startswith("/api/custom-types")
             or endpoint.startswith("/api/custom")
             or endpoint.startswith("/api/admin")
@@ -4067,6 +4158,7 @@ class RegistryClient:
         custom_resource: str | None = None,
         expected_issuer: str | None = None,
         list_tools_before_consent: bool = False,
+        re_register: bool = False,
     ) -> dict[str, Any]:
         """Configure per-user egress auth on a server (admin only).
 
@@ -4102,6 +4194,10 @@ class RegistryClient:
                 server's stored tools on a direct-route tools/list before the
                 user connects (issue #1986). The request replaces the whole
                 config, so leaving this False turns it off.
+            re_register: oauth_user with a dynamic-client-registration provider
+                only. Register a new OAuth client even when the stored one still
+                fits, for example after the provider revoked it. Cannot be
+                combined with a ``client_id`` that differs from the stored one.
 
         Returns:
             Non-secret egress config view dict.
@@ -4140,6 +4236,8 @@ class RegistryClient:
         if expected_issuer is not None:
             body["expected_issuer"] = expected_issuer
         body["list_tools_before_consent"] = list_tools_before_consent
+        if re_register:
+            body["re_register"] = True
 
         response = self._make_request(
             method="POST",
@@ -5081,6 +5179,59 @@ class RegistryClient:
         logger.info(f"Skill registered successfully: {result.get('name')} at {result.get('path')}")
         return SkillCard(**result)
 
+    def list_tool_access(
+        self,
+        query: str | None = None,
+        server_path: str | None = None,
+        server_type: str | None = None,
+        group: str | None = None,
+        include_disabled: bool = True,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> ToolAccessListResponse:
+        """
+        List which groups can see and call each tool (issue #2102).
+
+        Admins and read-only admins get every tool; other callers get the
+        tools on servers they own.
+
+        Args:
+            query: Substring to match in tool, server or group names
+            server_path: Exact server path
+            server_type: mcp, openapi or virtual
+            group: Exact registry or identity provider group name
+            include_disabled: Include tools on disabled servers
+            limit: Rows per page (1-500)
+            offset: Rows to skip
+
+        Returns:
+            ToolAccessListResponse with one page of rows
+
+        Raises:
+            requests.HTTPError: If request fails
+        """
+        params: dict[str, str | int] = {
+            "limit": limit,
+            "offset": offset,
+            "include_disabled": "true" if include_disabled else "false",
+        }
+        if query:
+            params["q"] = query
+        if server_path:
+            params["server_path"] = server_path
+        if server_type:
+            params["server_type"] = server_type
+        if group:
+            params["group"] = group
+
+        response = self._make_request(method="GET", endpoint="/api/tool-access", params=params)
+        result = ToolAccessListResponse(**response.json())
+        logger.info(
+            f"Retrieved {len(result.rows)} tool access rows "
+            f"(total={result.total_count}, offset={result.offset}, has_next={result.has_next})"
+        )
+        return result
+
     def list_skills(
         self,
         include_disabled: bool = False,
@@ -5618,6 +5769,136 @@ class RegistryClient:
         result = response.json()
         logger.info(f"Virtual server rated: avg={result.get('average_rating')}")
         return result
+
+    # ------------------------------------------------------------------
+    # OpenAPI MCP servers (issue #2022). Responses are returned as dicts:
+    # the API never includes a credential, only auth.credential_set.
+    # ------------------------------------------------------------------
+
+    def create_openapi_server(
+        self,
+        body: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Create an OpenAPI MCP server from {name, description, tags, visibility, allowed_groups}."""
+        return self._make_request(method="POST", endpoint="/api/openapi-servers", data=body).json()
+
+    def list_openapi_servers(self) -> dict[str, Any]:
+        """List the OpenAPI MCP servers the caller can see: {"servers": [...]}."""
+        return self._make_request(method="GET", endpoint="/api/openapi-servers").json()
+
+    def get_openapi_server(
+        self,
+        slug: str,
+    ) -> dict[str, Any]:
+        """Get one OpenAPI MCP server with its targets."""
+        return self._make_request(method="GET", endpoint=f"/api/openapi-servers/{slug}").json()
+
+    def update_openapi_server(
+        self,
+        slug: str,
+        body: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Update description, tags, visibility or allowed_groups."""
+        return self._make_request(
+            method="PATCH", endpoint=f"/api/openapi-servers/{slug}", data=body
+        ).json()
+
+    def delete_openapi_server(
+        self,
+        slug: str,
+    ) -> None:
+        """Delete an OpenAPI MCP server and its tools."""
+        self._make_request(method="DELETE", endpoint=f"/api/openapi-servers/{slug}")
+
+    def add_openapi_target(
+        self,
+        slug: str,
+        body: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Add a REST target; body follows OpenApiTargetCreateRequest."""
+        return self._make_request(
+            method="POST", endpoint=f"/api/openapi-servers/{slug}/targets", data=body
+        ).json()
+
+    def get_openapi_target(
+        self,
+        slug: str,
+        name: str,
+    ) -> dict[str, Any]:
+        """Get one REST target."""
+        return self._make_request(
+            method="GET", endpoint=f"/api/openapi-servers/{slug}/targets/{name}"
+        ).json()
+
+    def update_openapi_target(
+        self,
+        slug: str,
+        name: str,
+        body: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Update a target, rotate its credential (auth) or refresh its spec (refresh_spec)."""
+        return self._make_request(
+            method="PATCH", endpoint=f"/api/openapi-servers/{slug}/targets/{name}", data=body
+        ).json()
+
+    def remove_openapi_target(
+        self,
+        slug: str,
+        name: str,
+    ) -> None:
+        """Remove a target and its tools."""
+        self._make_request(method="DELETE", endpoint=f"/api/openapi-servers/{slug}/targets/{name}")
+
+    def set_openapi_key(
+        self,
+        slug: str,
+        name: str,
+        secret: str,
+        ttl_value: int,
+        ttl_unit: str,
+        sub: str | None = None,
+        auth_method: str | None = None,
+    ) -> dict[str, Any]:
+        """Store the caller's own key for a per-user target (an admin may pass sub and auth_method)."""
+        body: dict[str, Any] = {"secret": secret, "ttl_value": ttl_value, "ttl_unit": ttl_unit}
+        if sub:
+            body["sub"] = sub
+        if auth_method:
+            body["auth_method"] = auth_method
+        return self._make_request(
+            method="PUT",
+            endpoint=f"/api/openapi-servers/{slug}/targets/{name}/my-credential",
+            data=body,
+        ).json()
+
+    def get_openapi_key_status(
+        self,
+        slug: str,
+        name: str,
+    ) -> dict[str, Any]:
+        """Whether the caller has a key for a per-user target, and when it expires. Never the key."""
+        return self._make_request(
+            method="GET", endpoint=f"/api/openapi-servers/{slug}/targets/{name}/my-credential"
+        ).json()
+
+    def list_openapi_keys(
+        self,
+        slug: str,
+    ) -> dict[str, Any]:
+        """The caller's key status for every per-user target of a server."""
+        return self._make_request(
+            method="GET", endpoint=f"/api/openapi-servers/{slug}/my-credentials"
+        ).json()
+
+    def delete_openapi_key(
+        self,
+        slug: str,
+        name: str,
+    ) -> None:
+        """Remove the caller's key for a per-user target."""
+        self._make_request(
+            method="DELETE", endpoint=f"/api/openapi-servers/{slug}/targets/{name}/my-credential"
+        )
 
     def get_virtual_server_rating(self, path: str) -> dict[str, Any]:
         """

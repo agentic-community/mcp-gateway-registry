@@ -63,7 +63,7 @@ httpcore pool is keyed by the pinned IP. A hostname that later resolves elsewher
 opens a new connection instead of reusing the old one.
 
 What the guard here deliberately does NOT carry over from the registry: operator
-allowlists/profiles, the structural ``validate_url`` checks it does not need, and
+host allowlists/profiles, the structural ``validate_url`` checks it does not need, and
 ``coerce_ip_literal``'s obfuscated IPv4-literal spellings (decimal/octal/hex).
 Those exist for attacker-SUPPLIED URLs. An obfuscated literal is still handled
 here, just by a different mechanism -- it is not parseable as an IP, so it falls
@@ -74,7 +74,11 @@ The denial table (``_CREDENTIAL_ENDPOINT_IPS``, the embedded-IPv4 prefixes, and
 ``_ip_denial_reason``) is hand-duplicated from ``url_guard``;
 ``tests/unit/servers/mcpgw/test_http_pool.py`` asserts equivalence with
 ``url_guard._ip_denial_reason(ip, allow_private=True)`` so drift on either side
-fails a test rather than silently narrowing the guard.
+fails a test rather than silently narrowing the guard. The one operator setting
+honored here is ``SSRF_ALLOWED_CIDRS``, and only for reserved addresses (#2018):
+mcpgw already allows private targets, but a registry or Keycloak reached through
+an Istio ServiceEntry VIP (``240.240.0.0/16``) is reserved and needs the same
+opt-in the registry accepts.
 
 Other posture, unchanged from the per-call clients this replaces:
 
@@ -90,6 +94,7 @@ Other posture, unchanged from the per-call clients this replaces:
 from __future__ import annotations
 
 import asyncio
+import functools
 import http.cookiejar
 import ipaddress
 import logging
@@ -156,6 +161,10 @@ _6TO4_PREFIX = ipaddress.ip_network("2002::/16")  # RFC 3056: 2002:V4:V4::/48
 _TEREDO_PREFIX = ipaddress.ip_network("2001::/32")  # RFC 4380: client v4, XOR'd
 
 _ALLOWED_SCHEMES = frozenset({"http", "https"})
+
+# IPv4 limited broadcast: reserved, never an egress target, never relaxed.
+# Kept in sync with registry/utils/url_guard.py::_IPV4_BROADCAST.
+_IPV4_BROADCAST = ipaddress.IPv4Address("255.255.255.255")
 
 
 class EgressTargetError(ValueError):
@@ -240,6 +249,38 @@ def _connect_retries() -> int:
     return _env_int("EGRESS_HTTP_POOL_CONNECT_RETRIES", _CONNECT_RETRIES_DEFAULT, low=0, high=5)
 
 
+@functools.lru_cache(maxsize=8)
+def _parse_cidrs(
+    raw: str,
+) -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]:
+    """Parse a comma-separated CIDR list, skipping (and logging once) bad entries.
+
+    Cached on the raw string so the per-request lookup does not re-parse, and a
+    malformed entry is logged once rather than on every request.
+    """
+    nets: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+    for chunk in raw.split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        try:
+            nets.append(ipaddress.ip_network(chunk, strict=False))
+        except ValueError:
+            logger.warning("SSRF_ALLOWED_CIDRS: ignoring malformed CIDR %r", chunk)
+    return tuple(nets)
+
+
+def _operator_reserved_cidrs() -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]:
+    """Return the operator's SSRF_ALLOWED_CIDRS ranges (#2018).
+
+    Same variable, and the same meaning for reserved addresses, as the registry's
+    guard: a reserved address (for example Istio's auto-allocated ServiceEntry range
+    ``240.240.0.0/16``) is admitted only inside one of these ranges. mcpgw already
+    allows private, CGNAT and loopback, so nothing else is relaxed by it.
+    """
+    return _parse_cidrs(os.getenv("SSRF_ALLOWED_CIDRS", ""))
+
+
 def _unwrap_embedded_ipv4(
     ip: ipaddress.IPv4Address | ipaddress.IPv6Address,
 ) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
@@ -270,11 +311,14 @@ def _unwrap_embedded_ipv4(
 
 def _ip_denial_reason(
     ip: ipaddress.IPv4Address | ipaddress.IPv6Address,
+    reserved_cidrs: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...] = (),
 ) -> str | None:
     """Return why ``ip`` must not be an mcpgw egress target, or None if allowed.
 
     Private-unicast, CGNAT, and loopback are allowed (in-cluster service names and
-    local dev). Everything the registry hard-denies stays denied.
+    local dev). Everything the registry hard-denies stays denied. A reserved address
+    is allowed only inside ``reserved_cidrs`` (the operator's SSRF_ALLOWED_CIDRS),
+    and only when it is IPv4 other than limited broadcast.
     """
     ip = _unwrap_embedded_ipv4(ip)
 
@@ -290,7 +334,16 @@ def _ip_denial_reason(
     if ip.is_loopback:
         return None
     if ip.is_reserved:
-        return "reserved"
+        # Only IPv4 reserved space is relaxable. Reserved IPv6 can carry an IPv4
+        # that is not unwrapped (::a.b.c.d, ::ffff:0:a.b.c.d, 64:ff9b:1::/48), so a
+        # broad ::/0 entry would otherwise reach IMDS. Mirrors
+        # url_guard._operator_may_admit_reserved.
+        operator_allowed = (
+            isinstance(ip, ipaddress.IPv4Address)
+            and ip != _IPV4_BROADCAST
+            and any(ip in net for net in reserved_cidrs)
+        )
+        return None if operator_allowed else "reserved"
     return None
 
 
@@ -300,7 +353,7 @@ def _validated_ip(hostname: str, raw: str) -> str:
         ip = ipaddress.ip_address(raw)
     except ValueError as exc:  # a resolver answer is always a literal
         raise EgressTargetError(f"{hostname}: unparseable address {raw!r}") from exc
-    reason = _ip_denial_reason(ip)
+    reason = _ip_denial_reason(ip, _operator_reserved_cidrs())
     if reason is not None:
         raise EgressTargetError(f"{hostname} resolves to a blocked address ({reason}): {raw}")
     return str(ip)
@@ -457,7 +510,7 @@ class _GuardedAsyncTransport(httpx.AsyncHTTPTransport):
         if literal is not None:
             # Already an address: classify it, and leave the URL alone (there is
             # nothing to pin -- httpcore will connect to exactly this address).
-            reason = _ip_denial_reason(literal)
+            reason = _ip_denial_reason(literal, _operator_reserved_cidrs())
             if reason is not None:
                 raise EgressTargetError(f"blocked address ({reason}): {hostname}")
             return await super().handle_async_request(request)

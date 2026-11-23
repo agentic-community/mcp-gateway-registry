@@ -1,0 +1,16 @@
+{
+  "tool_name_overrides": {
+    "GET /api/whoami-v2": "whoami",
+    "GET /api/settings/repositories": "my_repositories",
+    "GET /api/papers/search": "search_papers",
+    "GET /api/papers/{paperId}": "get_paper",
+    "GET /api/daily_papers": "daily_papers",
+    "GET /api/spaces/semantic-search": "search_spaces",
+    "GET /api/spaces/featured": "featured_spaces",
+    "GET /api/collections": "list_collections",
+    "GET /api/collections/{namespace}/{slug}": "get_collection",
+    "GET /api/models-tags-by-type": "model_tags",
+    "GET /api/models/{namespace}/{repo}/refs": "model_refs",
+    "GET /api/models/{namespace}/{repo}/likers": "model_likers"
+  }
+}

@@ -15,6 +15,8 @@ This document provides a comprehensive overview of the MCP Gateway & Registry so
 - **Custom Entity Types**: Admins define schema-driven catalog types at runtime (e.g. LLM prompts, model cards, workflows) with typed fields; users create records via API or a dynamically-rendered UI tab, with lexical + semantic search, ratings, visibility controls, and pagination
 - **Server & Agent Rating System**: 5-star rating widget with aggregate scoring, one rating per user, and rotating buffer
 - **Health Monitoring**: Built-in health checks and status monitoring for all registered services
+- **MCP Apps**: Servers whose tools open an interactive page in the chat client show an MCP APP badge, and direct routes pass the extension through to hosts such as Claude. See [MCP Apps](mcp-apps.md)
+- **OpenAPI MCP Servers**: Turn existing REST APIs into MCP servers without writing code: an admin registers an OpenAPI 3 spec (by URL or upload), a base URL and a credential, and every operation becomes an MCP tool behind the gateway's usual login, scopes and search. Credentials are shared or per-user (each user adds their own key), and the openapi-mcp container checks each backend call against the target's base URL, SSRF guard and response limits. See [OpenAPI MCP servers](openapi-mcp-servers.md)
 - **Scalable Architecture**: Docker-based deployment with horizontal scaling support
 
 ## Agent Registry & A2A Communication

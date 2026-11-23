@@ -21,11 +21,11 @@ describe('EmptyState', () => {
 
   it('uses the error tone styling for failures', () => {
     render(<EmptyState title="Failed to load" tone="error" />);
-    expect(screen.getByText('Failed to load').className).toContain('text-red-500');
+    expect(screen.getByText('Failed to load').className).toContain('text-danger-500');
   });
 
   it('applies a tinted background for accent tones', () => {
     const { container } = render(<EmptyState title="No agents found" tone="cyan" />);
-    expect((container.firstChild as HTMLElement).className).toContain('bg-cyan-50');
+    expect((container.firstChild as HTMLElement).className).toContain('bg-agent-50');
   });
 });

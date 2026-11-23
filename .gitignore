@@ -153,6 +153,11 @@ celerybeat.pid
 # per-operator secrets never land in git.
 **/extra_env/*.env
 
+# Operator UI branding folder, bind-mounted into the registry by the compose
+# files (override with MCP_BRANDING_DIR). Only the placeholder is tracked.
+/branding/*
+!/branding/.gitkeep
+
 # Configuration files with sensitive data
 credentials-provider/agentcore-auth/config.yaml
 credentials-provider/oauth/config.yaml

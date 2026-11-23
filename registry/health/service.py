@@ -2,8 +2,11 @@ import asyncio
 import json
 import logging
 import os
+import random
+from collections.abc import Mapping
 from datetime import UTC, datetime
-from time import time
+from time import monotonic, time
+from typing import Any
 
 import httpx
 from fastapi import WebSocket
@@ -22,9 +25,19 @@ from ..core.backend_oauth import RESOLVED_BEARER_KEY as _BACKEND_OAUTH_TOKEN_KEY
 from ..core.backend_oauth import with_bearer as _with_backend_oauth
 from ..core.config import settings
 from ..core.endpoint_utils import get_endpoint_url_from_server_info
+from ..core.mcp_apps import (
+    count_mcp_app_tools,
+    mcp_app_signature,
+)
 from ..exceptions import UrlValidationError
+from ..utils.tool_list_hash import (
+    ToolListChanges,
+    compare_tool_lists,
+    tool_list_hash,
+)
 from ..utils.url_guard import (
     BUILTIN_AIREGISTRY_TOOLS_PROFILE,
+    BUILTIN_OPENAPI_MCP_PROFILE,
     PROXY_PROFILE,
     guarded_async_client,
     proxy_profile_for_entity_target,
@@ -63,6 +76,15 @@ LEGACY_MCP_ERA_CACHE_SECONDS: int = 3600
 # registry/utils/url_guard.py starts the reason of every resolver failure with this.
 DNS_FAILURE_REASON_PREFIX: str = "DNS resolution"
 HEALTH_PROBE_CLIENT_NAME: str = "mcp-gateway-registry"
+# Outer limit on fetching one server's tools, so a stuck fetch cannot hold a
+# slot of the fetch semaphore forever. Discovery itself stops at 25 s
+# (MCP_DISCOVERY_TIMEOUT_SECONDS in registry/core/mcp_client.py). The database
+# writes that follow run outside this limit, so a slow write is never cut off
+# between saving the tool list and updating scopes.
+TOOL_FETCH_TIMEOUT_SECONDS: float = 45.0
+# How many tool names of each kind (added, removed, changed) the change log
+# line prints before summarizing the rest as a count.
+MAX_LOGGED_TOOL_NAMES: int = 20
 HEALTH_PROBE_CLIENT_VERSION: str = "2.0.0"
 
 
@@ -184,6 +206,69 @@ def _discovery_identity_unconnected(server_info: dict) -> bool:
         (server_info.get("oauth_discovery") or {}).get("enabled")
         and (server_info.get("auth_scheme") or "none") == "none"
         and not server_info.get(_BACKEND_OAUTH_TOKEN_KEY)
+    )
+
+
+def _log_tool_refresh_settings() -> None:
+    """Log whether tool refresh is on, and its period in cycles and seconds."""
+    if not settings.tool_refresh_enabled:
+        logger.info(
+            "Tool refresh off: tools are fetched on the first check, on recovery "
+            f"and on UI refresh, at most {settings.tool_fetch_max_concurrency} at once"
+        )
+        return
+    period_seconds = settings.tool_refresh_every_cycles * settings.health_check_interval_seconds
+    logger.info(
+        f"Tool refresh on: every {settings.tool_refresh_every_cycles} health cycles "
+        f"(at least {period_seconds}s), at most {settings.tool_fetch_max_concurrency} "
+        "concurrent fetches per registry process"
+    )
+
+
+def _record_tool_fetch(
+    trigger: str,
+    result: str,
+    duration_ms: float | None = None,
+) -> None:
+    """Count one background tool fetch, and record its duration when it ran."""
+    try:
+        from ..observability.meters import (
+            tool_fetch_duration_ms,
+            tool_fetch_total,
+        )
+
+        tool_fetch_total.add(1, {"trigger": trigger, "result": result})
+        if duration_ms is not None:
+            tool_fetch_duration_ms.record(duration_ms, {"trigger": trigger})
+    except Exception as e:
+        logger.debug(f"Could not record tool fetch metric type={type(e).__name__}")
+
+
+def _names_for_log(
+    names: list[str],
+) -> str:
+    """Format tool names for a log line, capped at MAX_LOGGED_TOOL_NAMES.
+
+    The names come from the upstream server, so they are printed as a Python
+    list repr, which escapes newlines and cannot forge a second log line.
+    """
+    if len(names) <= MAX_LOGGED_TOOL_NAMES:
+        return repr(names)
+    shown = names[:MAX_LOGGED_TOOL_NAMES]
+    return f"{shown!r} and {len(names) - MAX_LOGGED_TOOL_NAMES} more"
+
+
+def _log_tool_list_changes(
+    service_path: str,
+    tool_count: int,
+    changes: ToolListChanges,
+) -> None:
+    """Log which tools were added, removed and changed on a server."""
+    logger.info(
+        f"Tool list changed for {service_path} ({tool_count} tools): "
+        f"added={_names_for_log(changes.added)} "
+        f"removed={_names_for_log(changes.removed)} "
+        f"changed={_names_for_log(changes.changed)}"
     )
 
 
@@ -380,6 +465,18 @@ class HealthMonitoringService:
         # server path -> (endpoint probed, expiry as a time() timestamp).
         self._legacy_mcp_endpoints: dict[str, tuple[str, float]] = {}
 
+        # Tool refresh (issue #2050): one cycle counter per process, and one
+        # starting offset per server, drawn the first time it is seen.
+        self._health_cycle: int = 0
+        self._tool_refresh_offsets: dict[str, int] = {}
+
+        # Every background tool fetch goes through this semaphore. The task set
+        # holds a strong reference to each fetch (asyncio keeps only a weak one),
+        # and the in-flight set stops two fetches for one server.
+        self._tool_fetch_semaphore = asyncio.Semaphore(settings.tool_fetch_max_concurrency)
+        self._tool_fetch_tasks: set[asyncio.Task] = set()
+        self._tool_fetch_in_flight: set[str] = set()
+
     async def _check_secret_key_persistence(self):
         """Warn if servers have encrypted credentials but SECRET_KEY is auto-generated."""
         if os.environ.get("SECRET_KEY"):
@@ -410,6 +507,8 @@ class HealthMonitoringService:
         # Check SECRET_KEY persistence for servers with encrypted credentials
         await self._check_secret_key_persistence()
 
+        _log_tool_refresh_settings()
+
         # Start background health checks
         self.health_check_task = asyncio.create_task(self._run_health_checks())
 
@@ -424,6 +523,13 @@ class HealthMonitoringService:
                 await self.health_check_task
             except asyncio.CancelledError:
                 pass
+
+        # Cancel tool fetches still running or waiting on the semaphore.
+        pending_fetches = list(self._tool_fetch_tasks)
+        for task in pending_fetches:
+            task.cancel()
+        if pending_fetches:
+            await asyncio.gather(*pending_fetches, return_exceptions=True)
 
         # Close all WebSocket connections
         connections = list(self.websocket_manager.connections)
@@ -520,7 +626,11 @@ class HealthMonitoringService:
 
         from ..services.server_service import server_service
 
+        # One cycle per pass of the loop. Tool refresh counts these, not clock time.
+        self._health_cycle += 1
+
         enabled_services = await server_service.get_enabled_services()
+        self._prune_tool_refresh_offsets(set(enabled_services or []))
         if not enabled_services:
             return
 
@@ -545,6 +655,11 @@ class HealthMonitoringService:
         # stream/post below; the SSRF guard still validates+pins every request.
         client = shared_guarded_async_client(profile=PROXY_PROFILE)
         builtin_client = shared_guarded_async_client(profile=BUILTIN_AIREGISTRY_TOOLS_PROFILE)
+        openapi_mcp_client = shared_guarded_async_client(profile=BUILTIN_OPENAPI_MCP_PROFILE)
+        clients_by_profile = {
+            BUILTIN_AIREGISTRY_TOOLS_PROFILE.name: builtin_client,
+            BUILTIN_OPENAPI_MCP_PROFILE.name: openapi_mcp_client,
+        }
 
         check_tasks = []
         for service_path in enabled_services:
@@ -562,9 +677,7 @@ class HealthMonitoringService:
                 profile = proxy_profile_for_entity_target(
                     "mcp_server", path, info["proxy_pass_url"]
                 )
-                selected_client = (
-                    builtin_client if profile is BUILTIN_AIREGISTRY_TOOLS_PROFILE else client
-                )
+                selected_client = clients_by_profile.get(profile.name, client)
                 batch_coros.append(self._check_single_service(selected_client, path, info))
             results = await asyncio.gather(*batch_coros, return_exceptions=True)
 
@@ -590,6 +703,105 @@ class HealthMonitoringService:
                 logger.error(
                     f"Failed to mark nginx config dirty after health status change type={type(e).__name__}"
                 )
+
+    def _tool_fetch_trigger(
+        self,
+        service_path: str,
+        previous_status: str,
+        server_info: dict,
+    ) -> str | None:
+        """Return why a healthy server's tools should be fetched now, or None.
+
+        Fetches happen on the first check after a restart, when a server turns
+        healthy again, when it has no stored tools, and (when tool refresh is
+        on) once every tool_refresh_every_cycles cycles.
+        """
+        if previous_status == HealthStatus.UNKNOWN:
+            logger.info(f"First health check for {service_path} - will fetch tools")
+            return "first_check"
+        if previous_status != HealthStatus.HEALTHY:
+            logger.info(f"Service {service_path} transitioned to healthy - will fetch tools")
+            return "recovered"
+        if not server_info.get("tool_list"):
+            logger.info(f"Service {service_path} is healthy but has no tools - will fetch tools")
+            return "empty"
+        if self._is_tool_refresh_due(service_path):
+            logger.debug(f"Tool refresh due for {service_path} on cycle {self._health_cycle}")
+            return "refresh"
+        return None
+
+    def _is_tool_refresh_due(
+        self,
+        service_path: str,
+    ) -> bool:
+        """Return True when this healthy server should be refreshed this cycle.
+
+        Each server draws one offset between 1 and the period the first time it
+        is seen, and is due on every cycle whose number matches that offset
+        modulo the period. So every server is fetched once per period, and the
+        servers spread evenly across the cycles of a period.
+        """
+        if not settings.tool_refresh_enabled:
+            return False
+        period = settings.tool_refresh_every_cycles
+        offset = self._tool_refresh_offsets.get(service_path)
+        if offset is None:
+            # Spreads load across cycles; not used for anything security-related.
+            offset = random.randint(1, period)  # nosec B311
+            self._tool_refresh_offsets[service_path] = offset
+            logger.debug(f"Tool refresh offset for {service_path}: {offset} of {period}")
+        return self._health_cycle % period == offset % period
+
+    def _prune_tool_refresh_offsets(
+        self,
+        enabled_paths: set[str],
+    ) -> None:
+        """Forget refresh offsets for servers that are no longer enabled."""
+        for path in list(self._tool_refresh_offsets):
+            if path not in enabled_paths:
+                del self._tool_refresh_offsets[path]
+
+    def _schedule_tool_fetch(
+        self,
+        service_path: str,
+        proxy_pass_url: str,
+        trigger: str,
+    ) -> bool:
+        """Start a background tool fetch unless one is already running for this server.
+
+        Args:
+            service_path: The server's registry path.
+            proxy_pass_url: The server's backend URL.
+            trigger: Why the fetch starts, for the log and the metric.
+
+        Returns:
+            True if a fetch was started, False if one was already in flight.
+        """
+        if service_path in self._tool_fetch_in_flight:
+            logger.debug(f"Tool fetch already running for {service_path}; skipping {trigger}")
+            _record_tool_fetch(trigger, "skipped_in_flight")
+            return False
+        self._tool_fetch_in_flight.add(service_path)
+        task = asyncio.create_task(self._run_tool_fetch(service_path, proxy_pass_url, trigger))
+        self._tool_fetch_tasks.add(task)
+        task.add_done_callback(self._tool_fetch_tasks.discard)
+        return True
+
+    async def _run_tool_fetch(
+        self,
+        service_path: str,
+        proxy_pass_url: str,
+        trigger: str,
+    ) -> None:
+        """Run one tool fetch under the shared semaphore, then clear the in-flight mark."""
+        try:
+            async with self._tool_fetch_semaphore:
+                started = monotonic()
+                result = await self._update_tools_background(service_path, proxy_pass_url)
+                duration_ms = (monotonic() - started) * 1000
+                _record_tool_fetch(trigger, result or "failed", duration_ms)
+        finally:
+            self._tool_fetch_in_flight.discard(service_path)
 
     async def _check_single_service(
         self, client: httpx.AsyncClient, service_path: str, server_info: dict
@@ -648,34 +860,13 @@ class HealthMonitoringService:
             if is_healthy:
                 new_status = status_detail  # Could be "healthy" or "healthy-auth-expired"
 
-                # Fetch tools in these cases:
-                # 1. First health check (previous_status == UNKNOWN)
-                # 2. Service transitioned to healthy from unhealthy
-                # 3. Service is healthy but has no tools yet (tool_list is empty)
-                # Only do this for fully healthy status, not auth-expired
-                should_fetch_tools = False
+                # Only a fully healthy server gets a tool fetch, never auth-expired.
                 if status_detail == HealthStatus.HEALTHY:
-                    if previous_status == HealthStatus.UNKNOWN:
-                        # First health check - always fetch tools
-                        should_fetch_tools = True
-                        logger.info(f"First health check for {service_path} - will fetch tools")
-                    elif previous_status != HealthStatus.HEALTHY:
-                        # Transitioned to healthy - fetch tools
-                        should_fetch_tools = True
-                        logger.info(
-                            f"Service {service_path} transitioned to healthy - will fetch tools"
-                        )
-                    else:
-                        # Already healthy - only fetch if we don't have tools
-                        current_tool_list = server_info.get("tool_list", [])
-                        if not current_tool_list:
-                            should_fetch_tools = True
-                            logger.info(
-                                f"Service {service_path} is healthy but has no tools - will fetch tools"
-                            )
-
-                if should_fetch_tools:
-                    asyncio.create_task(self._update_tools_background(service_path, proxy_pass_url))
+                    fetch_trigger = self._tool_fetch_trigger(
+                        service_path, previous_status, server_info
+                    )
+                    if fetch_trigger:
+                        self._schedule_tool_fetch(service_path, proxy_pass_url, fetch_trigger)
             else:
                 new_status = status_detail  # Detailed error message from transport check
 
@@ -741,6 +932,10 @@ class HealthMonitoringService:
                 f"Health server headers withheld service={entity_path or 'unknown'} destination={redact_url(destination_url)} validation_type={type(exc).__name__}",
             )
             return headers
+
+        from ..services.openapi_ownership import admission_headers
+
+        headers.update(admission_headers(entity_path, registered_target, destination_url))
 
         server_headers = server_info.get("headers", [])
         if isinstance(server_headers, list):
@@ -960,6 +1155,27 @@ class HealthMonitoringService:
         Returns:
             Session ID string if successful, None otherwise
         """
+        session_id, _ = await self._initialize_mcp_session_with_status(client, endpoint, headers)
+        return session_id
+
+    async def _initialize_mcp_session_with_status(
+        self,
+        client: httpx.AsyncClient,
+        endpoint: str,
+        headers: dict[str, str],
+    ) -> tuple[str | None, int | None]:
+        """Initialize an MCP session and report the HTTP status of a failed attempt.
+
+        Args:
+            client: httpx AsyncClient instance
+            endpoint: The MCP endpoint URL
+            headers: Headers to send with the request
+
+        Returns:
+            (session_id, None) on success, (None, status_code) when the server
+            answered with a non-2xx status, and (None, None) when the request
+            itself failed.
+        """
         import uuid
 
         try:
@@ -994,7 +1210,7 @@ class HealthMonitoringService:
                     logger.warning(
                         f"MCP initialize failed endpoint={redact_url(endpoint)} status={response.status_code}",
                     )
-                    return None
+                    return None, response.status_code
 
                 # Get session ID from response headers (server-generated)
                 server_session_id = response.headers.get("Mcp-Session-Id") or response.headers.get(
@@ -1005,20 +1221,20 @@ class HealthMonitoringService:
             logger.warning(
                 f"MCP initialize failed for {redact_url(endpoint)} type={type(e).__name__}"
             )
-            return None
+            return None, None
 
         await self._send_initialized_notification(client, endpoint, headers, server_session_id)
 
         if server_session_id:
             logger.debug(f"Server returned session ID: {server_session_id}")
-            return server_session_id
+            return server_session_id, None
 
         # If server doesn't return a session ID, generate one for stateless servers
         client_session_id = str(uuid.uuid4())
         logger.debug(
             f"Server did not return session ID, using client-generated: {client_session_id}"
         )
-        return client_session_id
+        return client_session_id, None
 
     async def _send_initialized_notification(
         self,
@@ -1069,7 +1285,12 @@ class HealthMonitoringService:
                 f"type={type(e).__name__}"
             )
 
-    async def _try_ping_without_auth(self, client: httpx.AsyncClient, endpoint: str) -> bool:
+    async def _try_ping_without_auth(
+        self,
+        client: httpx.AsyncClient,
+        endpoint: str,
+        server_info: dict | None = None,
+    ) -> bool:
         """
         Try a simple ping without authentication headers.
         Used as fallback when auth fails to determine if server is reachable.
@@ -1077,11 +1298,17 @@ class HealthMonitoringService:
         Args:
             client: httpx AsyncClient instance
             endpoint: The MCP endpoint URL to ping
+            server_info: The server record. An OpenAPI MCP server's hub refuses
+                any call without its admission marker, which is a routing proof
+                rather than a credential, so the ping still sends it. Without
+                it the hub answers 401, and a missing hub would read as healthy.
 
         Returns:
             bool: True if server responds (indicating it's reachable but auth expired)
         """
         import uuid
+
+        from ..services.openapi_ownership import admission_headers
 
         try:
             # Minimal headers without auth but with session ID (required by some servers)
@@ -1090,6 +1317,14 @@ class HealthMonitoringService:
                 "Content-Type": "application/json",
                 "Mcp-Session-Id": str(uuid.uuid4()),
             }
+            info = server_info or {}
+            headers.update(
+                admission_headers(
+                    info.get("path") or info.get("service_path"),
+                    info.get("proxy_pass_url"),
+                    endpoint,
+                )
+            )
             ping_payload = '{ "jsonrpc": "2.0", "id": "0", "method": "ping" }'
 
             response = await client.post(
@@ -1294,8 +1529,8 @@ class HealthMonitoringService:
                         logger.info(
                             f"[TRACE] Auth failure detected status={response.status_code} endpoint={redact_url(proxy_pass_url)}; trying ping without auth",
                         )
-                        if await self._try_ping_without_auth(client, proxy_pass_url):
-                            return True, HealthStatus.HEALTHY
+                        if await self._try_ping_without_auth(client, proxy_pass_url, server_info):
+                            return True, HealthStatus.HEALTHY_AUTH_EXPIRED
                         else:
                             return False, "unhealthy: auth failed and ping without auth failed"
 
@@ -1352,7 +1587,9 @@ class HealthMonitoringService:
                 logger.info(
                     f"[TRACE] Initializing MCP session for endpoint: {redact_url(endpoint)}"
                 )
-                session_id = await self._initialize_mcp_session(client, endpoint, headers)
+                session_id, init_status = await self._initialize_mcp_session_with_status(
+                    client, endpoint, headers
+                )
 
                 # If initialize failed, check if it was due to auth (401/403)
                 # Try ping without auth before giving up
@@ -1360,7 +1597,13 @@ class HealthMonitoringService:
                     logger.warning(
                         f"Failed to initialize MCP session for {redact_url(endpoint)}, trying ping without auth"
                     )
-                    if await self._try_ping_without_auth(client, endpoint):
+                    if await self._try_ping_without_auth(client, endpoint, server_info):
+                        # Reachable, but it refused the gateway's credentials (or
+                        # their absence): report that, so callers that need a
+                        # working credential, such as virtual servers, can tell
+                        # (issues #167 and #2079).
+                        if init_status in (401, 403):
+                            return True, HealthStatus.HEALTHY_AUTH_EXPIRED
                         return True, HealthStatus.HEALTHY
                     else:
                         return (
@@ -1382,31 +1625,12 @@ class HealthMonitoringService:
                     logger.info(
                         f"[TRACE] Auth failure detected ({response.status_code}) for {redact_url(endpoint)}, trying ping without auth"
                     )
-                    if await self._try_ping_without_auth(client, endpoint):
-                        # ============================================================================
-                        # TEMPORARY WORKAROUND - TODO: REVERT AFTER CREDENTIALS MANAGER IS IMPLEMENTED
-                        # ============================================================================
-                        # Issue: https://github.com/agentic-community/mcp-gateway-registry/issues/167
-                        #
-                        # Temporarily marking servers with auth failures as "healthy" instead of
-                        # "healthy-auth-expired" to avoid confusing users when servers are registered
-                        # with auth requirements but no credentials manager is in place yet.
-                        #
-                        # This allows servers like customer-support-assistant (Bedrock AgentCore) to
-                        # show as healthy when they respond to ping, even though live tool fetching
-                        # requires authentication.
-                        #
-                        # BEFORE CREDENTIALS MANAGER: Return healthy (current behavior)
-                        # AFTER CREDENTIALS MANAGER:  Return healthy-auth-expired (proper behavior)
-                        #
-                        # When the credentials manager container is implemented (see design doc at
-                        # .scratchpad/credentials-manager-design.md), this should be changed back to:
-                        #   return True, HealthStatus.HEALTHY_AUTH_EXPIRED
-                        # ============================================================================
-                        return (
-                            True,
-                            HealthStatus.HEALTHY,
-                        )  # TODO: Change back to HEALTHY_AUTH_EXPIRED
+                    if await self._try_ping_without_auth(client, endpoint, server_info):
+                        # Reachable, but the request was refused for its credentials.
+                        # healthy-auth-expired still routes (get_healthy_statuses),
+                        # and per-user egress credentials now come from the egress
+                        # broker, which ends the #167 workaround (issue #2079).
+                        return True, HealthStatus.HEALTHY_AUTH_EXPIRED
                     else:
                         return False, "unhealthy: auth failed and ping without auth failed"
 
@@ -1641,131 +1865,276 @@ class HealthMonitoringService:
         # All other status codes (404, 500, etc.) are considered unhealthy
         return False
 
-    async def _update_tools_background(self, service_path: str, proxy_pass_url: str):
-        """Update tool list in the background without blocking health checks."""
-        try:
-            logger.info(f"Starting background tool update for {service_path}")
-            from ..core.mcp_client import mcp_client_service
-            from ..services.server_service import server_service
+    async def refresh_tools_now(
+        self,
+        service_path: str,
+    ) -> None:
+        """Run the tool refresh for one server and return when it is done.
 
-            # Wait a moment to ensure health check session is fully closed
-            # This prevents connection conflicts with servers like currenttime and realserverfaketools
-            # that don't allow multiple concurrent sessions on the same endpoint
+        perform_immediate_health_check starts the same refresh in the background;
+        callers that must answer with the new tool list (OpenAPI MCP servers,
+        issue #2022) await this instead of polling the record.
+        """
+        from ..services.server_service import server_service
+
+        server_info = await server_service.get_server_info(service_path)
+        if not server_info or not server_info.get("proxy_pass_url"):
+            logger.warning(f"Tool refresh skipped for {service_path}: no proxy_pass_url")
+            return
+        await self._update_tools_background(service_path, server_info["proxy_pass_url"])
+
+    async def _fetch_tools_for_server(
+        self,
+        service_path: str,
+        proxy_pass_url: str,
+    ) -> tuple[list[dict] | None, Mapping[str, Any] | None]:
+        """Fetch one server's tools and serverInfo, within TOOL_FETCH_TIMEOUT_SECONDS.
+
+        Returns:
+            (tool_list, mcp_server_info). tool_list is None when the fetch failed.
+        """
+        from ..core.mcp_client import mcp_client_service
+        from ..services.server_service import server_service
+
+        async with asyncio.timeout(TOOL_FETCH_TIMEOUT_SECONDS):
+            # Let the health check's session close first. Some servers (for
+            # example currenttime and realserverfaketools) refuse a second
+            # concurrent session on the same endpoint.
             await asyncio.sleep(0.5)
 
-            # Get server info to pass transport configuration and credentials
+            # Credentialed read: the fetch needs transport settings and secrets.
             server_info = await server_service.get_server_info(
                 service_path, include_credentials=True
             )
             logger.info(f"Fetching tools from {redact_url(proxy_pass_url)} for {service_path}")
-
-            # Use the new connection result function to get both tools and server info
             connection_result = await mcp_client_service.get_mcp_connection_result(
                 proxy_pass_url, server_info
             )
 
-            tool_list = connection_result.get("tools") if connection_result else None
-            mcp_server_info = connection_result.get("server_info") if connection_result else None
+        tool_list = connection_result.get("tools") if connection_result else None
+        mcp_server_info = connection_result.get("server_info") if connection_result else None
+        logger.info(
+            f"Tool fetch result for {service_path}: {len(tool_list) if tool_list else 'None'} tools"
+        )
+        return tool_list, mcp_server_info
 
-            logger.info(
-                f"Tool fetch result for {service_path}: "
-                f"{len(tool_list) if tool_list else 'None'} tools"
+    def _add_server_version_fields(
+        self,
+        service_path: str,
+        current_server_info: dict,
+        mcp_server_info: Mapping[str, Any] | None,
+        updated_server_info: dict,
+        discovered_fields: list[str],
+    ) -> None:
+        """Copy the MCP server's name and version into the update, tracking a version change."""
+        if not mcp_server_info:
+            return
+        current_version = current_server_info.get("mcp_server_version")
+        new_version = mcp_server_info.get("version")
+        if new_version:
+            if current_version and current_version != new_version:
+                logger.warning(
+                    f"MCP server version change detected for {service_path}: "
+                    f"{current_version} -> {new_version}"
+                )
+                updated_server_info["mcp_server_version_previous"] = current_version
+                updated_server_info["mcp_server_version_updated_at"] = datetime.now(UTC).isoformat()
+                discovered_fields += [
+                    "mcp_server_version_previous",
+                    "mcp_server_version_updated_at",
+                ]
+            updated_server_info["mcp_server_version"] = new_version
+            discovered_fields.append("mcp_server_version")
+            logger.info(f"Storing MCP server version for {service_path}: {new_version}")
+        if mcp_server_info.get("name"):
+            updated_server_info["mcp_server_name"] = mcp_server_info["name"]
+            discovered_fields.append("mcp_server_name")
+
+    def _build_discovered_update(
+        self,
+        service_path: str,
+        current_server_info: dict,
+        tool_list: list[dict],
+        mcp_server_info: Mapping[str, Any] | None,
+    ) -> tuple[dict, list[str], ToolListChanges] | None:
+        """Decide whether a fetched tool list must be saved, and build the update.
+
+        The stored list is hashed every time rather than trusting the stored
+        tool_list_hash, because a registrant can write tool_list through the API
+        and servers stored before the hash existed have none.
+
+        Returns:
+            (updated_server_info, discovered_fields, changes), or None when the
+            stored copy already matches and nothing needs writing.
+        """
+        current_tool_list = current_server_info.get("tool_list") or []
+        new_hash = tool_list_hash(tool_list)
+        list_changed = tool_list_hash(current_tool_list) != new_hash
+        new_version = mcp_server_info.get("version") if mcp_server_info else None
+        # A fetch that reports no version is not a version change: nothing new
+        # would be stored, and with refresh on it would rewrite every period.
+        version_changed = bool(new_version) and (
+            current_server_info.get("mcp_server_version") != new_version
+        )
+        # MCP App pages live in _meta.ui, which the hash does not cover.
+        ui_changed = mcp_app_signature(current_tool_list) != mcp_app_signature(tool_list)
+        if not (list_changed or version_changed or ui_changed):
+            return None
+
+        # current_server_info was read without credentials, so a full-card write
+        # would replace nested documents such as egress_oauth without their
+        # secrets and wipe them. Persist only the fields discovery owns.
+        updated_server_info = current_server_info.copy()
+        updated_server_info["tool_list"] = tool_list
+        updated_server_info["num_tools"] = len(tool_list)
+        updated_server_info["num_mcp_app_tools"] = count_mcp_app_tools(tool_list)
+        updated_server_info["tool_list_hash"] = new_hash
+        discovered_fields = ["tool_list", "num_tools", "num_mcp_app_tools", "tool_list_hash"]
+        # The first discovery fills an empty list; that is not a change.
+        if list_changed and current_tool_list:
+            updated_server_info["tool_list_changed_at"] = datetime.now(UTC).isoformat()
+            discovered_fields.append("tool_list_changed_at")
+
+        self._add_server_version_fields(
+            service_path,
+            current_server_info,
+            mcp_server_info,
+            updated_server_info,
+            discovered_fields,
+        )
+        changes = compare_tool_lists(current_tool_list, tool_list)
+        return updated_server_info, discovered_fields, changes
+
+    async def _warn_on_removed_blocked_tools(
+        self,
+        service_path: str,
+        removed: list[str],
+    ) -> None:
+        """Warn when a tool that had a block override disappears from a server.
+
+        Blocks are keyed by tool name. If the server renamed the tool, the new
+        name is not blocked, so an operator has to block it again.
+        """
+        if not removed:
+            return
+        try:
+            from ..services.tool_blocks import blocked_names_for
+
+            blocked = await blocked_names_for(service_path, {})
+        except Exception as e:
+            logger.debug(f"Could not read tool blocks for {service_path} type={type(e).__name__}")
+            return
+        removed_blocked = sorted(set(removed) & blocked)
+        if removed_blocked:
+            logger.warning(
+                f"Blocked tools no longer listed by {service_path}: "
+                f"{_names_for_log(removed_blocked)}. If the server renamed them, "
+                "the new names are not blocked."
             )
 
-            if tool_list is not None:
-                new_tool_count = len(tool_list)
-                current_server_info = await server_service.get_server_info(service_path)
-                if current_server_info:
-                    current_tool_count = current_server_info.get("num_tools", 0)
+    async def _apply_scope_update(
+        self,
+        service_path: str,
+        server_name: str,
+        tool_list: list[dict],
+        changes: ToolListChanges,
+        first_discovery: bool,
+    ) -> None:
+        """Update scopes for the server's tool names, only when those names changed.
 
-                    # Update if count changed OR if we have no tool details yet
-                    current_tool_list = current_server_info.get("tool_list", [])
+        update_server_scopes reloads the auth server, so a description-only
+        change skips it.
+        """
+        if not (first_discovery or changes.names_changed):
+            return
+        try:
+            from ..services.scope_service import update_server_scopes
 
-                    # Check if MCP server version changed
-                    current_mcp_version = current_server_info.get("mcp_server_version")
-                    new_mcp_version = mcp_server_info.get("version") if mcp_server_info else None
+            tool_names = [tool["name"] for tool in tool_list if "name" in tool]
+            await update_server_scopes(service_path, server_name, tool_names)
+            logger.info(
+                f"Updated scopes for {service_path} with {len(tool_names)} discovered tools"
+            )
+        except Exception as e:
+            logger.error(
+                f"Failed to update scopes for {service_path} after tool discovery "
+                f"type={type(e).__name__}"
+            )
 
-                    # Log warning if version changed
-                    if (
-                        current_mcp_version
-                        and new_mcp_version
-                        and current_mcp_version != new_mcp_version
-                    ):
-                        logger.warning(
-                            f"MCP server version change detected for {service_path}: "
-                            f"{current_mcp_version} -> {new_mcp_version}"
-                        )
+    async def _save_discovered_tools(
+        self,
+        service_path: str,
+        tool_list: list[dict],
+        mcp_server_info: Mapping[str, Any] | None,
+    ) -> str:
+        """Save a fetched tool list when it differs from the stored one.
 
-                    needs_update = (
-                        current_tool_count != new_tool_count
-                        or not current_tool_list
-                        or current_mcp_version != new_mcp_version
-                    )
+        Returns:
+            "changed" when something was written, "unchanged" otherwise.
+        """
+        from ..services.server_service import server_service
 
-                    if needs_update:
-                        # current_server_info was read without credentials, so a
-                        # full-card write would replace nested documents such as
-                        # egress_oauth without their secrets (client_secret_encrypted)
-                        # and wipe them. Persist only the fields discovery owns.
-                        updated_server_info = current_server_info.copy()
-                        updated_server_info["tool_list"] = tool_list
-                        updated_server_info["num_tools"] = new_tool_count
-                        discovered_fields = ["tool_list", "num_tools"]
+        current_server_info = await server_service.get_server_info(service_path)
+        if not current_server_info:
+            return "unchanged"
+        update = self._build_discovered_update(
+            service_path, current_server_info, tool_list, mcp_server_info
+        )
+        if update is None:
+            return "unchanged"
+        updated_server_info, discovered_fields, changes = update
 
-                        # Store MCP server info if available
-                        if mcp_server_info:
-                            if mcp_server_info.get("version"):
-                                new_ver = mcp_server_info["version"]
-                                # Track previous version and change timestamp
-                                if current_mcp_version and current_mcp_version != new_ver:
-                                    updated_server_info["mcp_server_version_previous"] = (
-                                        current_mcp_version
-                                    )
-                                    updated_server_info["mcp_server_version_updated_at"] = (
-                                        datetime.now(UTC).isoformat()
-                                    )
-                                    discovered_fields += [
-                                        "mcp_server_version_previous",
-                                        "mcp_server_version_updated_at",
-                                    ]
-                                updated_server_info["mcp_server_version"] = new_ver
-                                discovered_fields.append("mcp_server_version")
-                                logger.info(
-                                    f"Storing MCP server version for {service_path}: {new_ver}"
-                                )
-                            if mcp_server_info.get("name"):
-                                updated_server_info["mcp_server_name"] = mcp_server_info["name"]
-                                discovered_fields.append("mcp_server_name")
+        first_discovery = not current_server_info.get("tool_list")
+        if changes.any_change and not first_discovery:
+            _log_tool_list_changes(service_path, len(tool_list), changes)
+        await server_service.update_server(
+            service_path,
+            updated_server_info,
+            updated_fields=discovered_fields,
+        )
+        await self._warn_on_removed_blocked_tools(service_path, changes.removed)
+        await self._apply_scope_update(
+            service_path,
+            current_server_info.get("server_name", "Unknown"),
+            tool_list,
+            changes,
+            first_discovery,
+        )
+        await self.broadcast_health_update(service_path)
+        return "changed"
 
-                        await server_service.update_server(
-                            service_path,
-                            updated_server_info,
-                            updated_fields=discovered_fields,
-                        )
+    async def _update_tools_background(
+        self,
+        service_path: str,
+        proxy_pass_url: str,
+    ) -> str:
+        """Fetch a server's tools and save them if they changed.
 
-                        # Update scopes with newly discovered tools
-                        try:
-                            from ..services.scope_service import update_server_scopes
+        The fetch is bounded by TOOL_FETCH_TIMEOUT_SECONDS. The writes that
+        follow are not, so a slow database never leaves the tool list saved but
+        the scopes not updated.
 
-                            tool_names = [tool["name"] for tool in tool_list if "name" in tool]
-                            await update_server_scopes(
-                                service_path,
-                                current_server_info.get("server_name", "Unknown"),
-                                tool_names,
-                            )
-                            logger.info(
-                                f"Updated scopes for {service_path} with {len(tool_names)} discovered tools"
-                            )
-                        except Exception as e:
-                            logger.error(
-                                f"Failed to update scopes for {service_path} after tool discovery type={type(e).__name__}"
-                            )
-
-                        # Broadcast only this specific service update
-                        await self.broadcast_health_update(service_path)
-
+        Returns:
+            "changed", "unchanged", "failed" or "timeout", for the fetch metric.
+        """
+        logger.info(f"Starting background tool update for {service_path}")
+        try:
+            tool_list, mcp_server_info = await self._fetch_tools_for_server(
+                service_path, proxy_pass_url
+            )
+        except TimeoutError:
+            logger.warning(f"Tool fetch for {service_path} exceeded {TOOL_FETCH_TIMEOUT_SECONDS}s")
+            return "timeout"
         except Exception as e:
             logger.warning(f"Failed to fetch tools for {service_path} type={type(e).__name__}")
+            return "failed"
+        if tool_list is None:
+            return "failed"
+        try:
+            return await self._save_discovered_tools(service_path, tool_list, mcp_server_info)
+        except Exception as e:
+            logger.warning(f"Failed to save tools for {service_path} type={type(e).__name__}")
+            return "failed"
 
     async def get_all_health_status(self) -> dict:
         """Get health status for all services."""
@@ -1856,9 +2225,7 @@ class HealthMonitoringService:
                         logger.info(
                             f"DEBUG: Status detail matches HealthStatus.HEALTHY, triggering background tool update for {service_path}"
                         )
-                        asyncio.create_task(
-                            self._update_tools_background(service_path, proxy_pass_url)
-                        )
+                        self._schedule_tool_fetch(service_path, proxy_pass_url, "manual")
                     elif status_detail == HealthStatus.HEALTHY_AUTH_EXPIRED:
                         logger.warning(
                             f"Auth token expired for {service_path} but server is reachable"

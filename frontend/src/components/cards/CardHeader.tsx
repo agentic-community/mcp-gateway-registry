@@ -69,7 +69,7 @@ const CardHeader: React.FC<CardHeaderProps> = ({
             {badges}
           </div>
           {path && (
-            <code className="text-xs text-gray-600 dark:text-gray-300 bg-gray-50 dark:bg-gray-800/50 px-2 py-1 rounded font-mono">
+            <code className="text-xs text-fg-muted bg-gray-500/10 px-2 py-1 rounded font-mono">
               {path}
             </code>
           )}

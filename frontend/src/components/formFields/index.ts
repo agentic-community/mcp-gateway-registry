@@ -25,8 +25,7 @@ export { default as DiscoveryIdentityFields } from './DiscoveryIdentityFields';
 export type { DiscoveryIdentityValues } from './DiscoveryIdentityFields';
 export {
   FIELD,
-  FIELD_BASE,
-  FIELD_FOCUS,
+  CHECKBOX,
   LABEL,
   FIELD_ERROR,
   FIELD_ERROR_BORDER,

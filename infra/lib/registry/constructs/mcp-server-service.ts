@@ -2,8 +2,8 @@
  * McpServerService - L3 construct for optional MCP server / A2A agent ECS
  * services. A service is only created when its container image URI is non-empty.
  *
- * Handles: currenttime, mcpgw, realserverfaketools, flight-booking-agent,
- * travel-assistant-agent.
+ * Handles: currenttime, mcpgw, openapi-mcp, realserverfaketools,
+ * flight-booking-agent, travel-assistant-agent.
  *
  * Each service gets its own Fargate task definition, security group, Cloud Map
  * Service Connect entry, and optional EFS volume mounts.
@@ -30,6 +30,12 @@ export interface McpEfsVolumeConfig {
 // ---------------------------------------------------------------------------
 // Props
 // ---------------------------------------------------------------------------
+
+/** Task-level CPU units for every MCP server / agent task. */
+const TASK_CPU: number = 512;
+
+/** Task-level memory (MiB) for every MCP server / agent task. */
+const TASK_MEMORY_MIB: number = 1024;
 
 export interface McpServerServiceProps {
   /** Short service name (e.g. 'currenttime', 'mcpgw') */
@@ -68,6 +74,28 @@ export interface McpServerServiceProps {
   readonly additionalExecRoleStatements?: iam.PolicyStatement[];
   /** Additional task role policy statements */
   readonly additionalTaskRoleStatements?: iam.PolicyStatement[];
+  /**
+   * CPU units to leave free for a sidecar added later. This construct pins
+   * the application container's CPU, and ECS rejects a task whose
+   * container-level CPU values sum above the task CPU, so a sidecar needs its
+   * share subtracted here.
+   */
+  readonly reservedSidecarCpu?: number;
+  /** Memory (MiB) to leave free for a sidecar added later. */
+  readonly reservedSidecarMemoryMiB?: number;
+  /** Container secrets from Secrets Manager (read is granted to the exec role) */
+  readonly secrets?: Record<string, ecs.Secret>;
+  /** Task and container memory in MiB (defaults to 1024) */
+  readonly memoryLimitMiB?: number;
+  /** Attach CPU autoscaling, min 1 and max 4 (defaults to true) */
+  readonly enableAutoScaling?: boolean;
+  /** Drop every Linux capability from the container (defaults to false) */
+  readonly dropAllCapabilities?: boolean;
+  /**
+   * Stop the old task before starting the new one on a deploy (defaults to
+   * false). For single-instance services that must never run two tasks.
+   */
+  readonly replaceTaskOnDeploy?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -80,6 +108,12 @@ export class McpServerService extends Construct {
 
   /** Security group for the ECS tasks (undefined if not created) */
   public readonly securityGroup?: ec2.SecurityGroup;
+
+  /**
+   * Task definition (undefined if imageUri was empty). Exposed so the
+   * observability pipeline can attach a per-task ADOT collector sidecar.
+   */
+  public readonly taskDefinition?: ecs.FargateTaskDefinition;
 
   constructor(scope: Construct, id: string, props: McpServerServiceProps) {
     super(scope, id);
@@ -207,13 +241,16 @@ export class McpServerService extends Construct {
     // Task Definition
     // ------------------------------------------------------------------
 
+    const memoryLimitMiB = props.memoryLimitMiB ?? TASK_MEMORY_MIB;
+
     const taskDef = new ecs.FargateTaskDefinition(this, 'TaskDef', {
       family: `${props.namePrefix}-${props.serviceName}`,
-      cpu: 512,
-      memoryLimitMiB: 1024,
+      cpu: TASK_CPU,
+      memoryLimitMiB,
       executionRole: taskExecRole,
       taskRole,
     });
+    this.taskDefinition = taskDef;
 
     // Add EFS volumes
     if (props.efsVolumes) {
@@ -238,13 +275,21 @@ export class McpServerService extends Construct {
     const healthCmd = props.healthCheckCommand
       ?? `nc -z localhost ${props.containerPort} || exit 1`;
 
+    let linuxParameters: ecs.LinuxParameters | undefined;
+    if (props.dropAllCapabilities) {
+      linuxParameters = new ecs.LinuxParameters(this, 'LinuxParams');
+      linuxParameters.dropCapabilities(ecs.Capability.ALL);
+    }
+
     const container = taskDef.addContainer(props.serviceName, {
       containerName: props.serviceName,
       image: ecs.ContainerImage.fromRegistry(props.imageUri),
       essential: true,
-      cpu: 512,
-      memoryLimitMiB: 1024,
+      cpu: TASK_CPU - (props.reservedSidecarCpu ?? 0),
+      memoryLimitMiB: memoryLimitMiB - (props.reservedSidecarMemoryMiB ?? 0),
       environment: props.environment,
+      secrets: props.secrets,
+      linuxParameters,
       logging: ecs.LogDrivers.awsLogs({
         logGroup,
         streamPrefix: 'ecs',
@@ -286,6 +331,7 @@ export class McpServerService extends Construct {
       cluster: props.cluster,
       taskDefinition: taskDef,
       desiredCount: props.desiredCount ?? 1,
+      ...(props.replaceTaskOnDeploy ? { maxHealthyPercent: 100, minHealthyPercent: 0 } : {}),
       assignPublicIp: false,
       vpcSubnets: { subnets: props.subnets },
       securityGroups: [sg],
@@ -307,14 +353,16 @@ export class McpServerService extends Construct {
     // Auto Scaling (min 1, max 4, CPU 70%)
     // ------------------------------------------------------------------
 
-    const scaling = this.service.autoScaleTaskCount({
-      minCapacity: 1,
-      maxCapacity: 4,
-    });
+    if (props.enableAutoScaling ?? true) {
+      const scaling = this.service.autoScaleTaskCount({
+        minCapacity: 1,
+        maxCapacity: 4,
+      });
 
-    scaling.scaleOnCpuUtilization('CpuScaling', {
-      targetUtilizationPercent: 70,
-    });
+      scaling.scaleOnCpuUtilization('CpuScaling', {
+        targetUtilizationPercent: 70,
+      });
+    }
 
     // ------------------------------------------------------------------
     // Tags

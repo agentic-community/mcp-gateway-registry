@@ -244,10 +244,10 @@ const FederationPeerForm: React.FC<FederationPeerFormProps> = ({
   if (isEditMode && isLoadingPeer) {
     return (
       <div className="space-y-6">
-        <div className="h-8 w-48 bg-gray-200 dark:bg-gray-700 rounded animate-pulse" />
+        <div className="h-8 w-48 bg-surface-hover rounded animate-pulse" />
         <div className="space-y-4">
           {[1, 2, 3, 4, 5].map((i) => (
-            <div key={i} className="h-16 bg-gray-200 dark:bg-gray-700 rounded animate-pulse" />
+            <div key={i} className="h-16 bg-surface-hover rounded animate-pulse" />
           ))}
         </div>
       </div>
@@ -258,15 +258,14 @@ const FederationPeerForm: React.FC<FederationPeerFormProps> = ({
   if (isEditMode && loadError) {
     return (
       <div className="text-center py-12">
-        <ExclamationCircleIcon className="h-12 w-12 mx-auto text-red-500 mb-4" />
-        <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">
+        <ExclamationCircleIcon className="h-12 w-12 mx-auto text-danger-500 mb-4" />
+        <h3 className="text-lg font-medium text-fg mb-2">
           Failed to Load Peer
         </h3>
-        <p className="text-gray-500 dark:text-gray-400 mb-4">{loadError}</p>
+        <p className="text-fg-subtle mb-4">{loadError}</p>
         <button
           onClick={() => navigate('/settings/federation/peers')}
-          className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200
-                     rounded-lg hover:bg-gray-300 dark:hover:bg-gray-800"
+          className="btn-secondary"
         >
           Back to Peers
         </button>
@@ -279,10 +278,10 @@ const FederationPeerForm: React.FC<FederationPeerFormProps> = ({
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+          <h2 className="text-lg font-semibold text-fg">
             {isEditMode ? 'Edit Peer' : 'Add Peer'}
           </h2>
-          <p className="text-sm text-gray-500 dark:text-gray-400">
+          <p className="text-sm text-fg-subtle">
             {isEditMode
               ? 'Update peer registry configuration'
               : 'Configure a new peer registry for federation'}
@@ -290,8 +289,7 @@ const FederationPeerForm: React.FC<FederationPeerFormProps> = ({
         </div>
         <button
           onClick={() => navigate('/settings/federation/peers')}
-          className="flex items-center text-gray-600 dark:text-gray-400
-                     hover:text-gray-900 dark:hover:text-white transition-colors"
+          className="flex items-center text-fg-muted hover:text-fg transition-colors"
         >
           <ArrowLeftIcon className="h-5 w-5 mr-2" />
           Back to List
@@ -301,7 +299,7 @@ const FederationPeerForm: React.FC<FederationPeerFormProps> = ({
       <form onSubmit={handleSubmit} className="space-y-6">
         {/* Basic Information */}
         <div className="space-y-4">
-          <h3 className="text-sm font-medium text-gray-900 dark:text-white uppercase tracking-wider">
+          <h3 className="text-sm font-medium text-fg uppercase tracking-wider">
             Basic Information
           </h3>
 
@@ -309,9 +307,9 @@ const FederationPeerForm: React.FC<FederationPeerFormProps> = ({
           <div>
             <label
               htmlFor="peer_id"
-              className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+              className="block text-sm font-medium text-fg-muted mb-1"
             >
-              Peer ID <span className="text-red-500">*</span>
+              Peer ID <span className="text-danger-500">*</span>
             </label>
             <input
               type="text"
@@ -321,16 +319,14 @@ const FederationPeerForm: React.FC<FederationPeerFormProps> = ({
               onChange={handleChange}
               disabled={isEditMode}
               placeholder="e.g., lob-a-registry"
-              className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-900
-                         text-gray-900 dark:text-white
-                         ${errors.peer_id ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'}
-                         ${isEditMode ? 'opacity-50 cursor-not-allowed' : ''}
-                         focus:ring-2 focus:ring-purple-500 focus:border-transparent`}
+              className={`input
+                         ${errors.peer_id ? 'border-danger-500' : ''}
+                         ${isEditMode ? 'opacity-50 cursor-not-allowed' : ''}`}
             />
             {errors.peer_id && (
-              <p className="mt-1 text-sm text-red-500">{errors.peer_id}</p>
+              <p className="mt-1 text-sm text-danger-500">{errors.peer_id}</p>
             )}
-            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            <p className="mt-1 text-xs text-fg-subtle">
               Unique identifier for this peer (alphanumeric, dashes, underscores)
             </p>
           </div>
@@ -339,9 +335,9 @@ const FederationPeerForm: React.FC<FederationPeerFormProps> = ({
           <div>
             <label
               htmlFor="name"
-              className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+              className="block text-sm font-medium text-fg-muted mb-1"
             >
-              Display Name <span className="text-red-500">*</span>
+              Display Name <span className="text-danger-500">*</span>
             </label>
             <input
               type="text"
@@ -350,13 +346,10 @@ const FederationPeerForm: React.FC<FederationPeerFormProps> = ({
               value={formData.name}
               onChange={handleChange}
               placeholder="e.g., LOB-A Registry"
-              className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-900
-                         text-gray-900 dark:text-white
-                         ${errors.name ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'}
-                         focus:ring-2 focus:ring-purple-500 focus:border-transparent`}
+              className={`input ${errors.name ? 'border-danger-500' : ''}`}
             />
             {errors.name && (
-              <p className="mt-1 text-sm text-red-500">{errors.name}</p>
+              <p className="mt-1 text-sm text-danger-500">{errors.name}</p>
             )}
           </div>
 
@@ -364,9 +357,9 @@ const FederationPeerForm: React.FC<FederationPeerFormProps> = ({
           <div>
             <label
               htmlFor="endpoint"
-              className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+              className="block text-sm font-medium text-fg-muted mb-1"
             >
-              Endpoint URL <span className="text-red-500">*</span>
+              Endpoint URL <span className="text-danger-500">*</span>
             </label>
             <input
               type="url"
@@ -375,15 +368,12 @@ const FederationPeerForm: React.FC<FederationPeerFormProps> = ({
               value={formData.endpoint}
               onChange={handleChange}
               placeholder="https://lob-a-registry.company.com"
-              className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-900
-                         text-gray-900 dark:text-white
-                         ${errors.endpoint ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'}
-                         focus:ring-2 focus:ring-purple-500 focus:border-transparent`}
+              className={`input ${errors.endpoint ? 'border-danger-500' : ''}`}
             />
             {errors.endpoint && (
-              <p className="mt-1 text-sm text-red-500">{errors.endpoint}</p>
+              <p className="mt-1 text-sm text-danger-500">{errors.endpoint}</p>
             )}
-            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            <p className="mt-1 text-xs text-fg-subtle">
               Base URL of the peer registry API
             </p>
           </div>
@@ -396,11 +386,11 @@ const FederationPeerForm: React.FC<FederationPeerFormProps> = ({
               name="enabled"
               checked={formData.enabled}
               onChange={handleChange}
-              className="h-4 w-4 text-purple-600 focus:ring-purple-500 border-gray-300 rounded"
+              className="h-4 w-4 rounded border-line-strong bg-surface text-purple-600 focus:ring-focus"
             />
             <label
               htmlFor="enabled"
-              className="ml-2 text-sm text-gray-700 dark:text-gray-300"
+              className="ml-2 text-sm text-fg-muted"
             >
               Enable sync from this peer
             </label>
@@ -408,8 +398,8 @@ const FederationPeerForm: React.FC<FederationPeerFormProps> = ({
         </div>
 
         {/* Authentication */}
-        <div className="space-y-4 pt-4 border-t border-gray-200 dark:border-gray-700">
-          <h3 className="text-sm font-medium text-gray-900 dark:text-white uppercase tracking-wider">
+        <div className="space-y-4 pt-4 border-t border-line">
+          <h3 className="text-sm font-medium text-fg uppercase tracking-wider">
             Authentication
           </h3>
 
@@ -417,9 +407,9 @@ const FederationPeerForm: React.FC<FederationPeerFormProps> = ({
           <div>
             <label
               htmlFor="federation_token"
-              className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+              className="block text-sm font-medium text-fg-muted mb-1"
             >
-              Federation Static Token {!isEditMode && <span className="text-red-500">*</span>}
+              Federation Static Token {!isEditMode && <span className="text-danger-500">*</span>}
             </label>
             <input
               type="password"
@@ -429,15 +419,12 @@ const FederationPeerForm: React.FC<FederationPeerFormProps> = ({
               onChange={handleChange}
               placeholder={isEditMode ? '(leave blank to keep existing)' : 'Enter token from peer registry'}
               autoComplete="off"
-              className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-900
-                         text-gray-900 dark:text-white
-                         ${errors.federation_token ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'}
-                         focus:ring-2 focus:ring-purple-500 focus:border-transparent`}
+              className={`input ${errors.federation_token ? 'border-danger-500' : ''}`}
             />
             {errors.federation_token && (
-              <p className="mt-1 text-sm text-red-500">{errors.federation_token}</p>
+              <p className="mt-1 text-sm text-danger-500">{errors.federation_token}</p>
             )}
-            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            <p className="mt-1 text-xs text-fg-subtle">
               {isEditMode
                 ? 'Leave blank to keep existing token, or enter a new value to update'
                 : 'The FEDERATION_STATIC_TOKEN value from the peer registry'}
@@ -446,8 +433,8 @@ const FederationPeerForm: React.FC<FederationPeerFormProps> = ({
         </div>
 
         {/* Sync Configuration */}
-        <div className="space-y-4 pt-4 border-t border-gray-200 dark:border-gray-700">
-          <h3 className="text-sm font-medium text-gray-900 dark:text-white uppercase tracking-wider">
+        <div className="space-y-4 pt-4 border-t border-line">
+          <h3 className="text-sm font-medium text-fg uppercase tracking-wider">
             Sync Configuration
           </h3>
 
@@ -455,7 +442,7 @@ const FederationPeerForm: React.FC<FederationPeerFormProps> = ({
           <div>
             <label
               htmlFor="sync_mode"
-              className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+              className="block text-sm font-medium text-fg-muted mb-1"
             >
               Sync Mode
             </label>
@@ -464,9 +451,7 @@ const FederationPeerForm: React.FC<FederationPeerFormProps> = ({
               name="sync_mode"
               value={formData.sync_mode}
               onChange={handleChange}
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg
-                         bg-white dark:bg-gray-900 text-gray-900 dark:text-white
-                         focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+              className="input"
             >
               <option value="all">All Public Items</option>
               <option value="whitelist">Whitelist Specific Items</option>
@@ -479,7 +464,7 @@ const FederationPeerForm: React.FC<FederationPeerFormProps> = ({
             <div>
               <label
                 htmlFor="whitelist"
-                className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+                className="block text-sm font-medium text-fg-muted mb-1"
               >
                 Whitelist Items
               </label>
@@ -489,15 +474,12 @@ const FederationPeerForm: React.FC<FederationPeerFormProps> = ({
                 onChange={(e) => setWhitelistText(e.target.value)}
                 placeholder="server:/finance-tools, agent:/code-reviewer"
                 rows={3}
-                className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-900
-                           text-gray-900 dark:text-white
-                           ${errors.whitelist ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'}
-                           focus:ring-2 focus:ring-purple-500 focus:border-transparent`}
+                className={`input ${errors.whitelist ? 'border-danger-500' : ''}`}
               />
               {errors.whitelist && (
-                <p className="mt-1 text-sm text-red-500">{errors.whitelist}</p>
+                <p className="mt-1 text-sm text-danger-500">{errors.whitelist}</p>
               )}
-              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              <p className="mt-1 text-xs text-fg-subtle">
                 Comma-separated list. Prefix with "server:" or "agent:" (default: server)
               </p>
             </div>
@@ -508,7 +490,7 @@ const FederationPeerForm: React.FC<FederationPeerFormProps> = ({
             <div>
               <label
                 htmlFor="tag_filters"
-                className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+                className="block text-sm font-medium text-fg-muted mb-1"
               >
                 Tag Filters
               </label>
@@ -518,15 +500,12 @@ const FederationPeerForm: React.FC<FederationPeerFormProps> = ({
                 value={tagFiltersText}
                 onChange={(e) => setTagFiltersText(e.target.value)}
                 placeholder="production, approved, finance"
-                className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-900
-                           text-gray-900 dark:text-white
-                           ${errors.tag_filters ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'}
-                           focus:ring-2 focus:ring-purple-500 focus:border-transparent`}
+                className={`input ${errors.tag_filters ? 'border-danger-500' : ''}`}
               />
               {errors.tag_filters && (
-                <p className="mt-1 text-sm text-red-500">{errors.tag_filters}</p>
+                <p className="mt-1 text-sm text-danger-500">{errors.tag_filters}</p>
               )}
-              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              <p className="mt-1 text-xs text-fg-subtle">
                 Comma-separated list of tags. Only items with these tags will be synced.
               </p>
             </div>
@@ -536,7 +515,7 @@ const FederationPeerForm: React.FC<FederationPeerFormProps> = ({
           <div>
             <label
               htmlFor="sync_interval_minutes"
-              className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+              className="block text-sm font-medium text-fg-muted mb-1"
             >
               Sync Interval (minutes)
             </label>
@@ -548,15 +527,12 @@ const FederationPeerForm: React.FC<FederationPeerFormProps> = ({
               onChange={handleChange}
               min={5}
               max={1440}
-              className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-900
-                         text-gray-900 dark:text-white
-                         ${errors.sync_interval_minutes ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'}
-                         focus:ring-2 focus:ring-purple-500 focus:border-transparent`}
+              className={`input ${errors.sync_interval_minutes ? 'border-danger-500' : ''}`}
             />
             {errors.sync_interval_minutes && (
-              <p className="mt-1 text-sm text-red-500">{errors.sync_interval_minutes}</p>
+              <p className="mt-1 text-sm text-danger-500">{errors.sync_interval_minutes}</p>
             )}
-            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            <p className="mt-1 text-xs text-fg-subtle">
               How often to sync from this peer (5-1440 minutes)
             </p>
           </div>
@@ -569,13 +545,13 @@ const FederationPeerForm: React.FC<FederationPeerFormProps> = ({
                 name="sync_local_servers"
                 checked={!!formData.sync_local_servers}
                 onChange={handleChange}
-                className="mt-1 h-4 w-4 rounded border-gray-300 text-purple-600 focus:ring-purple-500"
+                className="mt-1 h-4 w-4 rounded border-line-strong bg-surface text-purple-600 focus:ring-focus"
               />
               <span className="text-sm">
-                <span className="font-medium text-gray-700 dark:text-gray-300">
+                <span className="font-medium text-fg-muted">
                   Sync local (stdio) servers from this peer
                 </span>
-                <span className="block text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                <span className="block text-xs text-fg-subtle mt-0.5">
                   Local servers are executable launch recipes that run on developer machines.
                   Only enable for trusted peers. Default: off.
                 </span>
@@ -585,23 +561,21 @@ const FederationPeerForm: React.FC<FederationPeerFormProps> = ({
         </div>
 
         {/* Form Actions */}
-        <div className="flex justify-end space-x-3 pt-4 border-t border-gray-200 dark:border-gray-700">
+        <div className="flex justify-end space-x-3 pt-4 border-t border-line">
           <button
             type="button"
             onClick={() => navigate('/settings/federation/peers')}
             disabled={isSubmitting}
-            className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200
-                       rounded-lg hover:bg-gray-300 dark:hover:bg-gray-800 disabled:opacity-50"
+            className="btn-secondary"
           >
             Cancel
           </button>
           <button
             type="submit"
             disabled={isSubmitting}
-            className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700
-                       disabled:opacity-50 flex items-center"
+            className="btn-primary"
           >
-            {isSubmitting && <ArrowPathIcon className="h-4 w-4 mr-2 animate-spin" />}
+            {isSubmitting && <ArrowPathIcon className="h-4 w-4 animate-spin" />}
             {isEditMode ? 'Save Changes' : 'Add Peer'}
           </button>
         </div>

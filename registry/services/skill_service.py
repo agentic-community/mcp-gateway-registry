@@ -17,6 +17,7 @@ from typing import (
 from urllib.parse import urlparse
 
 import httpx
+import yaml
 
 from ..common.log_redaction import redact_url
 from ..core.config import settings
@@ -59,11 +60,13 @@ from ..utils.url_guard import (
     validate_url as _validate_url_guard,
 )
 from ..utils.url_utils import (
+    GIT_COMMIT_SHA_PATTERN,
     extract_repository_url,
     translate_skill_url,
 )
 from ._asset_id import resolve_asset_id
 from .github_auth import github_auth_provider as _github_auth
+from .visibility import can_skip_read_visibility
 
 # Configure logging
 logging.basicConfig(
@@ -75,6 +78,8 @@ logger = logging.getLogger(__name__)
 
 # Constants
 URL_VALIDATION_TIMEOUT: int = 10
+MAX_SKILL_FRONTMATTER_CHARS: int = 64 * 1024
+MAX_SKILL_YAML_DEPTH: int = 32
 
 # Upper bound on GitLab tree-API pages fetched during resource discovery, so a
 # server that keeps echoing the x-next-page header cannot loop indefinitely.
@@ -247,6 +252,8 @@ _LANG_BY_EXT: dict[str, str] = {
 # enterprise GitHub instances mirror the public path layout.
 _BLOB_PATH_PATTERN = re.compile(r"^/([^/]+)/([^/]+)/blob/([^/]+)/(.+)$")
 _RAW_PATH_PATTERN = re.compile(r"^/([^/]+)/([^/]+)/refs/heads/([^/]+)/(.+)$")
+# A raw URL pinned to a commit has the SHA where refs/heads/{branch} would be.
+_RAW_COMMIT_PATH_PATTERN = re.compile(rf"^/([^/]+)/([^/]+)/({GIT_COMMIT_SHA_PATTERN})/(.+)$")
 
 
 def _api_base_for_skill_host(
@@ -282,7 +289,8 @@ def _resolve_tree_api(
     """Resolve the GitHub/GHES Trees API endpoint for a SKILL.md URL.
 
     Parses both blob-style URLs (``github.com/{owner}/{repo}/blob/{ref}/...``)
-    and raw-content URLs (``raw.githubusercontent.com/{owner}/{repo}/refs/heads/{ref}/...``),
+    and raw-content URLs (``raw.githubusercontent.com/{owner}/{repo}/refs/heads/{ref}/...``,
+    or ``.../{owner}/{repo}/{commit sha}/...`` for a URL pinned to a commit),
     plus the corresponding GHES variants.
 
     Returns:
@@ -293,7 +301,7 @@ def _resolve_tree_api(
         - ``encoded_project``: ``{owner}/{repo}`` (kept for backward compat
           with the documented contract; GitHub's API uses owner+repo
           separately so callers can ignore this).
-        - ``ref``: branch name resolved from the SKILL.md URL.
+        - ``ref``: branch name or commit SHA resolved from the SKILL.md URL.
         - ``skill_dir``: directory portion of the path leading up to
           ``SKILL.md`` (``""`` when SKILL.md is at the repo root).
     """
@@ -314,7 +322,11 @@ def _resolve_tree_api(
     if not hostname:
         return None
 
-    match = _BLOB_PATH_PATTERN.match(parsed.path) or _RAW_PATH_PATTERN.match(parsed.path)
+    match = (
+        _BLOB_PATH_PATTERN.match(parsed.path)
+        or _RAW_PATH_PATTERN.match(parsed.path)
+        or _RAW_COMMIT_PATH_PATTERN.match(parsed.path)
+    )
     if not match:
         return None
 
@@ -628,6 +640,30 @@ async def _validate_skill_md_url(
         raise SkillUrlValidationError(url, str(e)) from e
 
 
+def _load_skill_frontmatter(frontmatter: str) -> dict[str, Any]:
+    if len(frontmatter) > MAX_SKILL_FRONTMATTER_CHARS:
+        return {}
+    source = frontmatter + "\n"
+    depth = 0
+    try:
+        for event in yaml.parse(source, Loader=yaml.BaseLoader):
+            if isinstance(event, yaml.AliasEvent) or getattr(event, "tag", None) is not None:
+                return {}
+            if isinstance(event, yaml.ScalarEvent):
+                event.value.encode("utf-8")
+            if isinstance(event, yaml.MappingStartEvent | yaml.SequenceStartEvent):
+                depth += 1
+                if depth > MAX_SKILL_YAML_DEPTH:
+                    return {}
+            elif isinstance(event, yaml.MappingEndEvent | yaml.SequenceEndEvent):
+                depth -= 1
+        # BaseLoader preserves scalar text and cannot construct Python objects.
+        metadata = yaml.load(source, Loader=yaml.BaseLoader)  # nosec B506 - data-only loader
+    except (yaml.YAMLError, ValueError):
+        return {}
+    return metadata if isinstance(metadata, dict) else {}
+
+
 async def _parse_skill_md_content(
     url: str,
     auth_scheme: str = "none",
@@ -728,57 +764,40 @@ async def _parse_skill_md_content(
             # 3. Code block without ---: ```yaml\n...\n```
             frontmatter = None
             frontmatter_end_pos = 0
+            scan = content[: MAX_SKILL_FRONTMATTER_CHARS + 1]
 
             # Format 1: Standard frontmatter at start of file
-            frontmatter_match = re.match(r"^---\s*\n(.*?)\n---\s*\n", content, re.DOTALL)
+            frontmatter_match = re.match(r"^---[^\S\n]*\n(.*?)\n---[^\S\n]*\n", scan, re.DOTALL)
             if frontmatter_match:
                 frontmatter = frontmatter_match.group(1)
                 frontmatter_end_pos = frontmatter_match.end()
             else:
-                # Format 2: YAML code block with --- markers inside
-                # Matches: ```yaml\n---\nkey: value\n---\n```
-                codeblock_with_markers = re.search(
-                    r"```ya?ml\s*\n---\s*\n(.*?)\n---\s*\n```",
-                    content,
-                    re.DOTALL | re.IGNORECASE,
-                )
-                if codeblock_with_markers:
-                    frontmatter = codeblock_with_markers.group(1)
-                    frontmatter_end_pos = codeblock_with_markers.end()
-                else:
-                    # Format 3: YAML code block without --- markers
-                    # Matches: ```yaml\nkey: value\n```
-                    codeblock_no_markers = re.search(
-                        r"```ya?ml\s*\n(.*?)\n```",
-                        content,
-                        re.DOTALL | re.IGNORECASE,
-                    )
-                    if codeblock_no_markers:
-                        frontmatter = codeblock_no_markers.group(1)
-                        frontmatter_end_pos = codeblock_no_markers.end()
+                fence = re.search(r"```ya?ml[^\S\n]*\n", scan, re.IGNORECASE)
+                if fence:
+                    end = scan.find("\n```", fence.end())
+                    if end != -1:
+                        frontmatter = scan[fence.end() : end]
+                        frontmatter = re.sub(r"^---[^\S\n]*\n|\n---[^\S\n]*$", "", frontmatter)
+                        frontmatter_end_pos = end + len("\n```")
 
             if frontmatter:
-                # Parse simple YAML key: value pairs
-                for line in frontmatter.split("\n"):
-                    if ":" in line:
-                        key, value = line.split(":", 1)
-                        key = key.strip().lower()
-                        value = value.strip().strip('"').strip("'")
-                        if key == "name":
-                            result["name"] = value
-                        elif key == "description":
-                            result["description"] = value
-                        elif key == "version":
-                            result["version"] = value
+                metadata = _load_skill_frontmatter(frontmatter)
+                if metadata:
+                    for key, value in metadata.items():
+                        if not isinstance(key, str):
+                            continue
+                        key = key.lower()
+                        if key in ("name", "description", "version") and isinstance(value, str):
+                            result[key] = value
                         elif key == "tags":
-                            # Handle comma-separated or YAML list
-                            if value.startswith("["):
-                                value = value.strip("[]")
-                            result["tags"] = [
-                                t.strip().strip('"').strip("'")
-                                for t in value.split(",")
-                                if t.strip()
-                            ]
+                            if isinstance(value, str):
+                                value = value.split(",")
+                            if isinstance(value, list):
+                                result[key] = [
+                                    tag.strip()
+                                    for tag in value
+                                    if isinstance(tag, str) and tag.strip()
+                                ]
 
                 # Remove frontmatter from content for further parsing
                 content = content[frontmatter_end_pos:]
@@ -1001,6 +1020,8 @@ async def _compute_content_integrity(
         url: str,
         rel_path: str,
     ) -> FileHash | None:
+        if not _is_safe_url(url):
+            return None
         fetch_url, fetch_headers = _build_fetch_headers(
             url,
             auth_scheme,
@@ -1008,12 +1029,22 @@ async def _compute_content_integrity(
             auth_header_name,
         )
         try:
+            if auth_scheme == "global_credentials":
+                fetch_headers = await _github_auth.get_auth_headers(
+                    fetch_url, allow_global_credentials=True
+                )
             resp = await client.get(
                 fetch_url,
                 headers=fetch_headers,
                 follow_redirects=True,
                 timeout=URL_VALIDATION_TIMEOUT,
             )
+            unsafe_hop = _unsafe_redirect_target(resp)
+            if unsafe_hop is not None:
+                logger.warning(
+                    "Integrity fetch blocked unsafe redirect to %s", redact_url(unsafe_hop)
+                )
+                return None
             if resp.status_code >= 400:
                 logger.warning("Integrity fetch failed for %s: HTTP %s", rel_path, resp.status_code)
                 return None
@@ -1055,6 +1086,40 @@ async def _compute_content_integrity(
         composite_hash=composite_hash,
         file_hashes=file_hashes,
         computed_at=datetime.now(UTC),
+    )
+
+
+async def _refresh_skill_content(
+    existing: SkillCard,
+    updates: dict[str, Any],
+) -> None:
+    """Validate replacement content and refresh its derived state before saving."""
+    merged = existing.model_copy(update=updates)
+    _, raw_url = translate_skill_url(str(merged.skill_md_url))
+    if not _is_safe_url(raw_url):
+        raise SkillUrlValidationError(raw_url, "URL failed validation")
+    auth_scheme, credential, header_name = _decrypt_skill_auth(merged)
+    try:
+        manifest = await _discover_skill_resources(raw_url, auth_scheme, credential, header_name)
+    except Exception as e:
+        logger.warning("Resource discovery error for %s: %s", redact_url(raw_url), type(e).__name__)
+        manifest = None
+    integrity = await _compute_content_integrity(
+        raw_url, manifest, auth_scheme, credential, header_name
+    )
+    if integrity is None:
+        raise SkillUrlValidationError(raw_url, "Could not compute replacement content integrity")
+    skill_md_hash = next((fh.sha256 for fh in integrity.file_hashes if fh.path == "SKILL.md"), None)
+    if not skill_md_hash:
+        raise SkillUrlValidationError(raw_url, "Could not compute replacement content integrity")
+
+    updates.update(
+        skill_md_raw_url=raw_url,
+        skill_md_content=None,
+        resource_manifest=manifest.model_dump(mode="json") if manifest else None,
+        content_integrity=integrity.model_dump(mode="json"),
+        content_version=skill_md_hash[:16],
+        content_updated_at=integrity.computed_at.isoformat(),
     )
 
 
@@ -1617,7 +1682,9 @@ class SkillService:
             tag=tag,
         )
 
-        if user_context and user_context.get("is_admin"):
+        # Admins and holders of the read-only view_all permission (issue #2099)
+        # see every skill. This method serves read paths only.
+        if can_skip_read_visibility(user_context):
             return all_skills
 
         # Discovery gate (list_skills). accessible_skills is derived at auth time
@@ -1680,10 +1747,23 @@ class SkillService:
         self,
         path: str,
         updates: dict[str, Any],
+        *,
+        existing: SkillCard | None = None,
     ) -> SkillCard | None:
         """Update a skill."""
         normalized = normalize_skill_path(path)
         repo = self._get_repo()
+
+        if "skill_md_url" in updates:
+            existing = existing or await repo.get(normalized)
+            if existing is None:
+                return None
+            _, raw_url = translate_skill_url(str(updates["skill_md_url"]))
+            old_raw_url = (
+                existing.skill_md_raw_url or translate_skill_url(str(existing.skill_md_url))[1]
+            )
+            if raw_url != str(old_raw_url):
+                await _refresh_skill_content(existing, updates)
 
         # Gateway-proxy SSRF layer 2: if this update changes the proxy opt-in or
         # target, resolve+validate the MERGED target (existing values overlaid with

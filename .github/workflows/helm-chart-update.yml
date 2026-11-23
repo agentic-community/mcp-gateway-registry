@@ -69,6 +69,7 @@ jobs:
             charts/auth-server/values.yaml \
             charts/registry/values.yaml \
             charts/mcpgw/values.yaml \
+            charts/openapi-mcp/values.yaml \
             charts/mongodb-configure/values.yaml; do
             VERSION="$VERSION" yq -i '.global.image.tag = strenv(VERSION)' "$VALUES_FILE"
             echo "Updated $VALUES_FILE"
@@ -182,7 +183,7 @@ jobs:
       - name: Create Pull Request
         id: create-pr
         if: steps.update.outputs.changed == 'true'
-        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        uses: peter-evans/create-pull-request@15733dbdfeedb4f7fdb73d13c6f5ac83b710fab8 # v8.1.2
         with:
           branch: release-update-${{ steps.version.outputs.version }}
           commit-message: "chore: update image tags to ${{ steps.version.outputs.version }}"
@@ -195,6 +196,7 @@ jobs:
             - `charts/auth-server/values.yaml`
             - `charts/registry/values.yaml`
             - `charts/mcpgw/values.yaml`
+            - `charts/openapi-mcp/values.yaml`
             - `charts/mongodb-configure/values.yaml`
             - `terraform/aws-ecs/variables.tf`
             - `terraform/aws-ecs/modules/mcp-gateway/variables.tf`

@@ -21,6 +21,7 @@ from fastapi import (
 from pydantic import BaseModel
 
 from ..audit.context import set_audit_action
+from ..auth.asset_permissions import can_view_all
 from ..auth.csrf import verify_csrf_token_flexible
 from ..auth.dependencies import nginx_proxied_auth
 from ..exceptions import (
@@ -37,6 +38,7 @@ from ..schemas.virtual_server_models import (
 )
 from ..services.tool_catalog_service import get_tool_catalog_service
 from ..services.virtual_server_service import get_virtual_server_service
+from ..services.visibility import user_can_list_virtual_server
 
 # Configure logging
 logging.basicConfig(
@@ -107,19 +109,20 @@ def _user_can_access_virtual_server(
     Returns:
         True if the user may access the virtual server.
     """
-    ui_permissions = user_context.get("ui_permissions", {})
-    list_virtual_perms = ui_permissions.get("list_virtual_server", [])
-    if user_context.get("is_admin") or "all" in list_virtual_perms:
-        return True
-    normalized_perms = {p.strip("/") for p in list_virtual_perms}
-    return normalized_path.strip("/") in normalized_perms
+    return user_can_list_virtual_server(user_context, normalized_path)
 
 
 def _require_virtual_server_access(
     user_context: dict,
     normalized_path: str,
+    *,
+    honor_view_all: bool = False,
 ) -> None:
     """Raise 404 if the user may not access the virtual server.
+
+    ``honor_view_all`` is True only on READ routes (detail, tools, rating): a
+    holder of the read-only ``view_all`` permission (issue #2099) passes there.
+    It defaults to False so the rate write can never pick up the bypass.
 
     Uses 404 (not 403) to avoid disclosing the existence of virtual servers
     the caller is not permitted to see, matching the list-filter contract.
@@ -131,6 +134,8 @@ def _require_virtual_server_access(
     Raises:
         HTTPException: 404 if access is denied.
     """
+    if honor_view_all and can_view_all(user_context):
+        return
     if not _user_can_access_virtual_server(user_context, normalized_path):
         logger.warning(
             f"User {user_context.get('username', 'unknown')} denied access to "
@@ -210,7 +215,8 @@ async def list_virtual_servers(
     list_virtual_perms = ui_permissions.get("list_virtual_server", [])
 
     # Admin users or users with "all" permission see everything
-    if user_context.get("is_admin") or "all" in list_virtual_perms:
+    # Admins, view_all holders (issue #2099) and "all" grants see every one.
+    if user_context.get("is_admin") or can_view_all(user_context) or "all" in list_virtual_perms:
         filtered_servers = all_servers
     else:
         # Filter to only virtual servers the user has explicit permission for
@@ -242,7 +248,7 @@ async def get_virtual_server_tools(
     Returns all tools with their final names, sources, and metadata.
     """
     normalized = _normalize_virtual_path(vs_path)
-    _require_virtual_server_access(user_context, normalized)
+    _require_virtual_server_access(user_context, normalized, honor_view_all=True)
     service = get_virtual_server_service()
 
     try:
@@ -328,7 +334,7 @@ async def get_virtual_server_rating(
 ) -> dict:
     """Get rating information for a virtual server."""
     normalized = _normalize_virtual_path(vs_path)
-    _require_virtual_server_access(user_context, normalized)
+    _require_virtual_server_access(user_context, normalized, honor_view_all=True)
     service = get_virtual_server_service()
 
     try:
@@ -351,7 +357,7 @@ async def get_virtual_server(
 ) -> VirtualServerConfig:
     """Get detailed configuration for a virtual server."""
     normalized = _normalize_virtual_path(vs_path)
-    _require_virtual_server_access(user_context, normalized)
+    _require_virtual_server_access(user_context, normalized, honor_view_all=True)
     service = get_virtual_server_service()
     config = await service.get_virtual_server(normalized)
 

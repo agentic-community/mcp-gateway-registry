@@ -6,7 +6,7 @@ import React from 'react';
  * and user-group tables, which previously each carried an identical copy.
  */
 const PROVIDER_STYLES: Record<string, string> = {
-  manual: 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300',
+  manual: 'bg-info-100 dark:bg-info-900/30 text-info-700 dark:text-info-300',
   pingfederate: 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300',
   okta: 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300',
   auth0: 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300',

@@ -2,6 +2,8 @@
 
 End-to-end deployment, credentials, and troubleshooting for the CDK deployment.
 
+> **Status: not actively maintained.** The supported AWS deployment is the Terraform stack in [`terraform/aws-ecs/`](../../terraform/aws-ecs/). This CDK stack lags behind it in features and configuration settings, and those gaps are not planned work. See the [known gaps](../README.md#known-gaps).
+
 ## Quickstart
 
 ```bash
@@ -9,6 +11,7 @@ cd infra
 export CDK_KEYCLOAK_ADMIN_PASSWORD="<...>"
 export CDK_KEYCLOAK_DATABASE_PASSWORD="<...>"
 export CDK_DOCUMENTDB_ADMIN_PASSWORD="<...>"
+export CDK_GRAFANA_ADMIN_PASSWORD="<...>"   # required while enableObservability is true
 ./scripts/deploy.sh   # bootstrap + synth + deploy --all + post-deploy
 ```
 

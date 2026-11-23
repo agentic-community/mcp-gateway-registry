@@ -196,8 +196,8 @@ const ServerToolsSelector: React.FC<ServerToolsSelectorProps> = ({
   if (serverPath === '*') {
     return (
       <div>
-        <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Tools</label>
-        <p className="text-xs text-gray-400 italic">All tools on all servers</p>
+        <label className="block text-xs text-fg-subtle mb-1">Tools</label>
+        <p className="text-xs text-fg-subtle italic">All tools on all servers</p>
       </div>
     );
   }
@@ -206,8 +206,8 @@ const ServerToolsSelector: React.FC<ServerToolsSelectorProps> = ({
   if (!serverPath) {
     return (
       <div>
-        <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Tools</label>
-        <p className="text-xs text-gray-400 italic">Select a server first</p>
+        <label className="block text-xs text-fg-subtle mb-1">Tools</label>
+        <p className="text-xs text-fg-subtle italic">Select a server first</p>
       </div>
     );
   }
@@ -216,7 +216,7 @@ const ServerToolsSelector: React.FC<ServerToolsSelectorProps> = ({
   if (selectedTools.includes('*')) {
     return (
       <div>
-        <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Tools</label>
+        <label className="block text-xs text-fg-subtle mb-1">Tools</label>
         <div className="flex items-center gap-2">
           <span className="inline-flex items-center px-2 py-1 text-xs bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 rounded-full">
             * (All tools)
@@ -244,7 +244,7 @@ const ServerToolsSelector: React.FC<ServerToolsSelectorProps> = ({
 
   return (
     <div>
-      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Tools</label>
+      <label className="block text-xs text-fg-subtle mb-1">Tools</label>
       <div className="space-y-2">
         {/* Selected tools as removable tags */}
         {selectedTools.length > 0 && (
@@ -669,12 +669,12 @@ const IAMGroups: React.FC<IAMGroupsProps> = ({ onShowToast }) => {
     return (
       <div className="space-y-6">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+          <h2 className="text-lg font-semibold text-fg">
             IAM &gt; Groups &gt; Create
           </h2>
           <button
             onClick={() => { resetForm(); setView('list'); }}
-            className="flex items-center text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+            className="flex items-center text-sm text-fg-subtle hover:text-fg"
           >
             <ArrowLeftIcon className="h-4 w-4 mr-1" />
             Back to List
@@ -684,42 +684,36 @@ const IAMGroups: React.FC<IAMGroupsProps> = ({ onShowToast }) => {
         {/* ── Basic Info ─────────────────────────────────────── */}
         <div className="space-y-4">
           <div>
-            <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">Group Name *</label>
+            <label className="block text-sm text-fg-muted mb-1">Group Name *</label>
             <input
               type="text"
               value={formName}
               onChange={(e) => setFormName(e.target.value)}
               placeholder="e.g. currenttime-users"
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg
-                         bg-white dark:bg-gray-900 text-gray-900 dark:text-white
-                         focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+              className="input"
             />
           </div>
           <div>
-            <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">Description</label>
+            <label className="block text-sm text-fg-muted mb-1">Description</label>
             <input
               type="text"
               value={formDescription}
               onChange={(e) => setFormDescription(e.target.value)}
               placeholder="Optional description"
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg
-                         bg-white dark:bg-gray-900 text-gray-900 dark:text-white
-                         focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+              className="input"
             />
           </div>
           <div>
-            <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">
+            <label className="block text-sm text-fg-muted mb-1">
               Group Mappings
-              <span className="text-xs text-gray-400 ml-1">(optional, comma-separated)</span>
+              <span className="text-xs text-fg-subtle ml-1">(optional, comma-separated)</span>
             </label>
             <input
               type="text"
               value={groupMappings}
               onChange={(e) => setGroupMappings(e.target.value)}
               placeholder="e.g. currenttime-users, other-group"
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg
-                         bg-white dark:bg-gray-900 text-gray-900 dark:text-white
-                         focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+              className="input"
             />
           </div>
           <div className="flex items-center space-x-2">
@@ -727,9 +721,9 @@ const IAMGroups: React.FC<IAMGroupsProps> = ({ onShowToast }) => {
               type="checkbox"
               checked={createInIdp}
               onChange={(e) => setCreateInIdp(e.target.checked)}
-              className="rounded border-gray-300 dark:border-gray-600 text-purple-600 focus:ring-purple-500"
+              className="rounded border-line-strong text-purple-600 focus:ring-focus"
             />
-            <label className="text-sm text-gray-600 dark:text-gray-400">
+            <label className="text-sm text-fg-muted">
               Create in Identity Provider (Keycloak / Entra ID)
             </label>
           </div>
@@ -769,20 +763,20 @@ const IAMGroups: React.FC<IAMGroupsProps> = ({ onShowToast }) => {
 
         {/* ── JSON Upload / Preview ──────────────────────────── */}
         <div className="space-y-4">
-          <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
+          <p className="text-sm font-medium text-fg-muted">
             Or Upload JSON Configuration
           </p>
           <div
             onDragOver={(e) => e.preventDefault()}
             onDrop={handleDrop}
-            className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-6
-                       text-center hover:border-purple-400 dark:hover:border-purple-500 transition-colors"
+            className="border-2 border-dashed border-line-strong rounded-lg p-6
+                       text-center hover:border-accent transition-colors"
           >
-            <DocumentArrowUpIcon className="h-8 w-8 mx-auto text-gray-400 dark:text-gray-500 mb-2" />
-            <p className="text-sm text-gray-500 dark:text-gray-400 mb-1">
+            <DocumentArrowUpIcon className="h-8 w-8 mx-auto text-fg-subtle mb-2" />
+            <p className="text-sm text-fg-subtle mb-1">
               Drag &amp; drop a scope JSON file here
             </p>
-            <label className="cursor-pointer text-sm text-purple-600 dark:text-purple-400 hover:underline">
+            <label className="cursor-pointer text-sm text-accent-text hover:underline">
               or click to browse
               <input type="file" accept=".json" onChange={handleFileUpload} className="hidden" />
             </label>
@@ -790,11 +784,11 @@ const IAMGroups: React.FC<IAMGroupsProps> = ({ onShowToast }) => {
 
           {jsonPreview && (
             <div>
-              <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              <p className="text-sm font-medium text-fg-muted mb-2">
                 JSON Preview (auto-generated from form):
               </p>
-              <pre className="bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700
-                              rounded-lg p-4 text-xs font-mono text-gray-800 dark:text-gray-200
+              <pre className="bg-surface-muted border border-line
+                              rounded-lg p-4 text-xs font-mono text-fg
                               overflow-auto max-h-64">
                 {jsonPreview}
               </pre>
@@ -803,7 +797,7 @@ const IAMGroups: React.FC<IAMGroupsProps> = ({ onShowToast }) => {
 
           <button
             onClick={downloadExampleJson}
-            className="flex items-center text-sm text-purple-600 dark:text-purple-400 hover:underline"
+            className="flex items-center text-sm text-accent-text hover:underline"
           >
             <ArrowDownTrayIcon className="h-4 w-4 mr-1" />
             Download Example JSON
@@ -811,19 +805,17 @@ const IAMGroups: React.FC<IAMGroupsProps> = ({ onShowToast }) => {
         </div>
 
         {/* ── Actions ────────────────────────────────────────── */}
-        <div className="flex justify-end space-x-3 pt-4 border-t border-gray-200 dark:border-gray-700">
+        <div className="flex justify-end space-x-3 pt-4 border-t border-line">
           <button
             onClick={() => { resetForm(); setView('list'); }}
-            className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700
-                       rounded-lg hover:bg-gray-200 dark:hover:bg-gray-800"
+            className="btn-secondary"
           >
             Cancel
           </button>
           <button
             onClick={handleCreate}
             disabled={!formName.trim() || isCreating}
-            className="px-4 py-2 text-sm text-white bg-purple-600 rounded-lg hover:bg-purple-700
-                       disabled:opacity-50 disabled:cursor-not-allowed"
+            className="btn-primary"
           >
             {isCreating ? 'Creating...' : 'Create Group'}
           </button>
@@ -838,12 +830,12 @@ const IAMGroups: React.FC<IAMGroupsProps> = ({ onShowToast }) => {
     return (
       <div className="space-y-6">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+          <h2 className="text-lg font-semibold text-fg">
             IAM &gt; Groups &gt; Edit: {editingGroup}
           </h2>
           <button
             onClick={() => { resetForm(); setEditingGroup(null); setGroupDetail(null); setView('list'); }}
-            className="flex items-center text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+            className="flex items-center text-sm text-fg-subtle hover:text-fg"
           >
             <ArrowLeftIcon className="h-4 w-4 mr-1" />
             Back to List
@@ -861,42 +853,36 @@ const IAMGroups: React.FC<IAMGroupsProps> = ({ onShowToast }) => {
             {/* ── Basic Info ─────────────────────────────────────── */}
             <div className="space-y-4">
               <div>
-                <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">Group Name</label>
+                <label className="block text-sm text-fg-muted mb-1">Group Name</label>
                 <input
                   type="text"
                   value={formName}
                   disabled
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg
-                             bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400
-                             cursor-not-allowed"
+                  className="input bg-surface-muted text-fg-subtle"
                 />
-                <p className="text-xs text-gray-400 mt-1">Group name cannot be changed</p>
+                <p className="text-xs text-fg-subtle mt-1">Group name cannot be changed</p>
               </div>
               <div>
-                <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">Description</label>
+                <label className="block text-sm text-fg-muted mb-1">Description</label>
                 <input
                   type="text"
                   value={formDescription}
                   onChange={(e) => setFormDescription(e.target.value)}
                   placeholder="Optional description"
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg
-                             bg-white dark:bg-gray-900 text-gray-900 dark:text-white
-                             focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                  className="input"
                 />
               </div>
               <div>
-                <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">
+                <label className="block text-sm text-fg-muted mb-1">
                   Group Mappings
-                  <span className="text-xs text-gray-400 ml-1">(optional, comma-separated)</span>
+                  <span className="text-xs text-fg-subtle ml-1">(optional, comma-separated)</span>
                 </label>
                 <input
                   type="text"
                   value={groupMappings}
                   onChange={(e) => setGroupMappings(e.target.value)}
                   placeholder="e.g. currenttime-users, other-group"
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg
-                             bg-white dark:bg-gray-900 text-gray-900 dark:text-white
-                             focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                  className="input"
                 />
               </div>
               {/* Create-in-IdP toggle, locked in edit mode (issue #946). */}
@@ -907,14 +893,14 @@ const IAMGroups: React.FC<IAMGroupsProps> = ({ onShowToast }) => {
                     checked={createInIdp}
                     disabled
                     aria-describedby="create-in-idp-edit-help"
-                    className="rounded border-gray-300 dark:border-gray-600 text-purple-600
-                               focus:ring-purple-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="rounded border-line-strong text-purple-600
+                               focus:ring-focus disabled:opacity-50 disabled:cursor-not-allowed"
                   />
-                  <span className="text-sm text-gray-600 dark:text-gray-400">
+                  <span className="text-sm text-fg-muted">
                     Create in Identity Provider (Keycloak / Entra ID)
                   </span>
                 </label>
-                <p id="create-in-idp-edit-help" className="text-xs text-gray-500 dark:text-gray-400 pl-6">
+                <p id="create-in-idp-edit-help" className="text-xs text-fg-subtle pl-6">
                   This setting cannot be changed after creation. To convert a group between
                   local-only and IdP-managed, delete and recreate it.
                 </p>
@@ -957,11 +943,11 @@ const IAMGroups: React.FC<IAMGroupsProps> = ({ onShowToast }) => {
             {jsonPreview && (
               <div className="space-y-4">
                 <div>
-                  <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  <p className="text-sm font-medium text-fg-muted mb-2">
                     JSON Preview (auto-generated from form):
                   </p>
-                  <pre className="bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700
-                                  rounded-lg p-4 text-xs font-mono text-gray-800 dark:text-gray-200
+                  <pre className="bg-surface-muted border border-line
+                                  rounded-lg p-4 text-xs font-mono text-fg
                                   overflow-auto max-h-64">
                     {jsonPreview}
                   </pre>
@@ -970,19 +956,17 @@ const IAMGroups: React.FC<IAMGroupsProps> = ({ onShowToast }) => {
             )}
 
             {/* ── Actions ────────────────────────────────────────── */}
-            <div className="flex justify-end space-x-3 pt-4 border-t border-gray-200 dark:border-gray-700">
+            <div className="flex justify-end space-x-3 pt-4 border-t border-line">
               <button
                 onClick={() => { resetForm(); setEditingGroup(null); setGroupDetail(null); setView('list'); }}
-                className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700
-                           rounded-lg hover:bg-gray-200 dark:hover:bg-gray-800"
+                className="btn-secondary"
               >
                 Cancel
               </button>
               <button
                 onClick={handleUpdate}
                 disabled={isSaving}
-                className="px-4 py-2 text-sm text-white bg-purple-600 rounded-lg hover:bg-purple-700
-                           disabled:opacity-50 disabled:cursor-not-allowed"
+                className="btn-primary"
               >
                 {isSaving ? 'Saving...' : 'Save Changes'}
               </button>
@@ -998,18 +982,18 @@ const IAMGroups: React.FC<IAMGroupsProps> = ({ onShowToast }) => {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+        <h2 className="text-lg font-semibold text-fg">
           IAM &gt; Groups
         </h2>
         <div className="flex items-center space-x-2">
-          <button onClick={refetch} className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200" title="Refresh">
+          <button onClick={refetch} className="btn-icon" title="Refresh">
             <ArrowPathIcon className="h-5 w-5" />
           </button>
           <button
             onClick={() => setView('create')}
-            className="flex items-center px-3 py-2 text-sm text-white bg-purple-600 rounded-lg hover:bg-purple-700"
+            className="btn-primary gap-1 px-3"
           >
-            <PlusIcon className="h-4 w-4 mr-1" />
+            <PlusIcon className="h-4 w-4" />
             Create Group
           </button>
         </div>
@@ -1023,9 +1007,7 @@ const IAMGroups: React.FC<IAMGroupsProps> = ({ onShowToast }) => {
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           placeholder="Search groups..."
-          className="w-full pl-10 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg
-                     bg-white dark:bg-gray-900 text-gray-900 dark:text-white text-sm
-                     focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+          className="input pl-10 pr-4"
         />
       </div>
 
@@ -1040,25 +1022,25 @@ const IAMGroups: React.FC<IAMGroupsProps> = ({ onShowToast }) => {
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-gray-200 dark:border-gray-700">
-                <th className="text-left py-3 px-4 font-medium text-gray-500 dark:text-gray-400">Name</th>
-                <th className="text-left py-3 px-4 font-medium text-gray-500 dark:text-gray-400">Description</th>
-                <th className="text-left py-3 px-4 font-medium text-gray-500 dark:text-gray-400">Path</th>
-                <th className="text-right py-3 px-4 font-medium text-gray-500 dark:text-gray-400">Action</th>
+              <tr className="border-b border-line">
+                <th className="text-left py-3 px-4 font-medium text-fg-subtle">Name</th>
+                <th className="text-left py-3 px-4 font-medium text-fg-subtle">Description</th>
+                <th className="text-left py-3 px-4 font-medium text-fg-subtle">Path</th>
+                <th className="text-right py-3 px-4 font-medium text-fg-subtle">Action</th>
               </tr>
             </thead>
             <tbody>
               {filteredGroups.map((group) => (
                 <React.Fragment key={group.name}>
-                  <tr className="table-row border-b border-gray-100 dark:border-gray-800">
-                    <td className="py-3 px-4 text-gray-900 dark:text-white font-medium">
+                  <tr className="table-row border-b border-line">
+                    <td className="py-3 px-4 text-fg font-medium">
                       <span>{group.name}</span>
                       {group.is_idp_managed === false ? (
                         <span
                           role="status"
                           aria-label="Local-only group: PATCH and DELETE will not call the upstream identity provider. Recommended for tenants without Group.ReadWrite.All."
                           title="Local-only: PATCH and DELETE will not call the upstream IdP. Recommended for tenants without Group.ReadWrite.All."
-                          className="ml-2 inline-flex items-center px-2 py-0.5 text-xs rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
+                          className="ml-2 inline-flex items-center px-2 py-0.5 text-xs rounded-full bg-warning-100 text-warning-800 dark:bg-warning-900/30 dark:text-warning-300"
                         >
                           Local-only
                         </span>
@@ -1067,18 +1049,18 @@ const IAMGroups: React.FC<IAMGroupsProps> = ({ onShowToast }) => {
                           role="status"
                           aria-label="IdP-managed group: PATCH and DELETE will call the upstream identity provider."
                           title="IdP-managed: this group is managed in the upstream identity provider."
-                          className="ml-2 inline-flex items-center px-2 py-0.5 text-xs rounded-full bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300"
+                          className="ml-2 inline-flex items-center px-2 py-0.5 text-xs rounded-full bg-info-100 text-info-800 dark:bg-info-900/30 dark:text-info-300"
                         >
                           IdP-managed
                         </span>
                       ) : null}
                     </td>
-                    <td className="py-3 px-4 text-gray-600 dark:text-gray-400">{group.description || '\u2014'}</td>
-                    <td className="py-3 px-4 text-gray-500 dark:text-gray-500 font-mono text-xs">{group.path || '\u2014'}</td>
+                    <td className="py-3 px-4 text-fg-muted">{group.description || '\u2014'}</td>
+                    <td className="py-3 px-4 text-fg-subtle font-mono text-xs">{group.path || '\u2014'}</td>
                     <td className="py-3 px-4 text-right">
                       <button
                         onClick={() => handleEditClick(group.name)}
-                        className="p-1 text-gray-400 hover:text-purple-500 dark:hover:text-purple-400 mr-1"
+                        className="p-1 text-fg-subtle hover:text-accent-text mr-1"
                         title="Edit group"
                         disabled={isLoadingGroup && editingGroup === group.name}
                       >
@@ -1090,7 +1072,7 @@ const IAMGroups: React.FC<IAMGroupsProps> = ({ onShowToast }) => {
                       </button>
                       <button
                         onClick={() => setDeleteTarget(group.name)}
-                        className="p-1 text-gray-400 hover:text-red-500 dark:hover:text-red-400"
+                        className="p-1 text-fg-subtle hover:text-danger-500 dark:hover:text-danger-400"
                         title="Delete group"
                       >
                         <TrashIcon className="h-4 w-4" />

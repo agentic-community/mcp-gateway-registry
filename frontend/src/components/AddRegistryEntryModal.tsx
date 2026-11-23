@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import axios from 'axios';
 import DetailsModal from './DetailsModal';
-import { LABEL } from './formFields';
+import { CHECKBOX, FIELD, LABEL } from './formFields';
 
 
 /**
@@ -64,15 +64,9 @@ const SOURCE_TITLES: Record<RegistrySourceType, string> = {
 
 
 /**
- * Input classes for this modal. Uses the ring-2 / rounded-lg / placeholder
- * treatment (distinct from the standard entity-modal field), so it stays local
- * rather than using the shared FIELD. The label, however, is the shared one.
+ * Field classes for this modal: the shared FIELD/LABEL strings.
  */
-const INPUT_CLASS =
-  'w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg ' +
-  'bg-white dark:bg-gray-900 text-gray-900 dark:text-white ' +
-  'focus:ring-2 focus:ring-purple-500 focus:border-transparent ' +
-  'placeholder-gray-400 dark:placeholder-gray-500 text-sm';
+const INPUT_CLASS = FIELD;
 
 const LABEL_CLASS = LABEL;
 
@@ -354,7 +348,7 @@ const AddRegistryEntryModal: React.FC<AddRegistryEntryModalProps> = ({
               autoFocus
             />
             {errors.server_name && (
-              <p className="text-sm text-red-600 dark:text-red-400 mt-1">{errors.server_name}</p>
+              <p className="text-sm text-danger-600 dark:text-danger-400 mt-1">{errors.server_name}</p>
             )}
             <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
               The server identifier from the Anthropic MCP Registry
@@ -379,7 +373,7 @@ const AddRegistryEntryModal: React.FC<AddRegistryEntryModalProps> = ({
               autoFocus
             />
             {errors.agent_id && (
-              <p className="text-sm text-red-600 dark:text-red-400 mt-1">{errors.agent_id}</p>
+              <p className="text-sm text-danger-600 dark:text-danger-400 mt-1">{errors.agent_id}</p>
             )}
             <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
               The agent identifier from the ASOR registry
@@ -393,7 +387,7 @@ const AddRegistryEntryModal: React.FC<AddRegistryEntryModalProps> = ({
             {/* Registry ID (required) */}
             <div>
               <label className={LABEL_CLASS}>
-                Registry ID <span className="text-red-500">*</span>
+                Registry ID <span className="text-danger-500">*</span>
               </label>
               <input
                 type="text"
@@ -406,7 +400,7 @@ const AddRegistryEntryModal: React.FC<AddRegistryEntryModalProps> = ({
                 autoFocus
               />
               {errors.registry_id && (
-                <p className="text-sm text-red-600 dark:text-red-400 mt-1">{errors.registry_id}</p>
+                <p className="text-sm text-danger-600 dark:text-danger-400 mt-1">{errors.registry_id}</p>
               )}
             </div>
 
@@ -474,15 +468,14 @@ const AddRegistryEntryModal: React.FC<AddRegistryEntryModalProps> = ({
                       checked={awsForm.descriptor_types.includes(dtype)}
                       onChange={() => handleDescriptorToggle(dtype)}
                       disabled={isSubmitting}
-                      className="rounded border-gray-300 dark:border-gray-600
-                                 text-purple-600 focus:ring-purple-500"
+                      className={CHECKBOX}
                     />
                     <span className="text-sm text-gray-700 dark:text-gray-300">{dtype}</span>
                   </label>
                 ))}
               </div>
               {errors.descriptor_types && (
-                <p className="text-sm text-red-600 dark:text-red-400 mt-1">
+                <p className="text-sm text-danger-600 dark:text-danger-400 mt-1">
                   {errors.descriptor_types}
                 </p>
               )}
@@ -512,7 +505,7 @@ const AddRegistryEntryModal: React.FC<AddRegistryEntryModalProps> = ({
             {/* Source ID (required) */}
             <div>
               <label className={LABEL_CLASS}>
-                Source ID <span className="text-red-500">*</span>
+                Source ID <span className="text-danger-500">*</span>
               </label>
               <input
                 type="text"
@@ -525,7 +518,7 @@ const AddRegistryEntryModal: React.FC<AddRegistryEntryModalProps> = ({
                 autoFocus
               />
               {errors.source_id && (
-                <p className="text-sm text-red-600 dark:text-red-400 mt-1">{errors.source_id}</p>
+                <p className="text-sm text-danger-600 dark:text-danger-400 mt-1">{errors.source_id}</p>
               )}
             </div>
 
@@ -559,7 +552,7 @@ const AddRegistryEntryModal: React.FC<AddRegistryEntryModalProps> = ({
                 placeholder="acme.com"
               />
               {errors.uri_or_domain && (
-                <p className="text-sm text-red-600 dark:text-red-400 mt-1">
+                <p className="text-sm text-danger-600 dark:text-danger-400 mt-1">
                   {errors.uri_or_domain}
                 </p>
               )}
@@ -592,19 +585,14 @@ const AddRegistryEntryModal: React.FC<AddRegistryEntryModalProps> = ({
             type="button"
             onClick={handleClose}
             disabled={isSubmitting}
-            className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300
-                       bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600
-                       rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700
-                       disabled:opacity-50 transition-colors"
+            className="btn-secondary"
           >
             Cancel
           </button>
           <button
             type="submit"
             disabled={isSubmitting}
-            className="px-4 py-2 text-sm font-medium text-white bg-purple-600
-                       rounded-lg hover:bg-purple-700 disabled:opacity-50
-                       disabled:cursor-not-allowed transition-colors"
+            className="btn-primary"
           >
             {isSubmitting ? 'Adding...' : 'Add'}
           </button>

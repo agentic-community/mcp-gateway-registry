@@ -7,13 +7,27 @@ Tests for skill security scan API endpoints and registration integration.
 **Validates: Requirements 4.2, 4.3, 5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 4.5, 8.4**
 """
 
+import hashlib
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from hypothesis import given, settings
 from hypothesis import strategies as st
+from starlette.requests import Request
 
+from registry.api import skill_routes
+from registry.exceptions import SkillUrlValidationError
+from registry.schemas.skill_models import (
+    ContentIntegrity,
+    FileHash,
+    SkillCard,
+    SkillRegistrationRequest,
+)
 from registry.schemas.skill_security import SkillSecurityScanResult
+from registry.services import skill_service
+from registry.utils.credential_encryption import encrypt_credential
 
 VALID_ANALYZERS = ["static", "behavioral", "llm", "meta", "virustotal", "ai-defense"]
 
@@ -273,6 +287,7 @@ class TestScanUsesSkillCredentials:
         scanner = MagicMock()
         scanner.get_scan_config.return_value = config
         scanner.scan_skill = AsyncMock(return_value=_make_safe_scan_result("/test-skill"))
+        scanner.get_scan_result = AsyncMock(return_value=None)
         return scanner
 
     async def _registration_scan(self, skill):
@@ -770,3 +785,130 @@ class TestScanFailureDoesNotDisableSkill:
         service.toggle_skill.assert_not_called()
         service.update_skill.assert_called_once()
         assert "security-pending" in service.update_skill.call_args[0][1]["tags"]
+
+
+UPDATE_OLD = "https://example.com/old/SKILL.md"
+UPDATE_NEW = "https://example.com/new/SKILL.md"
+UPDATE_OWNER = {"username": "owner", "is_admin": False, "ui_permissions": {"modify_skill": ["all"]}}
+UPDATE_ADMIN = {"username": "admin", "is_admin": True}
+
+
+@pytest.fixture
+def source_update_service():
+    digest = hashlib.sha256(b"fixture").hexdigest()
+    initial = SkillCard(
+        id="stable-id",
+        path="/skills/demo",
+        name="demo",
+        description="Demo",
+        owner="owner",
+        skill_md_url=UPDATE_OLD,
+        auth_scheme="none",
+        content_integrity=ContentIntegrity(
+            composite_hash=digest,
+            file_hashes=[FileHash(path="SKILL.md", sha256=digest, size_bytes=7)],
+        ),
+    )
+
+    service = skill_service.SkillService()
+    service._repo = AsyncMock()
+    service._repo.get.return_value = initial
+    service._repo.update.side_effect = lambda path, updates: initial.model_copy(update=updates)
+    service._search_repo = AsyncMock()
+    integrity = AsyncMock(return_value=initial.content_integrity)
+    with (
+        patch.object(skill_routes, "get_skill_service", return_value=service),
+        patch.object(
+            skill_routes,
+            "check_registration_gate",
+            AsyncMock(return_value=SimpleNamespace(allowed=True)),
+        ),
+        patch.object(skill_service, "_is_safe_url", return_value=True),
+        patch.object(skill_service, "_discover_skill_resources", AsyncMock(return_value=None)),
+        patch.object(skill_service, "_compute_content_integrity", integrity),
+    ):
+        yield service, integrity
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("url", [UPDATE_OLD, UPDATE_NEW])
+async def test_source_update_fetches_with_existing_credentials(source_update_service, url):
+    service, integrity = source_update_service
+    initial = service._repo.get.return_value
+    initial.auth_scheme = "bearer"
+    initial.auth_credential_encrypted = encrypt_credential("fixture-token")
+    initial.auth_header_name = "X-Fixture"
+    request = SkillRegistrationRequest(name="demo", description="Demo", skill_md_url=url)
+    http = Request({"type": "http", "method": "PUT", "path": "/api/skills/demo", "headers": []})
+    result = await skill_routes.update_skill(http, request, UPDATE_OWNER, "demo")
+
+    if url == UPDATE_NEW:
+        assert integrity.await_args.args[2:5] == ("bearer", "fixture-token", "X-Fixture")
+        assert str(result.skill_md_raw_url) == url
+    else:
+        integrity.assert_not_awaited()
+    assert str(result.skill_md_url) == url
+    assert service._repo.get.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_source_update_returns_generic_error(source_update_service):
+    service, integrity = source_update_service
+    integrity.side_effect = SkillUrlValidationError(UPDATE_NEW, "private transport detail")
+    request = SkillRegistrationRequest(name="demo", description="Demo", skill_md_url=UPDATE_NEW)
+    http = Request({"type": "http", "method": "PUT", "path": "/api/skills/demo", "headers": []})
+    with pytest.raises(HTTPException) as error:
+        await skill_routes.update_skill(http, request, UPDATE_OWNER, "demo")
+    assert error.value.status_code == 400
+    assert error.value.detail == "Could not update skill source"
+    service._repo.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_source_update_accepts_new_credentials(source_update_service):
+    _, integrity = source_update_service
+    request = SkillRegistrationRequest(
+        name="demo",
+        description="Demo",
+        skill_md_url=UPDATE_NEW,
+        auth_scheme="bearer",
+        auth_credential="new-fixture-token",
+    )
+    http = Request({"type": "http", "method": "PUT", "path": "/api/skills/demo", "headers": []})
+    await skill_routes.update_skill(http, request, UPDATE_OWNER, "demo")
+    assert integrity.await_args.args[2:4] == ("bearer", "new-fixture-token")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "scheme,context,url,requested,status",
+    [
+        ("none", UPDATE_OWNER, UPDATE_NEW, "global_credentials", 403),
+        ("global_credentials", UPDATE_OWNER, UPDATE_NEW, None, 403),
+        ("global_credentials", UPDATE_OWNER, UPDATE_NEW, "none", 200),
+        ("global_credentials", UPDATE_ADMIN, UPDATE_NEW, None, 200),
+        ("none", UPDATE_ADMIN, UPDATE_NEW, "global_credentials", 200),
+    ],
+)
+async def test_existing_source_update_permissions(
+    source_update_service, scheme, context, url, requested, status
+):
+    service, integrity = source_update_service
+    service._repo.get.return_value.auth_scheme = scheme
+    fields = {"name": "demo", "description": "Demo", "skill_md_url": url}
+    if requested is not None:
+        fields["auth_scheme"] = requested
+    request = SkillRegistrationRequest(**fields)
+    http = Request({"type": "http", "method": "PUT", "path": "/api/skills/demo", "headers": []})
+    try:
+        await skill_routes.update_skill(http, request, context, "demo")
+        actual = 200
+    except HTTPException as error:
+        actual = error.status_code
+    assert actual == status
+    if status == 403:
+        integrity.assert_not_awaited()
+        service._repo.update.assert_not_awaited()
+    else:
+        assert integrity.await_args.args[2] == (requested or scheme)
+        service._repo.update.assert_awaited_once()

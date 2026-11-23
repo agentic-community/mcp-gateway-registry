@@ -324,12 +324,17 @@ working in those areas.
   RFC-1918/loopback/link-local/reserved/multicast and exact cloud/workload
   metadata endpoints (AWS plus Alibaba `100.100.100.200`), including scoped/
   mapped/NAT64/6to4/Teredo forms. Validate at registration AND pin at fetch time.
+  The one relaxation of reserved space: an operator `SSRF_ALLOWED_CIDRS` range
+  admits reserved IPv4 inside it (Istio's `240.240.0.0/16`), never
+  `255.255.255.255` and never reserved IPv6, which can carry an IPv4 the guard
+  does not unwrap. Hostname trust and `allow_private` never admit reserved.
   Credentialed OAuth token endpoints MUST use the HTTPS-only empty-allowlist
   `CREDENTIALED_OAUTH_PROFILE` at both points, never `PROXY_PROFILE`. Credential
   builders self-guard the exact derived destination before adding/decrypting any
   configured header; missing/invalid/mismatched destinations return protocol-
   only headers. Actual ARD fetches use guarded transport; its domain wrapper
   delegates canonical URL/IP logic.
+- **Pin, do not just pre-check:** a URL check made before a connection (including one at token-mint time) does not stop a hostname that rebinds before the connect. Every connection to a registrant URL runs on a pinned transport: `guarded_async_client` for httpx, `GuardedHttpx2AsyncTransport` (`registry/utils/url_guard_httpx2.py`) for the MCP SDK's httpx2 client, and the auth server's `/mcp-proxy` hop for every MCP backend request, virtual ones included (nginx never `proxy_pass`es to a registrant URL). Pin that hop under the health check's profile (`proxy_profile_for_mcp_hop`, i.e. `PROXY_PROFILE` or the exact built-in), never a profile that admits private addresses by design, and give every process that builds it the same allowlist on every surface. A bare client is never correct for "trusted" internal traffic when the target comes from a registration.
 - **Gateway self-proxy:** a public URL is not automatically a valid backend.
   For A2A Pull Card, `url` is the advertised gateway route and `proxy_pass_url`
   is the real backend. A raw-path-equivalent echo on the advertised listener is
@@ -340,7 +345,13 @@ working in those areas.
   on a different host or nonstandard port without publishing it as agent `url`.
 - **Injection:** sanitize at EVERY interpolation site AND validate at the source
   (a sanitizer that exists but isn't called is worthless); `re.escape` user input
-  in regex/`$regex` queries.
+  in regex/`$regex` queries. Neutralize spreadsheet formulas in EVERY CSV export,
+  server (`_csv_safe`) and browser (`frontend/src/utils/csvSafe.ts`); AG Grid's
+  own CSV export neutralizes nothing.
+- **Operator-supplied files:** check and read a served file through ONE
+  descriptor (`O_NOFOLLOW`, then re-resolve and match the inode), never a path
+  handed to `FileResponse` later; bound an archive's raw header count and
+  decompressed size, skipped entries included.
 - **Authorization:** deny by default; never treat a broad/execute scope as admin;
   enforce ownership server-side before every mutation across the whole endpoint
   family; `dict.get("k")` not `getattr(dict, "k")`; no substring matching for
@@ -352,6 +363,10 @@ working in those areas.
   header (clear client copies on normal routes), require the nginx marker and
   resolved upstream, and check the rewritten backing method/tool grant separately.
   Never grant direct backing access from virtual binding alone.
+- **Owned records:** a server record a feature service owns (OpenAPI MCP servers mark it with
+  `metadata.openapi_server`) is written only through that service. Enforce it in the
+  `server_service` write path (`check_openapi_ownership`), not per route, and bind every
+  credential vend to a destination it derives itself, never to the record's current target.
 - **MCP backend identity:** preserve the exact registered path (including a
   legitimate trailing `/mcp`) across auth, signed proxy token, and vend; never
   strip a transport segment twice. Bind the exact outbound URL at credential
@@ -393,9 +408,13 @@ working in those areas.
   reads) via one shared helper, not just the reported endpoint. Mutation success
   responses, webhooks, lifecycle events, and exports must project a fresh recursive
   token-free copy; never serialize the encrypted storage object directly.
-- **Tokens/JWT:** never derive `verify_aud`/issuer/alg from an unverified claim:
-  enforce audience against a config allowlist, fail closed. Never auto-grant
-  groups/admin from a code-shipped mapping (config-driven, fail closed).
+- **Tokens/JWT:** never derive `verify_aud`/issuer/alg from an unverified claim,
+  and never let a request header (or query or body field) select how a request
+  is authenticated: the provider, pool, client, issuer and JWKS a credential is
+  checked against come from server config only (the `/validate` Cognito fallback
+  took them from `X-User-Pool-Id`/`X-Client-Id`). Enforce audience against a
+  config allowlist, fail closed. Never auto-grant groups/admin from a
+  code-shipped mapping (config-driven, fail closed).
 - **Admin ops:** refuse self-delete + last-admin removal/demotion (fail closed if
   the admin population can't be counted); audit admin-tier grants. A config/secrets
   export must deny sensitive values by default. Gate them behind a SEPARATE
@@ -412,6 +431,12 @@ working in those areas.
 - **One entity type's access grant must never gate a different entity type** (a
   skill filter keyed on agent access = bypass); filter each resource by its own
   access check, admin-only universal bypass.
+- **Read-widening grants stay on read paths:** `view_all` (read-only admin) is
+  checked only at named read sites (`can_skip_read_visibility`,
+  `user_can_discover_asset`), never in `user_has_asset_permission`, the
+  `accessible_*` lists (token binding reads them), writes, ratings, health checks
+  or redaction. A helper shared by reads and writes is split, or takes an opt-in
+  flag that defaults to off.
 - **Virtual MCP tools:** a backend tool's blocked override must be checked at
   every `tools/call` and `tools/list` boundary, including cached lists. Bind the
   decision to the mapped backend path and original tool name; unknown state denies.
@@ -441,12 +466,19 @@ working in those areas.
   HttpOnly cookie, its hash in the `state`, checked before the code exchange), not only
   to the principal; start a consent only for the browser's own session (never a bearer),
   and consume the single-use `state` once, right after it decodes, before the `code` check.
+- **Credential cookies:** read the session cookie through one exact-name parser and treat
+  a duplicate as no session. A change that renames or rescopes a credential cookie leaves
+  the old copy live in browsers: bind the signature to the cookie name
+  (`session_cookie_signing_salt`) so the old value fails under the new name, and tell
+  operators to end the old sessions.
 - **Frontend:** one shared URL-scheme guard on every dynamic href/`window.open`/
   markdown link (allowlist http/https/mailto, render unsafe as text); enforce
   `react/jsx-no-script-url`.
 - **Deployment/config:** sensitive ports on loopback not `0.0.0.0`; no working
   default for a required secret (`${VAR:?}` + reject weak literals); no secrets in
-  Docker build ARGs; pin image tags; TLS verify on by default (private certs via
+  Docker build ARGs; a credential reaches a container only through a secret
+  reference (ECS `secrets`/`valueFrom`, Kubernetes `secretKeyRef`), never a plain
+  env value, which lands in the broadly readable task definition or Deployment spec; pin image tags; TLS verify on by default (private certs via
   a CA bundle, never `verify=False`); dangerous toggles require an explicit flag +
   localhost guard.
 - **Approval TOCTOU:** snapshot what a user approves (destinations, token
@@ -459,6 +491,7 @@ working in those areas.
   names from registry values must be injective encodings. A header only a NEW
   template sets/clears is forgeable behind an OLD one: honor it only with the
   marker under a new header name (`X-Validate-Binding-Secret`).
+- **Bridges to third-party APIs:** a library that copies inbound headers onto outbound requests (FastMCP OpenAPI tools do) must sit behind an inbound-header allowlist, so gateway identity, forwarding and routing headers never reach a third-party API. A built-in private target (airegistry-tools, the openapi-mcp container) is admitted only by exact entity identity, through a profile limited to that entity's URLs, never by host. A reserved hostname is not an identity: the same backend answers on its IP, so the openapi-mcp container also requires a per-slug admission marker that only that server's own routes and the registry's probes send. The bridge also redacts every form of the credential it attached from the response (body and headers, JSON-escaped forms included), because a backend may echo it back to the model. Its pooled backend clients keep no cookies, every final URL must stay inside the approved base URL (HTTPS when a key is sent), and a compressed response is refused before it is read.
 - **After fixing a finding, grep the pattern repo-wide**, because findings usually have
   siblings the report didn't list.
 

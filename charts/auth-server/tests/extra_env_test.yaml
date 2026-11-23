@@ -41,7 +41,10 @@ tests:
       # NOTE: positions assume entra.clientSecretExistingSecret is set (above),
       # that no other conditional secrets (okta/auth0) are configured, and that
       # metrics.otelExporterOtlpEndpoint is empty (its OTEL_EXPORTER_OTLP_ENDPOINT block does
-      # not render, so it does not shift the extraEnv indices).
+      # not render, so it does not shift the extraEnv indices), and that
+      # app.openapiMcpEnabled=false (the OPENAPI_MCP_ENABLED / OPENAPI_MCP_INTERNAL_URL
+      # pair after SSRF_ALLOWED_CIDRS does not render; the next test covers the
+      # shifted positions when it does).
       # Index map:
       #   env[0] = ENTRA_CLIENT_SECRET (conditional valueFrom)
       #   env[1] = METRICS_LEGACY_HTTP_POST  (Issue #1122, unconditional)
@@ -60,8 +63,11 @@ tests:
       #                 generic-proxy vars (auth-server-consumed)
       #   env[24] = EGRESS_FORWARD_PROXY_ENABLED   (issue #1832)
       #   env[25] = EGRESS_FORWARD_PROXY_CA_BUNDLE (issue #1832)
-      #   env[26] = MY_FLAG       (extraEnv[0])
-      #   env[27] = MY_SECRET_VAR (extraEnv[1])
+      #   env[26] = SSRF_ALLOWED_HOSTS (always rendered; matches the registry)
+      #   env[27] = SSRF_ALLOWED_CIDRS (issue #2018, always rendered)
+      #   env[28] = GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS (always rendered)
+      #   env[29] = MY_FLAG       (extraEnv[0])
+      #   env[30] = MY_SECRET_VAR (extraEnv[1])
       - equal:
           path: spec.template.spec.containers[0].env[0].name
           value: ENTRA_CLIENT_SECRET
@@ -86,8 +92,8 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].env[23].name
           value: GATEWAY_GENERIC_STREAM_MAX_BYTES
-      # Forward-proxy egress pair (issue #1832), always rendered, immediately
-      # before the extraEnv append.
+      # Forward-proxy egress pair (issue #1832), always rendered, then the SSRF
+      # allowlist trio immediately before the extraEnv append.
       - equal:
           path: spec.template.spec.containers[0].env[24].name
           value: EGRESS_FORWARD_PROXY_ENABLED
@@ -96,10 +102,49 @@ tests:
           value: EGRESS_FORWARD_PROXY_CA_BUNDLE
       - equal:
           path: spec.template.spec.containers[0].env[26].name
-          value: MY_FLAG
+          value: SSRF_ALLOWED_HOSTS
       - equal:
           path: spec.template.spec.containers[0].env[27].name
+          value: SSRF_ALLOWED_CIDRS
+      - equal:
+          path: spec.template.spec.containers[0].env[28].name
+          value: GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS
+      - equal:
+          path: spec.template.spec.containers[0].env[29].name
+          value: MY_FLAG
+      - equal:
+          path: spec.template.spec.containers[0].env[30].name
           value: MY_SECRET_VAR
+
+  - it: appends extraEnv after the OpenAPI MCP pair when app.openapiMcpEnabled is true
+    set:
+      entra:
+        clientSecretExistingSecret: my-entra
+        clientSecretExistingSecretKey: ENTRA_CLIENT_SECRET
+      app:
+        openapiMcpEnabled: true
+      extraEnv:
+        - name: MY_FLAG
+          value: "on"
+    asserts:
+      # NOTE: same assumptions as the test above, except app.openapiMcpEnabled=true,
+      # which renders two entries after the SSRF allowlist trio (issue #2022):
+      #   env[28] = GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS
+      #   env[29] = OPENAPI_MCP_ENABLED
+      #   env[30] = OPENAPI_MCP_INTERNAL_URL
+      #   env[31] = MY_FLAG (extraEnv[0])
+      - equal:
+          path: spec.template.spec.containers[0].env[28].name
+          value: GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS
+      - equal:
+          path: spec.template.spec.containers[0].env[29].name
+          value: OPENAPI_MCP_ENABLED
+      - equal:
+          path: spec.template.spec.containers[0].env[30].name
+          value: OPENAPI_MCP_INTERNAL_URL
+      - equal:
+          path: spec.template.spec.containers[0].env[31].name
+          value: MY_FLAG
 
   - it: enables Entra overage recovery with a 300-second positive cache by default
     set:
@@ -262,6 +307,151 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].envFrom[1].secretRef.name
           value: auth-server-secret
+
+  - it: renders SSRF_ALLOWED_CIDRS empty by default (#2018)
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSRF_ALLOWED_CIDRS
+            value: ""
+
+  - it: global.ssrfAllowedCidrs wins over app.ssrfAllowedCidrs (#2018)
+    set:
+      global.ssrfAllowedCidrs: "240.240.0.0/16"
+      app.ssrfAllowedCidrs: "10.0.0.0/8"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSRF_ALLOWED_CIDRS
+            value: "240.240.0.0/16"
+
+  - it: falls back to app.ssrfAllowedCidrs when global is unset (standalone, #2018)
+    set:
+      app.ssrfAllowedCidrs: "10.0.0.0/8"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSRF_ALLOWED_CIDRS
+            value: "10.0.0.0/8"
+
+  - it: passes app.ssrfAllowedCidrs into SSRF_ALLOWED_CIDRS (#2018)
+    set:
+      app:
+        ssrfAllowedCidrs: "240.240.0.0/16"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSRF_ALLOWED_CIDRS
+            value: "240.240.0.0/16"
+
+  # The MCP proxy hop pins upstreams under PROXY_PROFILE, built from these
+  # values in this process. They must equal the registry's, whose health check
+  # applies the same profile, or a private upstream passes there and fails here.
+  - it: renders SSRF_ALLOWED_HOSTS empty and private targets off by default
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSRF_ALLOWED_HOSTS
+            value: ""
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS
+            value: "false"
+
+  - it: passes app.ssrfAllowedHosts into SSRF_ALLOWED_HOSTS (standalone)
+    set:
+      app.ssrfAllowedHosts: "currenttime-server,obo-echo"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSRF_ALLOWED_HOSTS
+            value: "currenttime-server,obo-echo"
+
+  - it: global.ssrfAllowedHosts wins over app.ssrfAllowedHosts
+    set:
+      global.ssrfAllowedHosts: "obo-echo"
+      app.ssrfAllowedHosts: "currenttime-server"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSRF_ALLOWED_HOSTS
+            value: "obo-echo"
+
+  - it: passes app.gatewayProxyAllowPrivateTargets (standalone)
+    set:
+      app.gatewayProxyAllowPrivateTargets: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS
+            value: "true"
+
+  - it: global.gatewayProxyAllowPrivateTargets turns private targets on
+    set:
+      global.gatewayProxyAllowPrivateTargets: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS
+            value: "true"
+
+  - it: rejects extraEnv overriding SSRF_ALLOWED_HOSTS
+    set:
+      extraEnv:
+        - name: SSRF_ALLOWED_HOSTS
+          value: "metadata.internal"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"SSRF_ALLOWED_HOSTS\" is a reserved variable"
+
+  - it: rejects extraEnv overriding GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS
+    set:
+      extraEnv:
+        - name: gateway_proxy_allow_private_targets
+          value: "true"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"gateway_proxy_allow_private_targets\" is a reserved variable"
+
+  - it: rejects a lowercase reserved name (ssrf_allowed_cidrs)
+    # Settings reads env case-insensitively, so a lowercase spelling would
+    # override the chart-managed SSRF_ALLOWED_CIDRS. Names compare upper-cased.
+    set:
+      extraEnv:
+        - name: ssrf_allowed_cidrs
+          value: "0.0.0.0/0"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"ssrf_allowed_cidrs\" is a reserved variable"
+
+  - it: rejects a mixed-case reserved name with surrounding spaces
+    set:
+      extraEnv:
+        - name: " Ssrf_Allowed_Cidrs "
+          value: "0.0.0.0/0"
+    asserts:
+      - failedTemplate:
+          errorPattern: "is a reserved variable"
+
+  - it: accepts names that differ only in case (HTTPS_PROXY and https_proxy)
+    set:
+      extraEnv:
+        - name: HTTPS_PROXY
+          value: "http://proxy.example.test:3128"
+        - name: https_proxy
+          value: "http://proxy.example.test:3128"
+    asserts:
+      - notFailedTemplate: {}
 
   - it: fails when extraEnv contains an env-block reserved name (ENTRA_CLIENT_SECRET)
     set:

@@ -48,6 +48,26 @@ export interface PatStatus {
   expired: boolean;
 }
 
+/** Vault entries for OpenAPI MCP per-user keys use provider `openapi-<target>`. */
+const OPENAPI_PROVIDER_PREFIX: string = 'openapi-';
+
+
+/**
+ * The OpenAPI target of a vault entry, or null for any other entry. Per-user
+ * OpenAPI keys are stored with provider `openapi-<target>` and server_path
+ * `/<slug>`, and are managed through the OpenAPI routes, not egress-pat.
+ */
+export function openApiTargetOf(provider: string): string | null {
+  if (!provider.startsWith(OPENAPI_PROVIDER_PREFIX)) return null;
+  const target = provider.slice(OPENAPI_PROVIDER_PREFIX.length);
+  return target || null;
+}
+
+
+/** The egress mode of an OpenAPI MCP server with per-user targets. */
+export const OPENAPI_USER_MODE: string = 'openapi_user';
+
+
 /** The server edit form fields that make up an egress config request. */
 export interface EgressConfigFormFields {
   egress_auth_mode: 'none' | 'oauth_user' | 'obo_exchange' | 'pat';
@@ -62,6 +82,21 @@ export interface EgressConfigFormFields {
   egress_expected_issuer: string;
   egress_target_audience: string;
   egress_list_tools_before_consent: boolean;
+  // Only meaningful for a dynamic-client-registration provider (atlassian-rovo).
+  egress_re_register: boolean;
+}
+
+/**
+ * Egress providers whose OAuth client the gateway registers itself (RFC 7591) when
+ * the config is saved, so the admin supplies no client ID or secret. Keep in step
+ * with the `requires_dcr` rows in registry/egress_auth/providers.py. Only per-user
+ * egress can use one: the discovery identity form must not offer these.
+ */
+export const DCR_EGRESS_PROVIDERS: ReadonlyArray<string> = ['atlassian-rovo'];
+
+/** Whether the gateway registers the OAuth client for this egress provider. */
+export function isDcrEgressProvider(provider: string): boolean {
+  return DCR_EGRESS_PROVIDERS.includes(provider.trim());
 }
 
 /** Egress modes whose users have a pre-consent state that can list stored tools. */
@@ -85,6 +120,25 @@ export function buildEgressConfigBody(form: EgressConfigFormFields): Record<stri
       egress_auth_mode: 'obo_exchange',
       target_audience: form.egress_target_audience.trim(),
       scopes,
+    };
+  }
+  if (mode === 'oauth_user' && isDcrEgressProvider(form.egress_provider)) {
+    // The gateway registers the client on save. A blank client ID asks for that;
+    // the stored client ID the form echoes back is treated as blank by the backend.
+    // With re_register the client ID is dropped: the backend rejects re_register
+    // alongside a differing client_id, and it registers a new client either way.
+    // A DCR client is public (PKCE), so no secret is ever sent.
+    return {
+      egress_auth_mode: 'oauth_user',
+      egress_provider: form.egress_provider.trim(),
+      client_id: form.egress_re_register
+        ? undefined
+        : form.egress_client_id.trim() || undefined,
+      client_secret: undefined,
+      scopes,
+      expected_issuer: form.egress_expected_issuer || undefined,
+      list_tools_before_consent: form.egress_list_tools_before_consent,
+      re_register: form.egress_re_register || undefined,
     };
   }
   if (mode === 'oauth_user') {
@@ -164,6 +218,8 @@ export async function loadEgressCardState(): Promise<Map<string, EgressCardState
   const connByPath = new Map(connections.map(c => [c.server_path, c]));
   const nowMs = Date.now();
   for (const s of available) {
+    // OpenAPI per-user keys have their own "Your API keys" button on the card.
+    if (s.egress_auth_mode === OPENAPI_USER_MODE) continue;
     const mode = s.egress_auth_mode === 'pat' ? 'pat' : 'oauth_user';
     const conn = connByPath.get(s.server_path);
     const connected = !!conn;

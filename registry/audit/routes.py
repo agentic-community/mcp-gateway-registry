@@ -1455,6 +1455,9 @@ def _generate_jsonl(events: list[dict[str, Any]]):
 # so an unauthenticated request to `/=HYPERLINK(...)` is recorded verbatim and
 # later exported into a cell an admin opens. The compliance export is precisely
 # the artifact most likely to be opened in a spreadsheet.
+#
+# The audit page's in-browser "Export view" applies the same rules through
+# frontend/src/utils/csvSafe.ts; change both together.
 _CSV_FORMULA_PREFIXES: tuple[str, ...] = ("=", "+", "-", "@", "\t", "\r")
 
 

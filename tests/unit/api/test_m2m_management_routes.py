@@ -104,7 +104,7 @@ def client_admin(mock_settings, admin_user_context, mock_service):
         "registry.api.m2m_management_routes._get_service",
         new=AsyncMock(return_value=mock_service),
     ):
-        client = TestClient(app, cookies={"mcp_gateway_session": "test-session"})
+        client = TestClient(app)
         yield client, mock_service
     app.dependency_overrides.clear()
 
@@ -118,7 +118,7 @@ def client_regular(mock_settings, regular_user_context, mock_service):
         "registry.api.m2m_management_routes._get_service",
         new=AsyncMock(return_value=mock_service),
     ):
-        client = TestClient(app, cookies={"mcp_gateway_session": "test-session"})
+        client = TestClient(app)
         yield client, mock_service
     app.dependency_overrides.clear()
 
@@ -132,7 +132,7 @@ def client_anon(mock_settings, mock_service):
         "registry.api.m2m_management_routes._get_service",
         new=AsyncMock(return_value=mock_service),
     ):
-        client = TestClient(app, cookies={"mcp_gateway_session": "test-session"})
+        client = TestClient(app)
         yield client, mock_service
     app.dependency_overrides.clear()
 

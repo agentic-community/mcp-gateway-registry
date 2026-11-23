@@ -33,7 +33,11 @@ from fastapi import (
 from pydantic import BaseModel
 
 from ..audit.context import set_audit_action
-from ..auth.asset_permissions import user_has_asset_permission
+from ..auth.asset_permissions import (
+    VIEW_ALL_SKILL_CONTENT_DENIED,
+    can_view_all,
+    user_has_asset_permission,
+)
 from ..auth.csrf import verify_csrf_token_flexible
 from ..auth.dependencies import nginx_proxied_auth
 from ..core.config import settings
@@ -71,6 +75,7 @@ from ..services.lifecycle_events import (
     user_can_change_lifecycle_status,
 )
 from ..services.registration_gate_service import check_registration_gate
+from ..services.security_pending import tags_after_passing_scan
 from ..services.skill_service import (
     SKILL_MD_GONE_STATUSES,
     SkillService,
@@ -82,7 +87,11 @@ from ..services.skill_service import (
     get_skill_service,
 )
 from ..services.tool_validation_service import get_tool_validation_service
-from ..services.visibility import redact_proxy_backend_url
+from ..services.visibility import (
+    can_skip_read_visibility,
+    redact_proxy_backend_url,
+    redact_scan_result_for_non_admin,
+)
 from ..services.webhook_service import send_registration_webhook
 from ..utils.group_names import groups_intersect
 from ..utils.metadata import (
@@ -558,7 +567,7 @@ async def get_integrity_status(
             detail=f"Skill not found: {normalized_path}",
         )
 
-    if not _user_can_access_skill(skill, user_context):
+    if not _user_can_read_skill(skill, user_context):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
     integrity = skill.content_integrity
@@ -696,8 +705,12 @@ async def get_skill_content(
             detail=f"Skill not found: {normalized_path}",
         )
 
+    # Not a view_all read (issue #2099): fetching content uses the skill's stored
+    # credential and records health and drift state (which can toggle the skill),
+    # so holders of view_all alone keep today's rule here.
     if not _user_can_access_skill(skill, user_context):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+        detail = VIEW_ALL_SKILL_CONTENT_DENIED if can_view_all(user_context) else "Access denied"
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
 
     if skill.content_integrity and skill.content_integrity.drift_detected:
         raise HTTPException(
@@ -866,7 +879,7 @@ async def get_skill_tools(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"Skill not found: {normalized_path}"
         )
 
-    if not _user_can_access_skill(skill, user_context):
+    if not _user_can_read_skill(skill, user_context):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="You do not have access to this skill"
         )
@@ -894,7 +907,7 @@ async def get_skill_rating(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"Skill not found: {normalized_path}"
         )
 
-    if not _user_can_access_skill(skill, user_context):
+    if not _user_can_read_skill(skill, user_context):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="You do not have access to this skill"
         )
@@ -930,7 +943,7 @@ async def get_skill_security_scan(
             detail=f"Skill not found: {normalized_path}",
         )
 
-    if not _user_can_access_skill(skill, user_context):
+    if not _user_can_read_skill(skill, user_context):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied",
@@ -942,7 +955,7 @@ async def get_skill_security_scan(
     if not scan_result:
         return {"message": "No security scan results available", "skill_path": normalized_path}
 
-    return scan_result
+    return redact_scan_result_for_non_admin(scan_result, user_context)
 
 
 @router.post(
@@ -988,11 +1001,21 @@ async def rescan_skill(
             str(skill.skill_md_raw_url or skill.skill_md_url),
             skill,
         )
+        # Read before scanning: the new result replaces it as the latest.
+        previous_scan = await skill_scanner_service.get_scan_result(normalized_path)
         result = await skill_scanner_service.scan_skill(
             skill_path=normalized_path,
             skill_md_url=fetch_url,
             headers=fetch_headers or None,
         )
+        if result.is_safe:
+            new_tags = tags_after_passing_scan(skill.tags, previous_scan)
+            if new_tags is not None:
+                await service.update_skill(normalized_path, {"tags": new_tags})
+                logger.info(
+                    f"Removed 'security-pending' from skill {normalized_path} "
+                    f"after a passing rescan"
+                )
         return result.model_dump()
 
     except Exception as e:
@@ -1096,7 +1119,7 @@ async def get_skill(
         )
 
     # Check visibility
-    if not _user_can_access_skill(skill, user_context):
+    if not _user_can_read_skill(skill, user_context):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
     # Apply metadata projection if requested (Issue #1277)
@@ -1409,7 +1432,12 @@ async def update_skill(
         updates["auth_header_name"] = None
         updates["credential_updated_at"] = None
 
-    updated = await service.update_skill(normalized_path, updates)
+    try:
+        updated = await service.update_skill(normalized_path, updates, existing=existing)
+    except SkillUrlValidationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Could not update skill source"
+        ) from e
 
     if not updated:
         raise HTTPException(
@@ -1680,11 +1708,29 @@ async def _record_skill_md_gone(
         logger.exception("Failed to record unhealthy status for skill %s", skill_path)
 
 
+def _user_can_read_skill(
+    skill: SkillCard,
+    user_context: dict,
+) -> bool:
+    """Check if the caller may read ``skill`` on a READ path.
+
+    Admins and holders of the read-only ``view_all`` permission (issue #2099)
+    may read every skill. Everyone else gets exactly ``_user_can_access_skill``.
+    """
+    if can_skip_read_visibility(user_context):
+        return True
+    return _user_can_access_skill(skill, user_context)
+
+
 def _user_can_access_skill(
     skill: SkillCard,
     user_context: dict,
 ) -> bool:
     """Check if the caller may read ``skill``.
+
+    Used directly by WRITE and side-effect paths (rate, the health check that
+    records health), which must not honor ``view_all``. Read routes go through
+    ``_user_can_read_skill`` instead.
 
     Two-layer gate, matching the list path
     (``SkillService.list_skills_for_user``) and the semantic-search skill branch:

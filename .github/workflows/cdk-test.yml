@@ -1,0 +1,91 @@
+name: CDK Tests
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'infra/**'
+      - '.github/workflows/cdk-test.yml'
+  pull_request:
+    paths:
+      - 'infra/**'
+      - '.github/workflows/cdk-test.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: "CDK Build, Synth and Test"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: infra/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        id: build
+        run: npm run build
+
+      - name: Unit tests
+        id: tests
+        run: npm test
+
+      # Synthesizing the whole app catches what per-stack unit tests cannot:
+      # a cross-stack reference or a CloudFormation-level validation error.
+      #
+      # CDK_DEFAULT_ACCOUNT is deliberately NOT set. A concrete account makes
+      # the stacks environment-specific, and CDK then resolves real
+      # availability zones through a context lookup that needs AWS
+      # credentials. Left unset, the stacks are environment-agnostic and CDK
+      # uses placeholder AZs, so this step needs no credentials at all. Any
+      # future `fromLookup` would fail here, which is the correct signal:
+      # credential-free synth is what makes this job runnable on a fork PR.
+      #
+      # Secrets below are placeholders that only have to pass the loader's
+      # length checks.
+      - name: Synth
+        id: synth
+        run: npx cdk synth --quiet
+        env:
+          CDK_DEFAULT_REGION: us-west-2
+          CDK_KEYCLOAK_ADMIN_PASSWORD: ci-synth-placeholder-not-a-real-secret  # pragma: allowlist secret
+          CDK_KEYCLOAK_DATABASE_PASSWORD: ci-synth-placeholder-not-a-real-secret  # pragma: allowlist secret
+          CDK_DOCUMENTDB_ADMIN_PASSWORD: ci-synth-placeholder-not-a-real-secret  # pragma: allowlist secret
+          # Required because config.yaml enables observability.
+          CDK_GRAFANA_ADMIN_PASSWORD: ci-synth-placeholder-not-a-real-secret  # pragma: allowlist secret
+
+      - name: Results summary
+        if: always()
+        run: |
+          echo "## CDK Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Type check | ${STEPS_BUILD_OUTCOME} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Unit tests | ${STEPS_TESTS_OUTCOME} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Synth | ${STEPS_SYNTH_OUTCOME} |" >> $GITHUB_STEP_SUMMARY
+        env:
+          STEPS_BUILD_OUTCOME: ${{ steps.build.outcome }}
+          STEPS_TESTS_OUTCOME: ${{ steps.tests.outcome }}
+          STEPS_SYNTH_OUTCOME: ${{ steps.synth.outcome }}

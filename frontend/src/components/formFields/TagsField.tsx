@@ -1,6 +1,6 @@
 import React from 'react';
 import FormField from './FormField';
-import { fieldClass, FIELD_FOCUS } from './formClasses';
+import { FIELD } from './formClasses';
 
 interface TagsFieldProps {
   /** Current tags. */
@@ -10,7 +10,6 @@ interface TagsFieldProps {
   label?: string;
   hint?: React.ReactNode;
   placeholder?: string;
-  accent?: keyof typeof FIELD_FOCUS;
 }
 
 /**
@@ -25,7 +24,6 @@ const TagsField: React.FC<TagsFieldProps> = ({
   label = 'Tags',
   hint,
   placeholder = 'tag1,tag2,tag3',
-  accent = 'purple',
 }) => {
   return (
     <FormField label={label} hint={hint}>
@@ -40,7 +38,7 @@ const TagsField: React.FC<TagsFieldProps> = ({
               .filter((t) => t),
           )
         }
-        className={fieldClass(accent)}
+        className={FIELD}
         placeholder={placeholder}
       />
     </FormField>

@@ -173,6 +173,35 @@ sanitizer that isn't called) is equivalent to no check.
   Alibaba ECS `100.100.100.200` — never allowlistable); unwrap scoped,
   IPv4-mapped, NAT64, 6to4, and Teredo forms before classification; require
   http/https. Fail closed. Do not create per-call-site `_is_safe_url` variants.
+- **Relax reserved space only for IPv4, and only from an operator range.** Istio
+  auto-allocates ServiceEntry addresses from `240.240.0.0/16`, which Python
+  classifies as reserved, so an operator `SSRF_ALLOWED_CIDRS` entry may admit a
+  reserved IPv4 address inside it (#2018). Exclude limited broadcast
+  `255.255.255.255`. Never relax reserved IPv6: IPv4-compatible `::a.b.c.d`, SIIT
+  `::ffff:0:a.b.c.d` and RFC 8215 local-use NAT64 `64:ff9b:1::/48` carry an IPv4
+  address the guard does not unwrap, so a broad `::/0` entry would reach IMDS
+  (`64:ff9b:1::a9fe:a9fe`). Pass only the operator's CIDRs to this check, never
+  the exact `/32` added for a trusted hostname, and never let `allow_private`
+  stand in for it. Every process that runs the guard (registry, auth-server,
+  mcpgw) must receive the same `SSRF_ALLOWED_CIDRS` value. Feed a value like this
+  from one source per surface: in Helm, a `global.*` key the subcharts read first
+  (`.Values.global.X | default .Values.app.X`), as `secretKey` does, so a
+  per-subchart key cannot drift from it.
+- **Compare reserved env names case-insensitively.** pydantic-settings reads the
+  environment with `case_sensitive=False`, so a Helm `extraEnv` entry named
+  `ssrf_allowed_cidrs` overrides the chart-managed `SSRF_ALLOWED_CIDRS` in the
+  registry while mcpgw (`os.getenv`) ignores it. Each chart's `validateExtraEnv`
+  compares names through `<chart>.envNameKey` (trimmed, upper-cased) for the
+  reserved check. Keys inside an `extraEnvFrom` source or `app.existingSecret`
+  cannot be checked at render time: a lowercase `ssrf_allowed_cidrs` there sits
+  beside the chart's `SSRF_ALLOWED_CIDRS`, and which one pydantic keeps depends on
+  the order the kubelet writes the container's environment, which the operator
+  does not control. Never put a lowercase copy of a chart-managed name
+  in those sources. The duplicate check stays exact, because `HTTPS_PROXY` and
+  `https_proxy` are two variables and proxy setups set both. Feed a
+  security-relevant chart value through `env:`, not a chart ConfigMap read via
+  `envFrom`: a user `extraEnvFrom` source renders later and wins over `envFrom`,
+  but never over `env:`.
 - **Don't rely on the language runtime's `is_private` to cover reserved ranges —
   block them explicitly and pin the range in a test.** Ranges like CGNAT / shared
   address space (`100.64.0.0/10`, RFC 6598) are only classified private on newer
@@ -344,6 +373,23 @@ sanitizer that isn't called) is equivalent to no check.
   guarded client cannot protect — e.g. a scanner CLI) so a value that was rebound
   after registration, or that reached the connect through the override field, is
   still blocked before any credential is attached or process spawned.
+- **A pre-connection check is not a pin, and a bare client on "trusted" traffic is not a carve-out.** Three paths validated a registrant's backend URL once and then connected with something that resolved the name again: the MCP SDK connections in `registry/core/mcp_client.py` (the SDK runs on `httpx2`, so `guarded_async_client` cannot be mounted), the gateway's ordinary `mcp_proxy` hop in the auth server, which kept a bare client because "internal upstreams are private", and the nginx `proxy_pass` behind each non-egress virtual-server backend. A hostname that passes the health check on a public address and then rebinds reaches a private or metadata address, and the hop returns the response body. Re-validating when `/validate` mints the hop token does not close this, because the connect still resolves the name again. Keep the early check, because it stops a credential being built for a blocked target, but run the connection itself on a pinned transport. For an `httpx2` client use `GuardedHttpx2AsyncTransport` from `registry/utils/url_guard_httpx2.py` (same validate-resolve-pin logic as `GuardedAsyncTransport`, per request and per redirect hop). Route every MCP backend request, virtual ones included, through `/mcp-proxy`, so nginx never connects to a registrant URL itself. Pin the hop under the profile the health check uses for the same registration (`proxy_profile_for_mcp_hop`, a wrapper of `proxy_profile_for_entity_target`): `PROXY_PROFILE`, which admits a private address only through the operator allowlist, or the exact built-in profile. Do not use a profile that admits private addresses by design (`EGRESS_UPSTREAM_PROFILE` stops metadata but not a `10.x` target); that profile is only for the credential-injected hop. Then every process that builds the profile needs the same allowlist (`SSRF_ALLOWED_HOSTS`, `SSRF_ALLOWED_CIDRS`, `GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS`) on every deployment surface, or an upstream passes the check in one service and fails the hop in another. Select the profile in one function per process (`_mcp_guard_profile` in the registry) so the early check and the transport cannot disagree. An SDK call with no way to inject a client or transport is a finding in its own right: pass the factory or `http_client` the SDK offers rather than leaving its default client in place.
+
+- **A built-in private identity follows the entity, not the host.** The guard admits two first-party private targets: the bundled airegistry-tools server (`mcpgw-server`) and the openapi-mcp container (issue #2022). Each is admitted only when the entity type, the registered path and the full target URL all match, and the selected profile may reach only that entity's URLs: three exact URLs for airegistry-tools, and `<container>/s/<slug>/mcp` by pattern for each OpenAPI MCP server, so a health check or tool refresh can never reach the container's `/internal/*` control API. Both hostnames stay reserved in every other profile, even when the feature is off, so an `SSRF_ALLOWED_HOSTS` entry cannot admit them for an ordinary server. Read feature flags with `is True` and URLs with `isinstance(str)`, so a partial or mocked settings object fails closed. Name the container by hostname: an IP literal is classified before the reserved-host check runs.
+- **A bridge that copies inbound headers onto outbound calls must strip them to an allowlist first.** FastMCP's OpenAPI tools copy every inbound HTTP header onto the backend request except a short exclusion list, so behind the gateway they would send the caller's identity headers, forwarding addresses and internal routing headers to a third-party API. The openapi-mcp dispatcher keeps only the MCP headers a hub needs (`content-type`, `accept`, `mcp-protocol-version`, `mcp-session-id`, `mcp-method`, `mcp-name`, `last-event-id`, `content-length`) before the library sees the request. Apply the same allowlist at the ASGI boundary of any library that forwards headers on its own.
+
+- **A record that a feature service owns must be written only through that service, and a credential vend must check the destination it would send to.** An OpenAPI MCP server (issue #2022) owns an ordinary `ServerInfo`, and the egress vend packs every caller's per-user keys into an envelope that is signed but not encrypted. The generic `POST /api/servers/edit` route let anyone with a `modify` grant change that record's `proxy_pass_url`, and the vend compared the upstream only with the current `proxy_pass_url`, so a repointed record would have received every caller's keys. The fix enforces ownership where the data is written: `check_openapi_ownership` (`registry/services/openapi_ownership.py`), called from every `server_service` write that sets a target, refuses a managed record that points anywhere but `<container>/s/<slug>/mcp`, and refuses any other record that points at the container. The generic routes return 409 for managed records, and the vend refuses unless the record still points at its own hub. Check ownership in the write path, not only in the routes you know about, and bind a vend to a destination the vend itself derives.
+- **Sign forwarded user credentials where they are vended, and verify them where they are used.** OpenAPI MCP per-user keys (issue #2022) pass through the auth server's mcp-proxy hop on their way to the openapi-mcp container. The registry vend signs them into one envelope with a key the hop never holds, valid for 60 seconds and once, bound to one server, with each key bound to its target's base URL. The container verifies all of that before using a key, and drops the header before the library that forwards headers can see it. A hop that only relays a credential should never be able to forge one, and a missing key must fail the call, never fall back to a shared credential.
+
+- **Turn off HTTP client request logging where a URL can carry a credential.** httpx and httpx2 log every request's full URL at INFO. In the openapi-mcp container a target whose shared key is a query parameter (`api_key_query`) put that key into the console and `openapi-mcp.log` on every tool call, and tool arguments sent as query parameters can hold personal data. The container now sets the `httpx` and `httpx2` loggers to WARNING at startup (`servers/openapi-mcp/logging_setup.py`), with a test that a logged request URL never reaches the file. The registry's `_QueryStringFilter` covers only the `httpx` logger in the registry process. Check every process that sends credentialed requests, and every HTTP library it uses, not only the one the filter names.
+- **Redact the credential you attached from what the backend sends back.** A REST API may echo the caller's key in its response: api.nasa.gov repeats `api_key=<key>` in the `links` URLs of its JSON, which put a per-user key into the agent's context on the first live call (issue #2022). A shared key echoed the same way would reach every caller. The openapi-mcp transport attached the credential, so it knows the exact value, and it replaces every likely echo of it (the raw value, both URL encodings, its JSON-escaped forms, and for basic auth the base64 `user:password`) with `[REDACTED]` in the response body and header values before the library sees them. Redact by exact value, never by pattern: a pattern misses a key in an unexpected field and corrupts data that only looks like one. Apply the same rule to any bridge that adds a credential to an outbound call and returns the response to a model or a user.
+
+- **A reserved hostname is not an identity.** The guard reserved the openapi-mcp container's hostname, but the same container answered on its ClusterIP or task IP, so an ordinary registration pointed at that address (on a deployment whose `SSRF_ALLOWED_CIDRS` admits it) made the gateway forward calls into another server's hub, which then spent that server's shared key (issue #2022, security review 2026-11-18). Network policy cannot help: the call comes from an allowed hop. The fix makes the backend check who routed the call. Every route that serves a slug sends a per-slug HMAC marker derived from a secret the backend shares with the registry (`admission_marker` in `registry/auth/openapi_mcp_sync.py`): the slug's own nginx location, virtual-server backend locations for it, and the registry's own probes through `admission_headers`. Every other MCP location sends the header empty, and the container refuses a missing or wrong marker before it looks up the hub. When a backend trusts its callers by network position, give it a check of its own that only the right routes can pass.
+- **A pooled HTTP client shared by many callers must not keep cookies.** Each openapi-mcp target had one long-lived client, and its cookie jar stored a backend's `Set-Cookie` from one user's call and sent it on the next user's call, beside that user's own key (issue #2022, security review 2026-11-18). A backend that prefers the session cookie then answers as the first user. Give the client a jar that stores nothing (`url_guard.NoStoreCookieJar`) and drop `Set-Cookie` in the transport. Never clear a shared jar between calls instead: two concurrent calls race on it.
+- **Check the final outbound URL against the approved base, not only the configured one.** A credential bound to a base URL was compared with the target's configured base, while the request URL came from a spec path. A path such as `/../../other/collect`, or its percent-encoded form, which httpx2 does not resolve, sent the key to another path on the same origin. Refuse dot segments and backslashes in spec paths at admission, and in the transport refuse any URL whose origin differs from the base or whose path leaves the base path, before a credential is attached. Compare on a segment boundary, so `/v10` is not inside `/v1`. Require HTTPS for a credentialed call unless the operator allowlisted the host by name or IP literal.
+- **Refuse a compressed response before reading it when a size cap matters.** httpx decodes a gzip chunk in full before `aiter_bytes()` yields it, so a body of 8 KB became an 8 MB allocation before the 2 MiB cap could see it. Asking for `Accept-Encoding: identity` is not enough, because a server may ignore it: also refuse any `Content-Encoding` other than identity, before the first read. The spec fetch and the openapi-mcp transport both do this; `registry/health/service.py`'s discover reader still has the pattern.
+- **A service that keeps a mirrored record in step must write only the fields it owns.** The OpenAPI MCP service read the whole `ServerInfo`, merged its own fields and wrote the snapshot back. An admin's disable or tool block that landed between the read and the write was undone. Use `server_service.update_server(..., updated_fields=[...])`, and treat a `False` return as a failed write.
+- **Refuse external references in an admitted document; do not rely on a library to ignore them.** An OpenAPI spec can carry `$ref` values that name a URL or a local file. FastMCP and openapi-core refuse them today (probed 2026-11-14: no request was made at conversion, listing or call), but that is library behavior a later version could change into an unguarded fetch or a file read. The registry's spec checks therefore refuse every `$ref` that is not a local `#/...` pointer before the spec is stored or converted, with a test that does not depend on the library. Apply the same rule to any document format with includes or references (JSON Schema, YAML includes, XML entities).
 
 ## Injection (nginx config generation, NoSQL/regex)
 
@@ -370,9 +416,30 @@ sanitizer that isn't called) is equivalent to no check.
   return the handler's error shape, do not raise. Query parameters are lower risk
   (they don't traverse the path), but still reject absolute (`/`-leading) and
   `..`-containing values as defense-in-depth.
+- **Neutralize spreadsheet formulas in every CSV export, including CSV the browser builds.** Audit records and registry data hold caller-authored strings (request paths, usernames, upstream error text). A cell that starts with `=`, `+`, `-`, `@`, tab or CR, also after leading whitespace, runs as a formula when an admin opens the file in Excel, Calc or Sheets (`=HYPERLINK` exfiltration, DDE prompts). The server export applies `_csv_safe` in `registry/audit/routes.py`; a client-side export (AG Grid `exportDataAsCsv`) bypasses it and must apply `frontend/src/utils/csvSafe.ts` through `processCellCallback`. AG Grid's default CSV output does not neutralize anything. Keep the two implementations' prefix rules identical.
 
 ## Authorization & ownership
 
+- **A grant that widens what a user can SEE must stay off every path that lets
+  them USE or CHANGE something.** `view_all` (issue #2099) lets a read-only admin
+  skip per-asset visibility, and it is checked only on read paths, through
+  `can_skip_read_visibility` / `can_view_all` / `user_can_discover_asset`, each
+  read site named explicitly. It must never be added to a helper that also serves
+  writes or token binding. Two such helpers exist: `user_has_asset_permission`
+  (several routes pass it a variable `action`) and the `accessible_*` lists, which
+  token binding (`registry/auth/resource_binding.py`) reads.
+  Teaching either about `view_all` would let a holder bind tokens to, or act on,
+  assets they can only look at. Where one helper serves reads and writes, split it
+  (`_filter_agents_for_read` / `_filter_agents_by_access`) or give it an opt-in
+  flag that defaults to off (`honor_view_all=False`), so a new write caller cannot
+  inherit the bypass. Redaction keys on `is_admin`, never on the read bypass.
+  "GET" is not the same as "read": a GET that returns decrypted credentials
+  (`connect-config`), sends a stored credential upstream (a live tool-list fetch,
+  skill content), or writes state (skill health and drift) stays on the old rule,
+  and a holder gets the stored copy or nothing. The shared visibility helpers take
+  `honor_view_all` defaulting to False, and each read caller opts in by name.
+  The tool access listing (`GET /api/tool-access`, issue #2102) is one such named
+  read site: `view_all` there shows group names and grants nothing.
 - **Deny by default; never treat a broad or execute scope as admin.** A helper
   meant for "can edit my own resource" must not gate admin-only operations.
   Require explicit `is_admin` or a named admin group/scope from centralized
@@ -513,6 +580,7 @@ sanitizer that isn't called) is equivalent to no check.
   resource in the tenant, is then accepted (confused deputy). Enforce audience
   against a config-driven allowlist with `verify_aud=True`; fail closed (reject)
   when the allowlist is unconfigured rather than accepting any audience.
+- **A request header never selects how the request is authenticated.** `/validate` had a fallback, for a provider without `validate_token`, that checked the bearer against the Cognito user pool and app client named by the request's own `X-User-Pool-Id` and `X-Client-Id` headers (and `X-Region`), and nginx forwarded the client's values for all three. A caller could then name a pool it controls, sign a token there, and have it verified against that pool. The branch never ran only because every provider implements `validate_token`. Everything that decides how a credential is verified (provider, issuer, pool, client, JWKS, algorithm, audience) comes from server configuration; a request may carry the credential, never the parameters that verify it. Remove such a branch rather than guard it, fail closed when the configured provider cannot validate, and blank those headers at every nginx location that proxies to `/validate` so an older auth server cannot read them either. Sweep for request headers, query parameters or body fields that reach a validator's constructor or `get_auth_provider`.
 - **Never auto-grant groups/roles/admin from a code-shipped mapping.** A
   hardcoded `client_id → [groups]` (or default-admin) table in an M2M/SSO sync
   path silently confers privilege. Drive the mapping from config, fail closed to
@@ -667,6 +735,27 @@ sanitizer that isn't called) is equivalent to no check.
   NOT a valid "hardening" here — CSRF is defended separately by the CSRF token,
   not by `SameSite=Strict`. Leave a comment at the `set_cookie` site so a future
   reader does not "tighten" it and break login.
+- **A session cookie without the `__Host-` prefix can be tossed from a sibling
+  subdomain.** Any other host under the parent domain can set a cookie with the
+  session cookie's name. Beside the real one, the browser sends both, in an
+  order the tossing host controls, and two readers that pick differently act as
+  two sessions on one request. Refuse a duplicated session cookie in every
+  reader of both services through one parser that matches the exact name, and
+  make a read that bypasses it fail closed. A tossed cookie with the real
+  cookie's Domain and Path replaces it instead, putting the browser in the
+  attacker's session: only the `__Host-` prefix stops that, so turn it on
+  wherever the deployment needs no shared cookie domain. Never record the
+  `Cookie` header, including through OpenTelemetry header capture ([Cookie
+  Security Design](design/cookie-security-design.md#duplicate-session-cookies)).
+- **Renaming or rescoping a credential cookie leaves the old copy live.** Turning
+  on the `__Host-` prefix renamed the session cookie, but the old one, still on
+  the parent `Domain`, kept reaching every sibling host until it expired, and its
+  value was a signed id for a session that stayed live. The value alone was
+  enough: replayed under the new name, it passed the signature check. When a
+  change renames or narrows a credential cookie, bind the signature to the
+  cookie's name (`session_cookie_signing_salt`), so a value signed for one name
+  fails under another, and tell operators to end the old sessions on the server
+  ([Cookie Security Design](design/cookie-security-design.md#session-cookie-host-prefix)).
 - **Bind the OAuth2/OIDC authorization-code flow to the specific login.** A valid
   signature is necessary but not sufficient — a correctly-signed id_token minted
   for a different login can be replayed/injected. Send a per-login `nonce` on the
@@ -862,7 +951,7 @@ sanitizer that isn't called) is equivalent to no check.
   authorization path. Apply it in every provider, including the self-signed and
   userinfo paths, because a validator that one reading skips is the reading an
   attacker uses.
-- **A relaxed check for a name the gateway invents is safe only if the gateway answers that name on every path and never forwards it.** Issue #1860 added a synthetic `connect_mcpgw_<server>` tool that `tools/list` returns before egress consent. It is authorized like `tools/list`, so a user with access to the server can call it without a grant for that tool. If the gateway answered it only while consent was pending and forwarded it afterwards, a backend tool with the same name would run with the user's vaulted credential under the weaker check. The rule has three parts. Answer the invented name at the gateway in every state: `_connect_tool_local_result` in `auth_server/server.py` covers the connected, OBO and non-egress cases. Match on the one exact name derived for the server. Grant the relaxed check only on routes where every request reaches the answering hop: direct routes, which nginx always sends to `/mcp-proxy` (pinned by `test_direct_route_location_only_proxies_to_mcp_proxy`). Virtual routes get no exemption, because nginx proxies their non-egress backends straight to the backend. A hop token that lacks the route claim gets none either.
+- **A relaxed check for a name the gateway invents is safe only if the gateway answers that name on every path and never forwards it.** Issue #1860 added a synthetic `connect_mcpgw_<server>` tool that `tools/list` returns before egress consent. It is authorized like `tools/list`, so a user with access to the server can call it without a grant for that tool. If the gateway answered it only while consent was pending and forwarded it afterwards, a backend tool with the same name would run with the user's vaulted credential under the weaker check. The rule has three parts. Answer the invented name at the gateway in every state: `_connect_tool_local_result` in `auth_server/server.py` covers the connected, OBO and non-egress cases. Match on the one exact name derived for the server. Grant the relaxed check only on routes where every request reaches the answering hop: direct routes, which nginx always sends to `/mcp-proxy` (pinned by `test_direct_route_location_only_proxies_to_mcp_proxy`). Virtual routes get no exemption. Their backend locations now also go through `/mcp-proxy`, but a virtual tool name is the aggregate's alias rather than the backend's, so nothing guarantees the exact name match the relaxation depends on. A hop token that lacks the route claim gets none either.
 - **A cache in front of a token exchange must re-establish what the exchange checked.** Without the cache, the IdP
   verifies the subject token on every exchange, so the gateway never needed to: on a cookie-authenticated
   request `/validate` verifies the cookie and never the bearer header, and the OBO hop compared only the
@@ -952,6 +1041,11 @@ surface.
   `react/jsx-no-script-url` lint rule so regressions are caught. (Server-side
   template `innerHTML`/inline-`onclick` is a separate sink — guard it too.)
 
+## Files served from, or unpacked into, a configurable folder
+
+- **Check and read a served file through one descriptor.** Resolving a path, checking it, and then handing the path to `FileResponse` leaves a window in which a writer can swap the file or a parent directory for a symlink to anything the process can read, such as `/proc/self/environ`. Open the final component with `O_NOFOLLOW | O_NONBLOCK`, `fstat` the descriptor, read from it, then resolve the name again and require the same `(st_dev, st_ino)` inside the folder. `read_branding_file` in `registry/utils/branding_files.py` is the worked example; it still follows Kubernetes ConfigMap `..data` symlinks because they resolve inside the folder.
+- **Bound everything an archive makes you do, not just the files you keep.** Count every tar header, including entries you skip (archive root, macOS `._*` metadata), and cap the decoded input and the decompressed stream before `tarfile` parses a header: a gzip bomb or a huge pax or long-name record is otherwise read in full. Log skipped entries as one count, not one line each. Never use `extractall`; write accepted regular files yourself with `O_EXCL | O_NOFOLLOW`. `registry/utils/branding_writer.py` is the worked example.
+
 ## Deployment surface & insecure-by-default config
 
 - **Publish sensitive ports on loopback, not `0.0.0.0`.** In compose/dev stacks,
@@ -979,6 +1073,7 @@ surface.
   trivially dodged by a case-mutated copy (`Change-Me-...`).
 - **No secrets as Docker build `ARG`s** — they persist in image history. Inject at
   runtime.
+- **A credential reaches a container through a secret reference, never as a plain environment value.** A plain value is stored in the workload definition, which far more principals can read than the secret itself. On ECS, an `environment` entry sits in the task definition, readable by anyone with `ecs:DescribeTaskDefinition`; use `secrets` with `valueFrom` pointing at Secrets Manager or an SSM `SecureString`, so the task definition holds only the ARN. On Kubernetes, use `valueFrom.secretKeyRef`, never `value:`, because the Deployment spec is readable more widely than Secrets. In CDK, a value written into a template's `SecretString` or container env is also readable through `cloudformation:GetTemplate`. An empty optional credential injects nothing, rather than an empty secret. To audit a surface, list every variable marked `sensitive` (Terraform) or every secret-like value (Helm) and confirm none feeds a plain env entry: #2069 found 14 that did in Terraform.
 - **Don't bind-mount broad credential dirs** (e.g. `~/.aws`) into a
   network-facing container by default; mount the single needed file or use a
   scoped role.
@@ -1114,10 +1209,12 @@ the drift between copies is the hole.
   live in `registry/utils/url_guard.py`; URL identity uses
   `normalize_url_identity()`, and safe URL logging uses
   `registry.common.log_redaction.redact_url()`. Pick the profile:
-  `SKILL_PROFILE` (skill/doc fetches), `PROXY_PROFILE` (server/agent targets),
+  `SKILL_PROFILE` (skill/doc fetches), `PROXY_PROFILE` (server/agent targets,
+  including the auth server's MCP proxy hop via `proxy_profile_for_mcp_hop`),
   `FEDERATION_PROFILE` (credentialed federation), or the HTTPS-only empty-
   allowlist `CREDENTIALED_OAUTH_PROFILE` (client-secret/refresh/assertion token
-  endpoints). Validate at
+  endpoints). An `httpx2` client (the MCP SDK) takes `GuardedHttpx2AsyncTransport`
+  from `registry/utils/url_guard_httpx2.py`. Validate at
   registration with `validate_proxy_pass_url()` / `validate_agent_url()` /
   `validate_server_path()`; reject nginx metacharacters with
   `contains_nginx_metacharacters()`. Internal targets are opt-in via
@@ -1138,11 +1235,15 @@ the drift between copies is the hole.
   `@router.(post|put|patch|delete)` handler that depends on the session-cookie
   auth dependency — `enhanced_auth` AND `nginx_proxied_auth`, which falls back to
   the cookie — and mutates state) and close every gap. `verify_csrf_token_flexible`
-  correctly NO-OPS for non-cookie (Bearer/CLI) callers, so it is safe to add to a
-  route even if some callers are non-browser. It reads the token from the
-  `X-CSRF-Token` header OR a `csrf_token` form field, so a JSON-body route works
-  fine via the header. Skip only routes authed purely by `validate_internal_auth`
-  / internal-token (not browser/cookie surfaces).
+  correctly NO-OPS for a caller with no session cookie at all (Bearer/CLI), so it
+  is safe to add to a route even if some callers are non-browser. A request that
+  carries the session cookie, even a duplicated one or one that does not
+  resolve, gets a 403 unless it presents the token of the session it resolves
+  to: skipping CSRF because the registry could not read a session rests on
+  `/validate` agreeing, and a transient store error breaks that. It reads the
+  token from the `X-CSRF-Token` header OR a `csrf_token` form field, so a
+  JSON-body route works fine via the header. Skip only routes authed purely by
+  `validate_internal_auth` / internal-token (not browser/cookie surfaces).
 - **Cookie-authenticated proxy requests → `registry/common/request_origin.py`.** A browser attaches the session cookie to a request any site makes, and an MCP client cannot send a CSRF token. So every MCP, virtual, agent and proxy request authenticated by the cookie goes through `origin_refusal()` at `/validate` (`_refuse_cross_origin_cookie_request` in `auth_server/server.py`), before any scope check or token mint. Trusted origins come only from configuration (`AUTH_SERVER_EXTERNAL_URL`, `REGISTRY_URL`), never from `Host` or `X-Forwarded-*`. A missing `Origin` passes only on GET/HEAD/OPTIONS; `null`, malformed and foreign values always fail. Parse an origin with `normalize_origin()`, the same parser the CORS allowlist uses (#1996).
 - **Internal service-to-service auth → `registry/auth/internal.py`.**
   `generate_internal_token()` to mint, `validate_internal_auth` /
@@ -1189,6 +1290,8 @@ the drift between copies is the hole.
   `MCP_SCANNER_LLM_API_KEY`) or stdin. When an unavoidable third-party tool only
   accepts the secret on argv, keep it off every hop you control and record the
   external constraint as a scoped residual (see FOLLOWUPS F-19/F-20).
+- **CSV export → neutralize formulas with the shared helper.** Server: `_csv_safe` in `registry/audit/routes.py`. Browser: `csvSafe` / `processCsvCell` in `frontend/src/utils/csvSafe.ts`, passed as AG Grid's `processCellCallback`.
+- **Serving a file from an operator-supplied folder → `read_branding_file` pattern** in `registry/utils/branding_files.py` (single descriptor, `O_NOFOLLOW`, post-open inode check). Do not return a path for `FileResponse` to open later.
 
 When you add a NEW canonical helper, list it here so the next agent reaches for
 it instead of rebuilding it.

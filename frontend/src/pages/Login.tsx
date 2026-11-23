@@ -81,7 +81,7 @@ const Login: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
+    <div className="min-h-screen bg-canvas flex flex-col justify-center py-12 sm:px-6 lg:px-8">
       <div className="sm:mx-auto sm:w-full sm:max-w-md">
         <h2 className="text-center text-3xl font-bold text-gray-900 dark:text-white">
           Sign in to {uiTitle}
@@ -94,7 +94,7 @@ const Login: React.FC = () => {
       <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
         <div className="card p-8">
           {error && (
-            <div className="p-4 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg dark:bg-red-900/30 dark:text-red-400 dark:border-red-800 flex items-start space-x-2 mb-6">
+            <div className="p-4 text-sm text-danger-700 bg-danger-50 border border-danger-200 rounded-lg dark:bg-danger-900/30 dark:text-danger-400 dark:border-danger-800 flex items-start space-x-2 mb-6">
               <ExclamationTriangleIcon className="h-5 w-5 flex-shrink-0 mt-0.5" />
               <span>{error}</span>
             </div>
@@ -107,7 +107,7 @@ const Login: React.FC = () => {
                 <button
                   key={provider.name}
                   onClick={() => handleOAuthLogin(provider.name)}
-                  className="w-full flex items-center justify-center px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg shadow-sm text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 transition-all duration-200 hover:shadow-md"
+                  className="btn-secondary w-full py-3"
                 >
                   <span>Continue with {provider.display_name}</span>
                 </button>

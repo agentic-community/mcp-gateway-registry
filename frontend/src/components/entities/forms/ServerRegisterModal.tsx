@@ -39,17 +39,22 @@ const ServerRegisterModal: React.FC<ServerRegisterModalProps> = ({
   onClose,
 }) => {
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white dark:bg-gray-800 rounded-lg max-w-md w-full max-h-[90vh] overflow-y-auto">
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div
+        role="dialog"
+        aria-modal="true"
+        className="bg-surface-overlay border border-line shadow-xl rounded-xl max-w-md w-full max-h-[90vh] overflow-y-auto"
+      >
         <form onSubmit={onSubmit} className="p-6">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+            <h3 className="text-lg font-semibold text-fg">
               Register New Server
             </h3>
             <button
               type="button"
               onClick={onClose}
-              className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+              className="btn-icon"
+              aria-label="Close"
             >
               <XMarkIcon className="h-6 w-6" />
             </button>

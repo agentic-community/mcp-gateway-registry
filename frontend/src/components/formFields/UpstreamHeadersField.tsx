@@ -1,6 +1,6 @@
 import React from 'react';
 import FormField from './FormField';
-import { fieldClass, FIELD_FOCUS } from './formClasses';
+import { CHECKBOX, FIELD, fieldClass } from './formClasses';
 
 /** One upstream custom header row in the editor. */
 export interface UpstreamHeader {
@@ -14,7 +14,6 @@ export interface UpstreamHeader {
 interface UpstreamHeadersFieldProps {
   headers: UpstreamHeader[];
   onChange: (headers: UpstreamHeader[]) => void;
-  accent?: keyof typeof FIELD_FOCUS;
   /** Max rows (mirrors the backend MAX_CUSTOM_HEADERS_PER_SERVER = 10). */
   max?: number;
   /**
@@ -125,7 +124,6 @@ export function upstreamHeaderRowError(
 const UpstreamHeadersField: React.FC<UpstreamHeadersFieldProps> = ({
   headers,
   onChange,
-  accent = 'purple',
   max = MAX_DEFAULT,
   editMode = false,
 }) => {
@@ -158,13 +156,13 @@ const UpstreamHeadersField: React.FC<UpstreamHeadersFieldProps> = ({
                   placeholder="X-Api-Key"
                   value={h.name}
                   onChange={(e) => update(idx, { name: e.target.value })}
-                  className={`flex-1 ${fieldClass(accent, !!err)} text-sm`}
+                  className={`flex-1 ${fieldClass(!!err)}`}
                 />
                 <button
                   type="button"
                   aria-label={`Remove header (row ${idx + 1})`}
                   onClick={() => remove(idx)}
-                  className="px-3 py-2 text-sm text-red-600 hover:text-red-800 dark:text-red-400"
+                  className="px-3 py-2 text-sm text-danger-600 hover:text-danger-800 dark:text-danger-400 dark:hover:text-danger-300"
                 >
                   Remove
                 </button>
@@ -184,28 +182,28 @@ const UpstreamHeadersField: React.FC<UpstreamHeadersFieldProps> = ({
                 }
                 value={h.value}
                 onChange={(e) => update(idx, { value: e.target.value })}
-                className={`w-full ${fieldClass(accent)} text-sm`}
+                className={`w-full ${FIELD}`}
               />
               <label className="inline-flex items-center gap-2 cursor-pointer">
                 <input
                   type="checkbox"
                   checked={h.overridable}
                   onChange={(e) => update(idx, { overridable: e.target.checked })}
-                  className="h-4 w-4 rounded border-gray-300 dark:border-gray-600"
+                  className={CHECKBOX}
                 />
                 <span className="text-xs text-gray-600 dark:text-gray-400">
                   Caller can override / supply this header
                 </span>
               </label>
               {isAuth && h.overridable && (
-                <p className="text-xs text-amber-600 dark:text-amber-400">
+                <p className="text-xs text-warning-600 dark:text-warning-400">
                   The caller’s Authorization is forwarded to the backend. The
                   gateway credential is never leaked (an equal-token guard rejects
                   a request that reuses it).
                 </p>
               )}
               {err && (
-                <p className="text-xs text-red-600 dark:text-red-400">{err}</p>
+                <p className="text-xs text-danger-600 dark:text-danger-400">{err}</p>
               )}
             </div>
           );
@@ -214,7 +212,7 @@ const UpstreamHeadersField: React.FC<UpstreamHeadersFieldProps> = ({
           <button
             type="button"
             onClick={add}
-            className="text-sm text-purple-600 hover:text-purple-800 dark:text-purple-400"
+            className="text-sm text-accent-text hover:underline"
           >
             + Add header
           </button>

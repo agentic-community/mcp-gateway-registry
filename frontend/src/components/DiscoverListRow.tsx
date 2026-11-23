@@ -67,34 +67,34 @@ function _getAverageRating(
 function _getTypeBadge(type: ItemType) {
   if (type === 'server') {
     return {
-      bg: 'bg-indigo-500/15 text-indigo-300',
+      bg: 'bg-server-50 text-server-700 dark:bg-server-500/15 dark:text-server-300',
       icon: ServerIcon,
       label: 'Server',
     };
   }
   if (type === 'virtual') {
     return {
-      bg: 'bg-teal-500/15 text-teal-300',
+      bg: 'bg-virtual-50 text-virtual-700 dark:bg-virtual-500/15 dark:text-virtual-300',
       icon: Square3Stack3DIcon,
       label: 'Virtual',
     };
   }
   if (type === 'agent') {
     return {
-      bg: 'bg-cyan-500/15 text-cyan-300',
+      bg: 'bg-agent-50 text-agent-700 dark:bg-agent-500/15 dark:text-agent-300',
       icon: CpuChipIcon,
       label: 'Agent',
     };
   }
   if (type === 'custom') {
     return {
-      bg: 'bg-teal-500/15 text-teal-300',
+      bg: 'bg-custom-50 text-custom-700 dark:bg-custom-500/15 dark:text-custom-300',
       icon: Square3Stack3DIcon,
       label: 'Custom',
     };
   }
   return {
-    bg: 'bg-amber-500/15 text-amber-300',
+    bg: 'bg-skill-50 text-skill-800 dark:bg-skill-500/15 dark:text-skill-300',
     icon: SparklesIcon,
     label: 'Skill',
   };
@@ -205,14 +205,22 @@ const DiscoverListRow: React.FC<DiscoverListRowProps> = ({
     <div className="mb-1.5">
       {/* Compact row */}
       <div
+        role="button"
+        tabIndex={0}
+        aria-expanded={expanded}
         className={`flex items-center gap-3 px-4 py-2.5 rounded-lg cursor-pointer
-          transition-colors duration-150
-          border border-gray-700/50
+          transition-colors duration-150 border
           ${expanded
-            ? 'bg-gray-800/90 border-gray-600'
-            : 'bg-gray-800/40 hover:bg-gray-800/70 hover:border-gray-600/50'
+            ? 'bg-surface border-line-strong shadow-sm'
+            : 'bg-surface border-line hover:bg-surface-hover/60 hover:border-line-strong'
           }`}
         onClick={() => setExpanded(!expanded)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            setExpanded(!expanded);
+          }
+        }}
         data-testid={`list-row-${type}-${item.path}`}
       >
         {/* Type badge */}
@@ -225,24 +233,24 @@ const DiscoverListRow: React.FC<DiscoverListRowProps> = ({
         {/* Registry source label */}
         {fields.registrySource && (
           <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded
-            text-[11px] font-medium bg-purple-500/15 text-purple-300 flex-shrink-0">
+            text-[11px] font-medium bg-purple-50 text-purple-700 dark:bg-purple-500/15 dark:text-purple-300 flex-shrink-0">
             <GlobeAltIcon className="h-3 w-3" />
             {fields.registrySource}
           </span>
         )}
 
         {/* Name */}
-        <span className="text-sm font-semibold text-gray-100 whitespace-nowrap flex-shrink-0">
+        <span className="text-sm font-semibold text-fg whitespace-nowrap flex-shrink-0">
           {fields.name}
         </span>
 
         {/* Separator */}
         {fields.description && (
-          <span className="text-gray-600 flex-shrink-0">&middot;</span>
+          <span className="text-fg-subtle flex-shrink-0">&middot;</span>
         )}
 
         {/* Description */}
-        <span className="text-sm text-gray-400 whitespace-nowrap overflow-hidden text-ellipsis flex-1 min-w-0">
+        <span className="text-sm text-fg-muted whitespace-nowrap overflow-hidden text-ellipsis flex-1 min-w-0">
           {fields.description}
         </span>
 
@@ -252,20 +260,20 @@ const DiscoverListRow: React.FC<DiscoverListRowProps> = ({
             {fields.tags.slice(0, 2).map((tag: string) => (
               <span
                 key={tag}
-                className="px-1.5 py-0.5 rounded text-[11px] bg-gray-700/60 text-gray-400"
+                className="px-1.5 py-0.5 rounded text-[11px] bg-surface-hover text-fg-muted"
               >
                 #{tag}
               </span>
             ))}
             {fields.tags.length > 2 && (
-              <span className="text-[11px] text-gray-500">+{fields.tags.length - 2}</span>
+              <span className="text-[11px] text-fg-subtle">+{fields.tags.length - 2}</span>
             )}
           </div>
         )}
 
         {/* Tool count */}
         {fields.toolCount > 0 && (
-          <span className="hidden md:inline-flex items-center gap-1 text-xs text-blue-400 flex-shrink-0">
+          <span className="hidden md:inline-flex items-center gap-1 text-xs text-info-600 dark:text-info-400 flex-shrink-0">
             <WrenchScrewdriverIcon className="h-3 w-3" />
             {fields.toolCount}
           </span>
@@ -273,20 +281,20 @@ const DiscoverListRow: React.FC<DiscoverListRowProps> = ({
 
         {/* Rating */}
         {fields.rating > 0 && (
-          <span className="inline-flex items-center gap-1 text-xs text-yellow-400 flex-shrink-0">
+          <span className="inline-flex items-center gap-1 text-xs text-warning-600 dark:text-warning-400 flex-shrink-0">
             <StarIcon className="h-3 w-3" />
             {fields.rating.toFixed(1)}
             {fields.ratingCount > 0 && (
-              <span className="text-gray-500">({fields.ratingCount})</span>
+              <span className="text-fg-subtle">({fields.ratingCount})</span>
             )}
           </span>
         )}
 
         {/* Expand chevron */}
         {expanded ? (
-          <ChevronUpIcon className="h-4 w-4 text-gray-400 flex-shrink-0" />
+          <ChevronUpIcon className="h-4 w-4 text-fg-muted flex-shrink-0" />
         ) : (
-          <ChevronDownIcon className="h-4 w-4 text-gray-500 flex-shrink-0" />
+          <ChevronDownIcon className="h-4 w-4 text-fg-subtle flex-shrink-0" />
         )}
       </div>
 

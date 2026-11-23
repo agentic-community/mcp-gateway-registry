@@ -900,6 +900,164 @@ async def test_tool_discovery_version_change_keeps_egress_oauth_client_secret(
     assert store.card["egress_oauth"] == egress_oauth
 
 
+_MCP_APP_TOOL: dict = {
+    "name": "get-budget-data",
+    "description": "Open the budget",
+    "ui_resource_uri": "ui://budget/view.html",
+    "ui_visibility": ["model", "app"],
+}
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_tool_discovery_backfills_mcp_app_count_when_count_unchanged(
+    health_service, mock_server_info
+):
+    """A server stored before UI detection gains num_mcp_app_tools.
+
+    The tool count and version are the same as before, so only the UI
+    signature tells discovery that the stored list is out of date.
+    """
+    card = {
+        **mock_server_info,
+        "tool_list": [{"name": "get-budget-data", "description": "Open the budget"}],
+        "num_tools": 1,
+        "mcp_server_version": "1.0.0",
+    }
+    store = _StoredServerService(card)
+
+    with patch("registry.core.mcp_client.mcp_client_service") as mock_mcp:
+        mock_mcp.get_mcp_connection_result = AsyncMock(
+            return_value={"tools": [_MCP_APP_TOOL], "server_info": {"version": "1.0.0"}}
+        )
+        with (
+            patch("registry.services.server_service.server_service", store),
+            patch("registry.services.scope_service.update_server_scopes", new=AsyncMock()),
+        ):
+            await health_service._update_tools_background("/budget", "http://budget:8000/mcp")
+
+    assert store.card["num_mcp_app_tools"] == 1
+    assert store.card["tool_list"][0]["ui_resource_uri"] == "ui://budget/view.html"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_tool_discovery_skips_write_when_mcp_app_tools_unchanged(
+    health_service, mock_server_info
+):
+    """Discovery does not rewrite a card whose tools, version and UI are unchanged."""
+    card = {
+        **mock_server_info,
+        "tool_list": [_MCP_APP_TOOL],
+        "num_tools": 1,
+        "num_mcp_app_tools": 1,
+        "mcp_server_version": "1.0.0",
+    }
+
+    with patch("registry.core.mcp_client.mcp_client_service") as mock_mcp:
+        mock_mcp.get_mcp_connection_result = AsyncMock(
+            return_value={"tools": [_MCP_APP_TOOL], "server_info": {"version": "1.0.0"}}
+        )
+        with patch("registry.services.server_service.server_service") as mock_server_service:
+            mock_server_service.get_server_info = AsyncMock(return_value=card)
+            mock_server_service.update_server = AsyncMock()
+            await health_service._update_tools_background("/budget", "http://budget:8000/mcp")
+
+    mock_server_service.update_server.assert_not_called()
+
+
+_ANNOTATED_TOOL: dict = {
+    "name": "delete_note",
+    "description": "Delete a note",
+    "annotations": {"readOnlyHint": False, "destructiveHint": True},
+}
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_tool_discovery_backfills_annotations_when_count_unchanged(
+    health_service, mock_server_info
+):
+    """A server stored before the registry kept annotations gains them.
+
+    The tool count and version match, so only the metadata signature tells
+    discovery that the stored list is out of date.
+    """
+    card = {
+        **mock_server_info,
+        "tool_list": [{"name": "delete_note", "description": "Delete a note"}],
+        "num_tools": 1,
+        "mcp_server_version": "1.0.0",
+    }
+    store = _StoredServerService(card)
+
+    with patch("registry.core.mcp_client.mcp_client_service") as mock_mcp:
+        mock_mcp.get_mcp_connection_result = AsyncMock(
+            return_value={"tools": [_ANNOTATED_TOOL], "server_info": {"version": "1.0.0"}}
+        )
+        with (
+            patch("registry.services.server_service.server_service", store),
+            patch("registry.services.scope_service.update_server_scopes", new=AsyncMock()),
+        ):
+            await health_service._update_tools_background("/notes", "http://notes:8000/mcp")
+
+    assert store.card["tool_list"][0]["annotations"] == {
+        "readOnlyHint": False,
+        "destructiveHint": True,
+    }
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_tool_discovery_picks_up_annotation_only_change(health_service, mock_server_info):
+    """Flipping one hint upstream rewrites the stored list."""
+    card = {
+        **mock_server_info,
+        "tool_list": [_ANNOTATED_TOOL],
+        "num_tools": 1,
+        "mcp_server_version": "1.0.0",
+    }
+    store = _StoredServerService(card)
+    flipped = {**_ANNOTATED_TOOL, "annotations": {"readOnlyHint": True}}
+
+    with patch("registry.core.mcp_client.mcp_client_service") as mock_mcp:
+        mock_mcp.get_mcp_connection_result = AsyncMock(
+            return_value={"tools": [flipped], "server_info": {"version": "1.0.0"}}
+        )
+        with (
+            patch("registry.services.server_service.server_service", store),
+            patch("registry.services.scope_service.update_server_scopes", new=AsyncMock()),
+        ):
+            await health_service._update_tools_background("/notes", "http://notes:8000/mcp")
+
+    assert store.card["tool_list"][0]["annotations"] == {"readOnlyHint": True}
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_tool_discovery_skips_write_when_annotations_unchanged(
+    health_service, mock_server_info
+):
+    """Discovery does not rewrite a card whose tools and annotations are unchanged."""
+    card = {
+        **mock_server_info,
+        "tool_list": [_ANNOTATED_TOOL],
+        "num_tools": 1,
+        "mcp_server_version": "1.0.0",
+    }
+
+    with patch("registry.core.mcp_client.mcp_client_service") as mock_mcp:
+        mock_mcp.get_mcp_connection_result = AsyncMock(
+            return_value={"tools": [dict(_ANNOTATED_TOOL)], "server_info": {"version": "1.0.0"}}
+        )
+        with patch("registry.services.server_service.server_service") as mock_server_service:
+            mock_server_service.get_server_info = AsyncMock(return_value=card)
+            mock_server_service.update_server = AsyncMock()
+            await health_service._update_tools_background("/notes", "http://notes:8000/mcp")
+
+    mock_server_service.update_server.assert_not_called()
+
+
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_health_service_get_all_health_status(health_service, mock_server_info):
@@ -2161,12 +2319,12 @@ class TestTransportAwareModernProbe:
     async def test_legacy_server_still_uses_initialize_and_ping(
         self, health_service, mock_server_info
     ):
-        initialize = AsyncMock(return_value="session-123")
+        initialize = AsyncMock(return_value=("session-123", None))
         ping_response = MagicMock(status_code=200)
         with (
             patch("registry.health.service.validate_url", return_value=["93.184.216.34"]),
             patch.object(health_service, "_probe_server_discover", AsyncMock(return_value=False)),
-            patch.object(health_service, "_initialize_mcp_session", initialize),
+            patch.object(health_service, "_initialize_mcp_session_with_status", initialize),
             patch.object(
                 health_service, "_probe_mcp_endpoint", AsyncMock(return_value=ping_response)
             ),
@@ -2177,6 +2335,59 @@ class TestTransportAwareModernProbe:
 
         assert (is_healthy, status) == (True, HealthStatus.HEALTHY)
         initialize.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("init_status", "expected"),
+        [
+            (401, HealthStatus.HEALTHY_AUTH_EXPIRED),
+            (403, HealthStatus.HEALTHY_AUTH_EXPIRED),
+            (500, HealthStatus.HEALTHY),
+            (None, HealthStatus.HEALTHY),
+        ],
+    )
+    async def test_initialize_refused_for_credentials_is_auth_expired(
+        self,
+        health_service,
+        mock_server_info,
+        init_status,
+        expected,
+    ):
+        """A reachable server that refuses initialize for credentials is auth-expired (#2079)."""
+        initialize = AsyncMock(return_value=(None, init_status))
+        with (
+            patch("registry.health.service.validate_url", return_value=["93.184.216.34"]),
+            patch.object(health_service, "_probe_server_discover", AsyncMock(return_value=False)),
+            patch.object(health_service, "_initialize_mcp_session_with_status", initialize),
+            patch.object(health_service, "_try_ping_without_auth", AsyncMock(return_value=True)),
+        ):
+            is_healthy, status = await health_service._check_server_endpoint_transport_aware(
+                MagicMock(), "http://localhost:8000/mcp", mock_server_info
+            )
+
+        assert (is_healthy, status) == (True, expected)
+
+    @pytest.mark.asyncio
+    async def test_ping_refused_for_credentials_is_auth_expired(
+        self,
+        health_service,
+        mock_server_info,
+    ):
+        """A session ping refused with 401 ends the #167 workaround (#2079)."""
+        initialize = AsyncMock(return_value=("session-123", None))
+        refused = MagicMock(status_code=401)
+        with (
+            patch("registry.health.service.validate_url", return_value=["93.184.216.34"]),
+            patch.object(health_service, "_probe_server_discover", AsyncMock(return_value=False)),
+            patch.object(health_service, "_initialize_mcp_session_with_status", initialize),
+            patch.object(health_service, "_probe_mcp_endpoint", AsyncMock(return_value=refused)),
+            patch.object(health_service, "_try_ping_without_auth", AsyncMock(return_value=True)),
+        ):
+            is_healthy, status = await health_service._check_server_endpoint_transport_aware(
+                MagicMock(), "http://localhost:8000/mcp", mock_server_info
+            )
+
+        assert (is_healthy, status) == (True, HealthStatus.HEALTHY_AUTH_EXPIRED)
 
     @pytest.mark.asyncio
     async def test_ssrf_block_happens_before_discover_probe(self, health_service, mock_server_info):

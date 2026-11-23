@@ -41,19 +41,19 @@ variable "task_execution_role_arn" {
 variable "registry_image_uri" {
   description = "Container image URI for registry service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/registry:1.36.0"
+  default     = "public.ecr.aws/p3v1o3c6/registry:1.38.2"
 }
 
 variable "auth_server_image_uri" {
   description = "Container image URI for auth server service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/auth-server:1.36.0"
+  default     = "public.ecr.aws/p3v1o3c6/auth-server:1.38.2"
 }
 
 variable "mcpgw_image_uri" {
   description = "Container image URI for mcpgw service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/mcpgw:1.36.0"
+  default     = "public.ecr.aws/p3v1o3c6/mcpgw:1.38.2"
 }
 
 variable "enable_demo_servers" {
@@ -494,6 +494,23 @@ variable "session_cookie_domain" {
   default     = ""
 }
 
+variable "session_cookie_host_prefix" {
+  description = "Name the session cookie __Host-<name> (Secure, Path=/, no Domain). Requires session_cookie_secure = true and an empty session_cookie_domain."
+  type        = bool
+  default     = false
+}
+
+variable "session_max_age_seconds" {
+  description = "Browser session lifetime in seconds: the auth server's session store TTL, the session cookie's Max-Age, and the registry's cookie signature max age. Rendered into both the registry and auth-server task definitions so the two always match."
+  type        = number
+  default     = 28800
+
+  validation {
+    condition     = var.session_max_age_seconds > 0 && floor(var.session_max_age_seconds) == var.session_max_age_seconds
+    error_message = "session_max_age_seconds must be a positive whole number of seconds (for example 28800 for 8 hours); the registry and auth-server refuse to start on 0 or a negative value."
+  }
+}
+
 variable "oauth2_allowed_redirect_uris" {
   description = "Comma-separated exact-match allowlist of OAuth login/logout redirect URIs (open-redirect hardening). When set, an absolute redirect_uri is accepted only if it exactly matches an entry; relative paths are always allowed. Empty falls back to the weaker cookie-domain heuristic."
   type        = string
@@ -700,7 +717,7 @@ variable "documentdb_credentials_secret_arn" {
 # discrete variables. Prefer mongodb_connection_string_secret_arn when the
 # URI contains credentials to avoid storing secrets in Terraform state.
 variable "mongodb_connection_string" {
-  description = "Optional full MongoDB connection string override (plain text). Takes precedence over documentdb_* variables. Leave empty to use documentdb_* variables."
+  description = "Optional full MongoDB connection string override (plain text). Takes precedence over documentdb_* variables. Leave empty to use documentdb_* variables. The module stores it in Secrets Manager and injects it through the task secrets block, so it does not appear in the task definition; it does still appear in Terraform state."
   type        = string
   default     = ""
   sensitive   = true
@@ -732,6 +749,15 @@ variable "registry_rum_snippet_secret_arn" {
 
 variable "registry_rum_allowed_hosts" {
   description = "Optional comma-separated allowlist of hosts the RUM snippet may reference (script src and beacon). When set, a snippet referencing any host not on the list is rejected at startup (fail closed). Empty disables the check."
+  type        = string
+  default     = ""
+}
+
+# Base64 .tar.gz of the UI branding folder, rendered as UI_BRANDING_ARCHIVE_B64
+# on the registry container only. Validated (format and 48 KiB cap) at the root
+# module; see terraform/aws-ecs/variables.tf.
+variable "ui_branding_archive_b64" {
+  description = "Optional base64-encoded .tar.gz of the UI branding folder, extracted into /app/branding by the registry at startup. Empty disables it."
   type        = string
   default     = ""
 }
@@ -896,7 +922,7 @@ variable "cognito_client_secret" {
 }
 
 variable "cognito_domain" {
-  description = "Optional Cognito hosted UI domain prefix or custom domain. Leave empty to derive it from the User Pool ID."
+  description = "Optional Cognito hosted-UI domain PREFIX (for example \"mcp-gw\"), not a hostname: the auth server appends \".auth.<region>.amazoncognito.com\", so a custom domain is not supported. Leave empty to derive it from the User Pool ID (us-east-1_KmP5A3La3 becomes us-east-1kmp5a3la3). That works only if the pool's domain uses that prefix, so set it explicitly otherwise."
   type        = string
   default     = ""
 }
@@ -1563,6 +1589,56 @@ variable "mcp_tools_list_filter_enabled" {
   default     = true
 }
 
+variable "health_check_interval_seconds" {
+  description = "How often the registry health-checks every enabled server, in seconds. Also the length of one tool refresh cycle. Default 300."
+  type        = number
+  default     = 300
+
+  validation {
+    condition     = var.health_check_interval_seconds >= 1
+    error_message = "health_check_interval_seconds must be at least 1."
+  }
+}
+
+variable "tool_access_owner_view" {
+  description = "What a server owner who is not an admin sees on the Tool access page and GET /api/tool-access: none (nothing; only admins and read-only admins see the listing) or owned (the tools on the servers they registered). Default none."
+  type        = string
+  default     = "none"
+
+  validation {
+    condition     = contains(["none", "owned"], var.tool_access_owner_view)
+    error_message = "tool_access_owner_view must be none or owned."
+  }
+}
+
+variable "tool_refresh_enabled" {
+  description = "Fetch tools again from servers that stay healthy, on a schedule, so the stored tool list picks up description and input schema changes. Each registry task refreshes on its own, so upstream servers see one refresh per task per period. Default false."
+  type        = bool
+  default     = false
+}
+
+variable "tool_refresh_every_cycles" {
+  description = "Fetch each healthy server once every this many health cycles (1 to 1000). The period is at least this value times health_check_interval_seconds, because a cycle also includes the time the checks take. Default 3."
+  type        = number
+  default     = 3
+
+  validation {
+    condition     = var.tool_refresh_every_cycles >= 1 && var.tool_refresh_every_cycles <= 1000
+    error_message = "tool_refresh_every_cycles must be between 1 and 1000."
+  }
+}
+
+variable "tool_fetch_max_concurrency" {
+  description = "Most background tool fetches one registry task runs at once (1 to 100). Default 5."
+  type        = number
+  default     = 5
+
+  validation {
+    condition     = var.tool_fetch_max_concurrency >= 1 && var.tool_fetch_max_concurrency <= 100
+    error_message = "tool_fetch_max_concurrency must be between 1 and 100."
+  }
+}
+
 variable "mcp_proxy_max_body_bytes" {
   description = "Upper bound on a tools/list upstream response body (in bytes) that the auth-server proxy hop will buffer for filtering. Responses exceeding this return HTTP 413. Default 2097152 (2 MiB)."
   type        = number
@@ -1706,13 +1782,13 @@ variable "a2a_reverse_proxy_enabled" {
 }
 
 variable "ssrf_allowed_hosts" {
-  description = "Comma-separated hostnames (or literal IPs) that may resolve to private addresses and still be accepted by the SSRF guard for MCP-server proxy_pass_url / A2A-agent URLs. The cloud metadata endpoint is never permitted."
+  description = "Comma-separated hostnames (or literal IPs) that may resolve to private addresses and still be accepted by the SSRF guard for MCP-server proxy_pass_url / A2A-agent URLs. Applied in the registry (registration, health check) and the auth-server (MCP proxy hop, generic proxy), so both make the same decision. The cloud metadata endpoint is never permitted."
   type        = string
   default     = ""
 }
 
 variable "ssrf_allowed_cidrs" {
-  description = "Comma-separated CIDR ranges the SSRF guard accepts for MCP-server / A2A-agent upstreams even though they are private (e.g. an internal service subnet). The cloud metadata address 169.254.169.254 is never permitted."
+  description = "Comma-separated CIDR ranges the SSRF guard accepts for MCP-server / A2A-agent upstreams even though they are private (e.g. an internal service subnet). A listed range also admits the reserved IPv4 addresses it contains (e.g. Istio ServiceEntry VIPs in 240.240.0.0/16), in the registry, the auth-server generic proxy and mcpgw. Cloud metadata/credential, link-local, unspecified and multicast addresses are never permitted."
   type        = string
   default     = ""
 }
@@ -1971,9 +2047,10 @@ variable "registry_extra_env" {
         "GATEWAY_GENERIC_CLIENT_MAX_BODY_SIZE",
         "GATEWAY_PROXY_PREFIX",
         "GATEWAY_GENERIC_STREAM_READ_TIMEOUT_SECONDS",
+        "SSRF_ALLOWED_CIDRS",
       ], upper(trimspace(entry.name)))
     ])
-    error_message = "registry_extra_env must not override Terraform-managed generic-proxy variables."
+    error_message = "registry_extra_env must not override Terraform-managed generic-proxy variables or SSRF_ALLOWED_CIDRS."
   }
 }
 
@@ -1998,17 +2075,29 @@ variable "auth_server_extra_env" {
         "GATEWAY_GENERIC_STREAM_MAX_DURATION_SECONDS",
         "GATEWAY_GENERIC_STREAM_MAX_BYTES",
         "AWS_EC2_METADATA_DISABLED",
+        "SSRF_ALLOWED_HOSTS",
+        "SSRF_ALLOWED_CIDRS",
+        "GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS",
       ], upper(trimspace(entry.name)))
     ])
-    error_message = "auth_server_extra_env must not override Terraform-managed generic-proxy or metadata-hardening variables; use the canonical variables instead."
+    error_message = "auth_server_extra_env must not override Terraform-managed generic-proxy, metadata-hardening or SSRF allowlist variables (SSRF_ALLOWED_HOSTS, SSRF_ALLOWED_CIDRS, GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS); use the canonical variables instead."
   }
 }
 
 variable "mcpgw_extra_env" {
-  description = "Extra environment variables for mcpgw service. List of objects with 'name' and 'value' string fields. Reserved-name validation is performed at the root module."
+  description = "Extra environment variables for mcpgw service. List of objects with 'name' and 'value' string fields. Comprehensive reserved-name validation is performed at the root module; the SSRF guard's SSRF_ALLOWED_CIDRS is also refused here so a direct module caller cannot override it."
   type        = list(object({ name = string, value = string }))
   default     = []
   sensitive   = true
+
+  validation {
+    condition = alltrue([
+      for entry in var.mcpgw_extra_env : !contains([
+        "SSRF_ALLOWED_CIDRS",
+      ], upper(trimspace(entry.name)))
+    ])
+    error_message = "mcpgw_extra_env must not override SSRF_ALLOWED_CIDRS; use the ssrf_allowed_cidrs variable instead."
+  }
 }
 
 # ---------------------------------------------------------------------------
@@ -2180,7 +2269,7 @@ variable "gateway_canonical_namespace_enabled" {
 }
 
 variable "gateway_proxy_allow_private_targets" {
-  description = "Allow the generic proxy to reach private/internal network targets. Off by default to keep the SSRF egress guard fail-closed."
+  description = "Allow private/internal network targets through the SSRF guard's PROXY_PROFILE: registration and health checks in the registry, the MCP proxy hop and the generic proxy in the auth-server. Metadata endpoints stay denied. Off by default to keep the SSRF egress guard fail-closed; prefer ssrf_allowed_hosts / ssrf_allowed_cidrs."
   type        = bool
   default     = false
 }
@@ -2286,5 +2375,172 @@ variable "gateway_generic_stream_max_bytes" {
   validation {
     condition     = var.gateway_generic_stream_max_bytes >= 1024
     error_message = "gateway_generic_stream_max_bytes must be at least 1024."
+  }
+}
+
+# =============================================================================
+# OPENAPI MCP SERVERS (issue #2022, ships disabled by default)
+# =============================================================================
+# Serves REST APIs described by OpenAPI specs as MCP servers. When enabled, the
+# registry gets the OPENAPI_MCP_* settings and an openapi-mcp ECS service is
+# deployed behind Service Connect as openapi-mcp:9876. Only the registry security
+# group can reach it. The sync secret both tasks share is generated here.
+
+variable "openapi_mcp_enabled" {
+  description = "Deploy the openapi-mcp service and turn on OpenAPI MCP servers in the registry. Requires openapi_mcp_image_uri."
+  type        = bool
+  default     = false
+}
+
+variable "openapi_mcp_image_uri" {
+  description = "Container image URI for the openapi-mcp service, with a pinned version tag or digest (never :latest). Required when openapi_mcp_enabled is true."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = !var.openapi_mcp_enabled || trimspace(var.openapi_mcp_image_uri) != ""
+    error_message = "openapi_mcp_image_uri must be set when openapi_mcp_enabled is true."
+  }
+
+  validation {
+    condition     = !endswith(var.openapi_mcp_image_uri, ":latest")
+    error_message = "openapi_mcp_image_uri must use a pinned version tag or digest, not :latest."
+  }
+}
+
+variable "openapi_mcp_replicas" {
+  description = "Number of openapi-mcp tasks. Must be 1: the registry pushes each server's state to one address, and Service Connect hides individual replicas behind it, so a second replica would serve stale tools."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.openapi_mcp_replicas == 1
+    error_message = "openapi_mcp_replicas must be 1. The registry cannot push state to each replica behind Service Connect."
+  }
+}
+
+variable "openapi_mcp_max_servers" {
+  description = "Most OpenAPI MCP servers a deployment can have (1 to 100)."
+  type        = number
+  default     = 10
+
+  validation {
+    condition     = var.openapi_mcp_max_servers >= 1 && var.openapi_mcp_max_servers <= 100
+    error_message = "openapi_mcp_max_servers must be between 1 and 100."
+  }
+}
+
+variable "openapi_mcp_max_targets_per_server" {
+  description = "Most REST targets one OpenAPI MCP server can have (1 to 50)."
+  type        = number
+  default     = 10
+
+  validation {
+    condition     = var.openapi_mcp_max_targets_per_server >= 1 && var.openapi_mcp_max_targets_per_server <= 50
+    error_message = "openapi_mcp_max_targets_per_server must be between 1 and 50."
+  }
+}
+
+variable "openapi_mcp_max_tools_per_target" {
+  description = "Most tools one target may produce after its filters (1 to 500)."
+  type        = number
+  default     = 100
+
+  validation {
+    condition     = var.openapi_mcp_max_tools_per_target >= 1 && var.openapi_mcp_max_tools_per_target <= 500
+    error_message = "openapi_mcp_max_tools_per_target must be between 1 and 500."
+  }
+}
+
+variable "openapi_mcp_spec_max_bytes" {
+  description = "Largest OpenAPI spec, in bytes, the registry will fetch (1024 to 20971520)."
+  type        = number
+  default     = 5242880
+
+  validation {
+    condition     = var.openapi_mcp_spec_max_bytes >= 1024 && var.openapi_mcp_spec_max_bytes <= 20971520
+    error_message = "openapi_mcp_spec_max_bytes must be between 1024 and 20971520."
+  }
+}
+
+variable "openapi_mcp_reconcile_interval_seconds" {
+  description = "How often, in seconds, the registry compares stored and running OpenAPI MCP state (10 to 3600)."
+  type        = number
+  default     = 60
+
+  validation {
+    condition     = var.openapi_mcp_reconcile_interval_seconds >= 10 && var.openapi_mcp_reconcile_interval_seconds <= 3600
+    error_message = "openapi_mcp_reconcile_interval_seconds must be between 10 and 3600."
+  }
+}
+
+variable "openapi_mcp_backend_timeout_seconds" {
+  description = "Timeout, in seconds, for each backend REST call the openapi-mcp container makes (above 0, at most 300)."
+  type        = number
+  default     = 30
+
+  validation {
+    condition     = var.openapi_mcp_backend_timeout_seconds > 0 && var.openapi_mcp_backend_timeout_seconds <= 300
+    error_message = "openapi_mcp_backend_timeout_seconds must be above 0 and at most 300."
+  }
+}
+
+variable "openapi_mcp_max_response_bytes" {
+  description = "Largest backend response, in bytes, the openapi-mcp container passes to the agent (1024 to 104857600). Larger ones become a tool error."
+  type        = number
+  default     = 2097152
+
+  validation {
+    condition     = var.openapi_mcp_max_response_bytes >= 1024 && var.openapi_mcp_max_response_bytes <= 104857600
+    error_message = "openapi_mcp_max_response_bytes must be between 1024 and 104857600."
+  }
+}
+
+variable "openapi_mcp_conversion_timeout_seconds" {
+  description = "Longest one spec conversion may take in the openapi-mcp container, in seconds (above 0, at most 120)."
+  type        = number
+  default     = 10
+
+  validation {
+    condition     = var.openapi_mcp_conversion_timeout_seconds > 0 && var.openapi_mcp_conversion_timeout_seconds <= 120
+    error_message = "openapi_mcp_conversion_timeout_seconds must be above 0 and at most 120."
+  }
+}
+
+variable "openapi_mcp_extra_env" {
+  description = "Extra environment variables for the openapi-mcp service. List of objects with 'name' and 'value' fields. The forward-proxy variables (HTTP_PROXY, HTTPS_PROXY, NO_PROXY) are copied from registry_extra_env automatically, so both apply one egress policy. Reserved names (listed in charts/openapi-mcp/reserved-env-names.txt) are refused."
+  type        = list(object({ name = string, value = string }))
+  default     = []
+  sensitive   = true
+
+  validation {
+    condition = alltrue([
+      for entry in var.openapi_mcp_extra_env : !contains([
+        "OPENAPI_MCP_SYNC_SECRET",
+        "OPENAPI_MCP_BACKEND_TIMEOUT_SECONDS",
+        "OPENAPI_MCP_MAX_RESPONSE_BYTES",
+        "OPENAPI_MCP_CONVERSION_TIMEOUT_SECONDS",
+        "APP_LOG_DIR",
+        "APP_LOG_FILE_FORMAT",
+        "APP_LOG_CONSOLE_FORMAT",
+        "APP_LOG_LEVEL",
+        "APP_LOG_MAX_BYTES",
+        "APP_LOG_BACKUP_COUNT",
+        "HOST",
+        "PORT",
+        "BUILD_VERSION",
+        "SSRF_ALLOWED_HOSTS",
+        "SSRF_ALLOWED_CIDRS",
+        "GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS",
+        "GITHUB_EXTRA_HOSTS",
+        "EGRESS_OAUTH_TRUSTED_IDP_HOSTS",
+        "EGRESS_FORWARD_PROXY_ENABLED",
+        "EGRESS_FORWARD_PROXY_CA_BUNDLE",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+      ], upper(trimspace(entry.name)))
+    ])
+    error_message = "openapi_mcp_extra_env must not override Terraform-managed variables (the OPENAPI_MCP_* container settings, the APP_LOG_* settings, HOST, PORT, BUILD_VERSION, the SSRF guard variables, or the forward-proxy variables, which come from registry_extra_env)."
   }
 }

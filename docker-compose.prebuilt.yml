@@ -49,6 +49,9 @@ services:
   # Pre-built images are published to Amazon ECR Public (public.ecr.aws/p3v1o3c6).
   # Override the namespace with ECR_REGISTRY if you mirror them elsewhere.
   registry:
+    networks:
+      - default
+      - openapi-mcp
     image: ${ECR_REGISTRY:-public.ecr.aws/p3v1o3c6}/registry:${REGISTRY_VERSION:-latest}
     environment:
       # Deployment Mode Configuration
@@ -113,6 +116,10 @@ services:
       # value whenever the operator's .env did not set BUILD_VERSION,
       # which is the silent-fallback symptom this PR fixes.
       - SECRET_KEY=${SECRET_KEY}
+      # __Host- session cookie; needs HTTPS and no SESSION_COOKIE_DOMAIN. Same value on auth-server.
+      - SESSION_COOKIE_HOST_PREFIX=${SESSION_COOKIE_HOST_PREFIX:-false}
+      # Browser session lifetime in seconds; must be positive. Same value on auth-server.
+      - SESSION_MAX_AGE_SECONDS=${SESSION_MAX_AGE_SECONDS:-28800}
       # Per-user egress credential vault (off by default)
       - EGRESS_AUTH_ENABLED=${EGRESS_AUTH_ENABLED:-false}
       - SECRET_STORE_BACKEND=${SECRET_STORE_BACKEND:-openbao}
@@ -185,6 +192,10 @@ services:
       - COGNITO_ENABLED=${COGNITO_ENABLED:-false}
       - AWS_REGION=${AWS_REGION:-us-east-1}
       - HEALTH_CHECK_INTERVAL_SECONDS=${HEALTH_CHECK_INTERVAL_SECONDS:-30}
+      - TOOL_REFRESH_ENABLED=${TOOL_REFRESH_ENABLED:-false}
+      - TOOL_REFRESH_EVERY_CYCLES=${TOOL_REFRESH_EVERY_CYCLES:-3}
+      - TOOL_FETCH_MAX_CONCURRENCY=${TOOL_FETCH_MAX_CONCURRENCY:-5}
+      - TOOL_ACCESS_OWNER_VIEW=${TOOL_ACCESS_OWNER_VIEW:-none}
       - SRE_GATEWAY_AUTH_TOKEN=${SRE_GATEWAY_AUTH_TOKEN}
       - ATLASSIAN_AUTH_TOKEN=${ATLASSIAN_AUTH_TOKEN}
       # Metrics configuration
@@ -420,6 +431,17 @@ services:
       - CUSTOM_TYPE_CACHE_TTL_SECONDS=${CUSTOM_TYPE_CACHE_TTL_SECONDS:-60}
       - MAX_CUSTOM_RECORDS_PER_TYPE=${MAX_CUSTOM_RECORDS_PER_TYPE:-1000}
       - MAX_CUSTOM_TYPES=${MAX_CUSTOM_TYPES:-50}
+      # OpenAPI MCP servers (issue #2022). Off by default. When on, also start the
+      # openapi-mcp service (build_and_run.sh adds --profile openapi-mcp) and set
+      # OPENAPI_MCP_SYNC_SECRET to the same value for both services.
+      - OPENAPI_MCP_ENABLED=${OPENAPI_MCP_ENABLED:-false}
+      - OPENAPI_MCP_INTERNAL_URL=${OPENAPI_MCP_INTERNAL_URL:-http://openapi-mcp:9876}
+      - OPENAPI_MCP_SYNC_SECRET=${OPENAPI_MCP_SYNC_SECRET:-}
+      - OPENAPI_MCP_MAX_SERVERS=${OPENAPI_MCP_MAX_SERVERS:-10}
+      - OPENAPI_MCP_MAX_TARGETS_PER_SERVER=${OPENAPI_MCP_MAX_TARGETS_PER_SERVER:-10}
+      - OPENAPI_MCP_MAX_TOOLS_PER_TARGET=${OPENAPI_MCP_MAX_TOOLS_PER_TARGET:-100}
+      - OPENAPI_MCP_SPEC_MAX_BYTES=${OPENAPI_MCP_SPEC_MAX_BYTES:-5242880}
+      - OPENAPI_MCP_RECONCILE_INTERVAL_SECONDS=${OPENAPI_MCP_RECONCILE_INTERVAL_SECONDS:-60}
       # Registry-UI internal token verification (the /api/ hop; mints in auth-server)
       - INTERNAL_TOKEN_TTL_SECONDS=${INTERNAL_TOKEN_TTL_SECONDS:-30}
       - INTERNAL_TOKEN_LEEWAY_SECONDS=${INTERNAL_TOKEN_LEEWAY_SECONDS:-5}
@@ -442,6 +464,8 @@ services:
       - ${HOME}/mcp-gateway/security_scans:/app/security_scans
       - ${HOME}/mcp-gateway/federation.json:/app/config/federation.json
       - ${HOME}/mcp-gateway/ssl:/etc/ssl:ro
+      # UI branding folder (manifest.json, theme.css, logos), read-only; see docs/ui-branding.md
+      - ${MCP_BRANDING_DIR:-./branding}:/app/branding:ro
       # Application log files (bind mount to host for Splunk ingestion, Issue #987)
       - /var/log/containers/ai-registry:/var/log/containers/ai-registry
     depends_on:
@@ -463,6 +487,9 @@ services:
 
   # Auth service (separate and scalable) - using pre-built image
   auth-server:
+    networks:
+      - default
+      - openapi-mcp
     image: ${ECR_REGISTRY:-public.ecr.aws/p3v1o3c6}/auth-server:${AUTH_SERVER_VERSION:-latest}
     environment:
       - REGISTRY_URL=${REGISTRY_URL}
@@ -470,6 +497,10 @@ services:
       - TRUSTED_PROXY_HOPS=${TRUSTED_PROXY_HOPS:-1}
       - TRUSTED_EXTERNAL_HOSTS=${TRUSTED_EXTERNAL_HOSTS:-}
       - SECRET_KEY=${SECRET_KEY}
+      # __Host- session cookie; needs HTTPS and no SESSION_COOKIE_DOMAIN. Same value on registry.
+      - SESSION_COOKIE_HOST_PREFIX=${SESSION_COOKIE_HOST_PREFIX:-false}
+      # Browser session lifetime in seconds; must be positive. Same value on registry.
+      - SESSION_MAX_AGE_SECONDS=${SESSION_MAX_AGE_SECONDS:-28800}
       # MCP access-token lifetime (hours). auth-server mints + clamps to the
       # configured max (bounded to a 7-day ceiling in code). Must match the
       # registry's values. Issue #1477.
@@ -498,6 +529,20 @@ services:
       - EGRESS_HTTP_POOL_MAX_KEEPALIVE=${EGRESS_HTTP_POOL_MAX_KEEPALIVE:-20}
       - EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS=${EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS:-30}
       - EGRESS_HTTP_POOL_CONNECT_RETRIES=${EGRESS_HTTP_POOL_CONNECT_RETRIES:-1}
+      # SSRF allowlist for PROXY_PROFILE, the profile the MCP proxy hop and the
+      # generic proxy pin every upstream connection under. Same values as the
+      # registry, whose health check and registration guard use the same profile,
+      # so a private upstream that passes there passes here. An operator CIDR may
+      # also admit a reserved IPv4 address (e.g. Istio 240.240.0.0/16, #2018).
+      # Metadata and workload-credential endpoints stay blocked regardless.
+      - SSRF_ALLOWED_HOSTS=${SSRF_ALLOWED_HOSTS:-}
+      - SSRF_ALLOWED_CIDRS=${SSRF_ALLOWED_CIDRS:-}
+      - GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS=${GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS:-false}
+      # OpenAPI MCP servers (issue #2022): the mcp-proxy hop forwards per-user
+      # keys to the openapi-mcp container, so it must recognize the container's
+      # exact identity. The auth server never gets OPENAPI_MCP_SYNC_SECRET.
+      - OPENAPI_MCP_ENABLED=${OPENAPI_MCP_ENABLED:-false}
+      - OPENAPI_MCP_INTERNAL_URL=${OPENAPI_MCP_INTERNAL_URL:-http://openapi-mcp:9876}
       # Forward-proxy egress for the SSRF-guarded clients (issue #1832). OFF by
       # default; enabling it relaxes IP-rebind pinning for targets that resolve
       # exclusively to public addresses. Set HTTP_PROXY / HTTPS_PROXY / NO_PROXY
@@ -728,6 +773,9 @@ services:
       - EGRESS_HTTP_POOL_MAX_KEEPALIVE=${EGRESS_HTTP_POOL_MAX_KEEPALIVE:-20}
       - EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS=${EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS:-30}
       - EGRESS_HTTP_POOL_CONNECT_RETRIES=${EGRESS_HTTP_POOL_CONNECT_RETRIES:-1}
+      # SSRF guard: an operator CIDR may admit a reserved address (e.g. Istio
+      # ServiceEntry VIPs in 240.240.0.0/16). Same value as the registry. #2018
+      - SSRF_ALLOWED_CIDRS=${SSRF_ALLOWED_CIDRS:-}
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -747,6 +795,56 @@ services:
       - "${HOST_BIND_IP:-127.0.0.1}:8003:8003"
     depends_on:
       - registry
+    restart: unless-stopped
+
+  # OpenAPI MCP servers (issue #2022): serves REST APIs as MCP servers. The
+  # registry pushes its state; only the registry and nginx call it.
+  # Start with: docker compose --profile openapi-mcp up -d (build_and_run.sh
+  # does this when OPENAPI_MCP_ENABLED=true in .env). The sync secret is not
+  # required here with :? because Compose interpolates every service, even ones
+  # whose profile is off; the container itself refuses to start without a
+  # strong OPENAPI_MCP_SYNC_SECRET.
+  openapi-mcp:
+    profiles: ["openapi-mcp"]
+    image: ${ECR_REGISTRY:-public.ecr.aws/p3v1o3c6}/openapi-mcp:${OPENAPI_MCP_VERSION:-latest}
+    environment:
+      - HOST=0.0.0.0
+      - PORT=9876
+      - OPENAPI_MCP_SYNC_SECRET=${OPENAPI_MCP_SYNC_SECRET:-}
+      - OPENAPI_MCP_BACKEND_TIMEOUT_SECONDS=${OPENAPI_MCP_BACKEND_TIMEOUT_SECONDS:-30}
+      - OPENAPI_MCP_MAX_RESPONSE_BYTES=${OPENAPI_MCP_MAX_RESPONSE_BYTES:-2097152}
+      - OPENAPI_MCP_CONVERSION_TIMEOUT_SECONDS=${OPENAPI_MCP_CONVERSION_TIMEOUT_SECONDS:-10}
+      # The SSRF guard in the container applies the registry's policy, so pass
+      # the same values the registry gets.
+      - SSRF_ALLOWED_HOSTS=${SSRF_ALLOWED_HOSTS:-}
+      - SSRF_ALLOWED_CIDRS=${SSRF_ALLOWED_CIDRS:-}
+      - GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS=${GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS:-false}
+      - EGRESS_FORWARD_PROXY_ENABLED=${EGRESS_FORWARD_PROXY_ENABLED:-false}
+      - EGRESS_FORWARD_PROXY_CA_BUNDLE=${EGRESS_FORWARD_PROXY_CA_BUNDLE:-}
+      - EGRESS_HTTP_POOL_MAX_CONNECTIONS=${EGRESS_HTTP_POOL_MAX_CONNECTIONS:-100}
+      - EGRESS_HTTP_POOL_MAX_KEEPALIVE=${EGRESS_HTTP_POOL_MAX_KEEPALIVE:-20}
+      - EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS=${EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS:-30}
+      - EGRESS_HTTP_POOL_CONNECT_RETRIES=${EGRESS_HTTP_POOL_CONNECT_RETRIES:-1}
+      # Application logs, the same knobs as mcpgw (docs/logging-standard.md).
+      - APP_LOG_DIR=${APP_LOG_DIR:-/var/log/containers/ai-registry}
+      - APP_LOG_FILE_FORMAT=${APP_LOG_FILE_FORMAT:-json}
+      - APP_LOG_CONSOLE_FORMAT=${APP_LOG_CONSOLE_FORMAT:-json}
+      - APP_LOG_LEVEL=${APP_LOG_LEVEL:-INFO}
+      - APP_LOG_MAX_BYTES=${APP_LOG_MAX_BYTES:-52428800}
+      - APP_LOG_BACKUP_COUNT=${APP_LOG_BACKUP_COUNT:-5}
+    volumes:
+      - /var/log/containers/ai-registry:/var/log/containers/ai-registry
+    env_file:
+      - path: ${MCP_EXTRA_ENV_DIR:-./extra_env}/openapi-mcp.env
+        required: false
+    # No published port: only the registry and the auth server may reach it.
+    # To debug: docker compose exec openapi-mcp curl -s http://127.0.0.1:9876/health
+    networks:
+      - openapi-mcp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     restart: unless-stopped
 
   # Prometheus for metrics collection - using canonical upstream image
@@ -1031,3 +1129,11 @@ volumes:
   mongodb-config:
   mongodb-keyfile:
   pingfederate-data:
+
+networks:
+  # openapi-mcp answers /s/<slug>/mcp without authentication of its own (the
+  # gateway's auth_request guards it) and spends the targets' shared
+  # credentials, so only the registry and the auth server share a network
+  # with it. It is not internal: the container has to reach third-party APIs.
+  # A REST API run as a compose service must join this network to be reached.
+  openapi-mcp: {}

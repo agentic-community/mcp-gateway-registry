@@ -1,8 +1,30 @@
 """Integration tests for skill API endpoints."""
 
+import hashlib
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
+
+from registry.exceptions import SkillUrlValidationError
+from registry.schemas.skill_models import (
+    ContentIntegrity,
+    FileHash,
+    SkillCard,
+    SkillResource,
+    SkillResourceManifest,
+)
+from registry.services import skill_service
+from registry.utils.credential_encryption import encrypt_credential
+
+OLD_URL = "https://raw.githubusercontent.com/example/skills/old/SKILL.md"
+NEW_URL = "https://raw.githubusercontent.com/example/skills/new/SKILL.md"
+OLD_CONTENT = b"# Old skill\n"
+NEW_CONTENT = b"# Updated skill\n"
+RESOURCE_CONTENT = b"# Updated reference\n"
+RESOURCES = {"references": "reference", "scripts": "script", "agents": "agent", "assets": "asset"}
+
 
 # Sample skill data for testing
 SAMPLE_SKILL_DATA = {
@@ -152,6 +174,160 @@ class TestSkillModels:
 
 class TestSkillService:
     """Test skill service functionality."""
+
+    @pytest.fixture
+    def service(self, mock_skill_repository, mock_search_repository):
+        digest = hashlib.sha256(OLD_CONTENT).hexdigest()
+        card = SkillCard(
+            id="stable-id",
+            name="demo",
+            path="/skills/demo",
+            description="Skill",
+            owner="owner",
+            visibility="private",
+            allowed_groups=["team"],
+            skill_md_url=OLD_URL,
+            skill_md_raw_url=OLD_URL,
+            skill_md_content=OLD_CONTENT.decode(),
+            content_version=digest[:16],
+            content_updated_at=datetime(2026, 1, 1, tzinfo=UTC),
+            content_integrity=ContentIntegrity(
+                composite_hash=digest,
+                file_hashes=[FileHash(path="SKILL.md", sha256=digest, size_bytes=len(OLD_CONTENT))],
+            ),
+            auth_scheme="bearer",
+            auth_credential_encrypted=encrypt_credential("fixture-token"),
+        )
+        result = skill_service.SkillService()
+        result._repo = mock_skill_repository
+        result._repo.get.return_value = card
+        result._repo.update.side_effect = lambda path, updates: SkillCard.model_validate(
+            {**result._repo.get.return_value.model_dump(), **updates}
+        )
+        result._search_repo = mock_search_repository
+        return result
+
+    @pytest.fixture
+    def manifest(self):
+        return SkillResourceManifest(
+            **{
+                bucket: [SkillResource(path=f"{bucket}/new.md", type=kind)]
+                for bucket, kind in RESOURCES.items()
+            }
+        )
+
+    @pytest.fixture
+    def remote(self, manifest, monkeypatch):
+        replies = {"requests": []}
+
+        def respond(request):
+            replies["requests"].append(request)
+            if request.headers.get("Authorization") != "Bearer fixture-token":
+                return httpx.Response(404)
+            content = NEW_CONTENT if request.url.path.endswith("/SKILL.md") else RESOURCE_CONTENT
+            return replies.get(str(request.url), httpx.Response(200, content=content))
+
+        monkeypatch.setattr(skill_service, "_is_safe_url", lambda url: "127.0.0.1" not in str(url))
+        monkeypatch.setattr(
+            skill_service,
+            "guarded_async_client",
+            lambda *args, **kwargs: httpx.AsyncClient(transport=httpx.MockTransport(respond)),
+        )
+        monkeypatch.setattr(
+            skill_service, "_discover_skill_resources", AsyncMock(return_value=manifest)
+        )
+        monkeypatch.setattr(skill_service, "_github_auth", AsyncMock())
+        skill_service._github_auth.get_auth_headers.return_value = {
+            "Authorization": "Bearer fixture-token"
+        }
+        return replies
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "scheme,url",
+        [
+            ("bearer", NEW_URL),
+            ("global_credentials", "https://github.com/example/skills/blob/new/SKILL.md"),
+        ],
+    )
+    async def test_replacement_refreshes_source_integrity_and_preserves_settings(
+        self, service, remote, manifest, scheme, url
+    ):
+        before = service._repo.get.return_value
+        if scheme == "global_credentials":
+            before.auth_scheme = scheme
+            before.auth_credential_encrypted = None
+        raw = NEW_URL.replace("/new/", "/refs/heads/new/") if "github.com/" in url else url
+        updated = await service.update_skill("demo", {"skill_md_url": url})
+        assert str(updated.skill_md_raw_url) == raw
+        assert updated.skill_md_content is None
+        assert updated.content_version == hashlib.sha256(NEW_CONTENT).hexdigest()[:16]
+        hashes = dict.fromkeys(
+            [f"{bucket}/new.md" for bucket in RESOURCES],
+            hashlib.sha256(RESOURCE_CONTENT).hexdigest(),
+        )
+        hashes["SKILL.md"] = hashlib.sha256(NEW_CONTENT).hexdigest()
+        assert {f.path: f.sha256 for f in updated.content_integrity.file_hashes} == hashes
+        assert updated.resource_manifest == manifest
+        assert not updated.content_integrity.drift_detected
+        assert updated.content_updated_at == updated.content_integrity.computed_at
+        assert updated.content_updated_at > before.content_updated_at
+        assert sum(r.url.path.endswith("/SKILL.md") for r in remote["requests"]) == 1
+        changed = {
+            "skill_md_url",
+            "skill_md_raw_url",
+            "skill_md_content",
+            "content_version",
+            "content_integrity",
+            "resource_manifest",
+            "content_updated_at",
+        }
+        assert updated.model_dump(exclude=changed) == before.model_dump(exclude=changed)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("legacy", [False, True])
+    async def test_unchanged_resolved_source_skips_fetch(self, service, remote, legacy):
+        before = service._repo.get.return_value
+        if legacy:
+            before.skill_md_url = "https://github.com/example/skills/blob/old/SKILL.md"
+            before.skill_md_raw_url = None
+            url = "https://raw.githubusercontent.com/example/skills/refs/heads/old/SKILL.md"
+        else:
+            url = OLD_URL
+        updated = await service.update_skill("demo", {"skill_md_url": url, "description": "New"})
+        assert updated.content_integrity == before.content_integrity
+        assert updated.content_updated_at == before.content_updated_at
+        assert updated.description == "New"
+        assert remote["requests"] == []
+
+    @pytest.mark.asyncio
+    async def test_discovery_failure_keeps_main_baseline(self, service, remote, monkeypatch):
+        monkeypatch.setattr(
+            skill_service, "_discover_skill_resources", AsyncMock(side_effect=ValueError("details"))
+        )
+        updated = await service.update_skill("demo", {"skill_md_url": NEW_URL})
+        assert updated.resource_manifest is None
+        assert (
+            updated.content_integrity.file_hashes[0].sha256
+            == hashlib.sha256(NEW_CONTENT).hexdigest()
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("failure", ["unsafe_url", "missing_main", "missing_auth", "redirect"])
+    async def test_rejected_replacement_does_not_persist(self, service, remote, failure):
+        url = NEW_URL
+        if failure == "unsafe_url":
+            url = "http://127.0.0.1/SKILL.md"
+        elif failure == "missing_main":
+            remote[NEW_URL] = httpx.Response(404)
+        elif failure == "redirect":
+            remote[NEW_URL] = httpx.Response(302, headers={"Location": "http://127.0.0.1/SKILL.md"})
+        else:
+            service._repo.get.return_value.auth_scheme = "global_credentials"
+            skill_service._github_auth.get_auth_headers.return_value = {}
+        with pytest.raises(SkillUrlValidationError):
+            await service.update_skill("demo", {"skill_md_url": url})
+        service._repo.update.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_register_skill(

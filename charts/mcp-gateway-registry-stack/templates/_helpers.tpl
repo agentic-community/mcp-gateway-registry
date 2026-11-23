@@ -96,6 +96,94 @@ subcharts render.
 {{- end -}}
 
 {{/*
+A value as a string for comparison. A whole number read from a values file
+arrives as a float, so 28800 from a file, 28800 from --set and "28800" all
+compare equal, and a large one is not written with an exponent.
+*/}}
+{{- define "mcp-gateway-registry-stack.valueString" -}}
+{{- if and (kindIs "float64" .) (eq . (float64 (int64 .))) -}}
+{{- int64 . -}}
+{{- else -}}
+{{- toString . -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Refuse a subchart-level session setting that differs from its global. The
+registry and the auth-server must agree on every one: the auth-server stores
+the session and sets the cookie's name, Domain, Max-Age and Secure attribute,
+and the registry reads, checks and expires the same cookie. A split prefix lets
+/validate find the session while CSRF, consent and logout do not; a split
+domain leaves the browser two cookies, which both services refuse, so the user
+is signed out on every request. Both subcharts render each setting from
+global.<setting>, so the stack requires the globals, and a differing override
+is ignored by the subcharts and would read as if it took effect, so name it
+instead. An override is compared with the value the subcharts render: for the
+cookie domain that is global.sessionCookieDomain, ".<global.domain>" when that
+global is empty, and no Domain at all with global.sessionCookieHostPrefix, so
+an override equal to the rendered domain is accepted. An empty override is a
+subchart default (app.sessionCookieDomain ships empty) and is ignored. The
+registry has no app key for the Secure flag.
+*/}}
+{{- define "mcp-gateway-registry-stack.validateSessionSettings" -}}
+{{- $checks := list (list "registry" "sessionMaxAgeSeconds" "SESSION_MAX_AGE_SECONDS") (list "auth-server" "sessionMaxAgeSeconds" "SESSION_MAX_AGE_SECONDS") (list "auth-server" "sessionCookieSecure" "SESSION_COOKIE_SECURE") (list "registry" "sessionCookieHostPrefix" "SESSION_COOKIE_HOST_PREFIX") (list "auth-server" "sessionCookieHostPrefix" "SESSION_COOKIE_HOST_PREFIX") (list "registry" "sessionCookieDomain" "SESSION_COOKIE_DOMAIN") (list "auth-server" "sessionCookieDomain" "SESSION_COOKIE_DOMAIN") -}}
+{{- range $check := $checks -}}
+{{- $chart := index $check 0 -}}
+{{- $key := index $check 1 -}}
+{{- $envName := index $check 2 -}}
+{{- $global := index $.Values.global $key -}}
+{{- if kindIs "invalid" $global -}}
+{{- fail (printf "global.%s is not set. The stack sets %s for the registry and the auth-server from global.%s, so the two cannot disagree. Set global.%s." $key $envName $key $key) -}}
+{{- end -}}
+{{- $globalText := include "mcp-gateway-registry-stack.valueString" $global -}}
+{{- $renderedText := $globalText -}}
+{{- $rendered := printf "global.%s is %s" $key ($globalText | default "empty") -}}
+{{- if eq $key "sessionCookieDomain" -}}
+{{- if eq (toString $.Values.global.sessionCookieHostPrefix) "true" -}}
+{{- $renderedText = "" -}}
+{{- $rendered = "global.sessionCookieHostPrefix is true, so the stack renders no Domain" -}}
+{{- else if eq $globalText "" -}}
+{{- $renderedText = printf ".%s" ($.Values.global.domain | default "localhost") -}}
+{{- $rendered = printf "global.sessionCookieDomain is empty, so the stack renders %s from global.domain" $renderedText -}}
+{{- end -}}
+{{- end -}}
+{{- $override := dig "app" $key nil (index $.Values $chart | default dict) -}}
+{{- if not (kindIs "invalid" $override) -}}
+{{- $overrideText := include "mcp-gateway-registry-stack.valueString" $override -}}
+{{- if and (ne $overrideText "") (ne $overrideText $renderedText) -}}
+{{- fail (printf "%s.app.%s is %s but %s. The stack sets %s for the registry and the auth-server from the globals only, so the two cannot disagree. Remove %s.app.%s and set global.%s." $chart $key $overrideText $rendered $envName $chart $key $key) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Refuse a subchart SSRF allowlist override that differs from its global. The
+registry's health check and the auth-server's MCP proxy hop pin every upstream
+under the same SSRF profile, built in each process from SSRF_ALLOWED_HOSTS and
+GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS. Both subcharts render those from the
+globals when set, so a subchart-only value would leave the two services
+disagreeing: a private upstream passes the registry's health check and is then
+refused at the hop. Name the override instead of rendering that split. An empty
+hosts override and a false flag override are subchart defaults and ignored.
+*/}}
+{{- define "mcp-gateway-registry-stack.validateSsrfAllowlist" -}}
+{{- $globalHosts := toString (.Values.global.ssrfAllowedHosts | default "") -}}
+{{- $globalPrivate := eq (toString .Values.global.gatewayProxyAllowPrivateTargets) "true" -}}
+{{- range $chart := list "registry" "auth-server" -}}
+{{- $app := dig "app" dict (index $.Values $chart | default dict) -}}
+{{- $hosts := toString (dig "ssrfAllowedHosts" "" $app | default "") -}}
+{{- if and (ne $hosts "") (ne $hosts $globalHosts) -}}
+{{- fail (printf "%s.app.ssrfAllowedHosts is %q but global.ssrfAllowedHosts is %q. The registry health check and the auth-server MCP proxy hop must allow the same hosts, or a private upstream passes one and fails the other. Move the value to global.ssrfAllowedHosts and remove %s.app.ssrfAllowedHosts." $chart $hosts $globalHosts $chart) -}}
+{{- end -}}
+{{- $private := eq (toString (dig "gatewayProxyAllowPrivateTargets" false $app)) "true" -}}
+{{- if and $private (not $globalPrivate) -}}
+{{- fail (printf "%s.app.gatewayProxyAllowPrivateTargets is true but global.gatewayProxyAllowPrivateTargets is false. The registry and the auth-server must agree on it, or a private upstream passes the registry health check and fails the auth-server MCP proxy hop. Set global.gatewayProxyAllowPrivateTargets: true and remove %s.app.gatewayProxyAllowPrivateTargets." $chart $chart) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Guard chart-generated random secret value.
 
 `global.generateSecrets: true` (the default) generates a random value,
@@ -117,5 +205,65 @@ Usage:
 {{- define "mcp-gateway-registry-stack.requireGeneratedSecret" -}}
 {{- if not (dig "generateSecrets" true .ctx.Values.global) -}}
 {{- fail (printf "global.generateSecrets is false and %s has no value, so the chart will not generate one. Set %s explicitly, or set %s to a Secret that already holds it. Generation is unsafe under ArgoCD and other `helm template` based tools: they render without cluster access, so the chart cannot read the previous value back and every sync would produce a different secret." .key .value .byo) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+OpenAPI MCP servers (issue #2022): the feature needs the registry flag, the
+auth-server flag and the openapi-mcp subchart together, both services must call
+the container at the same internal URL, and the container's SSRF guard must
+apply the registry's policy. Fails the render when they disagree, instead of
+deploying a registry that pushes to a missing pod, an auth server that cannot
+forward per-user-credential calls, or a pod with a looser guard.
+*/}}
+{{- define "mcp-gateway-registry-stack.validateOpenapiMcp" -}}
+{{- /* .Values itself is not a plain map, so dig starts one level down. */ -}}
+{{- $openapiMcp := .Values.openapiMcp | default dict -}}
+{{- $registry := .Values.registry | default dict -}}
+{{- $stackEnabled := dig "enabled" false $openapiMcp -}}
+{{- $registryEnabled := dig "app" "openapiMcpEnabled" false $registry -}}
+{{- if ne (toString $stackEnabled) (toString $registryEnabled) -}}
+{{- fail (printf "openapiMcp.enabled (%v) and registry.app.openapiMcpEnabled (%v) must be equal. Set both to true to turn on OpenAPI MCP servers, or both to false." $stackEnabled $registryEnabled) -}}
+{{- end -}}
+{{- /* The auth server's mcp-proxy hop forwards per-user-credential calls to the container. */ -}}
+{{- $authServer := index .Values "auth-server" | default dict -}}
+{{- $authServerEnabled := dig "app" "openapiMcpEnabled" false $authServer -}}
+{{- if ne (toString $stackEnabled) (toString $authServerEnabled) -}}
+{{- fail (printf "openapiMcp.enabled (%v) and auth-server.app.openapiMcpEnabled (%v) must be equal. Set openapiMcp.enabled, registry.app.openapiMcpEnabled and auth-server.app.openapiMcpEnabled to the same value." $stackEnabled $authServerEnabled) -}}
+{{- end -}}
+{{- $defaultInternalUrl := "http://openapi-mcp:9876" -}}
+{{- $registryUrl := dig "app" "openapiMcpInternalUrl" $defaultInternalUrl $registry -}}
+{{- $authServerUrl := dig "app" "openapiMcpInternalUrl" $defaultInternalUrl $authServer -}}
+{{- if ne (toString $registryUrl) (toString $authServerUrl) -}}
+{{- fail (printf "registry.app.openapiMcpInternalUrl (%q) and auth-server.app.openapiMcpInternalUrl (%q) must be equal. Both services call the same openapi-mcp container." (toString $registryUrl) (toString $authServerUrl)) -}}
+{{- end -}}
+{{- if $stackEnabled -}}
+  {{- /* Compare what the registry pod renders: the stack globals win over registry.app. */ -}}
+  {{- $global := .Values.global | default dict -}}
+  {{- $registryHosts := dig "ssrfAllowedHosts" "" $global | default (dig "app" "ssrfAllowedHosts" "" $registry) -}}
+  {{- $registryPrivate := or (dig "gatewayProxyAllowPrivateTargets" false $global) (dig "app" "gatewayProxyAllowPrivateTargets" false $registry) -}}
+  {{- $pairs := list
+        (list "ssrfAllowedHosts (global.ssrfAllowedHosts, else app.ssrfAllowedHosts)" $registryHosts (dig "app" "ssrfAllowedHosts" "" $openapiMcp))
+        (list "gatewayProxyAllowPrivateTargets (global, else app)" $registryPrivate (dig "app" "gatewayProxyAllowPrivateTargets" false $openapiMcp))
+        (list "app.egressForwardProxyEnabled" (dig "app" "egressForwardProxyEnabled" false $registry) (dig "app" "egressForwardProxyEnabled" false $openapiMcp))
+        (list "egressAuth.oauthTrustedIdpHosts / app.egressOauthTrustedIdpHosts" (dig "egressAuth" "oauthTrustedIdpHosts" "" $registry) (dig "app" "egressOauthTrustedIdpHosts" "" $openapiMcp)) -}}
+  {{- range $pairs -}}
+    {{- if ne (toString (index . 1)) (toString (index . 2)) -}}
+    {{- fail (printf "registry %s is %q but openapiMcp has %q. The openapi-mcp SSRF guard must apply the registry's policy; set the same value on both." (index . 0) (toString (index . 1)) (toString (index . 2))) -}}
+    {{- end -}}
+  {{- end -}}
+  {{- /* Both pods read the sync secret through secretKeyRef, so they must name the same Secret. */ -}}
+  {{- $globalSecret := dig "openapiMcp" "existingSyncSecret" "" (.Values.global | default dict) -}}
+  {{- $containerSecret := $globalSecret | default (dig "syncSecret" "existingSecret" "" $openapiMcp) | default (dig "syncSecret" "name" "openapi-mcp-sync-secret" $openapiMcp) -}}  {{- /* pragma: allowlist secret */ -}}
+  {{- $registrySecret := $globalSecret | default (dig "app" "openapiMcpSyncSecretName" "openapi-mcp-sync-secret" $registry) -}}  {{- /* pragma: allowlist secret */ -}}
+  {{- if ne (toString $containerSecret) (toString $registrySecret) -}}
+  {{- fail (printf "openapi-mcp reads the sync secret from Secret %q but the registry reads %q. Name an existing Secret once with global.openapiMcp.existingSyncSecret, which both read, instead of openapiMcp.syncSecret.existingSecret or syncSecret.name." (toString $containerSecret) (toString $registrySecret)) -}}
+  {{- end -}}
+  {{- /* The registry and auth server reach the container by its Service name and port. */ -}}
+  {{- $serviceHost := printf "%s:%v" (dig "app" "name" "openapi-mcp" $openapiMcp) (dig "service" "port" 9876 $openapiMcp) -}}
+  {{- $urlHost := (urlParse (toString $registryUrl)).host -}}
+  {{- if ne $urlHost $serviceHost -}}
+  {{- fail (printf "registry.app.openapiMcpInternalUrl (%q) does not reach the openapi-mcp Service at %s. Set registry.app.openapiMcpInternalUrl and auth-server.app.openapiMcpInternalUrl to http://%s, or keep openapiMcp.app.name and openapiMcp.service.port at their defaults." (toString $registryUrl) $serviceHost $serviceHost) -}}
+  {{- end -}}
 {{- end -}}
 {{- end -}}

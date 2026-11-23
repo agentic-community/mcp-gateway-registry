@@ -137,6 +137,8 @@ module "mcp_gateway" {
   # Session cookie security configuration
   session_cookie_secure        = var.session_cookie_secure
   session_cookie_domain        = var.session_cookie_domain
+  session_cookie_host_prefix   = var.session_cookie_host_prefix
+  session_max_age_seconds      = var.session_max_age_seconds
   oauth2_allowed_redirect_uris = var.oauth2_allowed_redirect_uris
   cors_allowed_origins         = var.cors_allowed_origins
   trusted_proxy_hops           = var.trusted_proxy_hops
@@ -180,6 +182,10 @@ module "mcp_gateway" {
   registry_rum_snippet_b64        = var.registry_rum_snippet_b64
   registry_rum_snippet_secret_arn = var.registry_rum_snippet_secret_arn
   registry_rum_allowed_hosts      = var.registry_rum_allowed_hosts
+
+  # Optional base64 .tar.gz of the UI branding folder, rendered as
+  # UI_BRANDING_ARCHIVE_B64 on the registry container.
+  ui_branding_archive_b64 = var.ui_branding_archive_b64
 
   # Search query logging (debug only)
   search_log_query_text = var.search_log_query_text
@@ -347,6 +353,13 @@ module "mcp_gateway" {
 
   # Tool-level access control (issue #1026)
   mcp_tools_list_filter_enabled = var.mcp_tools_list_filter_enabled
+
+  # Health checks and tool list refresh (issue #2050)
+  health_check_interval_seconds = var.health_check_interval_seconds
+  tool_refresh_enabled          = var.tool_refresh_enabled
+  tool_refresh_every_cycles     = var.tool_refresh_every_cycles
+  tool_fetch_max_concurrency    = var.tool_fetch_max_concurrency
+  tool_access_owner_view        = var.tool_access_owner_view
   mcp_proxy_max_body_bytes      = var.mcp_proxy_max_body_bytes
   mcp_proxy_timeout             = var.mcp_proxy_timeout
   tool_filter_audit_log_level   = var.tool_filter_audit_log_level
@@ -377,6 +390,20 @@ module "mcp_gateway" {
   custom_type_cache_ttl_seconds = var.custom_type_cache_ttl_seconds
   max_custom_records_per_type   = var.max_custom_records_per_type
   max_custom_types              = var.max_custom_types
+
+  # OpenAPI MCP servers (issue #2022, disabled by default)
+  openapi_mcp_enabled                    = var.openapi_mcp_enabled
+  openapi_mcp_image_uri                  = var.openapi_mcp_image_uri
+  openapi_mcp_replicas                   = var.openapi_mcp_replicas
+  openapi_mcp_max_servers                = var.openapi_mcp_max_servers
+  openapi_mcp_max_targets_per_server     = var.openapi_mcp_max_targets_per_server
+  openapi_mcp_max_tools_per_target       = var.openapi_mcp_max_tools_per_target
+  openapi_mcp_spec_max_bytes             = var.openapi_mcp_spec_max_bytes
+  openapi_mcp_reconcile_interval_seconds = var.openapi_mcp_reconcile_interval_seconds
+  openapi_mcp_backend_timeout_seconds    = var.openapi_mcp_backend_timeout_seconds
+  openapi_mcp_max_response_bytes         = var.openapi_mcp_max_response_bytes
+  openapi_mcp_conversion_timeout_seconds = var.openapi_mcp_conversion_timeout_seconds
+  openapi_mcp_extra_env                  = var.openapi_mcp_extra_env
 
   # Update check (admin "newer release available" banner)
   update_check_enabled        = var.update_check_enabled
@@ -507,6 +534,39 @@ resource "terraform_data" "mongodb_backend_uri_required" {
         "mongodb_connection_string_secret_arn (prefer the _secret_arn form",
         "for credentials). See terraform.tfvars.example and",
         "docs/faq/configuring-mongodb-atlas-backend.md.",
+      ])
+    }
+  }
+}
+
+# With session_cookie_host_prefix on, the registry and the auth server refuse to
+# start when the session cookie is not Secure or has a Domain, because browsers
+# drop such a __Host- cookie. Catch the same combination at plan time. These are
+# preconditions rather than variable validations because a validation that reads
+# another variable needs Terraform 1.9, and this configuration supports 1.2+.
+resource "terraform_data" "session_cookie_host_prefix_settings" {
+  input = var.session_cookie_host_prefix
+
+  lifecycle {
+    precondition {
+      condition = !var.session_cookie_host_prefix || var.session_cookie_secure
+      error_message = join(" ", [
+        "session_cookie_host_prefix = true needs session_cookie_secure = true:",
+        "browsers drop a __Host- cookie that is not Secure, and the registry and",
+        "auth-server refuse to start. Set session_cookie_secure = true, or set",
+        "session_cookie_host_prefix = false.",
+      ])
+    }
+
+    precondition {
+      condition = !var.session_cookie_host_prefix || trimspace(
+        var.session_cookie_domain == null ? "" : var.session_cookie_domain
+      ) == ""
+      error_message = join(" ", [
+        "session_cookie_host_prefix = true needs an empty session_cookie_domain:",
+        "browsers drop a __Host- cookie that has a Domain, and the registry and",
+        "auth-server refuse to start. Set session_cookie_domain = \"\", or set",
+        "session_cookie_host_prefix = false.",
       ])
     }
   }

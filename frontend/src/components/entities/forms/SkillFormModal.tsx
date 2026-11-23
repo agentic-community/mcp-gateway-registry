@@ -5,14 +5,10 @@ import {
   ProxyField,
   UpstreamHeadersField,
   type UpstreamHeader,
-  FIELD_BASE,
-  FIELD_FOCUS,
+  FIELD,
   LABEL,
 } from '../../formFields';
 import Button from '../../Button';
-
-// Skill forms use an amber focus accent.
-const FIELD = `${FIELD_BASE} ${FIELD_FOCUS.amber}`;
 
 /**
  * Shape of the skill form state, owned by the Dashboard. This modal handles
@@ -79,16 +75,20 @@ const SkillFormModal: React.FC<SkillFormModalProps> = ({
   onClose,
 }) => {
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-      <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
-        <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+      <div
+        role="dialog"
+        aria-modal="true"
+        className="bg-surface-overlay border border-line shadow-xl rounded-xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto"
+      >
+        <h3 className="text-lg font-semibold text-fg mb-4">
           {editing ? `Edit Skill: ${editing.name}` : 'Register New Skill'}
         </h3>
 
         <form onSubmit={onSubmit} className="space-y-4">
           {/* Auto-fill toggle - only for new skills */}
           {!editing && (
-            <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
+            <div className="flex items-center justify-between p-3 bg-surface-muted border border-line rounded-lg">
               <div>
                 <span className="text-sm font-medium text-gray-700 dark:text-gray-200">
                   Auto-fill from SKILL.md
@@ -101,7 +101,7 @@ const SkillFormModal: React.FC<SkillFormModalProps> = ({
                 type="button"
                 onClick={() => setAutoFill(!autoFill)}
                 className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                  autoFill ? 'bg-amber-600' : 'bg-gray-300 dark:bg-gray-600'
+                  autoFill ? 'bg-skill-600' : 'bg-gray-300 dark:bg-gray-600'
                 }`}
               >
                 <span
@@ -121,7 +121,7 @@ const SkillFormModal: React.FC<SkillFormModalProps> = ({
                 type="url"
                 value={form.skill_md_url}
                 onChange={(e) => setForm((prev) => ({ ...prev, skill_md_url: e.target.value }))}
-                className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-amber-500 focus:border-amber-500"
+                className={`flex-1 ${FIELD}`}
                 placeholder="https://raw.githubusercontent.com/org/repo/main/SKILL.md"
                 required
               />
@@ -130,7 +130,7 @@ const SkillFormModal: React.FC<SkillFormModalProps> = ({
                   type="button"
                   onClick={onParse}
                   disabled={!form.skill_md_url || parseLoading}
-                  className="px-3 py-2 text-sm font-medium text-white bg-amber-600 hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-md transition-colors whitespace-nowrap"
+                  className="btn-base px-3 bg-skill-600 text-white shadow-sm hover:bg-skill-700 whitespace-nowrap"
                 >
                   {parseLoading ? 'Parsing...' : 'Parse'}
                 </button>
@@ -224,7 +224,6 @@ const SkillFormModal: React.FC<SkillFormModalProps> = ({
 
           <StatusField
             value={form.status}
-            accent="amber"
             onChange={(status) => setForm((prev) => ({ ...prev, status }))}
           />
 
@@ -234,7 +233,6 @@ const SkillFormModal: React.FC<SkillFormModalProps> = ({
             proxyTargetUrl={form.proxy_target_url}
             onProxyTargetUrlChange={(v) => setForm((prev) => ({ ...prev, proxy_target_url: v }))}
             targetRequired
-            accent="amber"
             clientUrl={form.proxy_client_url}
           />
 
@@ -244,7 +242,6 @@ const SkillFormModal: React.FC<SkillFormModalProps> = ({
             <UpstreamHeadersField
               headers={form.custom_headers}
               onChange={(custom_headers) => setForm((prev) => ({ ...prev, custom_headers }))}
-              accent="amber"
               editMode={!!editing}
             />
           )}
@@ -313,7 +310,7 @@ const SkillFormModal: React.FC<SkillFormModalProps> = ({
                 type="button"
                 onClick={onParse}
                 disabled={parseLoading}
-                className="mt-2 px-3 py-1.5 text-sm font-medium text-white bg-amber-600 hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-md transition-colors"
+                className="btn-base mt-2 px-3 py-1.5 bg-skill-600 text-white shadow-sm hover:bg-skill-700"
               >
                 {parseLoading ? 'Parsing...' : 'Re-parse with global credentials'}
               </button>
@@ -332,7 +329,7 @@ const SkillFormModal: React.FC<SkillFormModalProps> = ({
                   onChange={(e) =>
                     setForm((prev) => ({ ...prev, auth_credential: e.target.value }))
                   }
-                  className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-amber-500 focus:border-amber-500"
+                  className={`flex-1 ${FIELD}`}
                   placeholder={
                     editing
                       ? 'Leave blank to keep existing credential'
@@ -346,7 +343,7 @@ const SkillFormModal: React.FC<SkillFormModalProps> = ({
                     type="button"
                     onClick={onParse}
                     disabled={parseLoading}
-                    className="px-3 py-2 text-sm font-medium text-white bg-amber-600 hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-md transition-colors whitespace-nowrap"
+                    className="btn-base px-3 bg-skill-600 text-white shadow-sm hover:bg-skill-700 whitespace-nowrap"
                   >
                     {parseLoading ? 'Parsing...' : 'Re-parse'}
                   </button>
@@ -378,7 +375,6 @@ const SkillFormModal: React.FC<SkillFormModalProps> = ({
 
           <MetadataField
             value={form.metadata}
-            accent="amber"
             hint="Key-value pairs in JSON format for searchable custom metadata"
             placeholder='{"category": "data-processing", "framework": "langchain"}'
             onChange={(metadata) => setForm((prev) => ({ ...prev, metadata }))}
@@ -390,7 +386,7 @@ const SkillFormModal: React.FC<SkillFormModalProps> = ({
               <input
                 type="text"
                 value={editing.path}
-                className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-300"
+                className={`${FIELD} bg-surface-muted text-fg-muted`}
                 disabled
               />
             </div>
@@ -400,7 +396,7 @@ const SkillFormModal: React.FC<SkillFormModalProps> = ({
             <button
               type="submit"
               disabled={loading}
-              className="flex-1 px-4 py-2 text-sm font-medium text-white bg-amber-600 hover:bg-amber-700 disabled:opacity-50 rounded-md transition-colors"
+              className="btn-base w-full bg-skill-600 text-white shadow-sm hover:bg-skill-700"
             >
               {loading
                 ? editing

@@ -11,7 +11,7 @@ global:
   image:
     # Container registry (host + optional namespace). Shared default across subcharts.
     registry: public.ecr.aws/p3v1o3c6
-    tag: 1.36.0
+    tag: 1.38.2
     pullPolicy: IfNotPresent
   cloud:
     # AWS region for cloud detection in telemetry. Set this when deploying
@@ -75,8 +75,33 @@ app:
 
   # Session cookie Domain attribute. Leave empty to default to
   # ".<global.domain>". See charts/auth-server/values.yaml for a longer
-  # note on when to override.
+  # note on when to override. Must match the auth-server.
+  # global.sessionCookieDomain, which the stack chart sets, takes precedence;
+  # this key applies only to a standalone install.
   sessionCookieDomain: ""
+  # Name the session cookie __Host-mcp_gateway_session (Secure, Path=/, no
+  # Domain) so no sibling subdomain can set or overwrite it. Requires a Secure
+  # session cookie (global.sessionCookieSecure, or global.ingress.tls=true when
+  # that global is unset) and an empty sessionCookieDomain; the chart then
+  # renders SESSION_COOKIE_DOMAIN empty. Set the same value on auth-server.
+  # Turning it on signs every user out once. See docs/design/cookie-security-design.md.
+  # global.sessionCookieHostPrefix, which the stack chart sets, takes
+  # precedence; this key applies only to a standalone install. It has no
+  # default here so the stack chart can tell an override from the default.
+  # Default: false
+  # sessionCookieHostPrefix: false
+  # SESSION_COOKIE_SECURE has no app key here: global.sessionCookieSecure, which
+  # the stack chart sets, decides it, and a standalone install without that
+  # global follows global.ingress.tls.
+  # Session lifetime in seconds (SESSION_MAX_AGE_SECONDS): how long the registry
+  # accepts the session cookie signature. Must be a positive integer and must
+  # match the auth-server, which stores the session and sets the cookie Max-Age
+  # from the same setting. global.sessionMaxAgeSeconds, which the stack chart
+  # sets, takes precedence; this key applies only to a standalone install. It
+  # has no default here so the stack chart can tell an override from the
+  # default. Unset, the chart renders no SESSION_MAX_AGE_SECONDS and the
+  # registry uses its built-in 8 hours, as the auth-server does.
+  # sessionMaxAgeSeconds:
   # Comma-separated exact browser origins allowed to make credentialed
   # cross-origin requests to the registry API (e.g.
   # "https://app.example.com,https://admin.example.com"). The registry's own
@@ -316,11 +341,33 @@ app:
   # Tool-level access control (issue #1026)
   mcpToolsListFilterEnabled: true # Registry-side awareness of the MCP tools/list filter (also read by auth-server)
   toolFilterAuditLogLevel: "INFO" # Audit log level for tool-prune events (DEBUG, INFO, WARNING)
+  # Health checks and tool list refresh (issue #2050)
+  healthCheckIntervalSeconds: 300 # Seconds between health checks of every server; also one tool refresh cycle
+  toolRefreshEnabled: false # Fetch tools again from servers that stay healthy, on a schedule. Each replica refreshes on its own
+  toolRefreshEveryCycles: 3 # Fetch each healthy server once every N health cycles (1-1000); 3 x 300 s = 15 min
+  toolFetchMaxConcurrency: 5 # Most background tool fetches one replica runs at once (1-100)
+  # Tool access listing (issue #2102): what an owner who is not an admin sees. none or owned
+  toolAccessOwnerView: "none" # none: only admins and read-only admins; owned: owners also see their own servers' tools
   # Custom entity types (admin-defined, schema-driven catalog types)
   customEntityTypesEnabled: false # Main switch for dynamic tabs + endpoints; off = no behavior change
   customTypeCacheTtlSeconds: 60 # TTL (s) for the in-process custom-type descriptor cache
   maxCustomRecordsPerType: 1000 # Soft cap on records per type (0 = unlimited); best-effort, rejects create at cap
   maxCustomTypes: 50 # Cap on number of custom types (0 = unlimited); rejects type create at limit
+  # OpenAPI MCP servers (issue #2022). Serves REST APIs described by OpenAPI
+  # specs as MCP servers through the openapi-mcp container. Under the stack
+  # chart, set openapiMcp.enabled to the same value (a render-time check fails
+  # when they differ). OPENAPI_MCP_SYNC_SECRET is read from the openapi-mcp sync
+  # Secret through secretKeyRef, only when this is true.
+  openapiMcpEnabled: false
+  openapiMcpInternalUrl: "http://openapi-mcp:9876" # How the registry and nginx reach the container
+  openapiMcpMaxServers: 10 # 1 to 100
+  openapiMcpMaxTargetsPerServer: 10 # 1 to 50
+  openapiMcpMaxToolsPerTarget: 100 # 1 to 500
+  openapiMcpSpecMaxBytes: 5242880 # 1 KiB to 20 MiB
+  openapiMcpReconcileIntervalSeconds: 60 # 10 to 3600
+  # Name of the Secret holding OPENAPI_MCP_SYNC_SECRET. Matches the openapi-mcp
+  # chart's syncSecret.name; global.openapiMcp.existingSyncSecret wins when set.
+  openapiMcpSyncSecretName: openapi-mcp-sync-secret  # pragma: allowlist secret
   # Gateway generic-proxy feature (registry-consumed). Ships DISABLED. Do NOT
   # enable gatewayGenericProxyEnabled until the network egress policy (SSRF layer 1)
   # is deployed and the registration-time validation + CSRF defenses are in place.
@@ -370,7 +417,11 @@ app:
   #   ssrfAllowedHosts: comma-separated exact hostnames (least privilege; no
   #     wildcards, e.g. "obo-echo.<ns>.svc.cluster.local").
   # The cloud metadata address (169.254.169.254) is never permitted by either.
+  # For a standalone install. Under the stack chart set global.ssrfAllowedHosts,
+  # which wins over this value and reaches the auth-server's MCP proxy hop too.
   ssrfAllowedHosts: ""
+  # For a standalone install. Under the stack chart set global.ssrfAllowedCidrs,
+  # which wins over this value and reaches auth-server and mcpgw too. #2018
   ssrfAllowedCidrs: ""
   # Forward-proxy egress for the SSRF-guarded clients (issue #1832). OFF by
   # default. Only needed where the pod has NO direct internet egress and all
@@ -573,7 +624,7 @@ cognito:
   userPoolId: "" # Cognito User Pool ID
   clientId: ""
   clientSecret: ""
-  domain: "" # Optional: custom Cognito domain
+  domain: "" # Optional: hosted-UI domain PREFIX, not a hostname. Empty derives it from the user pool id
   region: "us-east-1" # AWS region for the User Pool
 # Per-user egress credential vault (third-party OBO support).
 # When enabled, the registry renders a discrete `registry-egress-config`
@@ -786,6 +837,19 @@ caBundle:
   existingSecret: "" # or a Secret, for operators who treat the chain as sensitive
   key: ca-bundle.pem # key within the ConfigMap or Secret
   mountPath: /etc/ssl/mcp-gateway # directory the volume is mounted at
+# Runtime UI branding (logos, favicon, colors, named themes, fonts) without an
+# image rebuild. Put the branding files (manifest.json, theme.css, images,
+# .woff2 fonts) in a ConfigMap you manage, binary files under binaryData:
+#   kubectl create configmap registry-branding --from-file=./branding/
+# The whole ConfigMap is mounted read-only as a directory at mountPath (never via
+# subPath, so an edited ConfigMap reaches the pod without a restart) and the
+# deployment sets UI_BRANDING_DIR to mountPath, so the path is never written
+# twice. The registry serves the files at /branding/<name>. Keep the ConfigMap
+# under the 1 MiB Kubernetes object limit. See docs/ui-branding.md.
+branding:
+  enabled: false
+  existingConfigMap: "" # required when enabled (a `fail` guard enforces it)
+  mountPath: /app/branding # directory the ConfigMap is mounted at
 extraEnv: []
 # Extra `envFrom:` sources appended to the container. Use this to inject
 # all keys from an external ConfigMap or Secret you manage (e.g. via

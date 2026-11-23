@@ -38,6 +38,10 @@ jest.mock('../../hooks/useIAM', () => ({
 jest.mock('../../hooks/useRegistryConfig', () => ({
   useRegistryConfig: () => ({ config: { auth_provider: 'keycloak' } }),
 }));
+// The list views read the signed-in user for admin-only actions.
+jest.mock('../../contexts/AuthContext', () => ({
+  useAuth: () => ({ user: null }),
+}));
 
 const toast = jest.fn();
 

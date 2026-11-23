@@ -19,6 +19,7 @@ Ready-to-use registration files are provided under
 | GitHub | [`github-mcp-server.json`](../../cli/examples/github-mcp-server.json) | `https://api.githubcopilot.com/mcp/` |
 | Slack | [`slack-mcp-server.json`](../../cli/examples/slack-mcp-server.json) | `https://mcp.slack.com/mcp` |
 | Atlassian | [`atlassian-mcp-server.json`](../../cli/examples/atlassian-mcp-server.json) | `https://mcp.atlassian.com/v1/mcp` |
+| Atlassian Rovo MCP (v2) | [`atlassian-rovo-mcp-server.json`](../../cli/examples/atlassian-rovo-mcp-server.json) | `https://mcp.atlassian.com/v2/mcp` |
 | Salesforce Headless 360 (Beta) | [`salesforce-headless-360.json`](../../cli/examples/salesforce-headless-360.json) | `https://api.salesforce.com/platform/mcp/v1/platform/headless-360` |
 
 The `proxy_pass_url` values point at the third-party SaaS-hosted MCP endpoints.
@@ -76,6 +77,12 @@ channels:history,groups:history,im:history,mpim:history,channels:read,files:read
 
 ```
 offline_access,read:confluence-content.all,read:jira-user,read:jira-work,search:confluence,write:confluence-content,write:jira-work
+```
+
+**Atlassian Rovo MCP v2** (provider: `atlassian-rovo`, Jira). The gateway registers its own OAuth client for this provider, so leave `client_id` and `client_secret` empty. Configure it in the server's edit form (Per-user OAuth (3LO), provider "Atlassian Rovo MCP"), with `POST /api/servers/{path}/egress-auth`, or with `registry_management.py egress-configure`. To fill the registry's tool list, also designate a discovery identity with the same provider; it reuses the client egress registered. These are the default scopes, used when you send none. `read:account` is required and is added to any list you send. An Atlassian organization admin must also allow the gateway's domain first; see [Atlassian Rovo MCP](../egress-credential-vault.md#atlassian-rovo).
+
+```
+read:me,read:account,offline_access,read:jira:agent-interface,write:jira:agent-interface,search:jira:agent-interface
 ```
 
 **Salesforce Headless 360** (provider: `custom` — per-org endpoints; see

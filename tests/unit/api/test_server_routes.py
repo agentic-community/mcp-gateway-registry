@@ -669,6 +669,56 @@ class TestGetServersJSON:
         assert len(server["tool_list"]) == 2
         assert server["num_tools"] == 2
 
+    def _mcp_app_server_page(self) -> tuple[dict, int]:
+        """One server whose stored MCP App count (5) disagrees with its tool list (1)."""
+        return (
+            {
+                "/budget": {
+                    "server_name": "Budget",
+                    "description": "Test",
+                    "tags": [],
+                    "num_tools": 2,
+                    "num_mcp_app_tools": 5,
+                    "license": "MIT",
+                    "proxy_pass_url": "http://localhost:8080",
+                    "tool_list": [
+                        {
+                            "name": "open_budget",
+                            "description": "Open",
+                            "ui_resource_uri": "ui://budget/view.html",
+                            "ui_visibility": ["model", "app"],
+                        },
+                        {"name": "plain", "description": "No page"},
+                    ],
+                }
+            },
+            1,
+        )
+
+    def test_include_tools_false_returns_stored_mcp_app_count(
+        self, test_client_admin, mock_server_service
+    ):
+        """Without the tool list, the badge count is the one the health check stored."""
+        mock_server_service.get_servers_paginated = AsyncMock(
+            return_value=self._mcp_app_server_page()
+        )
+
+        response = test_client_admin.get("/api/servers?include_tools=false")
+
+        assert response.json()["servers"][0]["num_mcp_app_tools"] == 5
+
+    def test_include_tools_true_recounts_mcp_app_tools(
+        self, test_client_admin, mock_server_service
+    ):
+        """With the tool list loaded, the count comes from the tools the caller can see."""
+        mock_server_service.get_servers_paginated = AsyncMock(
+            return_value=self._mcp_app_server_page()
+        )
+
+        response = test_client_admin.get("/api/servers")
+
+        assert response.json()["servers"][0]["num_mcp_app_tools"] == 1
+
     def test_status_filter_returns_only_matching(self, test_client_admin, mock_server_service):
         """?status=beta returns only beta servers (Issue #1330). Forces fallback path."""
         mock_server_service.get_all_servers = AsyncMock(
@@ -1081,6 +1131,43 @@ class TestRegisterService:
 
         assert response.status_code == 422
         mock_server_service.register_server.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "proxy_pass_url",
+        ["http://169.254.169.254/latest/meta-data/", "http://openapi-mcp:9876/s/evil/mcp"],
+    )
+    def test_register_api_refused_url_is_400_not_500(
+        self,
+        test_client_admin,
+        mock_server_service,
+        proxy_pass_url,
+    ):
+        """A URL the guard or the OpenAPI MCP ownership rule refuses is a 400 with the reason.
+
+        The route's catch-all used to turn the UrlValidationError into a bare 500.
+        """
+        from registry.exceptions import UrlValidationError
+
+        mock_server_service.get_server_info = AsyncMock(return_value=None)
+        mock_server_service.register_server = AsyncMock(
+            side_effect=UrlValidationError(proxy_pass_url, "refused by test")
+        )
+        with patch(
+            "registry.auth.dependencies.user_has_ui_permission_for_service",
+            return_value=True,
+        ):
+            response = test_client_admin.post(
+                "/api/servers/register",
+                data={
+                    "name": "Refused",
+                    "description": "test",
+                    "path": "/evil",
+                    "proxy_pass_url": proxy_pass_url,
+                },
+            )
+
+        assert response.status_code == 400
+        assert "refused by test" in response.json()["detail"]
 
     def test_register_api_enforced_status_rejects_mismatch(
         self,
@@ -4055,6 +4142,10 @@ def _scan_result(*, scan_failed: bool, critical: int = 0, high: int = 0):
     )
 
 
+# Sentinel so _run() can tell "no stored_server given" from "stored_server=None".
+_SAME_AS_ENTRY = object()
+
+
 class TestScanFailureDoesNotDisableServer:
     """block_unsafe_servers must act on verdicts, not on scanner errors."""
 
@@ -4070,8 +4161,16 @@ class TestScanFailureDoesNotDisableServer:
             block_on_scan_failure=block_on_failure,
         )
 
-    async def _run(self, scan_result, scan_config):
-        """Drive the post-registration scan helper with everything mocked."""
+    async def _run(self, scan_result, scan_config, server_entry=None, stored_server=_SAME_AS_ENTRY):
+        """Drive the post-registration scan helper with everything mocked.
+
+        stored_server is what get_server_info() returns. By default it is a copy
+        of server_entry; pass None to simulate a server deleted mid-scan.
+        """
+        if server_entry is None:
+            server_entry = {"tags": [], "server_name": "test"}
+        if stored_server is _SAME_AS_ENTRY:
+            stored_server = dict(server_entry, tags=list(server_entry.get("tags", [])))
         from registry.api.server_routes import _perform_security_scan_on_registration
 
         scanner = MagicMock()
@@ -4081,6 +4180,7 @@ class TestScanFailureDoesNotDisableServer:
         service = MagicMock(
             update_server=AsyncMock(return_value=True),
             toggle_service=AsyncMock(return_value=True),
+            get_server_info=AsyncMock(return_value=stored_server),
         )
         search_repo = MagicMock(index_server=AsyncMock())
         scheduler = MagicMock(mark_dirty=MagicMock())
@@ -4098,7 +4198,7 @@ class TestScanFailureDoesNotDisableServer:
             await _perform_security_scan_on_registration(
                 "/test-server",
                 "https://example.internal/mcp",
-                {"tags": [], "server_name": "test"},
+                server_entry,
             )
 
         return service, search_repo, scheduler
@@ -4119,6 +4219,81 @@ class TestScanFailureDoesNotDisableServer:
         service.update_server.assert_awaited_once()
         _, entry = service.update_server.await_args.args
         assert "security-pending" in entry["tags"]
+
+    @pytest.mark.asyncio
+    async def test_security_pending_write_touches_only_tags(self):
+        """The tag write must not carry the registration-time is_enabled back.
+
+        The entry passed to the scan is the dict register_server() handed to
+        create(), which set is_enabled=False on it. A server toggled on while
+        the scan ran must stay on, so the write is scoped to the tags field.
+        """
+        entry = {"tags": [], "server_name": "test", "is_enabled": False}
+
+        service, _, _ = await self._run(
+            _scan_result(scan_failed=True),
+            self._config(),
+            server_entry=entry,
+        )
+
+        service.update_server.assert_awaited_once()
+        assert service.update_server.await_args.kwargs["updated_fields"] == ["tags"]
+
+    @pytest.mark.asyncio
+    async def test_security_pending_write_uses_stored_server_not_snapshot(self):
+        """A change made while the scan ran must not be overwritten by the snapshot.
+
+        update_server() re-pins the proxy target and clears upstream headers
+        based on the keys in the dict it receives, so the write must start from
+        the stored server. Tags edited during the scan must also survive.
+        """
+        snapshot = {
+            "tags": ["old"],
+            "server_name": "test",
+            "proxy_pass_url": "https://old.example.internal/mcp",
+        }
+        stored = {
+            "tags": ["edited"],
+            "server_name": "test",
+            "proxy_pass_url": "https://new.example.internal/mcp",
+        }
+
+        service, _, _ = await self._run(
+            _scan_result(scan_failed=True),
+            self._config(),
+            server_entry=snapshot,
+            stored_server=stored,
+        )
+
+        _, written = service.update_server.await_args.args
+        assert written["proxy_pass_url"] == "https://new.example.internal/mcp"
+        assert written["tags"] == ["edited", "security-pending"]
+        assert service.update_server.await_args.kwargs["updated_fields"] == ["tags"]
+        assert snapshot["tags"] == ["edited", "security-pending"]
+
+    @pytest.mark.asyncio
+    async def test_security_pending_skips_write_when_already_tagged(self):
+        """A server that already carries the tag needs no write."""
+        entry = {"tags": ["security-pending"], "server_name": "test"}
+
+        service, _, _ = await self._run(
+            _scan_result(scan_failed=True),
+            self._config(),
+            server_entry=entry,
+        )
+
+        service.update_server.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_security_pending_skips_write_when_server_deleted(self):
+        """A server deleted while the scan ran must not be written back."""
+        service, _, _ = await self._run(
+            _scan_result(scan_failed=True),
+            self._config(),
+            stored_server=None,
+        )
+
+        service.update_server.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_real_finding_still_disables_server(self):

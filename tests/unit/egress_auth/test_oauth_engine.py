@@ -10,11 +10,18 @@ import json
 from datetime import UTC, datetime
 from urllib.parse import parse_qs, urlparse
 
+import httpx
 import pytest
 
 from registry.egress_auth import oauth_engine
 from registry.egress_auth.providers import PROVIDER_REGISTRY, resolve_provider
 from registry.egress_auth.schemas import OAuthProviderConfig
+from tests.unit.egress_auth.dcr_fixtures import (
+    DCR_TEST_ISSUER,
+    DCR_TEST_PRM_URL,
+    DCR_TEST_RESOURCE,
+    make_dcr_test_config,
+)
 
 
 @pytest.mark.unit
@@ -252,10 +259,9 @@ class TestExpiresAtFallback:
 class TestResourceIndicator:
     """RFC 8707 resource indicator threads through authorize + exchange + refresh.
 
-    A resource server that mints per-resource tokens (e.g. Atlassian's Rovo MCP)
-    requires the ``resource`` param on the authorize request AND both token
-    grants, or it rejects the flow ('Invalid context provided'). A provider
-    without a resource (every built-in) must never emit the param.
+    A resource server that binds tokens to one resource expects the same
+    ``resource`` param on the authorize request AND both token grants. A
+    provider without a resource (every built-in) must never emit the param.
     """
 
     _RES = "https://mcp.atlassian.com/v1/mcp/authv2"
@@ -462,6 +468,719 @@ class TestQuirkParsers:
         assert data["client_secret"] == "sec"
         assert "Authorization" not in headers
         assert headers["Accept"] == "application/json"
+
+
+# --------------------------------------------------------------------------- #
+# Fakes for the guarded transport (covers the real _get_json / _post_dcr bodies)
+# --------------------------------------------------------------------------- #
+
+
+class _FakeResp:
+    def __init__(self, payload, status_code=200, non_json=False):
+        self._payload = payload
+        self.status_code = status_code
+        self._non_json = non_json
+
+    def json(self):
+        if self._non_json:
+            raise ValueError("not json")
+        return self._payload
+
+
+def _fake_guarded_sequence(responses, rec=None):
+    """A shared_guarded_async_client stand-in that hands back queued responses in order."""
+    it = iter(responses)
+
+    class _Client:
+        async def get(self, url, headers=None, timeout=None):
+            if rec is not None:
+                rec.setdefault("get_urls", []).append(url)
+            return next(it)
+
+        async def post(self, url, json=None, headers=None, timeout=None):
+            if rec is not None:
+                rec["post_url"] = url
+                rec["post_json"] = json
+            return next(it)
+
+    def _factory(*, profile, verify=True):
+        if rec is not None:
+            rec["profile"] = profile
+        return _Client()
+
+    return _factory
+
+
+def _fake_guarded_raising(exc):
+    """A shared_guarded_async_client stand-in whose get/post raise ``exc`` (transport error)."""
+
+    class _Client:
+        async def get(self, url, headers=None, timeout=None):
+            raise exc
+
+        async def post(self, url, json=None, headers=None, timeout=None):
+            raise exc
+
+    def _factory(*, profile, verify=True):
+        return _Client()
+
+    return _factory
+
+
+# Token endpoints the issuer check anchors on: the test provider's own, and Atlassian's.
+_DCR_TEST_TOKEN_URL = "https://auth.example.com/oauth/token"
+_ATLASSIAN_TOKEN_URL = "https://auth.atlassian.com/oauth/token"
+
+
+def _prm(**over):
+    """Protected-resource metadata that passes the RFC 9728 resource check."""
+    doc = {
+        "resource": DCR_TEST_RESOURCE,
+        "authorization_servers": [DCR_TEST_ISSUER],
+    }
+    doc.update(over)
+    return doc
+
+
+def _as_meta(**over):
+    """Authorization-server metadata that passes the RFC 8414 issuer and host checks."""
+    doc = {
+        "issuer": DCR_TEST_ISSUER,
+        "registration_endpoint": f"{DCR_TEST_ISSUER}/dcr/register",
+    }
+    doc.update(over)
+    return doc
+
+
+def _fake_discovery(monkeypatch, prm=None, as_meta=None, seen=None):
+    """Serve ``prm`` for the PRM URL and ``as_meta`` for anything else via _get_json."""
+
+    async def fake_get_json(url):
+        if seen is not None:
+            seen.append(url)
+        if "oauth-protected-resource" in url:
+            return prm if prm is not None else _prm()
+        return as_meta if as_meta is not None else _as_meta()
+
+    monkeypatch.setattr(oauth_engine, "_get_json", fake_get_json)
+
+
+@pytest.mark.unit
+class TestDynamicClientRegistration:
+    """RFC 7591 DCR: discovery (RFC 9728 -> RFC 8414) + public/confidential register."""
+
+    async def test_discovery_walks_prm_then_as_metadata(self, monkeypatch):
+        seen: list[str] = []
+        _fake_discovery(monkeypatch, seen=seen)
+        url = await oauth_engine._discover_registration_url(make_dcr_test_config())
+        assert url == f"{DCR_TEST_ISSUER}/dcr/register"
+        assert seen == [
+            DCR_TEST_PRM_URL,
+            f"{DCR_TEST_ISSUER}/.well-known/oauth-authorization-server",
+        ]
+
+    async def test_discovery_prefers_pinned_registration_url(self, monkeypatch):
+        async def boom(url):  # must not be called when registration_url is pinned
+            raise AssertionError("discovery should be skipped")
+
+        monkeypatch.setattr(oauth_engine, "_get_json", boom)
+        cfg = OAuthProviderConfig(
+            name="p",
+            display_name="P",
+            authorize_url="https://i/a",
+            token_url="https://i/t",
+            requires_dcr=True,
+            registration_url="https://i/register",
+        )
+        assert await oauth_engine._discover_registration_url(cfg) == "https://i/register"
+
+    async def test_discovery_no_source_raises(self):
+        cfg = make_dcr_test_config(protected_resource_metadata_url=None)
+        with pytest.raises(oauth_engine.OAuthEngineError, match="registration_url"):
+            await oauth_engine._discover_registration_url(cfg)
+
+    async def test_register_public_client_no_secret(self, monkeypatch):
+        captured: dict = {}
+
+        async def fake_disc(cfg, prm=None):
+            return f"{DCR_TEST_ISSUER}/dcr/register"
+
+        async def fake_post(reg_url, body):
+            captured["reg_url"] = reg_url
+            captured["body"] = body
+            return {"client_id": "DCRID", "client_secret_expires_at": 0}
+
+        monkeypatch.setattr(oauth_engine, "_discover_registration_url", fake_disc)
+        monkeypatch.setattr(oauth_engine, "_post_dcr", fake_post)
+        cid, secret = await oauth_engine.register_dcr_client(
+            make_dcr_test_config(),
+            redirect_uri="https://gw/oauth2/egress/callback",
+            scopes=["read:work", "offline_access"],
+        )
+        assert cid == "DCRID"
+        assert secret is None  # public client
+        assert captured["body"]["token_endpoint_auth_method"] == "none"
+        assert captured["body"]["redirect_uris"] == ["https://gw/oauth2/egress/callback"]
+        assert captured["body"]["scope"] == "read:work offline_access"
+        assert "authorization_code" in captured["body"]["grant_types"]
+
+    async def test_register_confidential_client_returns_secret(self, monkeypatch):
+        async def fake_disc(cfg, prm=None):
+            return "https://idp/register"
+
+        async def fake_post(reg_url, body):
+            assert body["token_endpoint_auth_method"] == "client_secret_post"
+            return {"client_id": "CID", "client_secret": "SEC"}
+
+        cfg = OAuthProviderConfig(
+            name="p",
+            display_name="P",
+            authorize_url="https://i/a",
+            token_url="https://i/t",
+            requires_dcr=True,
+            registration_url="https://idp/register",
+        )
+        monkeypatch.setattr(oauth_engine, "_discover_registration_url", fake_disc)
+        monkeypatch.setattr(oauth_engine, "_post_dcr", fake_post)
+        cid, secret = await oauth_engine.register_dcr_client(cfg, "https://gw/cb", [])
+        assert (cid, secret) == ("CID", "SEC")
+
+    async def test_register_missing_client_id_raises(self, monkeypatch):
+        async def fake_disc(cfg, prm=None):
+            return "https://idp/register"
+
+        async def fake_post(reg_url, body):
+            return {"client_secret": "SEC"}  # no client_id
+
+        monkeypatch.setattr(oauth_engine, "_discover_registration_url", fake_disc)
+        monkeypatch.setattr(oauth_engine, "_post_dcr", fake_post)
+        with pytest.raises(oauth_engine.OAuthEngineError, match="missing client_id"):
+            await oauth_engine.register_dcr_client(make_dcr_test_config(), "https://gw/cb", [])
+
+    async def test_discovery_no_authorization_servers_raises(self, monkeypatch):
+        _fake_discovery(monkeypatch, prm=_prm(authorization_servers=[]))
+        with pytest.raises(oauth_engine.OAuthEngineError, match="no authorization_servers"):
+            await oauth_engine._discover_registration_url(make_dcr_test_config())
+
+    async def test_discovery_no_registration_endpoint_raises(self, monkeypatch):
+        _fake_discovery(monkeypatch, as_meta={"issuer": DCR_TEST_ISSUER})
+        with pytest.raises(oauth_engine.OAuthEngineError, match="no registration_endpoint"):
+            await oauth_engine._discover_registration_url(make_dcr_test_config())
+
+    async def test_register_end_to_end_through_guarded_client(self, monkeypatch):
+        # Exercise the real _discover_registration_url + _post_dcr bodies (only the
+        # guarded transport is faked), so discovery + registration are covered
+        # end-to-end rather than monkeypatched away.
+        rec: dict = {}
+        monkeypatch.setattr(
+            oauth_engine,
+            "shared_guarded_async_client",
+            _fake_guarded_sequence(
+                [_FakeResp(_prm()), _FakeResp(_as_meta()), _FakeResp({"client_id": "DCRID"})],
+                rec,
+            ),
+        )
+        cid, secret = await oauth_engine.register_dcr_client(
+            make_dcr_test_config(), "https://gw/cb", ["read:work"]
+        )
+        assert (cid, secret) == ("DCRID", None)
+        assert rec["post_url"] == f"{DCR_TEST_ISSUER}/dcr/register"
+        assert rec["post_json"]["token_endpoint_auth_method"] == "none"
+        assert rec["profile"] is oauth_engine.CREDENTIALED_OAUTH_PROFILE
+
+
+@pytest.mark.unit
+class TestDiscoveryMetadataChecks:
+    """RFC 9728 section 3.3 and RFC 8414 section 3.3 checks on the fetched metadata."""
+
+    def test_expected_resource_strips_the_well_known_segment(self):
+        assert oauth_engine._expected_resource(DCR_TEST_PRM_URL) == DCR_TEST_RESOURCE
+
+    def test_expected_resource_for_a_host_level_resource(self):
+        url = "https://mcp.example.com/.well-known/oauth-protected-resource"
+        assert oauth_engine._expected_resource(url) == "https://mcp.example.com"
+
+    def test_expected_resource_rejects_a_url_without_the_segment(self):
+        with pytest.raises(oauth_engine.OAuthEngineError, match="not an RFC 9728 URL"):
+            oauth_engine._expected_resource("https://mcp.example.com/metadata")
+
+    def test_expected_resource_rejects_a_longer_segment(self):
+        url = "https://mcp.example.com/.well-known/oauth-protected-resourceX/v2"
+        with pytest.raises(oauth_engine.OAuthEngineError, match="not an RFC 9728 URL"):
+            oauth_engine._expected_resource(url)
+
+    async def test_wrong_resource_is_rejected(self, monkeypatch):
+        _fake_discovery(monkeypatch, prm=_prm(resource="https://evil.example.com/mcp"))
+        with pytest.raises(oauth_engine.OAuthEngineError, match="different resource"):
+            await oauth_engine._discover_registration_url(make_dcr_test_config())
+
+    async def test_missing_resource_is_rejected(self, monkeypatch):
+        prm = _prm()
+        del prm["resource"]
+        _fake_discovery(monkeypatch, prm=prm)
+        with pytest.raises(oauth_engine.OAuthEngineError, match="different resource"):
+            await oauth_engine._discover_registration_url(make_dcr_test_config())
+
+    async def test_prefetched_prm_with_wrong_resource_is_rejected(self, monkeypatch):
+        _fake_discovery(monkeypatch)
+        with pytest.raises(oauth_engine.OAuthEngineError, match="different resource"):
+            await oauth_engine._discover_registration_url(
+                make_dcr_test_config(), prm=_prm(resource="https://evil.example.com/mcp")
+            )
+
+    async def test_wrong_issuer_is_rejected(self, monkeypatch):
+        _fake_discovery(monkeypatch, as_meta=_as_meta(issuer="https://auth.example.com/OTHER"))
+        with pytest.raises(oauth_engine.OAuthEngineError, match="different issuer"):
+            await oauth_engine._discover_registration_url(make_dcr_test_config())
+
+    @pytest.mark.parametrize(
+        ("token_url", "evil_issuer"),
+        [
+            pytest.param(_DCR_TEST_TOKEN_URL, "https://evil.example", id="other-host"),
+            pytest.param(
+                _DCR_TEST_TOKEN_URL,
+                "https://auth.example.com.evil.example/TENANT",
+                id="suffix-host",
+            ),
+            pytest.param(
+                _DCR_TEST_TOKEN_URL, "https://auth.example.com:8443/TENANT", id="other-port"
+            ),
+            pytest.param(_DCR_TEST_TOKEN_URL, "http://auth.example.com/TENANT", id="other-scheme"),
+            # Edge cases against the Atlassian token origin. urlparse reads the host
+            # of each one as something other than auth.atlassian.com.
+            pytest.param(
+                _ATLASSIAN_TOKEN_URL,
+                "https://auth.atlassian.com@evil.example",
+                id="userinfo-names-the-origin",
+            ),
+            pytest.param(
+                _ATLASSIAN_TOKEN_URL,
+                "https://auth.atlassian.com./x",
+                id="trailing-dot",
+            ),
+            pytest.param(
+                _ATLASSIAN_TOKEN_URL,
+                "https://\u0430uth.atlassian.com/x",
+                id="idn-cyrillic-a",
+            ),
+        ],
+    )
+    async def test_issuer_on_another_origin_than_token_url_is_rejected(
+        self, monkeypatch, token_url, evil_issuer
+    ):
+        # Spoofed protected-resource metadata names an authorization server of its
+        # own that is internally consistent (issuer and registration endpoint match
+        # the URL it is served from), so only the token_url anchor can refuse it.
+        seen: list[str] = []
+        _fake_discovery(
+            monkeypatch,
+            prm=_prm(authorization_servers=[evil_issuer]),
+            as_meta=_as_meta(
+                issuer=evil_issuer, registration_endpoint=f"{evil_issuer}/dcr/register"
+            ),
+            seen=seen,
+        )
+        with pytest.raises(oauth_engine.OAuthEngineError, match="not on the provider's host"):
+            await oauth_engine._discover_registration_url(make_dcr_test_config(token_url=token_url))
+        # The authorization server's metadata is never fetched.
+        assert seen == [DCR_TEST_PRM_URL]
+
+    async def test_issuer_on_another_origin_registers_nothing(self, monkeypatch):
+        _fake_discovery(
+            monkeypatch,
+            prm=_prm(authorization_servers=["https://evil.example"]),
+            as_meta=_as_meta(
+                issuer="https://evil.example",
+                registration_endpoint="https://evil.example/dcr/register",
+            ),
+        )
+        posted: list[str] = []
+
+        async def fake_post_dcr(url, body):
+            posted.append(url)
+            return {"client_id": "X"}
+
+        monkeypatch.setattr(oauth_engine, "_post_dcr", fake_post_dcr)
+        with pytest.raises(oauth_engine.OAuthEngineError, match="not on the provider's host"):
+            await oauth_engine.register_dcr_client(
+                make_dcr_test_config(), "https://gw/oauth2/egress/callback", ["read:account"]
+            )
+        assert posted == []
+
+    async def test_prefetched_prm_naming_another_origin_is_rejected(self, monkeypatch):
+        _fake_discovery(monkeypatch)
+        with pytest.raises(oauth_engine.OAuthEngineError, match="not on the provider's host"):
+            await oauth_engine._discover_registration_url(
+                make_dcr_test_config(), prm=_prm(authorization_servers=["https://evil.example"])
+            )
+
+    async def test_issuer_on_the_token_url_origin_with_default_port_passes(self, monkeypatch):
+        _fake_discovery(monkeypatch)
+        cfg = make_dcr_test_config(token_url="https://AUTH.example.com:443/oauth/token")
+        assert (
+            await oauth_engine._discover_registration_url(cfg) == f"{DCR_TEST_ISSUER}/dcr/register"
+        )
+
+    async def test_upper_case_issuer_host_is_the_same_origin(self, monkeypatch):
+        # urlparse lowercases the scheme and host, so an issuer written in upper
+        # case is the token_url origin and passes, like the default-port case above.
+        issuer = "HTTPS://AUTH.ATLASSIAN.COM/x"
+        _fake_discovery(
+            monkeypatch,
+            prm=_prm(authorization_servers=[issuer]),
+            as_meta=_as_meta(issuer=issuer, registration_endpoint=f"{issuer}/dcr/register"),
+        )
+        cfg = make_dcr_test_config(token_url=_ATLASSIAN_TOKEN_URL)
+        assert await oauth_engine._discover_registration_url(cfg) == f"{issuer}/dcr/register"
+
+    async def test_provider_without_token_url_keeps_the_other_checks_only(self, monkeypatch):
+        _fake_discovery(
+            monkeypatch,
+            prm=_prm(authorization_servers=["https://other.example/TENANT"]),
+            as_meta=_as_meta(
+                issuer="https://other.example/TENANT",
+                registration_endpoint="https://other.example/TENANT/dcr/register",
+            ),
+        )
+        cfg = make_dcr_test_config(token_url="")
+        assert (
+            await oauth_engine._discover_registration_url(cfg)
+            == "https://other.example/TENANT/dcr/register"
+        )
+
+    async def test_registration_endpoint_on_another_host_is_rejected(self, monkeypatch):
+        _fake_discovery(
+            monkeypatch,
+            as_meta=_as_meta(registration_endpoint="https://evil.example.net/dcr/register"),
+        )
+        with pytest.raises(oauth_engine.OAuthEngineError, match="not on the issuer's host"):
+            await oauth_engine._discover_registration_url(make_dcr_test_config())
+
+    async def test_registration_endpoint_on_another_port_is_rejected(self, monkeypatch):
+        _fake_discovery(
+            monkeypatch,
+            as_meta=_as_meta(registration_endpoint="https://auth.example.com:8443/dcr/register"),
+        )
+        with pytest.raises(oauth_engine.OAuthEngineError, match="not on the issuer's host"):
+            await oauth_engine._discover_registration_url(make_dcr_test_config())
+
+    async def test_non_string_authorization_server_is_rejected(self, monkeypatch):
+        _fake_discovery(monkeypatch, prm=_prm(authorization_servers=[{"url": "x"}]))
+        with pytest.raises(oauth_engine.OAuthEngineError, match="invalid authorization server"):
+            await oauth_engine._discover_registration_url(make_dcr_test_config())
+
+    async def test_atlassian_shaped_metadata_passes_every_check(self, monkeypatch):
+        # Values served live by Atlassian's Rovo MCP v2 endpoint and its
+        # authorization server.
+        issuer = "https://auth.atlassian.com/VCeDsk8ZHncYF1g234fKtc4lNipbBhu3"
+        cfg = make_dcr_test_config(
+            protected_resource_metadata_url=(
+                "https://mcp.atlassian.com/.well-known/oauth-protected-resource/v2/mcp"
+            ),
+            token_url="https://auth.atlassian.com/oauth/token",
+        )
+        rec: dict = {}
+        monkeypatch.setattr(
+            oauth_engine,
+            "shared_guarded_async_client",
+            _fake_guarded_sequence(
+                [
+                    _FakeResp(
+                        {
+                            "resource": "https://mcp.atlassian.com/v2/mcp",
+                            "authorization_servers": [issuer],
+                        }
+                    ),
+                    _FakeResp(
+                        {"issuer": issuer, "registration_endpoint": f"{issuer}/dcr/register"}
+                    ),
+                ],
+                rec,
+            ),
+        )
+        url = await oauth_engine._discover_registration_url(cfg)
+        assert url == f"{issuer}/dcr/register"
+        assert rec["get_urls"][1] == f"{issuer}/.well-known/oauth-authorization-server"
+
+
+@pytest.mark.unit
+class TestDcrTransport:
+    """The real _get_json / _post_dcr bodies: status, JSON shape, transport, SSRF guard."""
+
+    async def test_get_json_happy_path(self, monkeypatch):
+        monkeypatch.setattr(
+            oauth_engine,
+            "shared_guarded_async_client",
+            _fake_guarded_sequence([_FakeResp({"a": 1})]),
+        )
+        assert await oauth_engine._get_json("https://as/meta") == {"a": 1}
+
+    async def test_get_json_non_2xx_raises(self, monkeypatch):
+        monkeypatch.setattr(
+            oauth_engine,
+            "shared_guarded_async_client",
+            _fake_guarded_sequence([_FakeResp({"resource": "x"}, status_code=404)]),
+        )
+        with pytest.raises(oauth_engine.OAuthEngineError, match="returned http 404"):
+            await oauth_engine._get_json("https://as/meta")
+
+    async def test_get_json_non_json_raises(self, monkeypatch):
+        monkeypatch.setattr(
+            oauth_engine,
+            "shared_guarded_async_client",
+            _fake_guarded_sequence([_FakeResp(None, non_json=True)]),
+        )
+        with pytest.raises(oauth_engine.OAuthEngineError, match="non-JSON"):
+            await oauth_engine._get_json("https://as/meta")
+
+    async def test_get_json_non_object_raises(self, monkeypatch):
+        # A JSON list used to reach dict.get and surface as an AttributeError/500.
+        monkeypatch.setattr(
+            oauth_engine,
+            "shared_guarded_async_client",
+            _fake_guarded_sequence([_FakeResp(["not", "an", "object"])]),
+        )
+        with pytest.raises(oauth_engine.OAuthEngineError, match="not an object"):
+            await oauth_engine._get_json("https://as/meta")
+
+    async def test_get_json_ssrf_guard_fails_closed(self):
+        # A metadata-IP discovery URL must be blocked by the real guarded client,
+        # and the guard's own text must not reach the raised message.
+        with pytest.raises(oauth_engine.OAuthEngineError) as exc_info:
+            await oauth_engine._get_json("http://169.254.169.254/latest/meta-data/")
+        assert str(exc_info.value) == "discovery endpoint blocked by security policy"
+
+    async def test_get_json_http_error_message_is_fixed(self, monkeypatch):
+        monkeypatch.setattr(
+            oauth_engine,
+            "shared_guarded_async_client",
+            _fake_guarded_raising(httpx.ConnectError("boom 10.0.0.7:443")),
+        )
+        with pytest.raises(oauth_engine.OAuthEngineError) as exc_info:
+            await oauth_engine._get_json("https://as/meta")
+        assert str(exc_info.value) == "discovery endpoint unreachable"
+
+    async def test_post_dcr_happy_path(self, monkeypatch):
+        rec: dict = {}
+        monkeypatch.setattr(
+            oauth_engine,
+            "shared_guarded_async_client",
+            _fake_guarded_sequence([_FakeResp({"client_id": "X"}, status_code=201)], rec),
+        )
+        out = await oauth_engine._post_dcr("https://as/register", {"client_name": "n"})
+        assert out == {"client_id": "X"}
+        assert rec["post_json"] == {"client_name": "n"}
+
+    async def test_post_dcr_rfc7591_error_code_is_passed_on(self, monkeypatch):
+        monkeypatch.setattr(
+            oauth_engine,
+            "shared_guarded_async_client",
+            _fake_guarded_sequence([_FakeResp({"error": "invalid_redirect_uri"}, status_code=400)]),
+        )
+        with pytest.raises(oauth_engine.OAuthEngineError, match="invalid_redirect_uri"):
+            await oauth_engine._post_dcr("https://as/register", {})
+
+    async def test_post_dcr_unknown_error_text_is_not_passed_on(self, monkeypatch):
+        reply = {"error": "<script>steer me</script>", "error_description": "free text"}
+        monkeypatch.setattr(
+            oauth_engine,
+            "shared_guarded_async_client",
+            _fake_guarded_sequence([_FakeResp(reply, status_code=400)]),
+        )
+        with pytest.raises(oauth_engine.OAuthEngineError) as exc_info:
+            await oauth_engine._post_dcr("https://as/register", {})
+        assert str(exc_info.value) == "registration rejected (http 400)"
+
+    async def test_post_dcr_non_json_raises(self, monkeypatch):
+        monkeypatch.setattr(
+            oauth_engine,
+            "shared_guarded_async_client",
+            _fake_guarded_sequence([_FakeResp(None, non_json=True)]),
+        )
+        with pytest.raises(oauth_engine.OAuthEngineError, match="non-JSON"):
+            await oauth_engine._post_dcr("https://as/register", {})
+
+    async def test_post_dcr_non_object_raises(self, monkeypatch):
+        monkeypatch.setattr(
+            oauth_engine,
+            "shared_guarded_async_client",
+            _fake_guarded_sequence([_FakeResp(["client_id", "X"], status_code=201)]),
+        )
+        with pytest.raises(oauth_engine.OAuthEngineError, match="not an object"):
+            await oauth_engine._post_dcr("https://as/register", {})
+
+    async def test_post_dcr_ssrf_guard_fails_closed(self):
+        with pytest.raises(oauth_engine.OAuthEngineError) as exc_info:
+            await oauth_engine._post_dcr("http://169.254.169.254/register", {})
+        assert str(exc_info.value) == "registration endpoint blocked by security policy"
+
+    async def test_post_dcr_http_error_message_is_fixed(self, monkeypatch):
+        monkeypatch.setattr(
+            oauth_engine,
+            "shared_guarded_async_client",
+            _fake_guarded_raising(httpx.ConnectError("boom 10.0.0.7:443")),
+        )
+        with pytest.raises(oauth_engine.OAuthEngineError) as exc_info:
+            await oauth_engine._post_dcr("https://as/register", {})
+        assert str(exc_info.value) == "registration endpoint unreachable"
+
+
+@pytest.mark.unit
+class TestScopeValidation:
+    """validate_scopes_against_prm and fetch_protected_resource_metadata."""
+
+    _SUPPORTED = ["read:me", "read:account", "offline_access", "read:work"]
+
+    def test_all_supported_returns_empty(self):
+        prm = {"scopes_supported": self._SUPPORTED}
+        assert oauth_engine.validate_scopes_against_prm(["read:me", "read:account"], prm) == []
+
+    def test_unsupported_scope_returned(self):
+        prm = {"scopes_supported": self._SUPPORTED}
+        bad = oauth_engine.validate_scopes_against_prm(
+            ["read:me", "read:legacy", "write:legacy"], prm
+        )
+        assert set(bad) == {"read:legacy", "write:legacy"}
+
+    def test_empty_scopes_always_valid(self):
+        prm = {"scopes_supported": self._SUPPORTED}
+        assert oauth_engine.validate_scopes_against_prm([], prm) == []
+
+    def test_no_scopes_supported_skips_validation(self):
+        # A PRM without scopes_supported must not reject anything.
+        assert oauth_engine.validate_scopes_against_prm(["anything"], {}) == []
+        assert (
+            oauth_engine.validate_scopes_against_prm(["anything"], {"scopes_supported": []}) == []
+        )
+
+    async def test_fetch_prm_returns_document(self, monkeypatch):
+        async def fake_get_json(url):
+            assert url == DCR_TEST_PRM_URL
+            return _prm(scopes_supported=self._SUPPORTED)
+
+        monkeypatch.setattr(oauth_engine, "_get_json", fake_get_json)
+        prm = await oauth_engine.fetch_protected_resource_metadata(make_dcr_test_config())
+        assert prm["scopes_supported"] == self._SUPPORTED
+
+    async def test_fetch_prm_checks_resource(self, monkeypatch):
+        async def fake_get_json(url):
+            return _prm(resource="https://evil.example.com/mcp")
+
+        monkeypatch.setattr(oauth_engine, "_get_json", fake_get_json)
+        with pytest.raises(oauth_engine.OAuthEngineError, match="different resource"):
+            await oauth_engine.fetch_protected_resource_metadata(make_dcr_test_config())
+
+    async def test_fetch_prm_no_url_raises(self):
+        cfg = OAuthProviderConfig(
+            name="x",
+            display_name="X",
+            authorize_url="https://x/a",
+            token_url="https://x/t",
+        )
+        with pytest.raises(oauth_engine.OAuthEngineError, match="protected_resource_metadata_url"):
+            await oauth_engine.fetch_protected_resource_metadata(cfg)
+
+    async def test_discovery_uses_provided_prm_without_refetch(self, monkeypatch):
+        # When a pre-fetched PRM is passed, _get_json must NOT be called for the
+        # PRM URL, only for the AS metadata URL.
+        fetched: list[str] = []
+
+        async def fake_get_json(url):
+            fetched.append(url)
+            if "oauth-authorization-server" in url:
+                return _as_meta()
+            raise AssertionError(f"unexpected URL fetched: {url}")
+
+        monkeypatch.setattr(oauth_engine, "_get_json", fake_get_json)
+        prm = _prm(scopes_supported=["read:me"])
+        reg_url = await oauth_engine._discover_registration_url(make_dcr_test_config(), prm=prm)
+        assert reg_url == f"{DCR_TEST_ISSUER}/dcr/register"
+        # Only the AS metadata URL was fetched; the PRM URL was not re-fetched.
+        assert fetched == [f"{DCR_TEST_ISSUER}/.well-known/oauth-authorization-server"]
+
+
+_ROVO_ISSUER = "https://auth.atlassian.com/VCeDsk8ZHncYF1g234fKtc4lNipbBhu3"
+
+
+@pytest.mark.unit
+class TestAtlassianRovoDcr:
+    """The atlassian-rovo provider through the real discovery and registration code."""
+
+    def _metadata_replies(self):
+        return [
+            _FakeResp(
+                {
+                    "resource": "https://mcp.atlassian.com/v2/mcp",
+                    "authorization_servers": [_ROVO_ISSUER],
+                    "scopes_supported": PROVIDER_REGISTRY["atlassian-rovo"].default_scopes,
+                }
+            ),
+            _FakeResp(
+                {"issuer": _ROVO_ISSUER, "registration_endpoint": f"{_ROVO_ISSUER}/dcr/register"}
+            ),
+        ]
+
+    async def test_registers_a_public_client_at_the_discovered_endpoint(self, monkeypatch):
+        rec: dict = {}
+        replies = [*self._metadata_replies(), _FakeResp({"client_id": "DCRID"}, status_code=201)]
+        monkeypatch.setattr(
+            oauth_engine, "shared_guarded_async_client", _fake_guarded_sequence(replies, rec)
+        )
+        rovo = PROVIDER_REGISTRY["atlassian-rovo"]
+        cid, secret = await oauth_engine.register_dcr_client(
+            rovo, "https://gw/oauth2/egress/callback", rovo.default_scopes
+        )
+        assert (cid, secret) == ("DCRID", None)
+        assert rec["get_urls"][0] == (
+            "https://mcp.atlassian.com/.well-known/oauth-protected-resource/v2/mcp"
+        )
+        assert rec["post_url"] == f"{_ROVO_ISSUER}/dcr/register"
+        assert rec["post_json"]["token_endpoint_auth_method"] == "none"
+        assert rec["post_json"]["scope"] == " ".join(rovo.default_scopes)
+
+    async def test_prm_for_v1_authv2_is_rejected_for_v2(self, monkeypatch):
+        # Metadata naming another resource (here the earlier v1 authv2 endpoint)
+        # must not steer the v2 registration.
+        replies = self._metadata_replies()
+        replies[0] = _FakeResp(
+            {
+                "resource": "https://mcp.atlassian.com/v1/mcp/authv2",
+                "authorization_servers": [_ROVO_ISSUER],
+            }
+        )
+        monkeypatch.setattr(
+            oauth_engine, "shared_guarded_async_client", _fake_guarded_sequence(replies)
+        )
+        with pytest.raises(oauth_engine.OAuthEngineError, match="different resource"):
+            await oauth_engine._discover_registration_url(PROVIDER_REGISTRY["atlassian-rovo"])
+
+    def test_authorize_url_has_no_audience_or_resource(self):
+        url = oauth_engine.build_authorize_url(
+            PROVIDER_REGISTRY["atlassian-rovo"],
+            client_id="DCRID",
+            redirect_uri="https://gw/oauth2/egress/callback",
+            scopes=["read:jira:agent-interface", "read:account"],
+            state="S",
+            pkce_challenge="CHAL",
+        )
+        q = parse_qs(urlparse(url).query)
+        assert "audience" not in q
+        assert "resource" not in q
+        assert q["code_challenge_method"] == ["S256"]
+        assert q["prompt"] == ["consent"]
+        assert q["scope"] == ["read:jira:agent-interface read:account"]
+
+    def test_classic_atlassian_authorize_url_keeps_the_audience(self):
+        url = oauth_engine.build_authorize_url(
+            PROVIDER_REGISTRY["atlassian"],
+            client_id="CLASSIC",
+            redirect_uri="https://gw/oauth2/egress/callback",
+            scopes=["read:jira-work", "offline_access"],
+            state="S",
+        )
+        q = parse_qs(urlparse(url).query)
+        assert q["audience"] == ["api.atlassian.com"]
+        assert q["prompt"] == ["consent"]
 
 
 @pytest.mark.unit

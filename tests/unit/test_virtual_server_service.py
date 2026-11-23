@@ -185,6 +185,51 @@ class TestVirtualServerServiceValidation:
         await service._validate_tool_mappings(mappings)
 
     @pytest.mark.asyncio
+    async def test_validate_tool_mappings_rejects_app_only_mcp_app_tool(
+        self, service, mock_server_repo
+    ):
+        """A tool only its MCP App page may call cannot be mapped into a virtual server.
+
+        A virtual server's tools/list is read by the model, and the MCP Apps spec
+        hides ui_visibility=["app"] tools from the model.
+        """
+        mock_server_repo.get.return_value = {
+            "server_name": "Budget",
+            "tool_list": [
+                {
+                    "name": "save_budget",
+                    "description": "Called by the page",
+                    "ui_resource_uri": "ui://budget/view.html",
+                    "ui_visibility": ["app"],
+                },
+            ],
+        }
+
+        mappings = [ToolMapping(tool_name="save_budget", backend_server_path="/budget")]
+        with pytest.raises(VirtualServerValidationError, match="only be called by its MCP App"):
+            await service._validate_tool_mappings(mappings)
+
+    @pytest.mark.asyncio
+    async def test_validate_tool_mappings_accepts_model_visible_mcp_app_tool(
+        self, service, mock_server_repo
+    ):
+        """A page-opening tool the model may call maps like any other tool."""
+        mock_server_repo.get.return_value = {
+            "server_name": "Budget",
+            "tool_list": [
+                {
+                    "name": "open_budget",
+                    "description": "Open the budget",
+                    "ui_resource_uri": "ui://budget/view.html",
+                    "ui_visibility": ["model", "app"],
+                },
+            ],
+        }
+
+        mappings = [ToolMapping(tool_name="open_budget", backend_server_path="/budget")]
+        await service._validate_tool_mappings(mappings)
+
+    @pytest.mark.asyncio
     async def test_validate_tool_mappings_version_not_found(self, service, mock_server_repo):
         """Test validation fails when pinned version doesn't exist."""
         # First call: server exists
@@ -905,6 +950,79 @@ class TestToolResolution:
         assert tools[0].description == "Search repos"
 
     @pytest.mark.asyncio
+    async def test_resolve_tools_skips_app_only_mcp_app_tool(
+        self, service, mock_vs_repo, mock_server_repo
+    ):
+        """A mapping made before a tool became app-only is not listed to the model."""
+        mock_vs_repo.get.return_value = VirtualServerConfig(
+            path="/virtual/budget",
+            server_name="Budget",
+            tool_mappings=[
+                ToolMapping(tool_name="save_budget", backend_server_path="/budget"),
+                ToolMapping(tool_name="open_budget", backend_server_path="/budget"),
+            ],
+        )
+        mock_server_repo.get.return_value = {
+            "server_name": "Budget",
+            "tool_list": [
+                {
+                    "name": "save_budget",
+                    "description": "Called by the page",
+                    "ui_resource_uri": "ui://budget/view.html",
+                    "ui_visibility": ["app"],
+                },
+                {
+                    "name": "open_budget",
+                    "description": "Open the budget",
+                    "ui_resource_uri": "ui://budget/view.html",
+                    "ui_visibility": ["model", "app"],
+                },
+            ],
+        }
+
+        tools = await service.resolve_tools("/virtual/budget", user_context={"is_admin": True})
+
+        assert [tool.name for tool in tools] == ["open_budget"]
+
+    @pytest.mark.asyncio
+    async def test_resolve_tools_keeps_backend_annotations_under_alias(
+        self, service, mock_vs_repo, mock_server_repo
+    ):
+        """A renamed tool keeps its backend's annotations; invalid hints are dropped."""
+        mock_vs_repo.get.return_value = VirtualServerConfig(
+            path="/virtual/travel",
+            server_name="Travel",
+            tool_mappings=[
+                ToolMapping(
+                    tool_name="cancel_booking", alias="travel_cancel", backend_server_path="/t"
+                ),
+                ToolMapping(tool_name="search_hotels", backend_server_path="/t"),
+                ToolMapping(tool_name="ping", backend_server_path="/t"),
+            ],
+        )
+        mock_server_repo.get.return_value = {
+            "server_name": "Travel",
+            "tool_list": [
+                {
+                    "name": "cancel_booking",
+                    "annotations": {"readOnlyHint": False, "destructiveHint": True},
+                },
+                {"name": "search_hotels", "annotations": {"readOnlyHint": "yes"}},
+                {"name": "ping"},
+            ],
+        }
+
+        tools = await service.resolve_tools("/virtual/travel", user_context={"is_admin": True})
+
+        by_name = {tool.name: tool for tool in tools}
+        assert by_name["travel_cancel"].annotations == {
+            "readOnlyHint": False,
+            "destructiveHint": True,
+        }
+        assert by_name["search_hotels"].annotations is None
+        assert by_name["ping"].annotations is None
+
+    @pytest.mark.asyncio
     async def test_resolve_tools_with_description_override(
         self, service, mock_vs_repo, mock_server_repo
     ):
@@ -1515,6 +1633,41 @@ class TestToolCatalogService:
         assert "search" in tool_names
         assert "create_issue" in tool_names
         assert "get_ticket" in tool_names
+
+    @pytest.mark.asyncio
+    async def test_catalog_omits_app_only_mcp_app_tools(
+        self, catalog_service, mock_server_repo, admin_context
+    ):
+        """A tool only an MCP App page may call is not offered to the virtual-server picker.
+
+        A virtual server's tools/list is read by the model, and the MCP Apps spec
+        hides ui_visibility=["app"] tools from the model.
+        """
+        mock_server_repo.list_all.return_value = {
+            "/budget": {
+                "server_name": "Budget",
+                "tool_list": [
+                    {
+                        "name": "open_budget",
+                        "description": "Open the budget",
+                        "ui_resource_uri": "ui://budget/view.html",
+                        "ui_visibility": ["model", "app"],
+                    },
+                    {
+                        "name": "save_budget",
+                        "description": "Called by the page",
+                        "ui_resource_uri": "ui://budget/view.html",
+                        "ui_visibility": ["app"],
+                    },
+                    {"name": "plain", "description": "No page"},
+                ],
+            },
+        }
+        mock_server_repo.get_state.return_value = True
+
+        catalog = await catalog_service.get_tool_catalog(user_context=admin_context)
+
+        assert sorted(entry.tool_name for entry in catalog) == ["open_budget", "plain"]
 
     @pytest.mark.asyncio
     async def test_catalog_filters_disabled_servers(

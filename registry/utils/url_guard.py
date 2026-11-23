@@ -20,8 +20,11 @@ implementations (``skill_service._is_safe_url`` and
   category-checked, so a private/metadata target cannot be smuggled through a
   non-canonical spelling.
 - Explicit host/CIDR allowlists can admit private, loopback, and CGNAT targets,
-  but cloud/workload credential endpoints, link-local, unspecified, reserved, and
-  multicast destinations remain hard-denied.
+  but cloud/workload credential endpoints, link-local, unspecified, and
+  multicast destinations remain hard-denied. Reserved IPv4 destinations (for example
+  Istio's ``240.240.0.0/16`` ServiceEntry range) are admitted only by an
+  operator ``SSRF_ALLOWED_CIDRS`` entry that contains them, never by hostname
+  trust or ``allow_private``.
 - Hostname trust (``ssrf_allowed_hosts`` / ``github_extra_hosts``) is a
   post-resolution relaxation, not a DNS bypass. Trusted names are still resolved,
   every answer is classified, and the request is pinned to a validated answer.
@@ -149,6 +152,7 @@ import http.cookiejar
 import ipaddress
 import logging
 import os
+import re
 import socket
 import ssl
 import threading
@@ -163,6 +167,7 @@ import httpx
 
 from ..common.log_redaction import redact_url
 from ..exceptions import UrlValidationError
+from .branding_files import BRANDING_PATH_SEGMENT
 
 if TYPE_CHECKING:
     from ..core.config import Settings
@@ -228,6 +233,30 @@ _TEREDO_PREFIX = ipaddress.ip_network("2001::/32")  # RFC 4380: client v4 in low
 # range, but it is internally routable (carrier NAT / on-cluster overlays), so we
 # treat it like private-unicast: denied by default, relaxable with allow_private.
 _CGNAT_NET = ipaddress.ip_network("100.64.0.0/10")
+
+# IPv4 limited broadcast. Reserved, and never a legitimate egress target, so an
+# operator CIDR (even 0.0.0.0/0) must not relax it.
+_IPV4_BROADCAST = ipaddress.IPv4Address("255.255.255.255")
+
+
+def _operator_may_admit_reserved(
+    ip: ipaddress.IPv4Address | ipaddress.IPv6Address,
+    reserved_cidrs: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...],
+) -> bool:
+    """Return True if an operator CIDR admits this reserved address (#2018).
+
+    Only IPv4 reserved space (``240.0.0.0/4``, minus limited broadcast) is
+    relaxable. Reserved IPv6 is never relaxed: several reserved IPv6 ranges
+    carry an IPv4 address that is not unwrapped and category-checked (IPv4-
+    compatible ``::a.b.c.d``, SIIT ``::ffff:0:a.b.c.d``, RFC 8215 local-use
+    NAT64 ``64:ff9b:1::/48``), so a broad ``::/0`` or ``::/8`` entry would
+    otherwise reach IMDS. Embedded IPv4 forms that ARE unwrapped (mapped,
+    NAT64, 6to4, Teredo) arrive here as IPv4 and are judged as IPv4.
+    """
+    if not isinstance(ip, ipaddress.IPv4Address) or ip == _IPV4_BROADCAST:
+        return False
+    return any(ip in net for net in reserved_cidrs)
+
 
 # Cloud metadata and workload-identity credential endpoints. NEVER reachable:
 # not relaxable by ``allow_private`` NOR by an explicit CIDR/hostname allowlist.
@@ -359,13 +388,22 @@ def _ip_denial_reason(
     ip: ipaddress.IPv4Address | ipaddress.IPv6Address,
     allow_private: bool,
     allowed_cidrs: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...] = (),
+    reserved_cidrs: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...] = (),
 ) -> str | None:
     """Return a denial reason if ``ip`` is an unsafe egress target.
 
     Embedded IPv4 forms are unwrapped first. Cloud/workload credential
-    endpoints, link-local, unspecified, multicast, and reserved destinations
-    are hard-denied before any relaxation. ``allow_private`` and explicit CIDRs
+    endpoints, link-local, unspecified, and multicast destinations are
+    hard-denied before any relaxation. ``allow_private`` and ``allowed_cidrs``
     may relax only loopback, private-unicast, and CGNAT destinations.
+
+    Reserved destinations are denied unless they fall inside
+    ``reserved_cidrs``: the operator's own ``SSRF_ALLOWED_CIDRS`` ranges (for
+    example Istio's auto-allocated ServiceEntry range ``240.240.0.0/16``).
+    Callers must pass only operator-listed CIDRs here, never the exact ``/32``
+    synthesized for a trusted hostname, so neither hostname trust nor
+    ``allow_private`` can reopen a reserved address. Only IPv4 reserved space is
+    relaxable; see ``_operator_may_admit_reserved``.
     """
     ip = _unwrap_embedded_ipv4(ip)
 
@@ -384,7 +422,7 @@ def _ip_denial_reason(
     if ip.is_loopback:
         return None if allow_private or explicitly_allowed else "loopback"
     if ip.is_reserved:
-        return "reserved"
+        return None if _operator_may_admit_reserved(ip, reserved_cidrs) else "reserved"
     if ip.is_private or (isinstance(ip, ipaddress.IPv4Address) and ip in _CGNAT_NET):
         return None if allow_private or explicitly_allowed else "private"
     return None
@@ -451,6 +489,17 @@ _BUILTIN_AIREGISTRY_TOOLS_OUTBOUND_IDENTITIES: frozenset[str] = frozenset(
 )
 _RESERVED_BUILTIN_PROXY_HOSTS: frozenset[str] = frozenset({"mcpgw-server"})
 
+# The second built-in private target: the openapi-mcp container that serves
+# OpenAPI MCP servers (issue #2022). Each server registered at /<slug>/ is
+# trusted only when its target is exactly <container>/s/<slug>/mcp, and a
+# request through the selected profile may reach only /s/<slug>/mcp paths,
+# never the container's /internal/* control API. The container host stays
+# reserved in every other profile, even with the feature off.
+_OPENAPI_MCP_ENTITY_TYPE = "mcp_server"
+_OPENAPI_MCP_SLUG_PATTERN = r"[a-z0-9]+(?:-[a-z0-9]+)*"
+_OPENAPI_MCP_SLUG_RE = re.compile(rf"^{_OPENAPI_MCP_SLUG_PATTERN}$")
+_OPENAPI_MCP_SERVER_PREFIX = "/s/"
+
 # Nginx metacharacters that must never appear in a proxy_pass_url. A valid URL
 # never legitimately contains these; their presence indicates an attempt to
 # break out of an nginx directive/string context (config injection).
@@ -477,10 +526,11 @@ _NGINX_METACHARACTERS: frozenset[str] = frozenset(
 class _Allowlist:
     """A resolved set of hosts/CIDRs that relax the IP block.
 
-    ``cidrs`` explicitly permit private, loopback, and CGNAT destinations.
-    ``hosts`` is a post-resolution trust signal with the same limited
-    relaxation. Hard-denied credential, link-local, unspecified, reserved, and
-    multicast categories remain closed in both cases.
+    ``cidrs`` explicitly permit private, loopback, CGNAT, and (only for the
+    ranges they contain) reserved IPv4 destinations. ``hosts`` is a post-resolution
+    trust signal limited to private, loopback, and CGNAT. Hard-denied
+    credential, link-local, unspecified, and multicast categories remain closed
+    in both cases.
     """
 
     hosts: frozenset[str] = field(default_factory=frozenset)
@@ -925,13 +975,50 @@ def _assert_credential_endpoints_bypass_proxy(
     )
 
 
+def _warn_if_proxy_env_ignored(
+    config: _ForwardProxyConfig,
+) -> None:
+    """Warn when HTTP(S)_PROXY is set but the guarded clients will not use it.
+
+    The guarded clients pass their own transport, so httpx and httpx2 never read
+    the proxy variables themselves; only EGRESS_FORWARD_PROXY_ENABLED turns proxy
+    routing on. A deployment that sets HTTPS_PROXY alone therefore sends every
+    guarded request direct, which in a proxy-only network shows up as connect
+    timeouts with nothing in the log pointing at the flag. A warning rather than
+    an error: the variables may be there for other tools in the image.
+    """
+    if config.enabled:
+        return
+    raw_enabled = (os.environ.get(_FORWARD_PROXY_ENABLED_ENV) or "").strip().lower()
+    if raw_enabled in _TRUE_VALUES:
+        return  # flag on but no proxy set: _forward_proxy_config already warned
+    names = [
+        name
+        for name in ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy")
+        if (os.environ.get(name) or "").strip()
+    ]
+    if not names:
+        return
+    logger.warning(
+        "SSRF guard: %s is set but %s is not true, so the SSRF-guarded egress "
+        "clients (health checks, tool discovery, MCP tool calls, OAuth token "
+        "exchange, federation) ignore it and connect direct. Set %s=true to route "
+        "public targets through the proxy.",
+        "/".join(names),
+        _FORWARD_PROXY_ENABLED_ENV,
+        _FORWARD_PROXY_ENABLED_ENV,
+    )
+
+
 def validate_forward_proxy_config() -> None:
     """Resolve and validate forward-proxy configuration at process startup.
 
     Call this from each app's lifespan so a bad CA-bundle path fails the pod
     rather than surfacing on the first proxied request, hours later and far from
     the cause. The CA bundle is validated even when the feature flag is off, so a
-    typo is caught before the flag is flipped.
+    typo is caught before the flag is flipped. Logs a warning when a proxy
+    variable is set while the flag is off, because the guarded clients then
+    ignore it.
 
     Raises:
         UrlValidationError: If the CA bundle path is missing, unreadable, or not
@@ -939,6 +1026,7 @@ def validate_forward_proxy_config() -> None:
             cloud credential endpoints.
     """
     config = _forward_proxy_config()
+    _warn_if_proxy_env_ignored(config)
     _assert_credential_endpoints_bypass_proxy(config)
     _forward_proxy_ssl_context()
 
@@ -1059,6 +1147,141 @@ def is_builtin_airegistry_tools_target(
         return normalize_url_identity(target_url) == _BUILTIN_AIREGISTRY_TOOLS_TARGET
     except UrlValidationError:
         return False
+
+
+def is_builtin_airegistry_tools_outbound_url(
+    url: str | None,
+) -> bool:
+    """Return whether a URL is one of the exact built-in airegistry-tools endpoints.
+
+    The auth server relays the caller's ingress bearer only to the bundled
+    registry-tools server (issue #1266). Checking the signed server name alone
+    would also relay it to wherever an admin repointed that registration, so
+    the relay checks the destination with this function too.
+
+    Args:
+        url: The signed upstream URL the request is about to be sent to.
+
+    Returns:
+        True only for the built-in base URL or its canonical /mcp endpoint.
+    """
+    try:
+        return normalize_url_identity(url) in _BUILTIN_AIREGISTRY_TOOLS_OUTBOUND_IDENTITIES
+    except UrlValidationError:
+        return False
+
+
+def _openapi_mcp_reserved_host() -> str | None:
+    """Host of OPENAPI_MCP_INTERNAL_URL, lower-cased. Reserved even when the feature is off."""
+    url = getattr(_get_settings(), "openapi_mcp_internal_url", "")
+    if not isinstance(url, str) or not url:
+        return None
+    host = urlsplit(url).hostname
+    return host.lower() if host else None
+
+
+def is_operator_trusted_host(
+    hostname: str | None,
+) -> bool:
+    """True when the operator explicitly allowlisted this host for private targets.
+
+    A host named in SSRF_ALLOWED_HOSTS, or an IP literal inside SSRF_ALLOWED_CIDRS.
+    A hostname that only resolves into an allowed range does not count, so a
+    caller that relaxes a rule for trusted internal hosts stays strict.
+    """
+    if not isinstance(hostname, str) or not hostname:
+        return False
+    host = hostname.lower().rstrip(".").strip("[]")
+    allowlist = _proxy_allowlist()
+    if allowlist.allows_host(host):
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return any(ip in net for net in allowlist.cidrs if net.version == ip.version)
+
+
+def is_openapi_mcp_container_url(
+    url: str | None,
+) -> bool:
+    """True when the URL's host is the openapi-mcp container's (reserved even with the feature off)."""
+    host = _openapi_mcp_reserved_host()
+    if not host or not isinstance(url, str) or not url:
+        return False
+    try:
+        target_host = urlsplit(url).hostname
+    except ValueError:
+        return False
+    return (target_host or "").lower().rstrip(".") == host
+
+
+def _openapi_mcp_base() -> str | None:
+    """Normalized container origin (no trailing slash) when the feature is on, else None."""
+    s = _get_settings()
+    # Strict checks: only a real True enables the identity, and only a real
+    # string is a URL, so a partial or mocked settings object fails closed.
+    if getattr(s, "openapi_mcp_enabled", False) is not True:
+        return None
+    url = getattr(s, "openapi_mcp_internal_url", "")
+    if not isinstance(url, str) or not url:
+        return None
+    try:
+        return normalize_url_identity(url).rstrip("/")
+    except UrlValidationError:
+        return None
+
+
+def openapi_mcp_target_url(
+    slug: str,
+) -> str:
+    """Return the exact container URL an OpenAPI MCP server must register as its target.
+
+    Raises:
+        UrlValidationError: When the feature is off or the slug is not valid.
+    """
+    base = _openapi_mcp_base()
+    if base is None or not _OPENAPI_MCP_SLUG_RE.fullmatch(slug or ""):
+        raise UrlValidationError(str(slug), "OpenAPI MCP servers are off or the slug is invalid")
+    return f"{base}{_OPENAPI_MCP_SERVER_PREFIX}{slug}/mcp"
+
+
+def is_builtin_openapi_mcp_target(
+    entity_type: str,
+    entity_path: str | None,
+    target_url: str | None,
+) -> bool:
+    """True only for the MCP server /<slug>/ pointing at exactly <container>/s/<slug>/mcp."""
+    if entity_type != _OPENAPI_MCP_ENTITY_TYPE:
+        return False
+    slug = _normalized_registered_path(entity_path).strip("/")
+    try:
+        expected = openapi_mcp_target_url(slug)
+        return normalize_url_identity(target_url) == expected
+    except UrlValidationError:
+        return False
+
+
+def _openapi_mcp_outbound_pattern() -> re.Pattern[str] | None:
+    """The only URLs the built-in OpenAPI MCP profile may reach: <container>/s/<slug>/mcp[/]."""
+    base = _openapi_mcp_base()
+    if base is None:
+        return None
+    return re.compile(
+        rf"{re.escape(base)}{re.escape(_OPENAPI_MCP_SERVER_PREFIX)}{_OPENAPI_MCP_SLUG_PATTERN}/mcp/?"
+    )
+
+
+def _builtin_openapi_mcp_allowlist() -> _Allowlist:
+    """Proxy policy plus the one container hostname. Not cached: it follows settings."""
+    ordinary = _proxy_allowlist()
+    host = _openapi_mcp_reserved_host()
+    extra = frozenset({host}) if host else frozenset()
+    return _Allowlist(
+        hosts=ordinary.hosts | extra,
+        cidrs=ordinary.cidrs,
+        allow_private=ordinary.allow_private,
+    )
 
 
 @lru_cache(maxsize=1)
@@ -1194,6 +1417,10 @@ class _Profile:
     name: str
     allowlist_factory: object  # callable returning _Allowlist
     allowed_url_identities: frozenset[str] | None = None
+    # Callable returning a compiled pattern the normalized URL must fully match,
+    # or None to deny every URL. For identities that depend on settings (the
+    # openapi-mcp container's per-server paths), where a fixed set cannot work.
+    allowed_url_pattern_factory: object | None = None
     require_https: bool = False
     allow_private: bool = False
     # Profiles whose requests carry a secret (client secret, refresh token,
@@ -1212,6 +1439,11 @@ BUILTIN_AIREGISTRY_TOOLS_PROFILE = _Profile(
     name="builtin-airegistry-tools",
     allowlist_factory=_builtin_airegistry_tools_allowlist,
     allowed_url_identities=_BUILTIN_AIREGISTRY_TOOLS_OUTBOUND_IDENTITIES,
+)
+BUILTIN_OPENAPI_MCP_PROFILE = _Profile(
+    name="builtin-openapi-mcp",
+    allowlist_factory=_builtin_openapi_mcp_allowlist,
+    allowed_url_pattern_factory=_openapi_mcp_outbound_pattern,
 )
 FEDERATION_PROFILE = _Profile(
     name="federation",
@@ -1238,6 +1470,22 @@ EGRESS_UPSTREAM_PROFILE = _Profile(
 )
 
 
+def _select_openapi_mcp_profile(
+    registered_target_url: str | None,
+    outbound_url: str | None,
+) -> _Profile:
+    """Admit only the registered target and the same URL with a trailing slash."""
+    target = normalize_url_identity(registered_target_url)
+    candidate = outbound_url or registered_target_url
+    normalized = normalize_url_identity(candidate)
+    if normalized not in (target, target + "/"):
+        raise UrlValidationError(
+            candidate,
+            "outbound URL does not match the exact OpenAPI MCP server identity",
+        )
+    return BUILTIN_OPENAPI_MCP_PROFILE
+
+
 def proxy_profile_for_entity_target(
     entity_type: str,
     entity_path: str | None,
@@ -1251,6 +1499,8 @@ def proxy_profile_for_entity_target(
     different override URL fails closed instead of silently falling back to the
     ordinary profile, even when that different URL is otherwise public.
     """
+    if is_builtin_openapi_mcp_target(entity_type, entity_path, registered_target_url):
+        return _select_openapi_mcp_profile(registered_target_url, outbound_url)
     if not is_builtin_airegistry_tools_target(entity_type, entity_path, registered_target_url):
         return PROXY_PROFILE
 
@@ -1262,6 +1512,43 @@ def proxy_profile_for_entity_target(
             "outbound URL does not match the exact built-in airegistry-tools identity",
         )
     return BUILTIN_AIREGISTRY_TOOLS_PROFILE
+
+
+def proxy_profile_for_mcp_hop(
+    server_path: str,
+    signed_upstream_url: str,
+    outbound_url: str,
+) -> _Profile:
+    """Select the profile for the auth server's hop to a registered MCP backend.
+
+    The same decision ``proxy_profile_for_entity_target`` makes for the
+    registry's health check, so a backend that passes the check passes the hop:
+    ``PROXY_PROFILE`` for an ordinary server, or the exact built-in profile.
+
+    The hop token signs the registration's ``proxy_pass_url`` on a direct route
+    but its resolved MCP endpoint on a virtual route (``selected_upstream``). For
+    the built-in, both are among its exact outbound identities, so a signed
+    built-in endpoint stands for the built-in target. The server path and the
+    outbound URL are still checked exactly, and no other URL is translated.
+
+    Args:
+        server_path: The signed ``server`` claim (the registered path).
+        signed_upstream_url: The signed ``upstream_url`` claim.
+        outbound_url: The URL the hop is about to connect to.
+
+    Returns:
+        The profile to pin the connection under.
+
+    Raises:
+        UrlValidationError: The registration is the built-in but the outbound
+            URL is not one of its exact endpoints.
+    """
+    registered_target = signed_upstream_url
+    if is_builtin_airegistry_tools_outbound_url(signed_upstream_url):
+        registered_target = _BUILTIN_AIREGISTRY_TOOLS_TARGET
+    return proxy_profile_for_entity_target(
+        "mcp_server", server_path, registered_target, outbound_url
+    )
 
 
 def _is_blocked_ip(
@@ -1292,10 +1579,13 @@ def _is_blocked_ip(
             # (profile.allow_private, e.g. EGRESS_UPSTREAM_PROFILE=True) or the
             # allowlist (allowlist.allow_private, set from
             # gateway_proxy_allow_private_targets). Metadata/credential/link-local
-            # /reserved/multicast stay hard-denied in _ip_denial_reason before
-            # any relaxation, so this only ever relaxes loopback/private/CGNAT.
+            # /multicast stay hard-denied in _ip_denial_reason before any
+            # relaxation, so this only ever relaxes loopback/private/CGNAT.
             allow_private=allow_private or allowlist.allow_private,
             allowed_cidrs=allowed_cidrs,
+            # Only the operator's own CIDRs may admit a reserved address (#2018),
+            # never the /32 added above for a trusted hostname.
+            reserved_cidrs=allowlist.cidrs,
         )
         is not None
     )
@@ -1425,6 +1715,12 @@ def validate_url(
         and normalized not in profile.allowed_url_identities
     ):
         raise UrlValidationError(url, "URL does not match the selected exact outbound identity")
+    if profile.allowed_url_pattern_factory is not None:
+        pattern = profile.allowed_url_pattern_factory()  # type: ignore[operator]
+        if pattern is None or not pattern.fullmatch(normalized):
+            raise UrlValidationError(
+                url, "URL does not match the selected outbound identity pattern"
+            )
     parsed = urlparse(normalized)
 
     allowed_schemes = ("https",) if require_https or profile.require_https else ("http", "https")
@@ -1461,6 +1757,11 @@ def validate_url(
         raise UrlValidationError(
             url, "hostname is reserved for the built-in airegistry-tools server"
         )
+    if (
+        hostname_lower == _openapi_mcp_reserved_host()
+        and profile is not BUILTIN_OPENAPI_MCP_PROFILE
+    ):
+        raise UrlValidationError(url, "hostname is reserved for OpenAPI MCP servers")
 
     if not resolve:
         # Registration-time structural validation only. The DNS-aware service
@@ -1531,14 +1832,17 @@ def validate_server_path(
     a mutating admin action masquerade as a health check and be dropped from the
     audit trail.
 
+    A path whose first segment is ``branding`` is also rejected: that prefix is
+    the public UI branding route, which a server location block would shadow.
+
     Args:
         path: The server path (e.g. ``/github``).
 
     Raises:
         UrlValidationError: If the path is empty, contains disallowed nginx
-            metacharacters, normalizes to an empty (slashes-only) path, or
+            metacharacters, normalizes to an empty (slashes-only) path,
             normalizes to a reserved cross-server wildcard or monitoring-route
-            name.
+            name, or starts with the reserved ``branding`` segment.
     """
     if not path or not isinstance(path, str):
         raise UrlValidationError(str(path), "server path is empty or not a string")
@@ -1574,6 +1878,16 @@ def validate_server_path(
         raise UrlValidationError(
             path,
             f"server path '{normalized}' is reserved (shadows a built-in monitoring route)",
+        )
+
+    # The first segment "branding" is the public UI branding route
+    # ({ROOT_PATH}/branding/<name>). A server there would get an nginx location
+    # block that shadows it (and puts it behind auth_request), so reserve it.
+    if normalized.split("/", 1)[0].lower() == BRANDING_PATH_SEGMENT:
+        raise UrlValidationError(
+            path,
+            f"server path '{normalized}' is reserved (the '/{BRANDING_PATH_SEGMENT}' "
+            "prefix serves the UI branding files)",
         )
 
 
@@ -2194,7 +2508,7 @@ def guarded_async_client(
 #     NOT enable http2 on these clients (it would coalesce far more aggressively).
 #   * No shared default identity state -- no default auth headers (callers pass the
 #     credential per request). Cookie persistence is disabled via a no-store cookie
-#     jar (see _disable_cookie_persistence / _NoStoreCookieJar): a Set-Cookie is never
+#     jar (see _disable_cookie_persistence / NoStoreCookieJar): a Set-Cookie is never
 #     stored, so it can never be replayed onto a later OR concurrent request sharing
 #     the client. Credentials never ride cookies on these paths, so this is
 #     defense-in-depth.
@@ -2215,7 +2529,7 @@ def _pool_limits() -> httpx.Limits:
     )
 
 
-class _NoStoreCookieJar(http.cookiejar.CookieJar):
+class NoStoreCookieJar(http.cookiejar.CookieJar):
     """A cookie jar that silently drops every cookie.
 
     Installing this on a pooled, shared client makes cookie handling stateless: a
@@ -2232,7 +2546,7 @@ class _NoStoreCookieJar(http.cookiejar.CookieJar):
 
 def _disable_cookie_persistence(client: httpx.AsyncClient) -> httpx.AsyncClient:
     """Swap in a no-store cookie jar so the shared client never persists cookies."""
-    client.cookies.jar = _NoStoreCookieJar()
+    client.cookies.jar = NoStoreCookieJar()
     return client
 
 

@@ -109,7 +109,7 @@ graph TB
 |--------|----------------|
 | `registry/egress_auth/service.py` | `EgressAuthService` — orchestrates consent URL build, callback handling, token vend, single-flight refresh, list, disconnect. |
 | `registry/egress_auth/oauth_engine.py` | PKCE generation, `build_authorize_url`, `exchange_code`, `refresh_token`; per-provider token-response parsers and auth styles. |
-| `registry/egress_auth/providers.py` | `PROVIDER_REGISTRY` (GitHub, Google, Atlassian, Microsoft, Slack) + `resolve_provider` for custom OIDC. |
+| `registry/egress_auth/providers.py` | `PROVIDER_REGISTRY` (GitHub, Google, Atlassian, Atlassian Rovo MCP, Microsoft, Slack) + `resolve_provider` for custom OIDC. |
 | `registry/egress_auth/state_codec.py` | AEAD (AES-256-GCM) encrypt/decrypt of the short-lived OAuth `state` blob — hides the PKCE verifier from the URL/logs. |
 | `registry/egress_auth/browser_binding.py` | The per-consent cookie that binds a consent to the browser that started it: secret, digest, cookie name, set, compare, clear. |
 | `registry/egress_auth/fallback_key.py` | `username_fallback_key`, the namespaced vault `user_id` for a login with no account id; only the auth-server's login callback calls it, and it stores the result on the subject-less session. |
@@ -421,7 +421,7 @@ first segment after it (see the layout below). Any value other than `oauth2` (`b
 
 **Username-fallback keys.** A session with no subject used to key on the bare username. It now keys on `name:<provider>:<username>` (see [When the key falls back to the username](#when-the-key-falls-back-to-the-username)), so users of a GitHub, Google or custom login that maps no subject find their connections gone and reconnect each egress server once. The old entries stay under the bare username. A token minted from such a session now carries the session's fallback key; a token minted before the upgrade carries none and is refused until the user generates a new one.
 
-**Sessions created before this release.** Earlier releases did not store the vault key (`egress_user`) on the session, and the gateway no longer falls back to the session's `subject`. Until the user signs in again, a session created before the upgrade has no vault key: initiate and PAT submit return 403, the connection list is empty, and the vend refuses a token minted from it after the upgrade. Sessions last at most `session.max_age_seconds` in `oauth2_providers.yml` (8 hours by default), and signing out and back in ends the gap sooner.
+**Sessions created before this release.** Earlier releases did not store the vault key (`egress_user`) on the session, and the gateway no longer falls back to the session's `subject`. Until the user signs in again, a session created before the upgrade has no vault key: initiate and PAT submit return 403, the connection list is empty, and the vend refuses a token minted from it after the upgrade. Sessions last at most `SESSION_MAX_AGE_SECONDS` (8 hours by default), and signing out and back in ends the gap sooner.
 
 **Consents in flight.** A consent state now carries the digest of the starting browser's consent cookie, and the callback refuses a state without one. A consent started before the upgrade fails at the callback with "this is not the browser that started it"; the user connects again. States expire after `EGRESS_STATE_TTL_SECONDS` (600 by default), so this lasts at most that long.
 
@@ -495,7 +495,7 @@ prefix; the AS facade is mounted at root and registered only when
 
 | Method | Path | Auth | Purpose |
 |--------|------|------|---------|
-| `POST` | `/api/servers/{server_path}/egress-auth` | proxied auth + admin | Configure egress OAuth on a server (provider, client_id, write-only encrypted client_secret, scopes, custom URLs, optional RFC 8707 `custom_resource`, optional RFC 9207 `expected_issuer`, optional `list_tools_before_consent`). |
+| `POST` | `/api/servers/{server_path}/egress-auth` | proxied auth + admin | Configure egress OAuth on a server (provider, client_id, write-only encrypted client_secret, scopes, custom URLs, optional RFC 8707 `custom_resource`, optional RFC 9207 `expected_issuer`, optional `list_tools_before_consent`, optional `re_register` for a [Dynamic Client Registration provider](#atlassian-rovo)). |
 | `GET` | `/api/servers/{server_path}/egress-auth` | proxied auth + admin | Read the non-secret egress config (secret stripped). |
 
 ### End-user
@@ -638,13 +638,9 @@ OPENBAO_AUTH_METHOD=token
 <a id="setup-mcp-server"></a>
 ## Setup: configuring an MCP server for egress
 
-Egress OAuth is configured **per MCP server** by an admin. You need an OAuth app
-registered with the provider, with its redirect/callback URL set to
-`{EGRESS_OAUTH_CALLBACK_BASE_URL}/oauth2/egress/callback`.
+Egress OAuth is configured **per MCP server** by an admin. You need an OAuth app registered with the provider, with its redirect/callback URL set to `{EGRESS_OAUTH_CALLBACK_BASE_URL}/oauth2/egress/callback`. The exception is `atlassian-rovo`, for which the gateway registers its own client (see [Atlassian Rovo MCP](#atlassian-rovo)).
 
-Built-in providers: `github`, `google`, `atlassian`, `microsoft`, `slack`. Any
-other provider uses `custom` with explicit `custom_authorize_url` /
-`custom_token_url`.
+Built-in providers: `github`, `google`, `atlassian`, `atlassian-rovo`, `microsoft`, `slack`. Any other provider uses `custom` with explicit `custom_authorize_url` / `custom_token_url`.
 
 Configure via the API (or the server-edit modal in the UI):
 
@@ -719,30 +715,7 @@ For a custom OIDC provider:
   "custom_resource": "https://mcp.datadoghq.com"
 }
 ```
-- `custom_resource` (optional) is an [RFC 8707](https://www.rfc-editor.org/rfc/rfc8707)
-  **resource indicator** — an absolute `https` URI (no fragment). When set, the
-  gateway sends it as the `resource` parameter on the authorize request **and**
-  both token grants (code exchange + refresh), binding the minted token to that
-  one protected resource. This is required by resource servers that issue
-  per-resource tokens: for example **Atlassian's Rovo MCP**
-  (`https://mcp.atlassian.com/v1/mcp/authv2`) rejects the authorize flow with
-  *"Invalid context provided"* if the indicator is absent, and rejects a token
-  whose audience is the generic `api.atlassian.com` REST API rather than the MCP
-  resource. Built-in providers never emit `resource`, so their flows are
-  unchanged. Example (Atlassian Rovo MCP via `custom`):
-
-```jsonc
-{
-  "egress_auth_mode": "oauth_user",
-  "egress_provider": "custom",
-  "client_id": "<atlassian-app-client-id>",
-  "client_secret": "<atlassian-app-secret>",
-  "scopes": ["read:jira-work", "read:jira-user", "write:jira-work", "offline_access"],
-  "custom_authorize_url": "https://auth.atlassian.com/authorize",
-  "custom_token_url": "https://auth.atlassian.com/oauth/token",
-  "custom_resource": "https://mcp.atlassian.com/v1/mcp/authv2"
-}
-```
+- `custom_resource` (optional) is an [RFC 8707](https://www.rfc-editor.org/rfc/rfc8707) **resource indicator**: an absolute `https` URI (no fragment). When set, the gateway sends it as the `resource` parameter on the authorize request **and** both token grants (code exchange + refresh), binding the minted token to that one protected resource. Set it only for a provider that expects it (the Datadog example above sends one). Some authorization servers reject the parameter: Atlassian's Rovo MCP answers `invalid_target`, so use the `atlassian-rovo` provider described below for it, not `custom` with `custom_resource`. Built-in providers never emit `resource`, so their flows are unchanged.
 
 <a id="choosing-token-auth-style"></a>
 ### Choosing `custom_token_auth_style`
@@ -750,10 +723,7 @@ For a custom OIDC provider:
 Do not guess this value: the provider publishes it. Work through the steps in
 order and stop at the first one that answers.
 
-**1. Is `egress_provider` a built-in?** (`github`, `google`, `atlassian`,
-`microsoft`, `slack`) Then there is nothing to set. `resolve_provider()` returns
-the built-in provider row verbatim and never reads `custom_token_auth_style`, so
-the field is ignored on those servers. Every built-in is confidential.
+**1. Is `egress_provider` a built-in?** (`github`, `google`, `atlassian`, `atlassian-rovo`, `microsoft`, `slack`) Then there is nothing to set. `resolve_provider()` returns the built-in provider row verbatim and never reads `custom_token_auth_style`, so the field is ignored on those servers. Every built-in is confidential except `atlassian-rovo`, which registers its own public client.
 
 **2. For `custom`, read the provider's authorization-server metadata**
 ([RFC 8414](https://www.rfc-editor.org/rfc/rfc8414)). Start from the MCP server's
@@ -814,6 +784,50 @@ Every provider sends the user back to the same `/oauth2/egress/callback`, so the
 Take the value from the `issuer` field of the provider's authorization-server metadata, the same document step 2 above reads. It must be an `https` URL with no query and no fragment. Leave it empty for a provider that publishes no metadata, such as GitHub OAuth apps.
 
 Set it with `registry_management.py egress-configure --expected-issuer <url>`, the `expected_issuer` field of `POST /api/servers/{server_path}/egress-auth` and `PUT /api/servers/{server_path}/oauth-discovery`, or the Expected issuer field in the server edit form.
+
+<a id="atlassian-rovo"></a>
+### Atlassian Rovo MCP (`atlassian-rovo`)
+
+Atlassian's Rovo MCP server (`https://mcp.atlassian.com/v2/mcp`) accepts tokens only from OAuth clients registered with [RFC 7591](https://www.rfc-editor.org/rfc/rfc7591) Dynamic Client Registration (DCR). A classic 3LO app from the Atlassian developer console still signs the user in, but the MCP server rejects its token. Use the `atlassian-rovo` provider for this server. The `atlassian` provider is unchanged: it is the classic 3LO app with the `api.atlassian.com` audience.
+
+Register the server with `https://mcp.atlassian.com/v2/mcp` as its `proxy_pass_url` (see [`cli/examples/atlassian-rovo-mcp-server.json`](../cli/examples/atlassian-rovo-mcp-server.json)), then save its egress configuration with no `client_id` and no `client_secret`:
+
+```jsonc
+{
+  "egress_auth_mode": "oauth_user",
+  "egress_provider": "atlassian-rovo"
+}
+```
+
+In the registry UI, open the server's edit form, set the egress mode to Per-user OAuth (3LO) and pick **Atlassian Rovo MCP (v2, dynamic client registration)** as the provider. The form asks for no client ID or secret. Without the UI, use the API or `registry_management.py egress-configure --mode oauth_user --provider atlassian-rovo`. The form also has a **Register a new client** checkbox, which sends `re_register` (see below).
+
+On save, the gateway registers its own OAuth client:
+
+1. It reads the protected-resource metadata at `https://mcp.atlassian.com/.well-known/oauth-protected-resource/v2/mcp` ([RFC 9728](https://www.rfc-editor.org/rfc/rfc9728)), then the metadata of the authorization server it names ([RFC 8414](https://www.rfc-editor.org/rfc/rfc8414)). It refuses a document whose `resource` is not `https://mcp.atlassian.com/v2/mcp`, whose `issuer` is not the authorization server it asked for, or whose `registration_endpoint` is on another host. It also refuses an authorization server whose origin (scheme, host and port) differs from the origin of the provider's token endpoint, `https://auth.atlassian.com`, so metadata that names some other server cannot steer the registration there.
+2. It checks the requested scopes against the resource's `scopes_supported`. A scope v2 does not offer fails the save with a 400 that names it, before anything is registered.
+3. It registers a public client (`token_endpoint_auth_method: none`) whose only redirect URI is the gateway callback, and stores the `client_id` on the server. Atlassian returns a `client_secret` too. The gateway discards it, because the PKCE verifier is the proof of possession. One client serves every user of the server; only the tokens are per user.
+
+If step 1 or step 3 fails, the save returns a 502 and stores nothing.
+
+**Scopes.** With no `scopes`, the provider uses `read:me`, `read:account`, `offline_access`, `read:jira:agent-interface`, `write:jira:agent-interface` and `search:jira:agent-interface`. v2 uses these granular `agent-interface` scopes and offers no `read:jira-work`, so the classic scope list fails the save. `read:account` is mandatory: an authorize request without it fails only after the user submits consent, with `invalid_request` and "Incorrect request parameters", and nothing says which scope is missing. The gateway therefore adds `read:account` to any scope list you send. Confluence scopes are not in the default. To use the Confluence tools, send the full list you want, Confluence scopes included.
+
+**Parameters the gateway does not send.** There is no `audience`: the token's `aud` is the registered `client_id` plus the user's site and workspace identifiers, not `api.atlassian.com`. There is no RFC 8707 `resource` either, because Atlassian's authorization server rejects it with `invalid_target`. The provider does send `prompt=consent`. The v2 flow works without it; it is kept so the consent screen and its site picker always show, as they do for `atlassian`.
+
+**When the gateway registers a new client.** A later save keeps the stored client while it still fits: the same provider, the same callback URL, and scopes that are a subset of those it was registered with. Switching the server from another provider, changing `EGRESS_OAUTH_CALLBACK_BASE_URL`, or adding a scope registers a new client. To replace a client that still fits, for example one Atlassian revoked, save the configuration with `"re_register": true` (`--re-register` on `registry_management.py egress-configure`). A `client_id` equal to the stored one, which the admin UI sends back on every save, is treated like no `client_id`: the checks above still apply. `re_register` cannot be combined with a `client_id` that differs from the stored one, which is an operator override and is used as-is. After a new registration, each user connects again, because their stored token belongs to the old client.
+
+A user who starts consent before the server has a client gets a 400 that says to save the configuration. A backend-auth discovery identity (`PUT /api/servers/{server_path}/oauth-discovery`) can use `atlassian-rovo`, which is how the registry fills the server's tool list. Discovery has no client of its own to register: it reuses the client that the per-user egress save registered. The discovery consent returns through the same egress callback URL, so that client fits as long as it was registered for `atlassian-rovo` and for scopes that cover the discovery scopes. Save the egress configuration first. Until then, or if the stored client was registered for another provider, callback URL or a narrower scope set, the request returns a 400 that says to save the egress configuration. Then connect the discovery account once at `/oauth2/egress/connect?server=<path>&purpose=discovery`.
+
+If you later register a new egress client (`re_register`, a callback change or wider scopes), the discovery identity keeps the client it copied. Save the discovery identity again to move it to the new client, then connect the discovery account again, because the stored token belongs to the old client.
+
+<a id="atlassian-admin-setup"></a>
+#### Atlassian admin setup
+
+The maintainers found these requirements while deploying this flow. Consent failed until all of them were in place.
+
+- The account that signs in must belong to an Atlassian site with Jira or Confluence. Otherwise the consent screen shows "Your account isn't associated with a supported site".
+- An organization admin must allow the gateway's domain. In Atlassian Administration, open Connectors, then Atlassian MCP server, then Domains, and add `https://<gateway-host>/**` in the organization that owns the site. Otherwise the consent screen shows "Access to this domain is restricted".
+- An account can belong to more than one organization with the same name. Make sure the domain goes into the organization that owns the site.
+- After adding the domain, you may need to delete it and add it again before it takes effect.
 
 ---
 
@@ -910,7 +924,9 @@ Set it with the checkbox in the server edit form, `registry_management.py egress
   The service enforces single-use (replay guard), TTL, the browser binding below,
   and an account-swap guard: the browser that completes the provider redirect
   must hold a live registry session for the same principal that started the
-  consent. A callback with no session cookie, or one that no longer resolves, is
+  consent. A callback with no session cookie, one that no longer resolves, or
+  two session cookies (see [duplicate session
+  cookies](design/cookie-security-design.md#duplicate-session-cookies)) is
   refused (HTTP 401, "you are not signed in") and stores nothing. The callback
   consumes the state's nonce once, right after it decodes the state and before
   any other check, so the code and state left in a refusing browser's history

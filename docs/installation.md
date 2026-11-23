@@ -32,7 +32,6 @@ hf download sentence-transformers/all-MiniLM-L6-v2 --local-dir ${HOME}/mcp-gatew
 # 4. Configure environment - edit .env with your passwords
 nano .env
 # Set: KEYCLOAK_ADMIN_PASSWORD, INITIAL_ADMIN_PASSWORD (must match), KEYCLOAK_DB_PASSWORD
-# Set: SESSION_COOKIE_SECURE=false (for HTTP localhost)
 
 # Generate SECRET_KEY
 SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_urlsafe(64))")
@@ -111,7 +110,6 @@ hf download sentence-transformers/all-MiniLM-L6-v2 --local-dir ${HOME}/mcp-gatew
 # 6. Configure environment - edit .env with your passwords
 nano .env
 # Set: KEYCLOAK_ADMIN_PASSWORD, INITIAL_ADMIN_PASSWORD (must match), KEYCLOAK_DB_PASSWORD
-# Set: SESSION_COOKIE_SECURE=false (for HTTP localhost)
 # For Podman: Set KEYCLOAK_URL=http://localhost:18080
 
 # Generate SECRET_KEY

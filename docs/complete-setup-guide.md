@@ -249,13 +249,9 @@ KEYCLOAK_REALM=mcp-gateway
 KEYCLOAK_CLIENT_ID=mcp-gateway-client
 
 # Session Cookie Security Configuration
-# CRITICAL: These settings must match your deployment environment
-
-# For LOCAL DEVELOPMENT (accessing via http://localhost):
-SESSION_COOKIE_SECURE=false  # MUST be false for HTTP access
-
-# For PRODUCTION with HTTPS (accessing via https://your-domain.com):
-# SESSION_COOKIE_SECURE=true  # Uncomment and set to true
+# The default true works for http://localhost and for HTTPS: the cookie is
+# Secure on HTTPS and never Secure on plain HTTP.
+SESSION_COOKIE_SECURE=true
 
 # Cookie domain (leave empty for most deployments)
 SESSION_COOKIE_DOMAIN=  # Empty = cookie scoped to exact host only
@@ -266,8 +262,7 @@ SESSION_COOKIE_DOMAIN=  # Empty = cookie scoped to exact host only
 **Important**:
 - Remember the passwords you set here - you'll need to use the same ones in Step 5!
 - **CRITICAL**: `KEYCLOAK_ADMIN_PASSWORD` and `INITIAL_ADMIN_PASSWORD` MUST be set to the same value. See Step 5 for details about why this is important.
-- **SESSION_COOKIE_SECURE**: For local development (HTTP), this MUST be `false`. Setting it to `true` will cause login to fail because cookies with `secure=true` are only sent over HTTPS connections.
-- For production deployments with HTTPS, change `SESSION_COOKIE_SECURE=true` before starting services.
+- **SESSION_COOKIE_SECURE**: Leave it at `true`. The gateway marks the session cookie Secure only on HTTPS requests, so a local login over plain HTTP still works.
 
 ### Download Required Embeddings Model
 
@@ -306,7 +301,7 @@ The steps above cover the minimum to boot a local Keycloak stack. This subsectio
 
 | Parameter | Why set it | Default without it |
 |-----------|------------|--------------------|
-| `SESSION_COOKIE_SECURE=true` | Required for any HTTPS/production deployment. | `false` in the example (local HTTP only). |
+| `SESSION_COOKIE_SECURE=true` | Keeps the session cookie off plain HTTP for any HTTPS deployment. | `true`, the application default and the value in `.env.example`. |
 | `TRUSTED_REAL_IP_CIDRS` | Behind an ALB/CloudFront, lets nginx recover the real client IP. | Audit client-IP and per-IP rate limits collapse to the load balancer's IP. Terraform auto-sets it to the VPC CIDR. |
 | `TRUSTED_PROXY_HOPS` | Must match your reverse-proxy depth (e.g. `2` for CloudFront + ALB). | `1`; wrong depth means the trusted-hop selection is wrong. |
 | `OAUTH2_ALLOWED_REDIRECT_URIS` | Exact-match allowlist of login/logout redirect URIs (open-redirect defense). | Falls back to a weaker cookie-domain heuristic that can admit attacker-controlled subdomains. |
@@ -1055,7 +1050,7 @@ docker-compose restart keycloak
 
 #### Login Redirects Back to Login Page
 
-**Most Common Cause**: Incorrect `SESSION_COOKIE_SECURE` setting
+**Common causes**: `SESSION_COOKIE_HOST_PREFIX=true` on plain HTTP, or a `SECRET_KEY` or `SESSION_COOKIE_NAME` that differs between the registry and the auth server. `SESSION_COOKIE_SECURE` does not cause this: the gateway never marks the cookie Secure on plain HTTP.
 
 **Symptoms**:
 - You enter username/password
@@ -1065,20 +1060,15 @@ docker-compose restart keycloak
 **Solution**:
 1. Check your `.env` file:
    ```bash
-   grep SESSION_COOKIE_SECURE .env
+   grep -E 'SESSION_COOKIE_HOST_PREFIX|SESSION_COOKIE_NAME' .env
    ```
 
-2. **For localhost (HTTP) access**:
+2. **For localhost (HTTP) access**, turn the prefix off:
    ```bash
-   # MUST be false
-   SESSION_COOKIE_SECURE=false
+   SESSION_COOKIE_HOST_PREFIX=false
    ```
 
-3. **For HTTPS access**:
-   ```bash
-   # MUST be true
-   SESSION_COOKIE_SECURE=true
-   ```
+3. **Make the shared values agree**: the registry and the auth server need the same `SECRET_KEY` and `SESSION_COOKIE_NAME`.
 
 4. **Verify in browser dev tools**:
    - Open browser dev tools (F12)
@@ -1094,7 +1084,7 @@ docker-compose restart keycloak
    docker compose up -d
    ```
 
-**Why this happens**: Cookies with `secure=true` are ONLY sent over HTTPS connections. If you access via HTTP (like `http://localhost`), the browser will reject the cookie and login will fail.
+**Why this happens**: A browser keeps a `__Host-` cookie only when it arrives Secure over HTTPS, so over `http://localhost` it drops the session cookie. A service whose `SECRET_KEY` or `SESSION_COOKIE_NAME` differs cannot read the cookie the other one set.
 
 #### Authentication Issues
 ```bash

@@ -325,6 +325,15 @@ class TestSettingsEnvironmentVariables:
 class TestSettingsPathsLocalDev:
     """Test path properties in local development mode."""
 
+    @pytest.fixture(autouse=True)
+    def _app_log_dir_unset(self, monkeypatch):
+        """These tests pin the defaults that apply when APP_LOG_DIR is unset.
+
+        tests/conftest.py points APP_LOG_DIR at a temp directory for the whole
+        run, so clear it here.
+        """
+        monkeypatch.delenv("APP_LOG_DIR", raising=False)
+
     @patch("registry.core.config.Path")
     def test_is_local_dev_true(self, mock_path_class) -> None:
         """Test is_local_dev property when /app does not exist."""
@@ -467,6 +476,15 @@ class TestSettingsPathsLocalDev:
 @pytest.mark.core
 class TestSettingsPathsContainer:
     """Test path properties in container/production mode."""
+
+    @pytest.fixture(autouse=True)
+    def _app_log_dir_unset(self, monkeypatch):
+        """These tests pin the defaults that apply when APP_LOG_DIR is unset.
+
+        tests/conftest.py points APP_LOG_DIR at a temp directory for the whole
+        run, so clear it here.
+        """
+        monkeypatch.delenv("APP_LOG_DIR", raising=False)
 
     @patch.object(Settings, "is_local_dev", new_callable=lambda: property(lambda self: False))
     def test_servers_dir_container(self, mock_is_local_dev) -> None:
@@ -880,6 +898,25 @@ class TestSettingsSessionCookie:
         # Assert
         assert settings.session_cookie_secure is True
 
+    @pytest.mark.parametrize(
+        ("secure", "warns"),
+        [("false", True), ("true", False)],
+    )
+    def test_startup_warns_when_the_session_cookie_is_not_secure(
+        self, monkeypatch, caplog, secure: str, warns: bool
+    ) -> None:
+        """SESSION_COOKIE_SECURE=false is logged at startup, since it drops Secure on HTTPS."""
+        # Arrange
+        monkeypatch.setenv("SESSION_COOKIE_SECURE", secure)
+
+        # Act
+        with caplog.at_level("WARNING", logger="registry.core.config"):
+            Settings()
+
+        # Assert
+        warned = any("SESSION_COOKIE_SECURE is false" in r.getMessage() for r in caplog.records)
+        assert warned is warns
+
     def test_session_cookie_domain_none_by_default(self) -> None:
         """Test that session_cookie_domain is None by default."""
         # Act
@@ -901,6 +938,94 @@ class TestSettingsSessionCookie:
         # Assert
         assert settings.session_cookie_domain == ".example.com"
 
+    def test_host_prefix_off_keeps_the_configured_name(self, monkeypatch) -> None:
+        """With SESSION_COOKIE_HOST_PREFIX unset the cookie name is unchanged."""
+        monkeypatch.delenv("SESSION_COOKIE_HOST_PREFIX", raising=False)
+        monkeypatch.delenv("SESSION_COOKIE_NAME", raising=False)
+
+        settings = Settings(_env_file=None)
+
+        assert settings.session_cookie_effective_name == "mcp_gateway_session"
+
+    def _prefixed_settings(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> Settings:
+        """Load settings with SESSION_COOKIE_HOST_PREFIX=true and a configured name."""
+        monkeypatch.setenv("SESSION_COOKIE_HOST_PREFIX", "true")
+        monkeypatch.setenv("SESSION_COOKIE_SECURE", "true")
+        monkeypatch.setenv("SESSION_COOKIE_NAME", "custom_session")
+        monkeypatch.delenv("SESSION_COOKIE_DOMAIN", raising=False)
+        return Settings(_env_file=None)
+
+    def test_host_prefix_on_prefixes_only_the_effective_name(self, monkeypatch) -> None:
+        """SESSION_COOKIE_HOST_PREFIX=true names the cookie __Host-<name>; the setting keeps <name>."""
+        settings = self._prefixed_settings(monkeypatch)
+
+        assert settings.session_cookie_name == "custom_session"
+        assert settings.session_cookie_effective_name == "__Host-custom_session"
+
+    def test_revalidating_prefixed_settings_accepts_their_own_name(self, monkeypatch) -> None:
+        """Settings rebuilt from a prefixed Settings' values load and name the same cookie.
+
+        A configured name that starts with __Host- is refused, so a field that
+        held the effective name would make its own values unloadable.
+        """
+        settings = self._prefixed_settings(monkeypatch)
+
+        again = Settings(_env_file=None, **settings.model_dump())
+
+        assert again.session_cookie_effective_name == settings.session_cookie_effective_name
+
+    @pytest.mark.parametrize(
+        ("secure", "domain", "named"),
+        [
+            pytest.param("false", None, "SESSION_COOKIE_SECURE", id="not-secure"),
+            pytest.param("true", ".example.com", "SESSION_COOKIE_DOMAIN", id="shared-domain"),
+        ],
+    )
+    def test_host_prefix_refuses_to_start_without_its_preconditions(
+        self, monkeypatch, secure, domain, named
+    ) -> None:
+        """The prefix needs a Secure cookie with no Domain, or settings refuse to load.
+
+        The registry and the auth server both build this class at startup.
+        """
+        monkeypatch.setenv("SESSION_COOKIE_HOST_PREFIX", "true")
+        monkeypatch.setenv("SESSION_COOKIE_SECURE", secure)
+        if domain is None:
+            monkeypatch.delenv("SESSION_COOKIE_DOMAIN", raising=False)
+        else:
+            monkeypatch.setenv("SESSION_COOKIE_DOMAIN", domain)
+
+        with pytest.raises(ValueError, match="SESSION_COOKIE_HOST_PREFIX") as raised:
+            Settings(_env_file=None)
+
+        assert named in str(raised.value)
+
+    @pytest.mark.parametrize(
+        "configured",
+        [
+            pytest.param("", id="empty"),
+            pytest.param("__Host-session", id="host-prefix"),
+            pytest.param("__secure-session", id="secure-prefix"),
+            pytest.param("my;session", id="separator"),
+            pytest.param("my session", id="space"),
+        ],
+    )
+    def test_refuses_to_start_with_an_unusable_session_cookie_name(
+        self, monkeypatch, configured
+    ) -> None:
+        """A SESSION_COOKIE_NAME browsers would not keep stops settings from loading.
+
+        The registry and the auth server both build this class at startup.
+        """
+        monkeypatch.setenv("SESSION_COOKIE_NAME", configured)
+        monkeypatch.delenv("SESSION_COOKIE_HOST_PREFIX", raising=False)
+
+        with pytest.raises(ValueError, match="SESSION_COOKIE_NAME"):
+            Settings(_env_file=None)
+
     def test_session_max_age_default(self) -> None:
         """Test that session_max_age_seconds has correct default."""
         # Act
@@ -908,6 +1033,20 @@ class TestSettingsSessionCookie:
 
         # Assert
         assert settings.session_max_age_seconds == 28800  # 8 hours in seconds
+
+    @pytest.mark.parametrize("lifetime", ["0", "-1", "-28800"])
+    def test_refuses_to_start_with_a_non_positive_session_lifetime(
+        self, monkeypatch, lifetime
+    ) -> None:
+        """A SESSION_MAX_AGE_SECONDS of zero or less stops settings from loading.
+
+        The registry and the auth server both build this class at startup, and
+        both take the session lifetime from it.
+        """
+        monkeypatch.setenv("SESSION_MAX_AGE_SECONDS", lifetime)
+
+        with pytest.raises(ValueError, match="SESSION_MAX_AGE_SECONDS"):
+            Settings(_env_file=None)
 
 
 # =============================================================================

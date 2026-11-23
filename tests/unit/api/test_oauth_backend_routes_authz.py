@@ -133,7 +133,7 @@ def _client(user_context: dict[str, Any], mock_server_service: MagicMock):
             patch("registry.health.service.health_service", MagicMock()),
             patch("registry.core.nginx_service.nginx_service", MagicMock()),
         ):
-            yield TestClient(app, cookies={"mcp_gateway_session": "test-session"})
+            yield TestClient(app)
     finally:
         app.dependency_overrides.clear()
 
@@ -503,6 +503,101 @@ class TestDiscoveryDesignationIsNotStolen:
         written = mock_server_service.update_server.await_args.args[1]["oauth_discovery"]
         assert written["user_id"] == "oidc-sub-of-owner"
         assert written["designated_by"] == OWNER
+
+    ROVO_CALLBACK = "https://gw.example.com/oauth2/egress/callback"
+    ROVO_SCOPES = [
+        "read:me",
+        "read:account",
+        "offline_access",
+        "read:jira:agent-interface",
+        "write:jira:agent-interface",
+        "search:jira:agent-interface",
+    ]
+
+    def _rovo_put(self, mock_server_service, server_record, egress, scopes=None):
+        """PUT a first atlassian-rovo designation against a server with `egress` stored."""
+        server_record["oauth_discovery"] = None
+        server_record["auth_scheme"] = "none"
+        server_record["egress_auth_mode"] = "oauth_user" if egress else "none"
+        server_record["egress_oauth"] = egress
+        ctx = _ctx(OWNER)
+        ctx["auth_method"] = "oauth2"
+        ctx["egress_user"] = "oidc-sub-of-owner"
+        with (
+            patch(
+                "registry.api.egress_auth_routes._callback_url",
+                return_value=self.ROVO_CALLBACK,
+            ),
+            _client(ctx, mock_server_service) as client,
+        ):
+            return client.put(
+                self.URL,
+                json={"provider": "atlassian-rovo", "client_id": "", "scopes": scopes or []},
+            )
+
+    def _rovo_egress(self, **overrides):
+        """An egress config as the per-user egress save stores it after registration."""
+        return {
+            "provider": "atlassian-rovo",
+            "client_id": "dcr-client-1",
+            "scopes": list(self.ROVO_SCOPES),
+            "dcr_provider": "atlassian-rovo",
+            "dcr_redirect_uri": self.ROVO_CALLBACK,
+            "dcr_scopes": list(self.ROVO_SCOPES),
+            **overrides,
+        }
+
+    def test_a_dcr_provider_without_an_egress_client_is_refused(
+        self, mock_server_service, server_record
+    ):
+        """atlassian-rovo needs the client egress registers; with none yet, 400 and store nothing."""
+        resp = self._rovo_put(mock_server_service, server_record, egress=None)
+        assert resp.status_code == 400, resp.text
+        assert "per-user egress configuration" in resp.json()["detail"]
+        mock_server_service.update_server.assert_not_awaited()
+
+    def test_a_dcr_provider_reuses_the_egress_client(self, mock_server_service, server_record):
+        """The discovery config carries the egress client_id, the defaults and no secret."""
+        resp = self._rovo_put(mock_server_service, server_record, egress=self._rovo_egress())
+        assert resp.status_code == 200, resp.text
+        written = mock_server_service.update_server.await_args.args[1]["oauth_discovery"]
+        assert written["oauth"]["provider"] == "atlassian-rovo"
+        assert written["oauth"]["client_id"] == "dcr-client-1"
+        assert written["oauth"]["scopes"] == self.ROVO_SCOPES
+        assert not written["oauth"].get("client_secret_encrypted")
+        assert written["oauth"]["dcr_redirect_uri"] == self.ROVO_CALLBACK
+        assert written["user_id"] == "oidc-sub-of-owner"
+
+    @pytest.mark.parametrize(
+        "overrides",
+        [
+            {"provider": "custom", "dcr_provider": "custom"},
+            {"dcr_redirect_uri": "https://old-gw.example.com/oauth2/egress/callback"},
+        ],
+    )
+    def test_an_egress_client_that_does_not_fit_is_refused(
+        self, mock_server_service, server_record, overrides
+    ):
+        """Another provider's client, or one registered for another callback, is not reused."""
+        resp = self._rovo_put(
+            mock_server_service, server_record, egress=self._rovo_egress(**overrides)
+        )
+        assert resp.status_code == 400, resp.text
+        mock_server_service.update_server.assert_not_awaited()
+
+    def test_discovery_scopes_beyond_the_registered_ones_are_refused(
+        self, mock_server_service, server_record
+    ):
+        """Atlassian may limit a client to its registered scopes, so wider ones get a 400."""
+        resp = self._rovo_put(
+            mock_server_service,
+            server_record,
+            egress=self._rovo_egress(),
+            scopes=[*self.ROVO_SCOPES, "read:confluence:agent-interface"],
+        )
+        assert resp.status_code == 400, resp.text
+        assert "narrower scope set" in resp.json()["detail"]
+        mock_server_service.update_server.assert_not_awaited()
 
     def test_the_designee_re_saving_refreshes_their_own_designation(
         self, mock_server_service, server_record

@@ -1,0 +1,105 @@
+suite: session cookie __Host- prefix secret rendering
+release:
+  name: test
+  namespace: default
+templates:
+  - secret.yaml
+tests:
+  - it: leaves the prefix off and keeps the parent-domain cookie by default
+    set:
+      app:
+        secretKey: "test-key-not-for-prod"  # pragma: allowlist secret
+      egressAuth:
+        markerSecret: "test-marker-not-for-prod"  # pragma: allowlist secret
+      global:
+        domain: example.com
+        authProvider:
+          type: keycloak
+    asserts:
+      - equal:
+          path: data.SESSION_COOKIE_HOST_PREFIX
+          value: "false"
+          decodeBase64: true
+      - equal:
+          path: data.SESSION_COOKIE_DOMAIN
+          value: ".example.com"
+          decodeBase64: true
+
+  - it: turns the prefix on with a host-only, Secure cookie
+    set:
+      app:
+        secretKey: "test-key-not-for-prod"  # pragma: allowlist secret
+        sessionCookieHostPrefix: true
+      egressAuth:
+        markerSecret: "test-marker-not-for-prod"  # pragma: allowlist secret
+      global:
+        domain: example.com
+        authProvider:
+          type: keycloak
+    asserts:
+      - equal:
+          path: data.SESSION_COOKIE_HOST_PREFIX
+          value: "true"
+          decodeBase64: true
+      - equal:
+          path: data.SESSION_COOKIE_DOMAIN
+          value: ""
+          decodeBase64: true
+      - equal:
+          path: data.SESSION_COOKIE_SECURE
+          value: "true"
+          decodeBase64: true
+
+  - it: refuses the prefix with a shared cookie domain
+    set:
+      app:
+        secretKey: "test-key-not-for-prod"  # pragma: allowlist secret
+        sessionCookieHostPrefix: true
+        sessionCookieDomain: ".example.com"
+      egressAuth:
+        markerSecret: "test-marker-not-for-prod"  # pragma: allowlist secret
+      global:
+        domain: example.com
+        authProvider:
+          type: keycloak
+    asserts:
+      - failedTemplate:
+          errorPattern: "app.sessionCookieHostPrefix requires app.sessionCookieDomain to be empty"
+
+  - it: refuses the prefix on a non-Secure cookie
+    set:
+      app:
+        secretKey: "test-key-not-for-prod"  # pragma: allowlist secret
+        sessionCookieHostPrefix: true
+        sessionCookieSecure: false
+      egressAuth:
+        markerSecret: "test-marker-not-for-prod"  # pragma: allowlist secret
+      global:
+        domain: example.com
+        authProvider:
+          type: keycloak
+    asserts:
+      - failedTemplate:
+          errorPattern: "app.sessionCookieHostPrefix requires app.sessionCookieSecure=true"
+
+  - it: takes the prefix from global.sessionCookieHostPrefix over the app key
+    set:
+      app:
+        secretKey: "test-key-not-for-prod"  # pragma: allowlist secret
+        sessionCookieHostPrefix: false
+      egressAuth:
+        markerSecret: "test-marker-not-for-prod"  # pragma: allowlist secret
+      global:
+        domain: example.com
+        sessionCookieHostPrefix: true
+        authProvider:
+          type: keycloak
+    asserts:
+      - equal:
+          path: data.SESSION_COOKIE_HOST_PREFIX
+          value: "true"
+          decodeBase64: true
+      - equal:
+          path: data.SESSION_COOKIE_DOMAIN
+          value: ""
+          decodeBase64: true

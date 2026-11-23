@@ -76,7 +76,12 @@ from ..services.lifecycle_events import (
     user_can_change_lifecycle_status,
 )
 from ..services.registration_gate_service import check_registration_gate
-from ..services.visibility import gateway_routable_agent_interfaces
+from ..services.security_pending import tags_after_passing_scan
+from ..services.visibility import (
+    can_skip_read_visibility,
+    gateway_routable_agent_interfaces,
+    redact_scan_result_for_non_admin,
+)
 from ..services.webhook_service import send_registration_webhook
 from ..utils.group_names import groups_intersect
 from ..utils.metadata import (
@@ -113,6 +118,30 @@ logger = logging.getLogger(__name__)
 
 
 router = APIRouter()
+
+
+async def _clear_agent_security_pending(
+    path: str,
+    previous_scan: dict | None,
+) -> bool:
+    """Remove a scanner-set security-pending tag after a passing rescan (issue #2032).
+
+    Args:
+        path: The agent path.
+        previous_scan: The latest stored scan result from before this rescan.
+
+    Returns:
+        True when the tag was removed.
+    """
+    agent = await agent_service.get_agent_info(path)
+    if not agent:
+        return False
+    new_tags = tags_after_passing_scan(agent.tags, previous_scan)
+    if new_tags is None:
+        return False
+    await agent_service.update_agent(path, {"tags": new_tags})
+    logger.info(f"Removed 'security-pending' from agent {path} after a passing rescan")
+    return True
 
 
 async def _perform_agent_security_scan_on_registration(
@@ -1026,12 +1055,37 @@ def _check_agent_lifecycle_status_permission(
     )
 
 
+def _filter_agents_for_read(
+    agents: list[AgentCard],
+    user_context: dict[str, Any],
+) -> list[AgentCard]:
+    """Filter agents for a READ path (list, detail, rating, discovery).
+
+    Admins and holders of the read-only ``view_all`` permission (issue #2099)
+    see every agent. Everyone else gets exactly ``_filter_agents_by_access``.
+
+    Args:
+        agents: List of agent cards
+        user_context: User context from auth
+
+    Returns:
+        The agents this caller may see.
+    """
+    if can_skip_read_visibility(user_context):
+        return list(agents)
+    return _filter_agents_by_access(agents, user_context)
+
+
 def _filter_agents_by_access(
     agents: list[AgentCard],
     user_context: dict[str, Any],
 ) -> list[AgentCard]:
     """
     Filter agents based on user access permissions.
+
+    Used directly by WRITE and side-effect paths (rate, health check), which
+    must not honor ``view_all``. Read paths go through
+    ``_filter_agents_for_read`` instead.
 
     Args:
         agents: List of agent cards
@@ -1519,9 +1573,10 @@ async def list_agents(
     is_admin = user_context.get("is_admin", False) if user_context else False
     accessible_agent_list = user_context.get("accessible_agents", []) if user_context else []
     has_field_filters = bool(query or enabled_only or visibility or allowed_groups)
-    # Admins skip all filtering. Non-admin users with "all" in accessible_agents
-    # still need _filter_agents_by_access to enforce group-restricted visibility.
-    is_unrestricted = is_admin
+    # Admins and view_all holders (issue #2099) skip all filtering. Non-admin
+    # users with "all" in accessible_agents still need the visibility filter to
+    # enforce group-restricted and private visibility.
+    is_unrestricted = is_admin or can_skip_read_visibility(user_context)
 
     # Dual-path pagination:
     # - Fast path: DB-level skip/limit for unrestricted users without field filters
@@ -1537,7 +1592,7 @@ async def list_agents(
         if is_unrestricted:
             accessible_agents = all_agents
         else:
-            accessible_agents = _filter_agents_by_access(all_agents, user_context)
+            accessible_agents = _filter_agents_for_read(all_agents, user_context)
 
     # Bulk-load security-scan summaries once (path -> {scan_failed, severity counts})
     # so each card colours its shield icon from the list payload instead of fetching
@@ -1808,7 +1863,7 @@ async def get_agent_rating(
             detail=f"Agent not found at path '{path}'",
         )
 
-    accessible = _filter_agents_by_access([agent_card], user_context)
+    accessible = _filter_agents_for_read([agent_card], user_context)
     if not accessible:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -1960,7 +2015,9 @@ async def get_agent_security_scan(
     if not user_context["is_admin"]:
         from ..services.visibility import user_can_access_agent_from_doc
 
-        if not user_can_access_agent_from_doc(agent_info.model_dump(), user_context):
+        if not user_can_access_agent_from_doc(
+            agent_info.model_dump(), user_context, honor_view_all=True
+        ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You do not have access to this agent",
@@ -1977,7 +2034,7 @@ async def get_agent_security_scan(
             "The agent may not have been scanned yet.",
         )
 
-    return scan_result
+    return redact_scan_result_for_non_admin(scan_result, user_context)
 
 
 @router.post("/agents/{path:path}/rescan")
@@ -2038,6 +2095,8 @@ async def rescan_agent(
         # Trigger security scan
         from ..services.agent_scanner import agent_scanner_service
 
+        # Read before scanning: the new result replaces it as the latest.
+        previous_scan = await agent_scanner_service.get_scan_result(path)
         scan_result = await agent_scanner_service.scan_agent(
             agent_card=agent_card_dict,
             agent_path=path,
@@ -2045,6 +2104,8 @@ async def rescan_agent(
             api_key=None,  # Use default API key from config
             timeout=None,  # Use default timeout from config
         )
+        if scan_result.is_safe:
+            await _clear_agent_security_pending(path, previous_scan)
 
         # Return the full scan result including raw_output for detailed findings
         return scan_result.model_dump(mode="json")
@@ -2434,7 +2495,7 @@ async def get_agent(
             detail=f"Agent not found at path '{path}'",
         )
 
-    accessible = _filter_agents_by_access([agent_card], user_context)
+    accessible = _filter_agents_for_read([agent_card], user_context)
 
     if not accessible:
         logger.warning(
@@ -2989,7 +3050,7 @@ async def discover_agents_by_skills(
     logger.info(f"User {user_context['username']} discovering agents with skills: {skills}")
 
     all_agents = await agent_service.get_all_agents()
-    accessible_agents = _filter_agents_by_access(all_agents, user_context)
+    accessible_agents = _filter_agents_for_read(all_agents, user_context)
 
     matched_agents = []
     required_skills = set(s.lower() for s in skills)
@@ -3138,7 +3199,7 @@ async def discover_agents_semantic(
             if not agent_card:
                 continue
 
-            if not _filter_agents_by_access([agent_card], user_context):
+            if not _filter_agents_for_read([agent_card], user_context):
                 continue
 
             # Return full agent card with relevance score

@@ -190,15 +190,18 @@ ssrf_allowed_hosts = "flight-booking-agent.mcp-gateway-v2.local"
 ssrf_allowed_cidrs = ""
 ```
 
-**Helm / EKS (`values.yaml`, stack chart uses `registry.app.*`):**
+**Helm / EKS (`values.yaml`, stack chart):**
 
 ```yaml
+global:
+  ssrfAllowedCidrs: "10.100.0.0/16" # reaches registry, auth-server and mcpgw
 registry:
   app:
     a2aReverseProxyEnabled: true
     ssrfAllowedHosts: ""
-    ssrfAllowedCidrs: "10.100.0.0/16"
 ```
+
+A standalone registry chart takes the range as `app.ssrfAllowedCidrs` instead.
 
 ### How discovery works (card rewrite)
 

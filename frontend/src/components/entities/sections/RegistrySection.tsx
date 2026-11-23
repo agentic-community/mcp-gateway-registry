@@ -53,8 +53,8 @@ interface RegistrySectionProps<T extends { path: string }> {
 }
 
 const LOCAL_HEADER_BG =
-  'bg-gradient-to-r from-green-50 to-emerald-50 dark:from-green-900/20 dark:to-emerald-900/20 hover:from-green-100 hover:to-emerald-100 dark:hover:from-green-900/30 dark:hover:to-emerald-900/30';
-const LOCAL_TITLE = 'text-green-700 dark:text-green-300';
+  'bg-gradient-to-r from-success-50 to-success-50 dark:from-success-900/20 dark:to-success-900/20 hover:from-success-100 hover:to-success-100 dark:hover:from-success-900/30 dark:hover:to-success-900/30';
+const LOCAL_TITLE = 'text-success-700 dark:text-success-300';
 
 /**
  * One registry group in the server/agent collections: an optional collapsible
@@ -140,7 +140,7 @@ function RegistrySection<T extends { path: string }>({
       </button>
 
       {expanded && (
-        <div className="p-4 bg-white dark:bg-gray-800 overflow-visible">{grid}</div>
+        <div className="p-4 bg-canvas overflow-visible">{grid}</div>
       )}
     </div>
   );

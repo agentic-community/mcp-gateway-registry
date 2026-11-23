@@ -1,0 +1,56 @@
+name: openapi-mcp container tests
+
+# servers/openapi-mcp is its own uv project with its own lock, so the root
+# test suite does not collect its tests. This runs them in the container's
+# environment, with the registry modules the image copies (url_guard and the
+# sync-token verifier) on the path, as in the image.
+
+on:
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'servers/openapi-mcp/**'
+      - 'registry/utils/url_guard.py'
+      - 'registry/utils/branding_files.py'
+      - 'registry/common/log_redaction.py'
+      - 'registry/common/secret_key.py'
+      - 'registry/exceptions.py'
+      - 'registry/auth/openapi_mcp_sync.py'
+      - '.github/workflows/openapi-mcp-test.yml'
+  push:
+    branches: [main, develop]
+    paths:
+      - 'servers/openapi-mcp/**'
+      - 'registry/utils/url_guard.py'
+      - 'registry/auth/openapi_mcp_sync.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: openapi-mcp unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+
+      - name: Run tests
+        working-directory: servers/openapi-mcp
+        run: |
+          # Re-resolve under the lock's own quarantine cutoff, as the image build does.
+          cutoff=$(awk '/^\[options\]/{o=1;next} /^\[/{o=0} o&&/^exclude-newer[[:space:]]*=/{gsub(/.*=[[:space:]]*"|"[[:space:]]*$/,"");print;exit}' uv.lock)
+          if [ -n "$cutoff" ]; then export UV_EXCLUDE_NEWER="$cutoff"; fi
+          uv sync --locked --python 3.14
+          uv run --no-sync python -m pytest tests/ -q

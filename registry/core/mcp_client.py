@@ -14,6 +14,7 @@ import re
 # stack is httpx2, a separate package from the httpx the rest of the registry
 # uses.
 import ssl
+from collections.abc import Callable
 from typing import (
     Any,
     Literal,
@@ -22,6 +23,7 @@ from typing import (
 
 import httpx2
 from mcp import Client
+from mcp.client.extension import ClientExtension
 from mcp.client.sse import sse_client
 from mcp.client.streamable_http import streamable_http_client
 from mcp.types import (
@@ -31,8 +33,14 @@ from mcp.types import (
 from pydantic import ValidationError
 
 from ..common.log_redaction import redact_url
+from ..utils.tool_annotations import tool_metadata_fields
 from .backend_oauth import RESOLVED_BEARER_KEY as _BACKEND_OAUTH_TOKEN_KEY
 from .backend_oauth import with_bearer as _with_backend_oauth
+from .mcp_apps import (
+    MCP_APPS_EXTENSION_ID,
+    MCP_APPS_MIME_TYPE,
+    tool_ui_fields,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,40 +67,78 @@ MCP_DISCOVERY_CLIENT_VERSION: str = "2.0.0"
 _TransportMode = Literal["auto", "legacy"]
 
 
+class _McpAppsUiExtension(ClientExtension):
+    """Declares MCP Apps support when the registry connects to a server.
+
+    A server that follows the MCP Apps spec lists its UI tools only to a client
+    that declares this extension. Kept here, not in mcp_apps.py, because it
+    needs the MCP SDK and mcp_apps.py must stay importable without it.
+    """
+
+    identifier = MCP_APPS_EXTENSION_ID
+
+    def settings(self) -> dict[str, Any]:
+        """Advertise the one page format the spec defines."""
+        return {"mimeTypes": [MCP_APPS_MIME_TYPE]}
+
+
+def _mcp_apps_client_extensions() -> list[ClientExtension]:
+    """Return the client extensions the registry declares during discovery."""
+    return [_McpAppsUiExtension()]
+
+
+def _mcp_guard_profile(
+    url: str,
+    server_info: dict[str, Any] | None = None,
+) -> Any:
+    """Select the SSRF profile for an MCP connection to ``url``.
+
+    The one place the profile is chosen, so the pre-connection check and the
+    pinned transport an SDK connection runs on always agree.
+
+    Args:
+        url: The MCP endpoint / base URL about to be connected to.
+        server_info: The registered server, when the caller has it.
+
+    Returns:
+        The ``url_guard`` profile to validate and pin this connection under.
+
+    Raises:
+        UrlValidationError: The URL does not match the exact built-in identity
+            its registered target claims.
+    """
+    from ..utils.url_guard import proxy_profile_for_entity_target
+
+    identity = server_info or {}
+    entity_path = identity.get("path") or identity.get("service_path")
+    registered_target = identity.get("proxy_pass_url")
+    return proxy_profile_for_entity_target("mcp_server", entity_path, registered_target, url)
+
+
 def _assert_mcp_url_fetchable(
     url: str,
     server_info: dict[str, Any] | None = None,
 ) -> bool:
     """Fail-closed SSRF check before an MCP SDK connection is opened.
 
-    The MCP SDK transports (``streamable_http_client`` / ``sse_client``) run on
-    their own httpx2 client, so they cannot use the pinned guarded transport that
-    protects the registry's direct fetches. This helper re-validates the target
-    against the proxy profile (public-only unless the operator allowlisted the
-    internal target) immediately before a connection is opened, so a
-    ``proxy_pass_url`` that resolves to a private/metadata address is rejected
-    *before* any decrypted credential is built or sent. It resolves DNS at call
-    time, closing the window between registration-time validation and this
-    fetch. Any validation error results in refusal (returns ``False``).
+    This is the early refusal that keeps a credential from being built for a
+    blocked destination. It is not the only control: the SDK connection itself
+    runs on a pinned transport (``_guarded_http_client``), which re-validates and
+    pins the connect IP for the request and every redirect hop, so a hostname
+    that rebinds between this check and the connect is refused there.
 
     Args:
         url: The MCP endpoint / base URL about to be connected to.
+        server_info: The registered server, when the caller has it.
 
     Returns:
         True if the URL passed validation and may be connected to, else False.
     """
     from ..exceptions import UrlValidationError
-    from ..utils.url_guard import (
-        proxy_profile_for_entity_target,
-        validate_url,
-    )
+    from ..utils.url_guard import validate_url
 
-    identity = server_info or {}
-    entity_path = identity.get("path") or identity.get("service_path")
-    registered_target = identity.get("proxy_pass_url")
     try:
-        profile = proxy_profile_for_entity_target("mcp_server", entity_path, registered_target, url)
-        validate_url(url, profile=profile)
+        validate_url(url, profile=_mcp_guard_profile(url, server_info))
         return True
     except UrlValidationError:
         logger.warning(
@@ -184,7 +230,9 @@ async def _discover_tools(
     In "auto" mode the SDK sends server/discover first. A 2026-07-28 server
     answers it and gets stateless requests. A handshake-era server does not,
     so the SDK falls back to initialize. Response caching is off, because
-    discovery must see the server's current list.
+    discovery must see the server's current list. The client declares MCP Apps
+    support, because a server that follows that spec hides its UI tools from a
+    client that does not.
 
     Args:
         transport: An SDK transport context manager, not yet entered.
@@ -206,6 +254,7 @@ async def _discover_tools(
             name=MCP_DISCOVERY_CLIENT_NAME,
             version=MCP_DISCOVERY_CLIENT_VERSION,
         ),
+        extensions=_mcp_apps_client_extensions(),
     )
     async with asyncio.timeout(MCP_DISCOVERY_TIMEOUT_SECONDS):
         async with client:
@@ -221,16 +270,30 @@ def _tls_context() -> ssl.SSLContext:
     return egress_ssl_context()
 
 
-def _verified_http_client(
+def _guarded_http_client(
+    profile: Any,
     headers: dict[str, str] | None = None,
     timeout: httpx2.Timeout | None = None,
     auth: httpx2.Auth | None = None,
 ) -> httpx2.AsyncClient:
-    """The SDK's client factory, with the registry's TLS trust.
+    """An httpx2 client for an SDK connection, pinned under ``profile``.
 
-    Same defaults as mcp.shared._httpx_utils.create_mcp_http_client; only the
-    certificate trust differs (see egress_ssl_context).
+    Same defaults as mcp.shared._httpx_utils.create_mcp_http_client. Two things
+    differ: certificate trust comes from the registry (see egress_ssl_context),
+    and the transport validates every request and redirect hop, resolves the host
+    once, and connects only to that validated IP.
+
+    Args:
+        profile: The ``url_guard`` profile to enforce.
+        headers: Headers to send on every request.
+        timeout: Client timeouts; the SDK defaults when omitted.
+        auth: An httpx2 auth flow, when the SDK supplies one.
+
+    Returns:
+        An unopened ``httpx2.AsyncClient``; use it as an async context manager.
     """
+    from ..utils.url_guard_httpx2 import GuardedHttpx2AsyncTransport
+
     if timeout is None:
         timeout = httpx2.Timeout(
             SDK_DEFAULT_TIMEOUT_SECONDS,
@@ -240,13 +303,29 @@ def _verified_http_client(
         headers=headers,
         timeout=timeout,
         auth=auth,
-        verify=_tls_context(),
+        transport=GuardedHttpx2AsyncTransport(guard_profile=profile, verify=_tls_context()),
     )
+
+
+def _guarded_client_factory(
+    profile: Any,
+) -> Callable[..., httpx2.AsyncClient]:
+    """Bind ``profile`` into the ``httpx_client_factory`` the SSE transport takes."""
+
+    def _factory(
+        headers: dict[str, str] | None = None,
+        timeout: httpx2.Timeout | None = None,
+        auth: httpx2.Auth | None = None,
+    ) -> httpx2.AsyncClient:
+        return _guarded_http_client(profile, headers=headers, timeout=timeout, auth=auth)
+
+    return _factory
 
 
 async def _discover_streamable_http(
     mcp_url: str,
     headers: dict[str, str],
+    server_info: dict[str, Any] | None = None,
 ) -> tuple[list[Tool], Implementation | None]:
     """Discover tools over Streamable HTTP, speaking either protocol era.
 
@@ -258,6 +337,7 @@ async def _discover_streamable_http(
         mcp_url: The exact MCP endpoint, already checked by
             _assert_mcp_url_fetchable.
         headers: Headers built for this exact destination.
+        server_info: The registered server, which decides the SSRF profile.
 
     Returns:
         The tools and the server identity.
@@ -266,11 +346,8 @@ async def _discover_streamable_http(
         MCP_HTTP_READ_TIMEOUT_SECONDS,
         connect=MCP_HTTP_CONNECT_TIMEOUT_SECONDS,
     )
-    async with httpx2.AsyncClient(
-        headers=headers,
-        timeout=timeout,
-        verify=_tls_context(),
-    ) as http_client:
+    profile = _mcp_guard_profile(mcp_url, server_info)
+    async with _guarded_http_client(profile, headers=headers, timeout=timeout) as http_client:
         transport = streamable_http_client(mcp_url, http_client=http_client)
         return await _discover_tools(transport, mode="auto")
 
@@ -278,6 +355,7 @@ async def _discover_streamable_http(
 async def _discover_sse(
     sse_url: str,
     headers: dict[str, str],
+    server_info: dict[str, Any] | None = None,
 ) -> tuple[list[Tool], Implementation | None]:
     """Discover tools over the deprecated HTTP+SSE transport (handshake only).
 
@@ -289,7 +367,11 @@ async def _discover_sse(
     Returns:
         The tools and the server identity.
     """
-    transport = sse_client(sse_url, headers=headers, httpx_client_factory=_verified_http_client)
+    transport = sse_client(
+        sse_url,
+        headers=headers,
+        httpx_client_factory=_guarded_client_factory(_mcp_guard_profile(sse_url, server_info)),
+    )
     return await _discover_tools(transport, mode="legacy")
 
 
@@ -435,6 +517,16 @@ def _build_headers_for_server(
         destination_url,
         server_info,
     )
+    if destination_safe:
+        from ..services.openapi_ownership import admission_headers
+
+        headers.update(
+            admission_headers(
+                server_info.get("path") or server_info.get("service_path"),
+                server_info.get("proxy_pass_url"),
+                destination_url,
+            )
+        )
     if has_server_values and not destination_safe:
         logger.warning(
             f"MCP headers withheld service={server_info.get('service_path') or server_info.get('path') or 'unknown'} destination={redact_url(destination_url or '')} reason=URL validation failed",
@@ -588,16 +680,21 @@ async def detect_server_transport(base_url: str) -> str:
         logger.debug(f"Server URL {redact_url(base_url)} already has MCP endpoint")
         return "streamable-http"
 
-    # Fail closed on SSRF before probing the target with the (unpinnable) SDK
-    # client. Both probe endpoints share this host, so validating base_url once
-    # covers them. Default to streamable-http (no connection) when blocked.
+    # Fail closed on SSRF before probing the target. Both probe endpoints share
+    # this host, so validating base_url once covers them. Default to
+    # streamable-http (no connection) when blocked. The probes then run on a
+    # pinned client, so a rebind after this check is refused at connect time.
     if not _assert_mcp_url_fetchable(base_url):
         return "streamable-http"
+    profile = _mcp_guard_profile(base_url)
 
     # Test streamable-http first (default preference)
     try:
         mcp_url = base_url.rstrip("/") + "/mcp/"
-        async with streamable_http_client(mcp_url) as connection:
+        async with (
+            _guarded_http_client(profile) as http_client,
+            streamable_http_client(mcp_url, http_client=http_client),
+        ):
             logger.debug(f"Server at {redact_url(base_url)} supports streamable-http transport")
             return "streamable-http"
     except Exception as e:
@@ -608,7 +705,7 @@ async def detect_server_transport(base_url: str) -> str:
     # Fallback to SSE
     try:
         sse_url = base_url.rstrip("/") + "/sse"
-        async with sse_client(sse_url) as connection:
+        async with sse_client(sse_url, httpx_client_factory=_guarded_client_factory(profile)):
             logger.debug(f"Server at {redact_url(base_url)} supports SSE transport")
             return "sse"
     except Exception as e:
@@ -694,7 +791,7 @@ async def _get_tools_streamable_http(base_url: str, server_info: dict = None) ->
         headers = _build_headers_for_server(server_info, destination_url=mcp_url)
 
         try:
-            tools, _ = await _discover_streamable_http(mcp_url, headers)
+            tools, _ = await _discover_streamable_http(mcp_url, headers, server_info)
             return _extract_tool_details(tools)
         except Exception as e:
             _log_discovery_failure("Streamable-HTTP connection failed", mcp_url, e)
@@ -723,7 +820,7 @@ async def _get_tools_streamable_http(base_url: str, server_info: dict = None) ->
             return None
         headers = _build_headers_for_server(server_info, destination_url=mcp_url)
         try:
-            tools, _ = await _discover_streamable_http(mcp_url, headers)
+            tools, _ = await _discover_streamable_http(mcp_url, headers, server_info)
             return _extract_tool_details(tools)
         except Exception as e:
             _log_discovery_failure("Streamable-HTTP connection failed", base_url, e)
@@ -738,7 +835,7 @@ async def _get_tools_streamable_http(base_url: str, server_info: dict = None) ->
             headers = _build_headers_for_server(server_info, destination_url=mcp_url)
             try:
                 logger.info(f"Trying streamable-http endpoint={redact_url(mcp_url)}")
-                tools, _ = await _discover_streamable_http(mcp_url, headers)
+                tools, _ = await _discover_streamable_http(mcp_url, headers, server_info)
                 logger.info(f"MCP connection succeeded endpoint={redact_url(mcp_url)}")
                 return _extract_tool_details(tools)
 
@@ -804,7 +901,7 @@ async def _get_tools_sse(base_url: str, server_info: dict = None) -> list[dict] 
         httpx2.AsyncClient.request = patched_request  # type: ignore[method-assign]  # legacy SSE monkeypatch
 
         try:
-            tools, _ = await _discover_sse(mcp_server_url, headers)
+            tools, _ = await _discover_sse(mcp_server_url, headers, server_info)
             return _extract_tool_details(tools)
         finally:
             httpx2.AsyncClient.request = original_request  # type: ignore[method-assign]  # restore monkeypatch
@@ -832,7 +929,9 @@ def _extract_tool_details(
         tools: Tools returned by tools/list, across all pages.
 
     Returns:
-        One dict per tool with name, description, parsed_description, schema.
+        One dict per tool with name, description, parsed_description, schema,
+        plus ui_resource_uri and ui_visibility for a tool with an MCP App page,
+        and title, annotations and outputSchema when the server sent them.
     """
     tool_details_list: list[dict[str, Any]] = []
 
@@ -896,17 +995,20 @@ def _extract_tool_details(
 
             tool_schema = tool.input_schema or {}
 
-            tool_details_list.append(
-                {
-                    "name": tool_name,
-                    "description": tool_desc or "",
-                    "parsed_description": parsed_desc,
-                    "schema": tool_schema,
-                    # The MCP field name, which the virtual-server mapping, the tool
-                    # catalog and search read. "schema" stays for ToolDescription.
-                    "inputSchema": tool_schema,
-                }
-            )
+            tool_detail = {
+                "name": tool_name,
+                "description": tool_desc or "",
+                "parsed_description": parsed_desc,
+                "schema": tool_schema,
+                # The MCP field name, which the virtual-server mapping, the tool
+                # catalog and search read. "schema" stays for ToolDescription.
+                "inputSchema": tool_schema,
+            }
+            # MCP Apps: ui_resource_uri and ui_visibility, only for a tool with a page.
+            tool_detail.update(tool_ui_fields(tool))
+            # title, annotations and outputSchema, only when the server sent them.
+            tool_detail.update(tool_metadata_fields(tool))
+            tool_details_list.append(tool_detail)
 
     logger.info(f"Successfully retrieved tool details count={len(tool_details_list):d}")
     return tool_details_list
@@ -996,8 +1098,9 @@ async def get_mcp_connection_result(
     # target that resolves to a private/metadata address must never receive the
     # server's decrypted backend credentials. Validate BOTH override endpoint
     # fields (mcp_endpoint and sse_endpoint) here because either one can be the
-    # actual connection target below depending on the negotiated transport; the
-    # SDK client is unpinnable, so this is the fetch-time re-validation.
+    # actual connection target below depending on the negotiated transport. This
+    # early check keeps a credential from being built for a blocked target; the
+    # SDK connection itself then runs on a pinned transport (_guarded_http_client).
     if not _assert_mcp_url_fetchable(explicit_endpoint or base_url, server_info):
         return None
     if explicit_sse_endpoint and not _assert_mcp_url_fetchable(explicit_sse_endpoint, server_info):
@@ -1039,7 +1142,9 @@ async def get_mcp_connection_result(
 
     try:
         if transport == "streamable-http":
-            sdk_tools, implementation = await _discover_streamable_http(mcp_url, headers)
+            sdk_tools, implementation = await _discover_streamable_http(
+                mcp_url, headers, server_info
+            )
             return _connection_result(base_url, sdk_tools, implementation)
 
         elif transport == "sse":
@@ -1053,7 +1158,7 @@ async def get_mcp_connection_result(
                 return None
             headers = _build_headers_for_server(server_info, destination_url=sse_url)
 
-            sdk_tools, implementation = await _discover_sse(sse_url, headers)
+            sdk_tools, implementation = await _discover_sse(sse_url, headers, server_info)
             return _connection_result(base_url, sdk_tools, implementation)
 
         else:

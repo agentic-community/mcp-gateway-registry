@@ -44,6 +44,11 @@ interface User {
   provider?: string;
   can_modify_servers?: boolean;
   is_admin?: boolean;
+  // Read-only admin (issue #2099): sees every asset, changes nothing.
+  view_all?: boolean;
+  // Tool access listing (issue #2102): true when TOOL_ACCESS_OWNER_VIEW=owned,
+  // so owners who are not admins see their own servers' tools.
+  tool_access_owner_view?: boolean;
   ui_permissions?: UIPermissions;
 }
 
@@ -108,6 +113,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         provider: userData.provider,
         can_modify_servers: userData.can_modify_servers || false,
         is_admin: userData.is_admin || false,
+        view_all: userData.view_all === true,
+        tool_access_owner_view: userData.tool_access_owner_view === true,
         ui_permissions: userData.ui_permissions || {},
       });
 

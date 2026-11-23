@@ -123,7 +123,7 @@ class TestSearchAndScopeAccessScoping:
         mock_repo = AsyncMock()
         mock_repo.search = AsyncMock(return_value=raw)
 
-        async def fake_access(path, name, ctx):
+        async def fake_access(path, name, ctx, **_kwargs):
             return path == "/allowed/"
 
         with (
@@ -190,7 +190,7 @@ async def test_skill_hit_publishes_indexed_update_time():
     mock_repo.search = AsyncMock(return_value=raw)
     with (
         patch.object(s, "get_search_repository", return_value=mock_repo),
-        patch.object(s, "user_has_asset_permission", return_value=True),
+        patch.object(s, "user_can_discover_asset", return_value=True),
         patch.object(s, "user_can_access_skill", AsyncMock(return_value=True)),
         patch.object(s, "_resolve_publisher_domain", return_value="reg.example.com"),
         patch.object(s, "_build_origin_map", AsyncMock(return_value=({}, []))),

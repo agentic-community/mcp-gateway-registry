@@ -3,7 +3,7 @@
   "info": {
     "title": "MCP Gateway Registry",
     "description": "A registry and management system for Model Context Protocol (MCP) servers",
-    "version": "1.37.0"
+    "version": "1.39.0"
   },
   "paths": {
     "/api/version": {
@@ -293,40 +293,12 @@
         "summary": "Logout Get",
         "description": "Handle logout via GET request (for URL navigation)",
         "operationId": "logout_get_api_auth_logout_get",
-        "parameters": [
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
               }
             }
           }
@@ -339,40 +311,12 @@
         "summary": "Logout Post",
         "description": "Handle logout via POST request (for forms with CSRF validation)",
         "operationId": "logout_post_api_auth_logout_post",
-        "parameters": [
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
               }
             }
           }
@@ -427,40 +371,12 @@
         "summary": "Get Csrf Token",
         "description": "API endpoint to get a CSRF token for React/SPA applications.\n\nReturns a CSRF token bound to the current session that can be used\nin X-CSRF-Token headers for API requests.",
         "operationId": "get_csrf_token_api_auth_csrf_token_get",
-        "parameters": [
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
               }
             }
           }
@@ -951,7 +867,7 @@
     "/api/egress-auth/initiate": {
       "post": {
         "summary": "Initiate Consent",
-        "description": "Begin the OAuth consent for the current user; returns the authorize URL.",
+        "description": "Begin the OAuth consent for the current user; returns the authorize URL.\n\nAlso sets this consent's cookie on the response, so the consent completes\nonly in the browser that called this route (the frontend's same-origin XHR\nstores it in that browser). The caller is the request's own browser session\n(``browser_session_context``: the session cookie, never a bearer or an\ninternal token), so a bearer caller, which skips CSRF, cannot get a state\nbound to the user plus its matching consent secret. CSRF still applies to\nthe browser caller.",
         "operationId": "initiate_consent_api_egress_auth_initiate_post",
         "requestBody": {
           "content": {
@@ -993,7 +909,7 @@
     "/api/oauth2/egress/callback": {
       "get": {
         "summary": "Egress Callback",
-        "description": "Provider redirect target. No ingress auth -- the signed+encrypted state is\nthe authority. Verifies state (TTL + single-use + account-swap), exchanges the\ncode, and stores the token. Reached via nginx -> registry (no /validate).\n\n``iss`` is the RFC 9207 issuer the provider names in its reply. It is checked\nagainst the server's ``expected_issuer`` when one is configured.",
+        "description": "Provider redirect target. No ingress auth (reached via nginx -> registry,\nno /validate), so the browser's session cookie is resolved here: the token is\nstored only when the browser that started the consent (it holds the consent\ncookie) is authenticated as the principal bound in the signed+encrypted\nstate. Verifies state (single-use + TTL + browser binding + account-swap),\nexchanges the code, and stores the token.\n\nThe state is decoded once, here, and its single-use nonce is consumed once,\nright after, by ``EgressAuthService.begin_callback``: before the ``code``\ncheck and before any other refusal, so every exit after it has already\nburned the state (a provider error such as ``?error=access_denied`` sends\nonly the state). Every response after the decode expires that consent's\ncookie. When the replay store cannot burn the state, or the callback raises\nan error it does not handle, the response is a 503 that still expires the\ncookie: without its cookie the state fails the browser binding, so nobody\ncan complete it.\n\n``iss`` is the RFC 9207 issuer the provider names in its reply. It is checked\nagainst the ``expected_issuer`` snapshot in the state when one is configured.",
         "operationId": "egress_callback_api_oauth2_egress_callback_get",
         "parameters": [
           {
@@ -1161,22 +1077,6 @@
                 }
               ],
               "title": "Query"
-            }
-          },
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
             }
           }
         ],
@@ -1359,22 +1259,6 @@
               "type": "string",
               "title": "Service Path"
             }
-          },
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
-            }
           }
         ],
         "requestBody": {
@@ -1429,22 +1313,6 @@
             "schema": {
               "type": "string",
               "title": "Service Path"
-            }
-          },
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
             }
           }
         ],
@@ -1596,33 +1464,15 @@
         "summary": "Register Service",
         "description": "Register a new service (requires register_service UI permission).\n\nSupports both deployment types:\n- Remote (default): proxy_pass_url required, registry proxies HTTP requests.\n- Local: local_runtime JSON required (admin-only). Registry stores\n  the launch recipe for stdio MCP servers; it does NOT execute the server.\n\nThe local_runtime field is a JSON-encoded string (same convention as metadata):\n    {\"type\": \"npx\", \"package\": \"@acme/mcp\", \"version\": \"1.0.0\",\n     \"args\": [...], \"env\": {...}, \"required_env\": [...]}",
         "operationId": "register_service_api_register_post",
-        "parameters": [
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
-            }
-          }
-        ],
         "requestBody": {
-          "required": true,
           "content": {
             "application/x-www-form-urlencoded": {
               "schema": {
                 "$ref": "#/components/schemas/Body_register_service_api_register_post"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "200": {
@@ -1712,22 +1562,6 @@
             "schema": {
               "type": "string",
               "title": "Service Path"
-            }
-          },
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
             }
           }
         ],
@@ -1890,22 +1724,6 @@
               "type": "string",
               "title": "Service Path"
             }
-          },
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
-            }
           }
         ],
         "responses": {
@@ -1951,22 +1769,6 @@
             "schema": {
               "type": "string",
               "title": "Service Path"
-            }
-          },
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
             }
           }
         ],
@@ -2015,24 +1817,6 @@
         "summary": "Token Generation Page",
         "description": "Show token generation page for authenticated users.",
         "operationId": "token_generation_page_api_tokens_get",
-        "parameters": [
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -2040,16 +1824,6 @@
               "text/html": {
                 "schema": {
                   "type": "string"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -2100,22 +1874,6 @@
               "title": "Metadata Fields"
             },
             "description": "Comma-separated metadata field paths to include (dot-notation for nested). Example: 'owner,config.region'. Omit to return full metadata."
-          },
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
-            }
           }
         ],
         "responses": {
@@ -2208,22 +1966,6 @@
               "type": "string",
               "title": "Service Path"
             }
-          },
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
-            }
           }
         ],
         "responses": {
@@ -2269,22 +2011,6 @@
             "schema": {
               "type": "string",
               "title": "Service Path"
-            }
-          },
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
             }
           }
         ],
@@ -2585,40 +2311,12 @@
         "summary": "Generate User Token",
         "description": "Generate a JWT token for the authenticated user.\n\nRequest body should contain:\n{\n    \"requested_scopes\": [\"scope1\", \"scope2\"],  // Optional, defaults to user's current scopes\n    \"expires_in_hours\": 8,                     // Optional, defaults to 8 hours\n    \"description\": \"Token for automation\"      // Optional description\n}\n\nReturns:\n    Generated JWT token with expiration info\n\nRaises:\n    HTTPException: If request fails or user lacks permissions",
         "operationId": "generate_user_token_api_tokens_generate_post",
-        "parameters": [
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
               }
             }
           }
@@ -8370,43 +8068,15 @@
         "summary": "Get full registry configuration",
         "description": "Returns all configuration parameters grouped by category. Admin only.",
         "operationId": "get_full_config_api_config_full_get",
-        "parameters": [
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
                   "additionalProperties": true,
+                  "type": "object",
                   "title": "Response Get Full Config Api Config Full Get"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -8427,43 +8097,15 @@
         "summary": "Get registry configuration",
         "description": "Returns the current deployment mode, registry mode, and enabled features",
         "operationId": "get_config_api_config_get",
-        "parameters": [
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
                   "additionalProperties": true,
+                  "type": "object",
                   "title": "Response Get Config Api Config Get"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -8519,22 +8161,6 @@
               "title": "Confirm Sensitive Export"
             },
             "description": "Explicit acknowledgement required alongside include_sensitive=true to bulk-export secrets. Without it, sensitive values are masked."
-          },
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
-            }
           }
         ],
         "responses": {
@@ -9063,6 +8689,837 @@
                   "additionalProperties": true,
                   "title": "Response Get Tool Catalog Api Tool Catalog Get"
                 }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/tool-access": {
+      "get": {
+        "tags": [
+          "tool-access"
+        ],
+        "summary": "List which groups can see and call each tool",
+        "description": "List tools with the groups that can see them and the groups that can call them.\n\nAdmins and view_all holders get every tool. Anyone else gets the tools on\nservers they own, or an empty list. The listing is informational and\ngrants nothing.",
+        "operationId": "list_tool_access_api_tool_access_get",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Match tool, server or group names.",
+              "title": "Q"
+            },
+            "description": "Match tool, server or group names."
+          },
+          {
+            "name": "server_path",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Exact server path.",
+              "title": "Server Path"
+            },
+            "description": "Exact server path."
+          },
+          {
+            "name": "server_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "mcp",
+                    "openapi",
+                    "virtual"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "mcp, openapi or virtual.",
+              "title": "Server Type"
+            },
+            "description": "mcp, openapi or virtual."
+          },
+          {
+            "name": "group",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Exact registry or identity provider group name.",
+              "title": "Group"
+            },
+            "description": "Exact registry or identity provider group name."
+          },
+          {
+            "name": "include_disabled",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Include disabled servers.",
+              "default": true,
+              "title": "Include Disabled"
+            },
+            "description": "Include disabled servers."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolAccessListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/openapi-servers": {
+      "get": {
+        "tags": [
+          "openapi-servers"
+        ],
+        "summary": "List Openapi Servers",
+        "description": "List the OpenAPI MCP servers the caller can see.",
+        "operationId": "list_openapi_servers_api_openapi_servers_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "openapi-servers"
+        ],
+        "summary": "Create Openapi Server",
+        "description": "Create an empty OpenAPI MCP server and its gateway route. The name becomes the path.",
+        "operationId": "create_openapi_server_api_openapi_servers_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenApiServerCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/openapi-servers/{slug}": {
+      "get": {
+        "tags": [
+          "openapi-servers"
+        ],
+        "summary": "Get Openapi Server",
+        "description": "One server with its targets and the container's status for each target.",
+        "operationId": "get_openapi_server_api_openapi_servers__slug__get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "openapi-servers"
+        ],
+        "summary": "Update Openapi Server",
+        "description": "Update description, tags, visibility or allowed groups.",
+        "operationId": "update_openapi_server_api_openapi_servers__slug__patch",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+              "title": "Slug"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenApiServerUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "openapi-servers"
+        ],
+        "summary": "Delete Openapi Server",
+        "description": "Delete a server, its path, its tools and any spec no other target uses.",
+        "operationId": "delete_openapi_server_api_openapi_servers__slug__delete",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/openapi-servers/{slug}/targets": {
+      "post": {
+        "tags": [
+          "openapi-servers"
+        ],
+        "summary": "Add Openapi Target",
+        "description": "Add a REST target. Fails closed: if any check fails, nothing is stored.",
+        "operationId": "add_openapi_target_api_openapi_servers__slug__targets_post",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+              "title": "Slug"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenApiTargetCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/openapi-servers/{slug}/targets/{name}": {
+      "get": {
+        "tags": [
+          "openapi-servers"
+        ],
+        "summary": "Get Openapi Target",
+        "description": "One target. The credential appears only as credential_set.",
+        "operationId": "get_openapi_target_api_openapi_servers__slug__targets__name__get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9]{1,23}$",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "openapi-servers"
+        ],
+        "summary": "Update Openapi Target",
+        "description": "Update a target, rotate its credential, or refresh its spec.",
+        "operationId": "update_openapi_target_api_openapi_servers__slug__targets__name__patch",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9]{1,23}$",
+              "title": "Name"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenApiTargetUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "openapi-servers"
+        ],
+        "summary": "Delete Openapi Target",
+        "description": "Remove a target and its tools.",
+        "operationId": "delete_openapi_target_api_openapi_servers__slug__targets__name__delete",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9]{1,23}$",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/openapi-servers/{slug}/targets/{name}/my-credential": {
+      "put": {
+        "tags": [
+          "openapi-servers"
+        ],
+        "summary": "Put My Credential",
+        "description": "Store your own key for a per-user target (an admin may store one for another user).",
+        "operationId": "put_my_credential_api_openapi_servers__slug__targets__name__my_credential_put",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9]{1,23}$",
+              "title": "Name"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MyCredentialRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      },
+      "get": {
+        "tags": [
+          "openapi-servers"
+        ],
+        "summary": "Get My Credential",
+        "description": "Whether you have a key for this target, and when it expires. Never the key.",
+        "operationId": "get_my_credential_api_openapi_servers__slug__targets__name__my_credential_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9]{1,23}$",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "openapi-servers"
+        ],
+        "summary": "Delete My Credential",
+        "description": "Delete your key for this target.",
+        "operationId": "delete_my_credential_api_openapi_servers__slug__targets__name__my_credential_delete",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9]{1,23}$",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/openapi-servers/{slug}/my-credentials": {
+      "get": {
+        "tags": [
+          "openapi-servers"
+        ],
+        "summary": "List My Credentials",
+        "description": "Your key status for every per-user target on this server.",
+        "operationId": "list_my_credentials_api_openapi_servers__slug__my_credentials_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
               }
             }
           },
@@ -10285,7 +10742,7 @@
           "Egress OAuth Facade"
         ],
         "summary": "Egress Connect",
-        "description": "Session-verified front door for MCP URL-mode elicitation.\n\nThis is the ``url`` the MCP client opens (verbatim, with user consent) when\nthe gateway returns an ``elicitation/create`` ``mode: \"url\"`` for an egress\nserver the user has not connected yet. It takes NO client-side OAuth\nparameters (no ``redirect_uri``/PKCE/``response_type`` and no Dynamic Client\nRegistration) -- the CLIENT performs no OAuth at all, so this works with\nproviders like Entra that do not support RFC 7591 DCR.\n\nFlow:\n  1. If the browser has no gateway session, bounce through the gateway login\n     (configured provider) and return here (so the opener is always an authenticated principal).\n  2. Verify the session principal is a per-user identity. This is the\n     elicitation anti-phishing requirement: the user who OPENS the URL must\n     be a real authenticated user, and the provider-leg AEAD state binds the\n     token write to THIS principal -- a stolen connect URL opened by a\n     different user cannot bind a token to the elicited user.\n  3. 302 the browser to the provider consent (``build_consent_url``). The\n     existing ``/oauth2/egress/callback`` stores the token and shows the\n     close-tab page; the client then retries the original tool call (same\n     bearer) and the vend now HITs.",
+        "description": "Session-verified front door for MCP URL-mode elicitation.\n\nThis is the ``url`` the MCP client opens (verbatim, with user consent) when\nthe gateway returns an ``elicitation/create`` ``mode: \"url\"`` for an egress\nserver the user has not connected yet. It takes NO client-side OAuth\nparameters (no ``redirect_uri``/PKCE/``response_type`` and no Dynamic Client\nRegistration) -- the CLIENT performs no OAuth at all, so this works with\nproviders like Entra that do not support RFC 7591 DCR.\n\nFlow:\n  1. If the browser has no gateway session, bounce through the gateway login\n     (configured provider) and return here (so the opener is always an authenticated principal).\n  2. Verify the session principal is a per-user identity. This is the\n     elicitation anti-phishing requirement: the user who OPENS the URL must\n     be a real authenticated user, and the provider-leg AEAD state binds the\n     token write to THIS principal -- a stolen connect URL opened by a\n     different user cannot bind a token to the elicited user.\n  3. 302 the browser to the provider consent (``build_consent_url``) and set\n     this consent's cookie on that redirect, so only this browser can\n     complete it. The existing ``/oauth2/egress/callback`` stores the token\n     and shows the close-tab page; the client then retries the original tool\n     call (same bearer) and the vend now HITs.",
         "operationId": "egress_connect_oauth2_egress_connect_get",
         "parameters": [
           {
@@ -11499,22 +11956,6 @@
               "title": "Stream"
             },
             "description": "Log stream type"
-          },
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
-            }
           }
         ],
         "responses": {
@@ -11601,22 +12042,6 @@
               "title": "Username"
             },
             "description": "Filter statistics to a specific username: matches the display identity or any stored identity claim (subject/canonical_id/object_id/principal_name)"
-          },
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
-            }
           }
         ],
         "responses": {
@@ -11671,22 +12096,6 @@
               "title": "Days"
             },
             "description": "Length of the comparison window in days"
-          },
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
-            }
           }
         ],
         "responses": {
@@ -11951,22 +12360,6 @@
               "title": "Sort Order"
             },
             "description": "Sort order: -1 for descending (newest first), 1 for ascending (oldest first)"
-          },
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
-            }
           }
         ],
         "responses": {
@@ -12034,22 +12427,6 @@
               "title": "Log Type"
             },
             "description": "Filter by log type: registry_api_access or mcp_server_access"
-          },
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
-            }
           }
         ],
         "responses": {
@@ -12302,22 +12679,6 @@
               "title": "Limit"
             },
             "description": "Maximum events to export"
-          },
-          {
-            "name": "mcp_gateway_session",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mcp Gateway Session"
-            }
           }
         ],
         "responses": {
@@ -15828,6 +16189,52 @@
   },
   "components": {
     "schemas": {
+      "AccessCondition": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "title": "Label",
+            "description": "What the check is, for display."
+          },
+          "groups": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Groups",
+            "description": "Registry groups that pass this check and are not already in 'alone'."
+          }
+        },
+        "type": "object",
+        "required": [
+          "label"
+        ],
+        "title": "AccessCondition",
+        "description": "One check a member must pass, and the groups that pass it."
+      },
+      "AccessSummary": {
+        "properties": {
+          "alone": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Alone",
+            "description": "Registry groups that grant this access by themselves."
+          },
+          "together": {
+            "items": {
+              "$ref": "#/components/schemas/AccessCondition"
+            },
+            "type": "array",
+            "title": "Together",
+            "description": "Checks a member must pass when no single group covers them all. Empty when combining groups adds nobody beyond 'alone'."
+          }
+        },
+        "type": "object",
+        "title": "AccessSummary",
+        "description": "Who has one kind of access (seeing or calling) to a tool.\n\nA user has access when they are in any group listed in ``alone``, or when\nthey are in at least one group from every entry in ``together``."
+      },
       "ActiveAgents": {
         "properties": {
           "daa": {
@@ -20320,6 +20727,11 @@
             "type": "boolean",
             "title": "List Tools Before Consent",
             "default": false
+          },
+          "re_register": {
+            "type": "boolean",
+            "title": "Re Register",
+            "default": false
           }
         },
         "type": "object",
@@ -21141,6 +21553,35 @@
         "title": "GroupListResponse",
         "description": "Response for listing groups."
       },
+      "GroupRef": {
+        "properties": {
+          "group": {
+            "type": "string",
+            "title": "Group",
+            "description": "Registry group name (the scope document id)."
+          },
+          "idp_groups": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Idp Groups",
+            "description": "Identity provider group names in the group's group_mappings."
+          },
+          "is_admin": {
+            "type": "boolean",
+            "title": "Is Admin",
+            "description": "True when the group makes its members registry admins.",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "group"
+        ],
+        "title": "GroupRef",
+        "description": "A registry group and the identity provider groups mapped to it."
+      },
       "GroupSummary": {
         "properties": {
           "id": {
@@ -21954,6 +22395,31 @@
             ],
             "title": "Inputschema",
             "description": "JSON Schema for tool input parameters"
+          },
+          "ui_resource_uri": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ui Resource Uri",
+            "description": "MCP Apps: the ui:// page this tool opens in clients that support MCP Apps. Read it with resources/read on the same server. None when the tool has no page."
+          },
+          "annotations": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Annotations",
+            "description": "MCP tool annotations the server declared: readOnlyHint, destructiveHint, idempotentHint, openWorldHint and title. Advisory: the server sets them and the registry does not verify them. None when the server declared none."
           }
         },
         "type": "object",
@@ -22024,6 +22490,62 @@
         ],
         "title": "MissingEmbeddingsResponse",
         "description": "Response for the missing embeddings scan."
+      },
+      "MyCredentialRequest": {
+        "properties": {
+          "secret": {
+            "type": "string",
+            "format": "password",
+            "title": "Secret",
+            "writeOnly": true
+          },
+          "ttl_value": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Ttl Value"
+          },
+          "ttl_unit": {
+            "type": "string",
+            "enum": [
+              "minutes",
+              "hours",
+              "days"
+            ],
+            "title": "Ttl Unit"
+          },
+          "sub": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sub",
+            "description": "Admin only: store the key for this user instead"
+          },
+          "auth_method": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auth Method",
+            "description": "Admin only, with sub: the user's ingress auth method"
+          }
+        },
+        "type": "object",
+        "required": [
+          "secret",
+          "ttl_value",
+          "ttl_unit"
+        ],
+        "title": "MyCredentialRequest",
+        "description": "Body of PUT .../targets/{name}/my-credential: the caller's own key for a per-user target."
       },
       "OAuthBackendConfigRequest": {
         "properties": {
@@ -22363,6 +22885,462 @@
         ],
         "title": "OktaSyncResponse",
         "description": "Response from Okta M2M sync operation."
+      },
+      "OpenApiServerCreateRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 1000,
+            "title": "Description",
+            "default": ""
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 20,
+            "title": "Tags"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "public",
+              "private",
+              "group-restricted"
+            ],
+            "title": "Visibility",
+            "default": "private"
+          },
+          "allowed_groups": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 50,
+            "title": "Allowed Groups"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "OpenApiServerCreateRequest",
+        "description": "Body of POST /api/openapi-servers. The name becomes the path.",
+        "example": {
+          "description": "Forecast and air quality from Open-Meteo",
+          "name": "Weather APIs",
+          "tags": [
+            "weather"
+          ],
+          "visibility": "private"
+        }
+      },
+      "OpenApiServerUpdateRequest": {
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 1000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 20
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tags"
+          },
+          "visibility": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "public",
+                  "private",
+                  "group-restricted"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visibility"
+          },
+          "allowed_groups": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 50
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allowed Groups"
+          }
+        },
+        "type": "object",
+        "title": "OpenApiServerUpdateRequest",
+        "description": "Body of PATCH /api/openapi-servers/{slug}. The name and path cannot change."
+      },
+      "OpenApiTargetAuthInput": {
+        "properties": {
+          "scheme": {
+            "type": "string",
+            "enum": [
+              "none",
+              "api_key_header",
+              "api_key_query",
+              "bearer",
+              "basic"
+            ],
+            "title": "Scheme",
+            "default": "none"
+          },
+          "credential_mode": {
+            "type": "string",
+            "enum": [
+              "shared",
+              "per_user"
+            ],
+            "title": "Credential Mode",
+            "default": "shared"
+          },
+          "header_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Header Name"
+          },
+          "query_param": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_.\\-]{1,128}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Query Param"
+          },
+          "username": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 256
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Username"
+          },
+          "credential": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "password",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credential"
+          }
+        },
+        "type": "object",
+        "title": "OpenApiTargetAuthInput",
+        "description": "Auth for one REST target, as the admin sends it. The credential is write-only."
+      },
+      "OpenApiTargetCreateRequest": {
+        "properties": {
+          "tool_name_overrides": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Tool Name Overrides"
+          },
+          "description_overrides": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Description Overrides"
+          },
+          "include_tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "title": "Include Tags"
+          },
+          "include_operations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 500,
+            "title": "Include Operations"
+          },
+          "keep_output_schemas": {
+            "type": "boolean",
+            "title": "Keep Output Schemas",
+            "default": false
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9]{1,23}$",
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 1000,
+            "title": "Description",
+            "default": ""
+          },
+          "spec_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2083,
+                "minLength": 1,
+                "format": "uri"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spec Url",
+            "description": "Where the registry fetches the spec. Send this or spec_content."
+          },
+          "spec_content": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 8388608
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spec Content",
+            "description": "The spec itself, as JSON or YAML text. Send this or spec_url."
+          },
+          "base_url": {
+            "type": "string",
+            "maxLength": 2083,
+            "minLength": 1,
+            "format": "uri",
+            "title": "Base Url"
+          },
+          "auth": {
+            "$ref": "#/components/schemas/OpenApiTargetAuthInput"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "base_url"
+        ],
+        "title": "OpenApiTargetCreateRequest",
+        "description": "Body of POST /api/openapi-servers/{slug}/targets.",
+        "example": {
+          "auth": {
+            "credential": "YOUR_PETSTORE_KEY",
+            "header_name": "api_key",
+            "scheme": "api_key_header"
+          },
+          "base_url": "https://petstore3.swagger.io/api/v3",
+          "description": "Swagger Petstore sample API",
+          "include_operations": [
+            "getInventory"
+          ],
+          "include_tags": [
+            "pet"
+          ],
+          "name": "petstore",
+          "spec_url": "https://petstore3.swagger.io/api/v3/openapi.json"
+        }
+      },
+      "OpenApiTargetUpdateRequest": {
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 1000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "base_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2083,
+                "minLength": 1,
+                "format": "uri"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Url"
+          },
+          "auth": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OpenApiTargetAuthInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tool_name_overrides": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool Name Overrides"
+          },
+          "description_overrides": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description Overrides"
+          },
+          "include_tags": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Include Tags"
+          },
+          "include_operations": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Include Operations"
+          },
+          "keep_output_schemas": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Keep Output Schemas"
+          },
+          "spec_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2083,
+                "minLength": 1,
+                "format": "uri"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spec Url",
+            "description": "Fetch the spec from this URL instead and check it again."
+          },
+          "spec_content": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 8388608
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spec Content",
+            "description": "Replace the spec with this JSON or YAML text and check it again."
+          },
+          "refresh_spec": {
+            "type": "boolean",
+            "title": "Refresh Spec",
+            "description": "Fetch the spec again from the stored spec_url.",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "OpenApiTargetUpdateRequest",
+        "description": "Body of PATCH /api/openapi-servers/{slug}/targets/{name}. A missing auth keeps the stored one."
       },
       "Package": {
         "properties": {
@@ -26559,6 +27537,192 @@
         "title": "ToggleVirtualServerRequest",
         "description": "Request model for toggling virtual server enabled state."
       },
+      "ToolAccessListResponse": {
+        "properties": {
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/ToolAccessRow"
+            },
+            "type": "array",
+            "title": "Rows"
+          },
+          "groups": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/GroupRef"
+            },
+            "type": "object",
+            "title": "Groups",
+            "description": "Identity provider names and admin flag of every group named on this page."
+          },
+          "total_count": {
+            "type": "integer",
+            "title": "Total Count",
+            "description": "Rows matching the filters, before paging."
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit",
+            "description": "Page size used."
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset",
+            "description": "Offset used."
+          },
+          "has_next": {
+            "type": "boolean",
+            "title": "Has Next",
+            "description": "True when more rows follow this page."
+          },
+          "generated_at": {
+            "type": "string",
+            "title": "Generated At",
+            "description": "ISO-8601 UTC time the rows were computed."
+          }
+        },
+        "type": "object",
+        "required": [
+          "total_count",
+          "limit",
+          "offset",
+          "has_next",
+          "generated_at"
+        ],
+        "title": "ToolAccessListResponse",
+        "description": "A page of the tool access listing.",
+        "example": {
+          "generated_at": "2026-11-22T18:00:00Z",
+          "groups": {
+            "docs-readers": {
+              "group": "docs-readers",
+              "idp_groups": [
+                "eng-docs"
+              ],
+              "is_admin": false
+            }
+          },
+          "has_next": false,
+          "limit": 50,
+          "offset": 0,
+          "rows": [
+            {
+              "blocked": false,
+              "can_call": {
+                "alone": [
+                  "docs-readers"
+                ],
+                "together": []
+              },
+              "can_see": {
+                "alone": [
+                  "docs-readers"
+                ],
+                "together": []
+              },
+              "enabled": true,
+              "server_name": "Cloudflare docs",
+              "server_path": "/cloudflare-docs/",
+              "server_type": "mcp",
+              "tool_name": "search_docs"
+            }
+          ],
+          "total_count": 1
+        }
+      },
+      "ToolAccessRow": {
+        "properties": {
+          "tool_name": {
+            "type": "string",
+            "title": "Tool Name",
+            "description": "Tool name a client calls (alias on a virtual server)."
+          },
+          "server_name": {
+            "type": "string",
+            "title": "Server Name",
+            "description": "Server display name."
+          },
+          "server_path": {
+            "type": "string",
+            "title": "Server Path",
+            "description": "Registry path of the server."
+          },
+          "server_type": {
+            "type": "string",
+            "enum": [
+              "mcp",
+              "openapi",
+              "virtual"
+            ],
+            "title": "Server Type",
+            "description": "mcp, openapi or virtual."
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "description": "Whether the server is enabled."
+          },
+          "blocked": {
+            "type": "boolean",
+            "title": "Blocked",
+            "description": "True when an admin or a security scan blocked the tool, so nobody can call it.",
+            "default": false
+          },
+          "blocked_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocked Source",
+            "description": "'admin' or 'security_scan' when blocked."
+          },
+          "backend_server_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Backend Server Path",
+            "description": "Virtual servers only: the backend server's path."
+          },
+          "backend_tool_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Backend Tool Name",
+            "description": "Virtual servers only: the tool's name on the backend server."
+          },
+          "can_see": {
+            "$ref": "#/components/schemas/AccessSummary",
+            "description": "Groups whose members see the tool in the registry UI, API and search."
+          },
+          "can_call": {
+            "$ref": "#/components/schemas/AccessSummary",
+            "description": "Groups whose members can call the tool through the gateway."
+          }
+        },
+        "type": "object",
+        "required": [
+          "tool_name",
+          "server_name",
+          "server_path",
+          "server_type",
+          "enabled"
+        ],
+        "title": "ToolAccessRow",
+        "description": "One tool on one server, with who can see it and who can call it."
+      },
       "ToolMapping": {
         "properties": {
           "tool_name": {
@@ -26771,6 +27935,31 @@
             ],
             "title": "Endpoint Url",
             "description": "URL for agents to connect to the parent MCP server"
+          },
+          "ui_resource_uri": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ui Resource Uri",
+            "description": "MCP Apps: the ui:// page this tool opens in clients that support MCP Apps. Read it with resources/read on server_path. None when the tool has no page."
+          },
+          "annotations": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Annotations",
+            "description": "MCP tool annotations the server declared: readOnlyHint, destructiveHint, idempotentHint, openWorldHint and title. Advisory: the server sets them and the registry does not verify them. None when the server declared none."
           }
         },
         "type": "object",

@@ -13,10 +13,11 @@ Security posture (this module wires the entity/proxy layer to the SSRF control):
   ``ValueError``) so a Pydantic field validator surfaces a clean 4xx. Registration
   and the fetch-time pinned transport therefore share ONE policy — the
   ``gateway_proxy_allow_private_targets`` bool plus ``ssrf_allowed_hosts`` /
-  ``ssrf_allowed_cidrs`` can relax only loopback/private/CGNAT targets;
-  cloud/workload credential endpoints (including Alibaba), link-local, reserved,
-  multicast, and unspecified destinations remain hard-denied, including scoped
-  and embedded/tunneled IPv6 forms.
+  ``ssrf_allowed_cidrs`` can relax only loopback/private/CGNAT targets, plus
+  reserved IPv4 inside a ``ssrf_allowed_cidrs`` range (never broadcast, never
+  reserved IPv6; #2018); cloud/workload credential endpoints (including Alibaba),
+  link-local, other reserved, multicast, and unspecified destinations remain
+  hard-denied, including scoped and embedded/tunneled IPv6 forms.
 - The static check is best-effort on literal-IP targets; hostnames pass it (no DNS
   in a validator). The authoritative rebind defense is the fetch-time pinned
   transport (``url_guard.guarded_async_client``, which resolves+validates+connects

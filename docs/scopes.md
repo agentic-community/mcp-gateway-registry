@@ -168,20 +168,24 @@ if method == 'tools/call' and tool_name:
 
 #### Example: Tool Access Configuration
 
-```yaml
-mcp-servers-restricted/execute:
-  - server: currenttime
-    methods:
-      - initialize
-      - notifications/initialized
-      - ping
-      - tools/list
-      - tools/call                    # Can call tools/call method
-    tools:
-      - current_time_by_timezone      # Can call this specific tool
-      - get_config                    # Can call this specific tool
-      # Note: Cannot call other tools not listed here
+Each `server_access` entry has its own `tools` list, so one scope can allow a different subset of tools on each server:
+
+```json
+"server_access": [
+  {
+    "server": "/realserverfaketools",
+    "methods": ["initialize", "notifications/initialized", "ping", "tools/list", "tools/call"],
+    "tools": ["quantum_flux_analyzer", "neural_pattern_synthesizer"]
+  },
+  {
+    "server": "/mcpgw",
+    "methods": ["initialize", "notifications/initialized", "ping", "tools/list", "tools/call"],
+    "tools": ["list_services", "search_registry", "healthcheck"]
+  }
+]
 ```
+
+A member can call only the named tools on each server, and `tools/list` returns only those tools. The full group file is [`cli/examples/tool-subset-per-server.json`](../cli/examples/tool-subset-per-server.json), and the FAQ [How do I let a group call only some of the tools on each MCP server?](faq/tool-level-access-control.md) walks through it.
 
 ### Access Control Scenarios
 

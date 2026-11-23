@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
+from starlette.datastructures import Headers
 
 from registry.auth.csrf import (
     generate_csrf_token,
@@ -37,13 +38,18 @@ def _make_request(
     headers: dict | None = None,
     form_data: dict | None = None,
 ):
-    """Create a mock Request object with optional cookies, headers, and form data."""
-    request = MagicMock()
-    request.cookies = cookies or {}
+    """Create a mock Request object with optional cookies, headers, and form data.
 
-    header_dict = headers or {}
-    request.headers = MagicMock()
-    request.headers.get = lambda key, default=None: header_dict.get(key, default)
+    The cookies travel in the ``cookie`` header, which the session cookie
+    reader parses; ``scope`` holds its per-request cache.
+    """
+    request = MagicMock()
+    request.scope = {}
+
+    header_dict = dict(headers or {})
+    if cookies:
+        header_dict["cookie"] = "; ".join(f"{name}={value}" for name, value in cookies.items())
+    request.headers = Headers(header_dict)
 
     request.form = AsyncMock(return_value=form_data or {})
     return request
@@ -100,26 +106,24 @@ class TestVerifyCsrfTokenFlexibleEnforcement:
         assert "invalid token" in exc_info.value.detail
 
     @pytest.mark.asyncio
-    async def test_pass_when_session_cookie_and_valid_csrf_header(self):
-        """Session cookie + valid CSRF token in header should pass."""
-        session_id = "test-session-id"
-        csrf_token = generate_csrf_token(session_id)
+    async def test_pass_when_session_cookie_and_valid_csrf_header(self, mock_session_resolver):
+        """Resolvable session cookie + valid CSRF token in header should pass."""
+        csrf_token = generate_csrf_token("sid-1")
 
         request = _make_request(
-            cookies={"mcp_gateway_session": session_id},
+            cookies={"mcp_gateway_session": "opaque-cookie"},
             headers={"X-CSRF-Token": csrf_token},
         )
 
         await verify_csrf_token_flexible(request)
 
     @pytest.mark.asyncio
-    async def test_pass_when_session_cookie_and_valid_csrf_form(self):
-        """Session cookie + valid CSRF token in form data should pass."""
-        session_id = "test-session-id"
-        csrf_token = generate_csrf_token(session_id)
+    async def test_pass_when_session_cookie_and_valid_csrf_form(self, mock_session_resolver):
+        """Resolvable session cookie + valid CSRF token in form data should pass."""
+        csrf_token = generate_csrf_token("sid-1")
 
         request = _make_request(
-            cookies={"mcp_gateway_session": session_id},
+            cookies={"mcp_gateway_session": "opaque-cookie"},
             headers={},
             form_data={"csrf_token": csrf_token},
         )
@@ -127,13 +131,12 @@ class TestVerifyCsrfTokenFlexibleEnforcement:
         await verify_csrf_token_flexible(request)
 
     @pytest.mark.asyncio
-    async def test_header_token_takes_precedence_over_form(self):
+    async def test_header_token_takes_precedence_over_form(self, mock_session_resolver):
         """X-CSRF-Token header should be checked before form data."""
-        session_id = "test-session-id"
-        valid_token = generate_csrf_token(session_id)
+        valid_token = generate_csrf_token("sid-1")
 
         request = _make_request(
-            cookies={"mcp_gateway_session": session_id},
+            cookies={"mcp_gateway_session": "opaque-cookie"},
             headers={"X-CSRF-Token": valid_token},
             form_data={"csrf_token": "wrong-token"},
         )
@@ -204,14 +207,24 @@ class TestVerifyCsrfTokenHeaderOnly:
         assert exc_info.value.status_code == 403
         assert "invalid token" in exc_info.value.detail
 
-    @pytest.mark.asyncio
-    async def test_skip_when_cookie_present_but_unresolvable(self, mock_session_resolver):
-        """Cookie present but unresolvable (legacy/expired/tampered) skips the
-        check (the downstream auth dependency rejects with 401 anyway)."""
-        mock_session_resolver.next_value = None
-        request = _make_request(
-            cookies={"mcp_gateway_session": "stale-or-tampered"},
-            headers={},
-        )
 
-        await verify_csrf_token_header_only(request)
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "check",
+    [verify_csrf_token_flexible, verify_csrf_token_header_only],
+    ids=["flexible", "header-only"],
+)
+async def test_refuse_when_cookie_present_but_unresolvable(mock_session_resolver, check):
+    """A session cookie that resolves to no session (legacy, expired, tampered,
+    store down) is refused, never skipped: the request carries ambient
+    credentials, and nothing proves it is not a session another reader accepts."""
+    mock_session_resolver.next_value = None
+    request = _make_request(
+        cookies={"mcp_gateway_session": "stale-or-tampered"},
+        headers={"X-CSRF-Token": generate_csrf_token("sid-1")},
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await check(request)
+
+    assert exc_info.value.status_code == 403

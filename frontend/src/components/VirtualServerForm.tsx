@@ -232,7 +232,7 @@ const VirtualServerForm: React.FC<VirtualServerFormProps> = ({
 
   // Render step indicator
   const renderStepIndicator = () => (
-    <div className="flex items-center justify-between px-6 py-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50">
+    <div className="flex items-center justify-between px-6 py-3 border-b border-line bg-surface-muted">
       {STEPS.map((step, index) => {
         const isActive = step.id === currentStep;
         const isCompleted = index < currentStepIndex;
@@ -242,7 +242,7 @@ const VirtualServerForm: React.FC<VirtualServerFormProps> = ({
           <React.Fragment key={step.id}>
             {index > 0 && (
               <div className={`flex-1 h-0.5 mx-2 ${
-                isCompleted ? 'bg-teal-500' : 'bg-gray-300 dark:bg-gray-600'
+                isCompleted ? 'bg-virtual-500' : 'bg-gray-300 dark:bg-gray-600'
               }`} />
             )}
             <button
@@ -251,18 +251,18 @@ const VirtualServerForm: React.FC<VirtualServerFormProps> = ({
               disabled={!isClickable}
               className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
                 isActive
-                  ? 'bg-teal-100 dark:bg-teal-900/30 text-teal-700 dark:text-teal-300'
+                  ? 'bg-virtual-100 dark:bg-virtual-900/30 text-virtual-700 dark:text-virtual-300'
                   : isCompleted
-                  ? 'text-teal-600 dark:text-teal-400 hover:bg-teal-50 dark:hover:bg-teal-900/20 cursor-pointer'
-                  : 'text-gray-400 dark:text-gray-500 cursor-default'
+                  ? 'text-virtual-600 dark:text-virtual-400 hover:bg-virtual-50 dark:hover:bg-virtual-900/20 cursor-pointer'
+                  : 'text-fg-subtle cursor-default'
               }`}
             >
               <span className={`flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${
                 isActive
-                  ? 'bg-teal-600 text-white'
+                  ? 'bg-virtual-600 text-white'
                   : isCompleted
-                  ? 'bg-teal-500 text-white'
-                  : 'bg-gray-300 dark:bg-gray-600 text-gray-500 dark:text-gray-400'
+                  ? 'bg-virtual-500 text-white'
+                  : 'bg-surface border border-line-strong text-fg-subtle'
               }`}>
                 {isCompleted ? <CheckIcon className="h-3.5 w-3.5" /> : index + 1}
               </span>
@@ -278,23 +278,21 @@ const VirtualServerForm: React.FC<VirtualServerFormProps> = ({
   const renderBasicsStep = () => (
     <div className="space-y-6">
       <div>
-        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-          Name <span className="text-red-500">*</span>
+        <label className="block text-sm font-medium text-fg-muted mb-1">
+          Name <span className="text-danger-500">*</span>
         </label>
         <input
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="e.g. Dev Essentials"
-          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg
-                     bg-white dark:bg-gray-900 text-gray-900 dark:text-white
-                     focus:ring-2 focus:ring-teal-500 focus:border-transparent"
+          className="input"
         />
       </div>
 
       <div>
-        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-          Path <span className="text-red-500">*</span>
+        <label className="block text-sm font-medium text-fg-muted mb-1">
+          Path <span className="text-danger-500">*</span>
         </label>
         <input
           type="text"
@@ -302,20 +300,17 @@ const VirtualServerForm: React.FC<VirtualServerFormProps> = ({
           onChange={(e) => handlePathChange(e.target.value)}
           placeholder="/virtual/dev-essentials"
           disabled={isEditMode}
-          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg
-                     bg-white dark:bg-gray-900 text-gray-900 dark:text-white
-                     focus:ring-2 focus:ring-teal-500 focus:border-transparent
-                     disabled:opacity-50 disabled:cursor-not-allowed font-mono text-sm"
+          className="input font-mono"
         />
         {!isEditMode && (
-          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+          <p className="mt-1 text-xs text-fg-subtle">
             Auto-generated from name. Must start with /virtual/.
           </p>
         )}
       </div>
 
       <div>
-        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+        <label className="block text-sm font-medium text-fg-muted mb-1">
           Description
         </label>
         <textarea
@@ -323,14 +318,12 @@ const VirtualServerForm: React.FC<VirtualServerFormProps> = ({
           onChange={(e) => setDescription(e.target.value)}
           placeholder="Describe what this virtual server provides..."
           rows={3}
-          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg
-                     bg-white dark:bg-gray-900 text-gray-900 dark:text-white
-                     focus:ring-2 focus:ring-teal-500 focus:border-transparent"
+          className="input"
         />
       </div>
 
       <div>
-        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+        <label className="block text-sm font-medium text-fg-muted mb-1">
           Tags
         </label>
         <input
@@ -338,9 +331,7 @@ const VirtualServerForm: React.FC<VirtualServerFormProps> = ({
           value={tags}
           onChange={(e) => setTags(e.target.value)}
           placeholder="development, tools, frontend (comma-separated)"
-          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg
-                     bg-white dark:bg-gray-900 text-gray-900 dark:text-white
-                     focus:ring-2 focus:ring-teal-500 focus:border-transparent"
+          className="input"
         />
       </div>
     </div>
@@ -350,13 +341,13 @@ const VirtualServerForm: React.FC<VirtualServerFormProps> = ({
   const renderToolSelectionStep = () => (
     <div>
       <div className="flex items-center justify-between mb-3">
-        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+        <label className="block text-sm font-medium text-fg-muted">
           Select tools to include in this virtual server
         </label>
         <button
           type="button"
           onClick={() => setUseToolSelector(!useToolSelector)}
-          className="text-xs text-teal-600 dark:text-teal-400 hover:underline"
+          className="text-xs text-virtual-600 dark:text-virtual-400 hover:underline"
         >
           {useToolSelector ? 'Switch to manual entry' : 'Switch to tool picker'}
         </button>
@@ -372,7 +363,7 @@ const VirtualServerForm: React.FC<VirtualServerFormProps> = ({
           {manualMappings.map((mapping, index) => (
             <div
               key={index}
-              className="flex items-start gap-2 p-3 bg-gray-50 dark:bg-gray-900/50 rounded-lg"
+              className="flex items-start gap-2 p-3 bg-surface-muted rounded-lg"
             >
               <div className="flex-1 space-y-2">
                 <input
@@ -382,8 +373,7 @@ const VirtualServerForm: React.FC<VirtualServerFormProps> = ({
                     updateManualMapping(index, 'backend_server_path', e.target.value)
                   }
                   placeholder="Backend server path (e.g. /github)"
-                  className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded
-                             bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                  className="input px-2 py-1.5"
                 />
                 <input
                   type="text"
@@ -392,8 +382,7 @@ const VirtualServerForm: React.FC<VirtualServerFormProps> = ({
                     updateManualMapping(index, 'tool_name', e.target.value)
                   }
                   placeholder="Tool name"
-                  className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded
-                             bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                  className="input px-2 py-1.5"
                 />
                 <input
                   type="text"
@@ -402,14 +391,13 @@ const VirtualServerForm: React.FC<VirtualServerFormProps> = ({
                     updateManualMapping(index, 'alias', e.target.value)
                   }
                   placeholder="Alias (optional)"
-                  className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded
-                             bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                  className="input px-2 py-1.5"
                 />
               </div>
               <button
                 type="button"
                 onClick={() => removeManualMapping(index)}
-                className="p-2 text-gray-400 hover:text-red-500 transition-colors"
+                className="p-2 rounded-lg text-fg-subtle hover:bg-surface-hover hover:text-danger-500 transition-colors"
               >
                 <TrashIcon className="h-4 w-4" />
               </button>
@@ -418,8 +406,8 @@ const VirtualServerForm: React.FC<VirtualServerFormProps> = ({
           <button
             type="button"
             onClick={addManualMapping}
-            className="flex items-center gap-2 px-3 py-2 text-sm text-teal-600 dark:text-teal-400
-                       hover:bg-teal-50 dark:hover:bg-teal-900/20 rounded-lg transition-colors"
+            className="flex items-center gap-2 px-3 py-2 text-sm text-virtual-600 dark:text-virtual-400
+                       hover:bg-virtual-50 dark:hover:bg-virtual-900/20 rounded-lg transition-colors"
           >
             <PlusIcon className="h-4 w-4" />
             Add Tool Mapping
@@ -434,11 +422,11 @@ const VirtualServerForm: React.FC<VirtualServerFormProps> = ({
     <div className="space-y-6">
       {/* Tool alias/version overrides */}
       <div>
-        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+        <label className="block text-sm font-medium text-fg-muted mb-2">
           Tool Aliases and Version Pins
         </label>
         {allMappings.length === 0 ? (
-          <p className="text-sm text-gray-500 dark:text-gray-400 py-4 text-center bg-gray-50 dark:bg-gray-900/50 rounded-lg">
+          <p className="text-sm text-fg-subtle py-4 text-center bg-surface-muted rounded-lg">
             No tools selected. Go back to add tools.
           </p>
         ) : (
@@ -446,13 +434,13 @@ const VirtualServerForm: React.FC<VirtualServerFormProps> = ({
             {allMappings.map((mapping, index) => (
               <div
                 key={`${mapping.backend_server_path}-${mapping.tool_name}-${index}`}
-                className="flex items-center gap-3 p-3 bg-gray-50 dark:bg-gray-900/50 rounded-lg"
+                className="flex items-center gap-3 p-3 bg-surface-muted rounded-lg"
               >
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm font-mono text-gray-900 dark:text-white truncate">
+                  <div className="text-sm font-mono text-fg truncate">
                     {mapping.tool_name}
                   </div>
-                  <div className="text-xs text-gray-500 dark:text-gray-400">
+                  <div className="text-xs text-fg-subtle">
                     {mapping.backend_server_path}
                   </div>
                 </div>
@@ -473,8 +461,7 @@ const VirtualServerForm: React.FC<VirtualServerFormProps> = ({
                       }
                     }}
                     placeholder="Alias"
-                    className="w-full px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded
-                               bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                    className="input px-2 py-1 text-xs"
                   />
                 </div>
                 <div className="w-28">
@@ -490,8 +477,7 @@ const VirtualServerForm: React.FC<VirtualServerFormProps> = ({
                       // Manual mappings don't have backend_version support
                     }}
                     placeholder="Version"
-                    className="w-full px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded
-                               bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                    className="input px-2 py-1 text-xs"
                   />
                 </div>
               </div>
@@ -502,7 +488,7 @@ const VirtualServerForm: React.FC<VirtualServerFormProps> = ({
 
       {/* Required Scopes */}
       <div>
-        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+        <label className="block text-sm font-medium text-fg-muted mb-1">
           Required Scopes
         </label>
         <input
@@ -510,11 +496,9 @@ const VirtualServerForm: React.FC<VirtualServerFormProps> = ({
           value={requiredScopes}
           onChange={(e) => setRequiredScopes(e.target.value)}
           placeholder="scope1, scope2 (comma-separated)"
-          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg
-                     bg-white dark:bg-gray-900 text-gray-900 dark:text-white
-                     focus:ring-2 focus:ring-teal-500 focus:border-transparent"
+          className="input"
         />
-        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+        <p className="mt-1 text-xs text-fg-subtle">
           Scopes required to access this virtual server. Leave empty for unrestricted access.
         </p>
       </div>
@@ -524,34 +508,34 @@ const VirtualServerForm: React.FC<VirtualServerFormProps> = ({
   // Step 4: Review
   const renderReviewStep = () => (
     <div className="space-y-4">
-      <div className="bg-gray-50 dark:bg-gray-900/50 rounded-lg p-4">
-        <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
+      <div className="bg-surface-muted rounded-lg p-4">
+        <h4 className="text-sm font-medium text-fg-muted mb-3">
           Server Details
         </h4>
         <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
-          <dt className="text-gray-500 dark:text-gray-400">Name</dt>
-          <dd className="text-gray-900 dark:text-white font-medium">{name || '-'}</dd>
-          <dt className="text-gray-500 dark:text-gray-400">Path</dt>
-          <dd className="text-gray-900 dark:text-white font-mono text-xs">{path || '-'}</dd>
-          <dt className="text-gray-500 dark:text-gray-400">Description</dt>
-          <dd className="text-gray-900 dark:text-white">{description || '-'}</dd>
-          <dt className="text-gray-500 dark:text-gray-400">Tags</dt>
-          <dd className="text-gray-900 dark:text-white">
+          <dt className="text-fg-subtle">Name</dt>
+          <dd className="text-fg font-medium">{name || '-'}</dd>
+          <dt className="text-fg-subtle">Path</dt>
+          <dd className="text-fg font-mono text-xs">{path || '-'}</dd>
+          <dt className="text-fg-subtle">Description</dt>
+          <dd className="text-fg">{description || '-'}</dd>
+          <dt className="text-fg-subtle">Tags</dt>
+          <dd className="text-fg">
             {parsedTags.length > 0 ? parsedTags.join(', ') : '-'}
           </dd>
-          <dt className="text-gray-500 dark:text-gray-400">Required Scopes</dt>
-          <dd className="text-gray-900 dark:text-white">
+          <dt className="text-fg-subtle">Required Scopes</dt>
+          <dd className="text-fg">
             {parsedScopes.length > 0 ? parsedScopes.join(', ') : 'None (unrestricted)'}
           </dd>
         </dl>
       </div>
 
-      <div className="bg-gray-50 dark:bg-gray-900/50 rounded-lg p-4">
-        <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
+      <div className="bg-surface-muted rounded-lg p-4">
+        <h4 className="text-sm font-medium text-fg-muted mb-3">
           Tool Mappings ({allMappings.length})
         </h4>
         {allMappings.length === 0 ? (
-          <p className="text-sm text-gray-500 dark:text-gray-400">No tools configured</p>
+          <p className="text-sm text-fg-subtle">No tools configured</p>
         ) : (
           <div className="space-y-1.5">
             {allMappings.map((mapping, index) => (
@@ -560,16 +544,16 @@ const VirtualServerForm: React.FC<VirtualServerFormProps> = ({
                 className="flex items-center justify-between text-sm"
               >
                 <div className="flex items-center gap-2">
-                  <span className="font-mono text-gray-900 dark:text-white">
+                  <span className="font-mono text-fg">
                     {mapping.alias || mapping.tool_name}
                   </span>
                   {mapping.alias && (
-                    <span className="text-xs text-gray-500 dark:text-gray-400">
+                    <span className="text-xs text-fg-subtle">
                       (from {mapping.tool_name})
                     </span>
                   )}
                 </div>
-                <span className="text-xs text-gray-500 dark:text-gray-400 font-mono">
+                <span className="text-xs text-fg-subtle font-mono">
                   {mapping.backend_server_path}
                   {mapping.backend_version && ` @${mapping.backend_version}`}
                 </span>
@@ -580,7 +564,7 @@ const VirtualServerForm: React.FC<VirtualServerFormProps> = ({
       </div>
 
       {/* Unique backend servers count */}
-      <div className="text-sm text-gray-500 dark:text-gray-400">
+      <div className="text-sm text-fg-subtle">
         {(() => {
           const uniqueBackends = new Set(allMappings.map((m) => m.backend_server_path));
           return `${allMappings.length} tool(s) from ${uniqueBackends.size} backend server(s)`;
@@ -620,19 +604,19 @@ const VirtualServerForm: React.FC<VirtualServerFormProps> = ({
   return (
     <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
       <div
-        className="bg-white dark:bg-gray-800 rounded-xl shadow-xl max-w-4xl w-full mx-4 max-h-[90vh] flex flex-col"
+        className="bg-surface-overlay border border-line rounded-xl shadow-xl max-w-4xl w-full mx-4 max-h-[90vh] flex flex-col"
         role="dialog"
         aria-modal="true"
         aria-label={isEditMode ? 'Edit Virtual Server' : 'Create Virtual Server'}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-line flex-shrink-0">
+          <h2 className="text-lg font-semibold text-fg">
             {isEditMode ? 'Edit Virtual Server' : 'Create Virtual Server'}
           </h2>
           <button
             onClick={onCancel}
-            className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded-lg transition-colors"
+            className="btn-icon"
           >
             <XMarkIcon className="h-5 w-5" />
           </button>
@@ -645,8 +629,8 @@ const VirtualServerForm: React.FC<VirtualServerFormProps> = ({
         <div className="flex-1 overflow-y-auto p-6">
           {/* Validation error */}
           {validationError && (
-            <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
-              <p className="text-sm text-red-700 dark:text-red-300">
+            <div className="mb-4 p-3 bg-danger-50 dark:bg-danger-900/20 border border-danger-200 dark:border-danger-800 rounded-lg">
+              <p className="text-sm text-danger-700 dark:text-danger-300">
                 {validationError}
               </p>
             </div>
@@ -656,15 +640,12 @@ const VirtualServerForm: React.FC<VirtualServerFormProps> = ({
         </div>
 
         {/* Navigation */}
-        <div className="flex items-center justify-between px-6 py-4 border-t border-gray-200 dark:border-gray-700 flex-shrink-0">
+        <div className="flex items-center justify-between px-6 py-4 border-t border-line flex-shrink-0">
           <button
             type="button"
             onClick={isFirstStep ? onCancel : goToPrev}
             disabled={saving}
-            className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300
-                       bg-gray-100 dark:bg-gray-700 rounded-lg
-                       hover:bg-gray-200 dark:hover:bg-gray-800 transition-colors
-                       disabled:opacity-50"
+            className="btn-secondary"
           >
             {isFirstStep ? 'Cancel' : 'Back'}
           </button>
@@ -675,9 +656,7 @@ const VirtualServerForm: React.FC<VirtualServerFormProps> = ({
                 type="button"
                 onClick={onCancel}
                 disabled={saving}
-                className="px-4 py-2 text-sm font-medium text-gray-500 dark:text-gray-400
-                           hover:text-gray-700 dark:hover:text-gray-200 transition-colors
-                           disabled:opacity-50"
+                className="btn-ghost"
               >
                 Cancel
               </button>
@@ -688,7 +667,7 @@ const VirtualServerForm: React.FC<VirtualServerFormProps> = ({
                 onClick={handleSubmit}
                 disabled={saving}
                 className="px-4 py-2 text-sm font-medium text-white
-                           bg-teal-600 rounded-lg hover:bg-teal-700 transition-colors
+                           bg-virtual-600 rounded-lg hover:bg-virtual-700 transition-colors
                            disabled:opacity-50 flex items-center gap-2"
               >
                 {saving && (
@@ -704,7 +683,7 @@ const VirtualServerForm: React.FC<VirtualServerFormProps> = ({
                 type="button"
                 onClick={goToNext}
                 className="px-4 py-2 text-sm font-medium text-white
-                           bg-teal-600 rounded-lg hover:bg-teal-700 transition-colors"
+                           bg-virtual-600 rounded-lg hover:bg-virtual-700 transition-colors"
               >
                 Next
               </button>

@@ -21,6 +21,14 @@ export interface RegistrySecretsProps {
 export class RegistrySecrets extends Construct {
   public readonly kmsKey: kms.Key;
   public readonly secretKey: secretsmanager.Secret;
+  /**
+   * Shared marker proving a `/validate` call arrived through registry nginx.
+   * Both the registry and the auth-server read it from the SAME secret: the
+   * auth-server mints an internal token only when the marker it receives
+   * matches its own, so a mismatch turns every registry API and UI request
+   * into a 401.
+   */
+  public readonly nginxMarkerSecret: secretsmanager.Secret;
   public readonly keycloakClientSecret: secretsmanager.Secret;
   public readonly keycloakM2mClientSecret: secretsmanager.Secret;
   public readonly keycloakAdminPassword: secretsmanager.Secret;
@@ -31,14 +39,51 @@ export class RegistrySecrets extends Construct {
   public readonly oktaApiToken?: secretsmanager.Secret;
   public readonly auth0ClientSecret?: secretsmanager.Secret;
   public readonly auth0M2mClientSecret?: secretsmanager.Secret;
+  /**
+   * Secrets referenced by ARN rather than created from a configured value.
+   *
+   * `_createSecret` writes a literal into `SecretString`, which lands in the
+   * synthesized template and therefore sits in plaintext in `cdk.out` and in
+   * the deployed CloudFormation stack. These four are imported instead, the
+   * same way the DocumentDB secret already is, so no value passes through
+   * synthesis. The remaining literal-valued secrets above predate this and
+   * are tracked separately.
+   */
+  public readonly cognitoClientSecret?: secretsmanager.ISecret;
+  public readonly pingfederateClientSecret?: secretsmanager.ISecret;
+  public readonly pingfederateM2mClientSecret?: secretsmanager.ISecret;
+  public readonly pingfederateAdminPassword?: secretsmanager.ISecret;
+  public readonly egressCredentialEncryptionKey?: secretsmanager.ISecret;
   public readonly metricsApiKey?: secretsmanager.Secret;
   public readonly metricsKeyPepper?: secretsmanager.Secret;
   public readonly metricsAdminApiKey?: secretsmanager.Secret;
   public readonly otlpExporterHeaders?: secretsmanager.Secret;
   public readonly grafanaAdminPassword?: secretsmanager.Secret;
+  /**
+   * Operator-supplied credentials injected into containers, keyed by the
+   * environment variable name. Only a configured (non-empty) value gets a
+   * secret, so an unset credential injects nothing, as it did when these
+   * were plain environment entries set to ''.
+   *
+   * These used to be plain `environment` values, which stored them in the ECS
+   * task definition (issue #2063). The value still passes through synthesis,
+   * like the other literal-valued secrets above.
+   */
+  public readonly sharedContainerCredentials: Record<string, secretsmanager.Secret>;
+  /** Same as {@link sharedContainerCredentials}, for the registry only. */
+  public readonly registryContainerCredentials: Record<string, secretsmanager.Secret>;
+  /** OpenAPI MCP sync secret (issue #2022). Deliberately NOT in accessStatements. */
+  public readonly openapiMcpSyncSecret?: secretsmanager.Secret;
 
-  /** IAM statements granting GetSecretValue + KMS decrypt for all secrets above */
+  /**
+   * IAM statements granting GetSecretValue + KMS decrypt for every secret in
+   * the bundle. Use {@link accessStatementsExcept} for a service that does not
+   * receive all of them.
+   */
   public readonly accessStatements: iam.PolicyStatement[];
+
+  /** Every secret ARN in the bundle, including imported ones. */
+  private readonly allSecretArns: string[];
 
   constructor(scope: Construct, id: string, props: RegistrySecretsProps) {
     super(scope, id);
@@ -83,6 +128,19 @@ export class RegistrySecrets extends Construct {
       description: 'Secret key for MCP Gateway Registry',
       kmsKey: this.kmsKey,
       generateString: { passwordLength: 64, excludePunctuation: false },
+    });
+
+    // Generated, not operator supplied: the registry and the auth-server only
+    // have to agree with each other, and nothing outside the stack needs the
+    // value. 64 characters of letters and digits clear all three checks in
+    // registry/core/config.py: non-empty, at least 32 bytes, and every
+    // character printable ASCII other than `$` (nginx renders it into a config
+    // file and sends it as a header).
+    this.nginxMarkerSecret = _createSecret(this, 'NginxMarkerSecret', {
+      description:
+        'Shared marker proving an auth-server /validate call arrived through registry nginx',
+      kmsKey: this.kmsKey,
+      generateString: { passwordLength: 64, excludePunctuation: true },
     });
 
     this.keycloakClientSecret = _createSecret(this, 'KeycloakClientSecret', {
@@ -150,6 +208,42 @@ export class RegistrySecrets extends Construct {
       });
     }
 
+    // Imported, not created: see the note on the fields above.
+    if (config.cognito.enabled) {
+      this.cognitoClientSecret = secretsmanager.Secret.fromSecretCompleteArn(
+        this, 'CognitoClientSecret', config.cognito.clientSecretArn,
+      );
+    }
+
+    if (config.pingfederate.enabled) {
+      this.pingfederateClientSecret = secretsmanager.Secret.fromSecretCompleteArn(
+        this, 'PingFederateClientSecret', config.pingfederate.clientSecretArn,
+      );
+      // Only when a SEPARATE M2M secret is configured. The provider falls back
+      // to the web client secret otherwise
+      // (auth_server/providers/pingfederate.py), so creating an empty secret
+      // here would both be rejected by CloudFormation (SecretString has a
+      // minimum length of 1) and override a working fallback.
+      if (config.pingfederate.m2mClientSecretArn !== '') {
+        this.pingfederateM2mClientSecret = secretsmanager.Secret.fromSecretCompleteArn(
+          this, 'PingFederateM2mClientSecret', config.pingfederate.m2mClientSecretArn,
+        );
+      }
+      // Registry only. It drives the PingFederate admin API to create OAuth
+      // clients and PCV users; the auth-server never calls that API.
+      this.pingfederateAdminPassword = secretsmanager.Secret.fromSecretCompleteArn(
+        this, 'PingFederateAdminPassword', config.pingfederate.adminPasswordArn,
+      );
+    }
+
+    // Empty leaves credentials in plaintext, which is the application's legacy
+    // behavior, so an unset key injects nothing rather than an empty value.
+    if (config.egress.enabled && config.egress.credentialEncryptionKeyArn !== '') {
+      this.egressCredentialEncryptionKey = secretsmanager.Secret.fromSecretCompleteArn(
+        this, 'EgressCredentialEncryptionKey', config.egress.credentialEncryptionKeyArn,
+      );
+    }
+
     if (config.enableObservability) {
       this.metricsApiKey = _createSecret(this, 'MetricsApiKey', {
         description: 'API key for metrics-service',
@@ -191,9 +285,38 @@ export class RegistrySecrets extends Construct {
       });
     }
 
+    // Operator-supplied container credentials. Same set and same split as
+    // terraform/aws-ecs/modules/mcp-gateway/secrets.tf (container_secret_values).
+    this.sharedContainerCredentials = _createCredentialSecrets(this, this.kmsKey, [
+      { envName: 'AUTH0_MANAGEMENT_API_TOKEN', id: 'Auth0ManagementApiToken', value: config.auth0.managementApiToken },
+      { envName: 'REGISTRY_API_TOKEN', id: 'RegistryApiToken', value: config.staticTokenAuth.registryApiToken },
+      { envName: 'FEDERATION_STATIC_TOKEN', id: 'FederationStaticToken', value: config.federation.staticToken },
+      { envName: 'FEDERATION_ENCRYPTION_KEY', id: 'FederationEncryptionKey', value: config.federation.encryptionKey },
+      { envName: 'ANS_API_KEY', id: 'AnsApiKey', value: config.ans.apiKey },
+      { envName: 'ANS_API_SECRET', id: 'AnsApiSecret', value: config.ans.apiSecret },
+    ]);
+    this.registryContainerCredentials = _createCredentialSecrets(this, this.kmsKey, [
+      { envName: 'GITHUB_PAT', id: 'GithubPat', value: config.github.pat },
+      { envName: 'GITHUB_APP_PRIVATE_KEY', id: 'GithubAppPrivateKey', value: config.github.appPrivateKey },
+    ]);
+
+    // OpenAPI MCP sync secret (issue #2022). The registry signs each push to
+    // the openapi-mcp container with a key derived from it, and the container
+    // verifies it. Generated, 48 letters and digits. It is left out of
+    // accessStatements below, which every service shares: ecs.Secret grants
+    // read to exactly the registry and openapi-mcp execution roles that use it.
+    if (config.openapiMcp.enabled) {
+      this.openapiMcpSyncSecret = _createSecret(this, 'OpenapiMcpSyncSecret', {
+        description: 'Signs registry-to-openapi-mcp sync tokens (registry and openapi-mcp only)',
+        kmsKey: this.kmsKey,
+        generateString: { passwordLength: 48, excludePunctuation: true },
+      });
+    }
+
     // IAM statements
     const arns: string[] = [
       this.secretKey.secretArn,
+      this.nginxMarkerSecret.secretArn,
       this.keycloakClientSecret.secretArn,
       this.keycloakM2mClientSecret.secretArn,
       this.keycloakAdminPassword.secretArn,
@@ -203,17 +326,46 @@ export class RegistrySecrets extends Construct {
     for (const s of [
       this.entraClientSecret, this.oktaClientSecret, this.oktaM2mClientSecret,
       this.oktaApiToken, this.auth0ClientSecret, this.auth0M2mClientSecret,
+      this.cognitoClientSecret, this.pingfederateClientSecret,
+      this.pingfederateM2mClientSecret, this.pingfederateAdminPassword,
+      this.egressCredentialEncryptionKey,
       this.metricsApiKey, this.metricsKeyPepper, this.metricsAdminApiKey,
       this.otlpExporterHeaders, this.grafanaAdminPassword,
     ]) if (s) arns.push(s.secretArn);
+    for (const s of Object.values(this.sharedContainerCredentials)) arns.push(s.secretArn);
+    for (const s of Object.values(this.registryContainerCredentials)) arns.push(s.secretArn);
 
-    this.accessStatements = [
+    this.allSecretArns = arns;
+    this.accessStatements = this.accessStatementsExcept();
+  }
+
+  /**
+   * Read access to every secret in the bundle except the ones listed.
+   *
+   * An execution role only needs the secrets its own containers are given, and
+   * two of these are single-service: the PingFederate admin password is the
+   * registry's, and the egress credential key reaches the auth-server only
+   * when its OBO cache is on. Pass the ones a service does not receive so its
+   * role cannot read them.
+   */
+  public accessStatementsExcept(
+    exclude: Array<secretsmanager.ISecret | undefined> = [],
+  ): iam.PolicyStatement[] {
+    const excluded = new Set(
+      exclude.filter((s): s is secretsmanager.ISecret => s !== undefined).map((s) => s.secretArn),
+    );
+    return [
       new iam.PolicyStatement({
         sid: 'SecretsManagerAccess',
         effect: iam.Effect.ALLOW,
         actions: ['secretsmanager:GetSecretValue'],
-        resources: arns,
+        resources: this.allSecretArns.filter((arn) => !excluded.has(arn)),
       }),
+      // This stack's own key only. An IMPORTED secret (Cognito, PingFederate,
+      // egress credential key, DocumentDB) is encrypted with whatever key its
+      // creator chose. The AWS-managed Secrets Manager key needs no explicit
+      // grant, but a customer-managed one does, and CDK cannot discover it
+      // from the secret ARN. config.yaml says so where the ARNs are set.
       new iam.PolicyStatement({
         sid: 'KmsDecrypt',
         effect: iam.Effect.ALLOW,
@@ -230,6 +382,38 @@ interface CreateSecretOptions {
   fixedName?: string;
   stringValue?: string;
   generateString?: { passwordLength: number; excludePunctuation: boolean };
+}
+
+interface CredentialSecretSpec {
+  /** Environment variable the container reads the value from. */
+  envName: string;
+  /** Construct id of the secret. */
+  id: string;
+  /** Operator-supplied value. Empty means not configured. */
+  value: string;
+}
+
+/**
+ * Create one secret per configured credential, keyed by its env var name.
+ *
+ * An empty value is skipped: CloudFormation rejects an empty SecretString,
+ * and the application treats an unset variable the same as an empty one.
+ */
+function _createCredentialSecrets(
+  scope: Construct,
+  kmsKey: kms.IKey,
+  specs: CredentialSecretSpec[],
+): Record<string, secretsmanager.Secret> {
+  const secrets: Record<string, secretsmanager.Secret> = {};
+  for (const spec of specs) {
+    if (spec.value === '') continue;
+    secrets[spec.envName] = _createSecret(scope, spec.id, {
+      description: `${spec.envName} for MCP Gateway Registry containers`,
+      kmsKey,
+      stringValue: spec.value,
+    });
+  }
+  return secrets;
 }
 
 function _createSecret(scope: Construct, id: string, opts: CreateSecretOptions): secretsmanager.Secret {

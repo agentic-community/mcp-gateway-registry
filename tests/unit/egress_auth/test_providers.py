@@ -7,12 +7,14 @@ from registry.egress_auth.providers import (
     list_provider_names,
     resolve_provider,
 )
-from registry.egress_auth.schemas import TokenEndpointAuthStyle
+from registry.egress_auth.schemas import OAuthProviderConfig, TokenEndpointAuthStyle
 
 
 @pytest.mark.unit
 class TestProviderRegistry:
-    @pytest.mark.parametrize("name", ["github", "google", "atlassian", "microsoft", "slack"])
+    @pytest.mark.parametrize(
+        "name", ["github", "google", "atlassian", "atlassian-rovo", "microsoft", "slack"]
+    )
     def test_builtin_present_and_wellformed(self, name):
         cfg = PROVIDER_REGISTRY[name]
         assert cfg.name == name
@@ -44,6 +46,76 @@ class TestProviderRegistry:
         params = PROVIDER_REGISTRY["google"].extra_authorize_params
         assert params.get("access_type") == "offline"
         assert params.get("prompt") == "consent"
+
+    def test_atlassian_is_the_classic_3lo_provider(self):
+        # Existing deployments configured ``atlassian`` with a classic 3LO app
+        # (confidential client, api.atlassian.com audience). Adding the Rovo MCP
+        # provider must not change this row, or their refresh and consent break.
+        assert PROVIDER_REGISTRY["atlassian"] == OAuthProviderConfig(
+            name="atlassian",
+            display_name="Atlassian",
+            authorize_url="https://auth.atlassian.com/authorize",
+            token_url="https://auth.atlassian.com/oauth/token",  # nosec B106 - public OAuth token endpoint URL, not a credential
+            extra_authorize_params={"audience": "api.atlassian.com", "prompt": "consent"},
+        )
+
+
+@pytest.mark.unit
+class TestAtlassianRovoProvider:
+    """Atlassian Rovo MCP v2: a DCR-registered public PKCE client."""
+
+    def test_is_a_dcr_none_style_client(self):
+        rovo = PROVIDER_REGISTRY["atlassian-rovo"]
+        assert rovo.requires_dcr is True
+        assert rovo.token_endpoint_auth_style == TokenEndpointAuthStyle.NONE
+        assert rovo.use_pkce is True
+
+    def test_uses_atlassian_endpoints(self):
+        rovo = PROVIDER_REGISTRY["atlassian-rovo"]
+        assert rovo.authorize_url == "https://auth.atlassian.com/authorize"
+        assert rovo.token_url == "https://auth.atlassian.com/oauth/token"
+
+    def test_discovers_from_the_v2_protected_resource_metadata(self):
+        rovo = PROVIDER_REGISTRY["atlassian-rovo"]
+        assert rovo.protected_resource_metadata_url == (
+            "https://mcp.atlassian.com/.well-known/oauth-protected-resource/v2/mcp"
+        )
+        assert rovo.registration_url is None
+
+    def test_sends_prompt_but_no_audience_or_resource(self):
+        # The classic api.atlassian.com audience does not apply to MCP tokens,
+        # and the authorization server rejects an RFC 8707 resource.
+        rovo = PROVIDER_REGISTRY["atlassian-rovo"]
+        assert rovo.extra_authorize_params == {"prompt": "consent"}
+        assert rovo.resource is None
+
+    def test_default_scopes_are_the_v2_agent_interface_set(self):
+        assert PROVIDER_REGISTRY["atlassian-rovo"].default_scopes == [
+            "read:me",
+            "read:account",
+            "offline_access",
+            "read:jira:agent-interface",
+            "write:jira:agent-interface",
+            "search:jira:agent-interface",
+        ]
+
+    def test_requires_read_account(self):
+        # read:account is mandatory and its absence fails only after the user
+        # submits consent. It must be in required_scopes (always unioned in), not
+        # only in default_scopes, which an explicit operator list overrides.
+        assert PROVIDER_REGISTRY["atlassian-rovo"].required_scopes == ["read:account"]
+
+    def test_other_providers_have_no_default_or_required_scopes(self):
+        for name, cfg in PROVIDER_REGISTRY.items():
+            if name != "atlassian-rovo":
+                assert cfg.default_scopes == [], f"{name} unexpectedly has default_scopes"
+                assert cfg.required_scopes == [], f"{name} unexpectedly has required_scopes"
+
+    def test_only_atlassian_rovo_uses_dcr(self):
+        # Every other built-in stays a static operator client.
+        for name, cfg in PROVIDER_REGISTRY.items():
+            if name != "atlassian-rovo":
+                assert cfg.requires_dcr is False, name
 
 
 @pytest.mark.unit
@@ -106,9 +178,11 @@ class TestResolveProvider:
             )
 
     def test_builtin_providers_are_confidential(self):
-        # No built-in may ever resolve to the public-client style.
+        # A built-in with a static operator app must never resolve to the
+        # public-client style. Only a DCR provider registers its own public client.
         for name, cfg in PROVIDER_REGISTRY.items():
-            assert cfg.token_endpoint_auth_style != TokenEndpointAuthStyle.NONE, name
+            if not cfg.requires_dcr:
+                assert cfg.token_endpoint_auth_style != TokenEndpointAuthStyle.NONE, name
 
     def test_custom_resource_threaded(self):
         # RFC 8707 resource indicator is carried onto the resolved config.
@@ -134,4 +208,5 @@ class TestResolveProvider:
 
     def test_builtin_has_no_resource(self):
         # Built-ins never carry a resource indicator (keeps their flow unchanged).
-        assert PROVIDER_REGISTRY["atlassian"].resource is None
+        for name, cfg in PROVIDER_REGISTRY.items():
+            assert cfg.resource is None, name

@@ -42,7 +42,7 @@ const FormField: React.FC<FormFieldProps> = ({
       {error ? (
         <p className={FIELD_ERROR}>{error}</p>
       ) : hint ? (
-        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{hint}</p>
+        <p className="mt-1 text-xs text-fg-subtle">{hint}</p>
       ) : null}
     </div>
   );

@@ -494,11 +494,28 @@ export class KeycloakService extends Construct {
         streamPrefix: 'ecs',
       }),
       healthCheck: {
-        command: ['CMD-SHELL', 'exit 0'],
+        // Probe Keycloak's own readiness on the management port. `exit 0`
+        // reported every task healthy, so ECS never replaced a wedged one:
+        // the ALB target group would stop routing to it, but the task stayed.
+        //
+        // bash + /dev/tcp rather than curl, because the Keycloak image ships
+        // neither curl nor wget. Parity with
+        // terraform/aws-ecs/keycloak-ecs.tf.
+        command: [
+          'CMD',
+          '/bin/bash',
+          '-c',
+          "{ printf 'HEAD /health/ready HTTP/1.0\\r\\n\\r\\n' >&0; grep 'HTTP/1.[01] 200'; } 0<>/dev/tcp/localhost/9000",
+        ],
         interval: cdk.Duration.seconds(30),
         timeout: cdk.Duration.seconds(5),
         retries: 3,
-        startPeriod: cdk.Duration.seconds(60),
+        // 120s, not the 60s used while the check was `exit 0`: Keycloak runs
+        // its database schema migration on first boot, and a real probe that
+        // starts counting failures too early puts the task in a restart loop
+        // before the migration finishes. Parity with
+        // terraform/aws-ecs/keycloak-ecs.tf.
+        startPeriod: cdk.Duration.seconds(120),
       },
       readonlyRootFilesystem: false,
     });

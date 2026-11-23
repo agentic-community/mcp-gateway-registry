@@ -455,6 +455,21 @@ class EgressOAuthConfig(BaseModel):
         "When set, the egress OAuth callback rejects a sign-in reply whose iss names a "
         "different issuer. Empty keeps the callback as before.",
     )
+    # Dynamic Client Registration (requires_dcr providers only). Written when the
+    # gateway registers its own client, so a later save can tell whether the
+    # stored client_id still fits the provider, callback URL and scopes.
+    dcr_provider: str | None = Field(
+        default=None,
+        description="Provider the stored client_id was registered for by the gateway.",
+    )
+    dcr_redirect_uri: str | None = Field(
+        default=None,
+        description="redirect_uri sent in the registration request.",
+    )
+    dcr_scopes: list[str] | None = Field(
+        default=None,
+        description="Scope list sent in the registration request.",
+    )
     updated_at: str | None = None
 
 
@@ -698,6 +713,29 @@ class ServerInfo(ProxyableMixin):
     proxy_pass_url: str | None = None
     tags: list[str] = Field(default_factory=list)
     num_tools: int = 0
+    num_mcp_app_tools: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Number of tools that open an MCP App page (an interactive UI the chat "
+            "client renders). Set by tool discovery; 0 means the server ships no MCP App."
+        ),
+    )
+    tool_list_hash: str | None = Field(
+        default=None,
+        description=(
+            "SHA-256 over every tool's name, description, inputSchema, title, "
+            "annotations and outputSchema. Set when tool discovery saves the tool "
+            "list. Compare it to tell whether a server's tools changed."
+        ),
+    )
+    tool_list_changed_at: str | None = Field(
+        default=None,
+        description=(
+            "ISO 8601 UTC time tool discovery last saved a tool list that differed "
+            "from the stored one. None until the first change is seen."
+        ),
+    )
     license: str = "N/A"
     tool_list: list[dict[str, Any]] = Field(default_factory=list)
     is_enabled: bool = False

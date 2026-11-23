@@ -324,10 +324,12 @@ class TestGenerateVirtualBackendLocations:
 
         assert "/_vs_backend" in result
         assert "internal;" in result
-        # A normal external host (has a dot) uses a literal proxy_pass that nginx
-        # resolves once at startup, so there is no per-request DNS cost and no
-        # resolver directive for this common case.
-        assert "proxy_pass https://api.github.com/mcp" in result
+        # nginx never connects to the backend: the location proxies to the
+        # auth-server hop, which connects on a pinned, SSRF-guarded client to the
+        # URL signed into the hop token.
+        assert "proxy_pass http://localhost:8888/mcp-proxy/github/;" in result
+        assert 'set $backend_url "https://api.github.com/mcp";' in result
+        assert "proxy_pass https://api.github.com" not in result
         assert "resolver " not in result
 
     @pytest.mark.asyncio
@@ -344,7 +346,7 @@ class TestGenerateVirtualBackendLocations:
         service = NginxConfigService()
         result = await service._generate_virtual_backend_locations([vs])
 
-        assert "proxy_pass https://insights.example.com/mcp/http;" in result
+        assert 'set $backend_url "https://insights.example.com/mcp/http";' in result
         assert "/mcp/http/mcp" not in result
 
     @pytest.mark.parametrize(
@@ -355,7 +357,7 @@ class TestGenerateVirtualBackendLocations:
     async def test_root_mcp_endpoint_replaces_internal_capture_uri(
         self, mock_server_repository, endpoint
     ):
-        """The backend must receive POST /, never POST /_vs_backend... ."""
+        """The signed backend URL is the root endpoint, never the internal capture URI."""
         vs = _make_vs_config()
         mock_server_repository.get.return_value = {
             "is_enabled": True,
@@ -366,7 +368,8 @@ class TestGenerateVirtualBackendLocations:
         from registry.core.nginx_service import NginxConfigService
 
         blocks = await NginxConfigService()._generate_virtual_backend_locations([vs])
-        assert "proxy_pass https://knowledge-mcp.global.api.aws/;" in blocks
+        assert 'set $backend_url "https://knowledge-mcp.global.api.aws";' in blocks
+        assert not re.search(r'set \$backend_url "[^"]*_vs_backend', blocks)
 
     @pytest.mark.asyncio
     async def test_explicit_mcp_endpoint_keeps_proxy_host(self, mock_server_repository):
@@ -383,21 +386,18 @@ class TestGenerateVirtualBackendLocations:
         service = NginxConfigService()
         result = await service._generate_virtual_backend_locations([vs])
 
-        assert re.search(
-            r'set \$vs_backend_[0-9a-f]{16} "http://insights-service:8000/custom/mcp/http"',
-            result,
-        )
+        assert 'set $backend_url "http://insights-service:8000/custom/mcp/http";' in result
         assert "public.example.com" not in result
 
     @pytest.mark.asyncio
-    async def test_credentials_not_forwarded_to_untrusted_backend(self, mock_server_repository):
-        """The caller's credential must not be relayed to a registrant-controlled backend.
+    async def test_credentials_are_left_for_the_hop_to_strip(self, mock_server_repository):
+        """The caller's credential reaches only the auth-server hop, never the backend.
 
-        This location proxies directly to the MCP backend URL supplied by whoever
-        registered the server. Forwarding ``Authorization`` or the parent
-        request's ``Cookie`` (inherited by the Lua subrequest) would leak the
-        caller's registry-scoped token or session cookie to that untrusted
-        upstream. Both must be cleared instead.
+        The location proxies to /mcp-proxy, whose _forward_headers strips
+        Authorization, X-Authorization and Cookie before connecting to the
+        backend. The hop needs the bearer for the OBO exchange and the built-in
+        registry tools relay, so nginx must not clear it here, and must not set
+        it from a client-controlled variable either.
         """
         vs = _make_vs_config()
         mock_server_repository.get.return_value = {
@@ -409,13 +409,12 @@ class TestGenerateVirtualBackendLocations:
 
         service = NginxConfigService()
         result = await service._generate_virtual_backend_locations([vs])
+        block = _location_block(result, "/_vs_backend_github")
 
-        assert 'proxy_set_header Authorization "";' in result
-        assert "proxy_set_header Authorization $http_authorization;" not in result
-        # The Lua subrequest inherits the parent request's Cookie header, so the
-        # user's registry session cookie must also be cleared before reaching
-        # the untrusted backend.
-        assert 'proxy_set_header Cookie "";' in result
+        assert "proxy_pass http://localhost:8888/mcp-proxy/github/;" in block
+        assert "proxy_set_header Authorization" not in block
+        assert 'proxy_set_header Cookie "";' in block
+        assert 'proxy_set_header Proxy-Authorization "";' in block
 
     @pytest.mark.asyncio
     async def test_identity_headers_forwarded_via_http_vars(self, mock_server_repository):
@@ -449,11 +448,9 @@ class TestGenerateVirtualBackendLocations:
         assert "proxy_set_header X-Username $auth_username" not in result
 
     @pytest.mark.asyncio
-    async def test_bare_hostname_backend_uses_deferred_resolution(self, mock_server_repository):
-        """Bare hostnames defer DNS resolution so they cannot crash nginx at startup."""
+    async def test_bare_hostname_backend_needs_no_nginx_resolution(self, mock_server_repository):
+        """nginx never resolves a backend host, so a bare name cannot stop it starting."""
         vs = _make_vs_config()
-        # A docker-compose-style service name (no dot) is not resolvable in every
-        # environment; a literal proxy_pass to it would make nginx fail to start.
         mock_server_repository.get.return_value = {
             "is_enabled": True,
             "proxy_pass_url": "http://currenttime-server:8000/",
@@ -464,13 +461,9 @@ class TestGenerateVirtualBackendLocations:
         service = NginxConfigService()
         result = await service._generate_virtual_backend_locations([vs])
 
-        # Resolver + variable form means nginx resolves at request time, turning an
-        # unresolvable backend into a per-request 502 instead of a startup crash.
-        assert "resolver " in result
-        assert re.search(
-            r'set \$vs_backend_[0-9a-f]{16} "http://currenttime-server:8000/mcp"', result
-        )
-        assert re.search(r"proxy_pass \$vs_backend_[0-9a-f]{16};", result)
+        assert "resolver " not in result
+        assert "proxy_pass http://currenttime-server" not in result
+        assert 'set $backend_url "http://currenttime-server:8000/mcp";' in result
 
     @pytest.mark.asyncio
     async def test_pinned_mapping_uses_its_version_document_backend(self, mock_server_repository):
@@ -505,8 +498,6 @@ class TestGenerateVirtualBackendLocations:
 
         service = NginxConfigService()
         blocks = await service._generate_virtual_backend_locations([vs])
-        variables = re.findall(r'        set (\$vs_backend_[0-9a-f]{16}) "http://', blocks)
-        assert len(variables) == len(set(variables)) == 2
         assert blocks.count("    location = /_vs_backend") == 2
         assert 'set $backend_url "http://new-service:8000/mcp";' in blocks
         assert 'set $backend_url "http://old-service:8000/mcp";' in blocks
@@ -556,6 +547,47 @@ class TestGenerateVirtualBackendLocations:
             data = json.loads((Path(tmpdir) / "dev-essentials.json").read_text())
 
         assert data["tools"][0]["inputSchema"] == schema
+
+    @pytest.mark.asyncio
+    async def test_mapping_carries_backend_tool_annotations(self, mock_server_repository):
+        """The Lua fallback tools/list reads the mapping file, so the mapping must
+        carry the backend tool's title, annotations and outputSchema. Invalid
+        stored hints are dropped, and a tool without them gets no extra keys."""
+        vs = _make_vs_config(
+            tool_mappings=[
+                ToolMapping(tool_name="delete_note", backend_server_path="/notes"),
+                ToolMapping(tool_name="ping", backend_server_path="/notes"),
+            ]
+        )
+        mock_server_repository.get.side_effect = {
+            "/notes": {
+                "is_enabled": True,
+                "proxy_pass_url": "http://svc:8000/mcp",
+                "tool_list": [
+                    {
+                        "name": "delete_note",
+                        "description": "Delete",
+                        "title": "Delete note",
+                        "annotations": {"destructiveHint": True, "readOnlyHint": "no"},
+                        "outputSchema": {"type": "object"},
+                    },
+                    {"name": "ping", "description": "Ping"},
+                ],
+            },
+        }.get
+        from registry.core.nginx_service import NginxConfigService
+
+        with TemporaryDirectory() as tmpdir:
+            with patch("registry.core.nginx_service.VIRTUAL_MAPPINGS_DIR", Path(tmpdir)):
+                await NginxConfigService()._write_virtual_server_mappings([vs])
+            data = json.loads((Path(tmpdir) / "dev-essentials.json").read_text())
+
+        by_name = {tool["name"]: tool for tool in data["tools"]}
+        assert by_name["delete_note"]["annotations"] == {"destructiveHint": True}
+        assert by_name["delete_note"]["title"] == "Delete note"
+        assert by_name["delete_note"]["outputSchema"] == {"type": "object"}
+        for key in ("annotations", "title", "outputSchema"):
+            assert key not in by_name["ping"]
 
     @pytest.mark.asyncio
     async def test_versioned_path_without_explicit_pin_uses_selected_doc(
@@ -810,6 +842,30 @@ class TestGenerateVirtualBackendLocations:
         assert 'set $backend_url "https://plain.example.com/mcp";' in auth_block
 
     @pytest.mark.asyncio
+    async def test_backend_authorization_blanks_the_client_cognito_headers(
+        self, mock_server_repository
+    ):
+        """The per-backend /validate location sends no client X-User-Pool-Id or X-Client-Id.
+
+        It proxies straight to the auth server with the client's request headers,
+        so it blanks the headers the shared /validate location blanks.
+        """
+        from registry.core.nginx_service import NginxConfigService
+
+        mock_server_repository.get.return_value = {
+            "is_enabled": True,
+            "proxy_pass_url": "https://plain.example.com/mcp",
+        }
+        vs = _make_vs_config(
+            tool_mappings=[ToolMapping(tool_name="t", backend_server_path="/plain")]
+        )
+        result = await NginxConfigService()._generate_virtual_backend_locations([vs])
+        auth_block = result.split("location = /_vs_auth_plain {", 1)[1].split("\n    }", 1)[0]
+
+        for header in ("X-User-Pool-Id", "X-Client-Id", "X-Region"):
+            assert f'proxy_set_header {header} "";' in auth_block, header
+
+    @pytest.mark.asyncio
     async def test_paths_differing_only_in_punctuation_get_distinct_locations(
         self, mock_server_repository
     ):
@@ -858,6 +914,109 @@ class TestGenerateVirtualBackendLocations:
         assert "location = /_vs_backend_airegistry-tools" in result
 
     @pytest.mark.asyncio
+    async def test_builtin_backend_routes_through_mcp_proxy(self, mock_server_repository):
+        """Issue #2060: the built-in keeps the caller's bearer via the MCP proxy relay."""
+        from registry.core.nginx_service import NginxConfigService
+
+        mock_server_repository.get.return_value = {
+            "is_enabled": True,
+            "proxy_pass_url": "http://mcpgw-server:8003/",
+            "egress_auth_mode": "none",
+        }
+        vs = _make_vs_config(
+            tool_mappings=[
+                ToolMapping(tool_name="search_registry", backend_server_path="/airegistry-tools")
+            ]
+        )
+        result = await NginxConfigService()._generate_virtual_backend_locations([vs])
+        block = _location_block(result, "/_vs_backend_airegistry-tools")
+
+        assert "/mcp-proxy/airegistry-tools/;" in block
+        assert "proxy_set_header X-Internal-Token $http_x_internal_token;" in block
+        assert 'proxy_set_header X-Registered-Route-Mode "virtual";' in block
+        assert "proxy_pass http://mcpgw-server:8003" not in block
+        assert 'proxy_set_header Authorization "";' not in block
+        assert 'proxy_set_header X-Authorization "";' not in block
+
+    @pytest.mark.asyncio
+    async def test_repointed_builtin_path_is_not_brokered(self, mock_server_repository, tmp_path):
+        """/airegistry-tools pointed at another target routes like any backend.
+
+        It still goes through the pinned /mcp-proxy hop, but it is not the
+        built-in, so the mapping does not mark it for live discovery, and the
+        hop's own exact-identity check (_relays_ingress_auth) withholds the
+        caller's bearer from it.
+        """
+        from registry.core.nginx_service import NginxConfigService
+
+        mock_server_repository.get.return_value = {
+            "is_enabled": True,
+            "proxy_pass_url": "https://elsewhere.example.com/mcp",
+            "egress_auth_mode": "none",
+        }
+        vs = _make_vs_config(
+            tool_mappings=[ToolMapping(tool_name="search", backend_server_path="/airegistry-tools")]
+        )
+        result = await NginxConfigService()._generate_virtual_backend_locations([vs])
+        block = _location_block(result, "/_vs_backend_airegistry-tools")
+        mapping = await _write_mappings_and_read(vs, str(tmp_path))
+
+        assert "/mcp-proxy/airegistry-tools/;" in block
+        assert "proxy_pass https://elsewhere.example.com" not in result
+        assert mapping["tools"][0]["live_discovery"] is False
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("backend_path", "proxy_pass_url"),
+        [
+            ("/airegistry-tools-copy", "http://mcpgw-server:8003/"),
+            ("/airegistry-tools", "http://mcpgw-server:9000/"),
+        ],
+    )
+    async def test_lookalike_builtin_target_is_not_rendered(
+        self,
+        mock_server_repository,
+        backend_path,
+        proxy_pass_url,
+    ):
+        """The reserved mcpgw host outside the exact built-in identity gets no location."""
+        from registry.core.nginx_service import NginxConfigService
+
+        mock_server_repository.get.return_value = {
+            "is_enabled": True,
+            "proxy_pass_url": proxy_pass_url,
+            "egress_auth_mode": "none",
+        }
+        vs = _make_vs_config(
+            tool_mappings=[ToolMapping(tool_name="search", backend_server_path=backend_path)]
+        )
+        result = await NginxConfigService()._generate_virtual_backend_locations([vs])
+
+        assert "location = /_vs_backend" not in result
+        assert "/mcp-proxy/" not in result
+
+    @pytest.mark.asyncio
+    async def test_builtin_backend_mapping_keeps_egress_mode_none(
+        self,
+        mock_server_repository,
+        tmp_path,
+    ):
+        """The Lua mapping still treats the built-in as a non-egress backend."""
+        mock_server_repository.get.return_value = {
+            "is_enabled": True,
+            "proxy_pass_url": "http://mcpgw-server:8003/",
+            "egress_auth_mode": "none",
+        }
+        vs = _make_vs_config(
+            tool_mappings=[
+                ToolMapping(tool_name="search_registry", backend_server_path="/airegistry-tools")
+            ]
+        )
+        mapping = await _write_mappings_and_read(vs, str(tmp_path))
+
+        assert mapping["tools"][0]["egress_auth_mode"] == "none"
+
+    @pytest.mark.asyncio
     async def test_backend_auth_uses_bounded_validation_timeouts(self, mock_server_repository):
         """A stalled auth-server cannot hold each virtual subrequest for 60 seconds."""
         from registry.core.nginx_service import NginxConfigService
@@ -878,8 +1037,8 @@ class TestGenerateVirtualBackendLocations:
             assert directive in auth_block
 
     @pytest.mark.asyncio
-    async def test_plain_backend_clears_all_gateway_credentials(self, mock_server_repository):
-        """Plain backend still proxies directly, never receiving internal tokens."""
+    async def test_plain_backend_goes_through_the_mcp_proxy(self, mock_server_repository):
+        """A non-egress backend uses the same pinned hop as an egress backend."""
         mock_server_repository.get.return_value = {
             "is_enabled": True,
             "proxy_pass_url": "https://backend.example.com/mcp",
@@ -889,22 +1048,18 @@ class TestGenerateVirtualBackendLocations:
         from registry.core.nginx_service import NginxConfigService
 
         result = await NginxConfigService()._generate_virtual_backend_locations([_make_vs_config()])
+        block = _location_block(result, "/_vs_backend_github")
 
-        assert "proxy_pass https://backend.example.com/mcp;" in result
-        assert "/mcp-proxy/github/" not in result
-        for name in (
-            "Authorization",
-            "X-Authorization",
-            "Cookie",
-            "X-Internal-Token",
-            "X-Internal-Token-Generic",
-            "X-Internal-Token-Registry",
-        ):
-            assert f'proxy_set_header {name} "";' in result
+        assert "proxy_pass http://localhost:8888/mcp-proxy/github/;" in block
+        assert "proxy_pass https://backend.example.com" not in result
+        assert "proxy_set_header X-Internal-Token $http_x_internal_token;" in block
+        assert 'proxy_set_header X-Registered-Route-Mode "virtual";' in block
+        for name in ("Cookie", "X-Internal-Token-Generic", "X-Internal-Token-Registry"):
+            assert f'proxy_set_header {name} "";' in block
 
     @pytest.mark.asyncio
     async def test_plain_backend_clears_every_reserved_header(self, mock_server_repository):
-        """Every reserved header except framing and re-set identity is cleared."""
+        """Every reserved header the hop does not read is cleared before it."""
         mock_server_repository.get.return_value = {
             "is_enabled": True,
             "proxy_pass_url": "https://backend.example.com/mcp",
@@ -915,9 +1070,11 @@ class TestGenerateVirtualBackendLocations:
         block = _location_block(result, "/_vs_backend_github")
 
         cleared = {name.lower() for name in re.findall(r'proxy_set_header (\S+) "";', block)}
+        # The caller's credentials and the signed hop token are the hop's inputs:
+        # it strips them itself before the backend.
         assert cleared == {
-            "authorization",
-            "x-authorization",
+            # An ordinary backend never sends an OpenAPI MCP admission marker.
+            "x-openapi-mcp-admission",
             "proxy-authorization",
             "cookie",
             "set-cookie",
@@ -936,7 +1093,6 @@ class TestGenerateVirtualBackendLocations:
             "x-tool-name",
             "x-entity-path",
             "x-original-method",
-            "x-internal-token",
             "x-internal-token-generic",
             "x-internal-token-registry",
             "x-generic-proxy-kind",
@@ -971,6 +1127,21 @@ class TestGenerateVirtualBackendLocations:
         # Every ingress credential must stay on the stripped side of the carve-outs.
         for credential in ("authorization", "x-authorization", "proxy-authorization", "cookie"):
             assert credential in _VS_BACKEND_STRIPPED_HEADERS
+
+    def test_hop_clears_everything_stripped_except_its_own_inputs(self):
+        """The virtual hop keeps only what the auth server reads, and strips itself."""
+        from registry.core.nginx_service import (
+            _VS_BACKEND_STRIPPED_HEADERS,
+            _VS_MCP_PROXY_CLEARED_HEADERS,
+            _VS_MCP_PROXY_HOP_INPUT_HEADERS,
+        )
+
+        assert _VS_MCP_PROXY_CLEARED_HEADERS == (
+            _VS_BACKEND_STRIPPED_HEADERS - _VS_MCP_PROXY_HOP_INPUT_HEADERS
+        )
+        assert {"cookie", "proxy-authorization", "x-scopes", "x-groups"} <= (
+            _VS_MCP_PROXY_CLEARED_HEADERS
+        )
 
     @pytest.mark.asyncio
     async def test_backend_auth_still_receives_the_caller_bearer(self, mock_server_repository):
@@ -1071,12 +1242,31 @@ class TestGenerateVirtualBackendLocations:
         assert mapping["tools"] == []
 
     @pytest.mark.asyncio
-    async def test_auth_expired_backend_stays_routable(
+    async def test_auth_expired_egress_backend_stays_routable(
         self,
         mock_server_repository,
         _backends_healthy,
     ):
-        """An expired-auth backend is up, so the direct route keeps it and so do we."""
+        """An egress backend gets each user's credential, so auth-expired keeps it."""
+        _backends_healthy.return_value = "healthy-auth-expired"
+        mock_server_repository.get.return_value = {
+            "is_enabled": True,
+            "egress_auth_mode": "pat",
+            "proxy_pass_url": "https://backend.example.com/mcp",
+        }
+        from registry.core.nginx_service import NginxConfigService
+
+        result = await NginxConfigService()._generate_virtual_backend_locations([_make_vs_config()])
+
+        assert "location = /_vs_backend_github {" in result
+
+    @pytest.mark.asyncio
+    async def test_auth_expired_plain_backend_is_left_out(
+        self,
+        mock_server_repository,
+        _backends_healthy,
+    ):
+        """A plain backend that refuses the gateway would list tools that fail (#2079)."""
         _backends_healthy.return_value = "healthy-auth-expired"
         mock_server_repository.get.return_value = {
             "is_enabled": True,
@@ -1086,7 +1276,24 @@ class TestGenerateVirtualBackendLocations:
 
         result = await NginxConfigService()._generate_virtual_backend_locations([_make_vs_config()])
 
-        assert "location = /_vs_backend_github {" in result
+        assert "location = /_vs_backend_github {" not in result
+
+    @pytest.mark.asyncio
+    async def test_registry_credential_backend_is_left_out(
+        self,
+        mock_server_repository,
+    ):
+        """The virtual path never sends a registry-level credential (#2079)."""
+        mock_server_repository.get.return_value = {
+            "is_enabled": True,
+            "auth_scheme": "bearer",
+            "proxy_pass_url": "https://backend.example.com/mcp",
+        }
+        from registry.core.nginx_service import NginxConfigService
+
+        result = await NginxConfigService()._generate_virtual_backend_locations([_make_vs_config()])
+
+        assert "location = /_vs_backend_github {" not in result
 
     @pytest.mark.asyncio
     async def test_health_is_read_for_the_active_document_path(
@@ -1281,6 +1488,243 @@ class TestWriteVirtualServerMappings:
         for location in mapped:
             assert f"location = {location} {{" in locations
 
+    @pytest.mark.asyncio
+    async def test_omitted_tool_warns_once_until_reset(self, mock_server_repository, caplog):
+        """The scheduler re-renders every few seconds; an omitted tool must log one
+        WARNING, then DEBUG on repeats, and WARNING again after mark_dirty resets."""
+        import logging
+
+        from registry.core.nginx_service import NginxConfigService
+
+        mock_server_repository.get.side_effect = lambda path: None
+        vs = _make_vs_config(
+            tool_mappings=[ToolMapping(tool_name="gone", backend_server_path="/deleted")]
+        )
+        service = NginxConfigService()
+
+        def _omit_warnings() -> int:
+            return sum(
+                1
+                for record in caplog.records
+                if record.levelno == logging.WARNING and "Omitting tool" in record.message
+            )
+
+        caplog.set_level(logging.DEBUG, logger="registry.core.nginx_service")
+        with TemporaryDirectory() as tmpdir:
+            with patch("registry.core.nginx_service.VIRTUAL_MAPPINGS_DIR", Path(tmpdir)):
+                await service._write_virtual_server_mappings([vs])
+                await service._write_virtual_server_mappings([vs])
+                assert _omit_warnings() == 1
+
+                service.reset_virtual_warnings()
+                await service._write_virtual_server_mappings([vs])
+                assert _omit_warnings() == 2
+
+
+def _github_backend(
+    tool: dict,
+    **extra: object,
+) -> dict:
+    """Return a healthy GitHub backend document with one stored tool."""
+    document = {
+        "server_name": "GitHub",
+        "is_enabled": True,
+        "proxy_pass_url": "https://github.example.com/mcp",
+        "tool_list": [tool],
+    }
+    document.update(extra)
+    return document
+
+
+class TestMappingDiscoveryFlags:
+    """Mapping fields the virtual router uses to answer discovery (issue #2079)."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("refresh_enabled", [True, False])
+    async def test_serve_tools_from_mapping_follows_tool_refresh(
+        self,
+        mock_server_repository,
+        refresh_enabled,
+    ):
+        """The mapping answers tools/list only while tool refresh keeps it current."""
+        mock_server_repository.get.return_value = _github_backend(
+            {"name": "search", "inputSchema": {"type": "object"}}
+        )
+
+        with (
+            patch("registry.core.nginx_service.settings.tool_refresh_enabled", refresh_enabled),
+            TemporaryDirectory() as tmpdir,
+        ):
+            mapping = await _write_mappings_and_read(_make_vs_config(), tmpdir)
+
+        assert mapping["serve_tools_from_mapping"] is refresh_enabled
+
+    @pytest.mark.asyncio
+    async def test_resources_advertised_only_for_mcp_app_tools(
+        self,
+        mock_server_repository,
+    ):
+        """A ui:// page needs resources/read, so only then are resources advertised."""
+        mock_server_repository.get.return_value = _github_backend(
+            {"name": "search", "inputSchema": {"type": "object"}}
+        )
+        with TemporaryDirectory() as tmpdir:
+            plain = await _write_mappings_and_read(_make_vs_config(), tmpdir)
+
+        mock_server_repository.get.return_value = _github_backend(
+            {
+                "name": "search",
+                "inputSchema": {"type": "object"},
+                "ui_resource_uri": "ui://search/page",
+            }
+        )
+        with TemporaryDirectory() as tmpdir:
+            app = await _write_mappings_and_read(_make_vs_config(), tmpdir)
+
+        assert plain["advertise_resources"] is False
+        assert app["advertise_resources"] is True
+        # The router asks only MCP App backends for resources.
+        assert plain["tools"][0]["mcp_app"] is False
+        assert app["tools"][0]["mcp_app"] is True
+
+    @pytest.mark.asyncio
+    async def test_live_discovery_marks_egress_backends(
+        self,
+        mock_server_repository,
+    ):
+        """An egress backend's list can depend on the user, so it stays live."""
+        tool = {"name": "search", "inputSchema": {"type": "object"}}
+        mock_server_repository.get.return_value = _github_backend(tool)
+        with TemporaryDirectory() as tmpdir:
+            plain = await _write_mappings_and_read(_make_vs_config(), tmpdir)
+
+        mock_server_repository.get.return_value = _github_backend(tool, egress_auth_mode="pat")
+        with TemporaryDirectory() as tmpdir:
+            egress = await _write_mappings_and_read(_make_vs_config(), tmpdir)
+
+        assert plain["tools"][0]["live_discovery"] is False
+        assert egress["tools"][0]["live_discovery"] is True
+
+    @pytest.mark.asyncio
+    async def test_live_discovery_marks_mcp_app_backends(
+        self,
+        mock_server_repository,
+    ):
+        """An MCP App tool's _meta.ui page is not in the stored list, so its backend stays live.
+
+        With TOOL_REFRESH_ENABLED the router answers tools/list from the mapping,
+        which keeps only title, annotations and outputSchema. That dropped the
+        tools' _meta (the ui:// page) and execution, so clients never opened the
+        app (1.38.1 regression).
+        """
+        app_tool = {
+            "name": "search",
+            "inputSchema": {"type": "object"},
+            "ui_resource_uri": "ui://search/page",
+        }
+        mock_server_repository.get.return_value = _github_backend(app_tool)
+        with (
+            patch("registry.core.nginx_service.settings.tool_refresh_enabled", True),
+            TemporaryDirectory() as tmpdir,
+        ):
+            mapping = await _write_mappings_and_read(_make_vs_config(), tmpdir)
+
+        assert mapping["tools"][0]["live_discovery"] is True
+
+    @pytest.mark.asyncio
+    async def test_live_discovery_covers_plain_tools_of_an_mcp_app_backend(
+        self,
+        mock_server_repository,
+    ):
+        """A mapped plain tool on an MCP App backend also keeps the backend's _meta."""
+        backend = _github_backend({"name": "search", "inputSchema": {"type": "object"}})
+        backend["tool_list"].append(
+            {"name": "draw", "inputSchema": {"type": "object"}, "ui_resource_uri": "ui://d/page"}
+        )
+        mock_server_repository.get.return_value = backend
+        with TemporaryDirectory() as tmpdir:
+            mapping = await _write_mappings_and_read(_make_vs_config(), tmpdir)
+
+        assert (mapping["tools"][0]["mcp_app"], mapping["tools"][0]["live_discovery"]) == (
+            False,
+            True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_mcp_app_mapping_carries_the_claude_ui_domain_per_path(
+        self,
+        mock_server_repository,
+        monkeypatch,
+    ):
+        """Claude shows a page only when ui.domain hashes the URL the user added.
+
+        The router replaces the backend's value with these on resources/read.
+        """
+        import hashlib
+
+        monkeypatch.setenv("REGISTRY_URL", "https://gw.example.com")
+        monkeypatch.delenv("AUTH_SERVER_EXTERNAL_URL", raising=False)
+        monkeypatch.setenv("ROOT_PATH", "")
+        mock_server_repository.get.return_value = _github_backend(
+            {"name": "search", "inputSchema": {"type": "object"}, "ui_resource_uri": "ui://s/p"}
+        )
+        with TemporaryDirectory() as tmpdir:
+            mapping = await _write_mappings_and_read(_make_vs_config(), tmpdir)
+
+        url = "https://gw.example.com/virtual/dev-essentials/mcp"
+        expected = hashlib.sha256(url.encode()).hexdigest()[:32] + ".claudemcpcontent.com"
+        domains = mapping["mcp_app_ui_domains"]
+        assert domains["/virtual/dev-essentials/mcp"] == [expected]
+        assert set(domains) == {
+            "/virtual/dev-essentials",
+            "/virtual/dev-essentials/",
+            "/virtual/dev-essentials/mcp",
+            "/virtual/dev-essentials/mcp/",
+        }
+
+    @pytest.mark.asyncio
+    async def test_ui_domains_only_for_mcp_app_backends_and_a_public_url(
+        self,
+        mock_server_repository,
+        monkeypatch,
+    ):
+        """No MCP App tool, no domains; no configured public URL, no domains."""
+        monkeypatch.setenv("REGISTRY_URL", "https://gw.example.com")
+        mock_server_repository.get.return_value = _github_backend(
+            {"name": "search", "inputSchema": {"type": "object"}}
+        )
+        with TemporaryDirectory() as tmpdir:
+            plain = await _write_mappings_and_read(_make_vs_config(), tmpdir)
+
+        monkeypatch.setenv("REGISTRY_URL", "")
+        monkeypatch.setenv("AUTH_SERVER_EXTERNAL_URL", "")
+        mock_server_repository.get.return_value = _github_backend(
+            {"name": "search", "inputSchema": {"type": "object"}, "ui_resource_uri": "ui://s/p"}
+        )
+        with TemporaryDirectory() as tmpdir:
+            no_origin = await _write_mappings_and_read(_make_vs_config(), tmpdir)
+
+        assert ("mcp_app_ui_domains" in plain, no_origin["mcp_app_ui_domains"]) == (False, {})
+
+    @pytest.mark.asyncio
+    async def test_mapping_is_written_as_compact_json(
+        self,
+        mock_server_repository,
+    ):
+        """The router copies the whole file into a shared dict, so no indentation."""
+        from registry.core.nginx_service import NginxConfigService
+
+        mock_server_repository.get.return_value = _github_backend(
+            {"name": "search", "inputSchema": {"type": "object"}}
+        )
+        with TemporaryDirectory() as tmpdir:
+            with patch("registry.core.nginx_service.VIRTUAL_MAPPINGS_DIR", Path(tmpdir)):
+                await NginxConfigService()._write_virtual_server_mappings([_make_vs_config()])
+            text = (Path(tmpdir) / "dev-essentials.json").read_text()
+
+        assert "\n" not in text
+        assert ", " not in text and ": " not in text
+
 
 class TestEncodePathForLocation:
     """Tests for _encode_path_for_location."""
@@ -1306,37 +1750,3 @@ class TestEncodePathForLocation:
 
         encoded = NginxConfigService._encode_path_for_location("/ai.smithery-test/x_y")
         assert re.fullmatch(r"[A-Za-z0-9_.\-]+", encoded)
-
-
-class TestIsHostResolvableAtStartup:
-    """Tests for the upstream host resolvability heuristic."""
-
-    def test_fqdn_is_resolvable(self):
-        """A dotted hostname (FQDN) is safe to resolve at config load."""
-        from registry.core.nginx_service import NginxConfigService
-
-        assert NginxConfigService._is_host_resolvable_at_startup("api.github.com") is True
-
-    def test_ipv4_is_resolvable(self):
-        """An IPv4 literal is safe to resolve at config load."""
-        from registry.core.nginx_service import NginxConfigService
-
-        assert NginxConfigService._is_host_resolvable_at_startup("10.0.0.5") is True
-
-    def test_ipv6_is_resolvable(self):
-        """An IPv6 literal (contains colons) is safe to resolve at config load."""
-        from registry.core.nginx_service import NginxConfigService
-
-        assert NginxConfigService._is_host_resolvable_at_startup("::1") is True
-
-    def test_bare_hostname_is_not_resolvable(self):
-        """A bare service name with no dot is not safe to resolve at startup."""
-        from registry.core.nginx_service import NginxConfigService
-
-        assert NginxConfigService._is_host_resolvable_at_startup("currenttime-server") is False
-
-    def test_empty_hostname_is_not_resolvable(self):
-        """An empty hostname is treated as not safe."""
-        from registry.core.nginx_service import NginxConfigService
-
-        assert NginxConfigService._is_host_resolvable_at_startup("") is False

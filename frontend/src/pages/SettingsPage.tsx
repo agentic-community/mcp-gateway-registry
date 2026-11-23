@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { Suspense, lazy, useState, useEffect } from 'react';
+import clsx from 'clsx';
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
   ChevronDownIcon,
@@ -18,7 +19,7 @@ import FederationPeers from '../components/FederationPeers';
 import FederationPeerForm from '../components/FederationPeerForm';
 import ConfigPanel from '../components/ConfigPanel';
 import VirtualServerList from '../components/VirtualServerList';
-import AuditLogsPage from './AuditLogsPage';
+import PageFallback from '../components/PageFallback';
 import IAMGroups from '../components/IAMGroups';
 import IAMUsers from '../components/IAMUsers';
 import IAMM2M from '../components/IAMM2M';
@@ -31,6 +32,10 @@ import DataExport from '../components/DataExport';
 import { useAuth } from '../contexts/AuthContext';
 import { canAccessSettings } from '../utils/permissions';
 import { useRegistryConfig } from '../hooks/useRegistryConfig';
+
+// The audit grid (AG Grid) is the heaviest settings panel; load it on demand
+// so the other settings panels do not download it.
+const AuditLogsPage = lazy(() => import('./AuditLogsPage'));
 
 
 interface ToastState {
@@ -286,7 +291,7 @@ const SettingsPage: React.FC = () => {
 
     // Audit > Logs
     if (path === '/settings/audit/logs' || path === '/settings/audit') {
-      return <AuditLogsPage embedded />;
+      return <AuditLogsPage />;
     }
 
     // Application Logs > Viewer
@@ -377,47 +382,51 @@ const SettingsPage: React.FC = () => {
     }
 
     // Default to Audit Logs (all settings require admin)
-    return <AuditLogsPage embedded />;
+    return <AuditLogsPage />;
   };
 
   const activeItemId = getActiveItemId();
 
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex h-full flex-col">
       {/* Header with back button */}
-      <div className="flex items-center space-x-4 mb-6">
+      <div className="mb-6 flex items-center gap-3">
         <button
+          type="button"
           onClick={() => navigate('/')}
-          className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800
-                     text-gray-500 dark:text-gray-400 transition-colors"
+          className="btn-icon"
           title="Back to Dashboard"
+          aria-label="Back to Dashboard"
         >
           <ArrowLeftIcon className="h-5 w-5" />
         </button>
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Settings</h1>
+        <h1 className="text-2xl font-semibold tracking-tight text-fg">Settings</h1>
       </div>
 
       {/* Main content area with sidebar */}
-      <div className="flex flex-1 gap-6 min-h-0">
+      <div className="flex flex-1 items-start gap-6">
         {/* Sidebar */}
-        <div className="w-64 flex-shrink-0">
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-4">
-            <nav className="space-y-1">
+        <div className="sticky top-0 w-60 flex-shrink-0">
+          <div className="card p-2">
+            <nav className="space-y-0.5" aria-label="Settings sections">
               {visibleCategories.map((category) => (
                 <div key={category.id}>
                   {/* Category header */}
                   <button
+                    type="button"
                     onClick={() => !category.disabled && toggleCategory(category.id)}
                     disabled={category.disabled}
-                    className={`w-full flex items-center justify-between px-3 py-2 text-sm font-medium rounded-lg transition-colors ${
+                    aria-expanded={!category.disabled && expandedCategories.has(category.id)}
+                    className={clsx(
+                      'flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm font-medium transition-colors',
                       category.disabled
-                        ? 'text-gray-400 dark:text-gray-600 cursor-not-allowed'
-                        : 'text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700'
-                    }`}
+                        ? 'cursor-not-allowed text-fg-subtle opacity-60'
+                        : 'text-fg hover:bg-surface-hover',
+                    )}
                   >
-                    <div className="flex items-center space-x-3">
-                      <span className={category.disabled ? 'opacity-40' : ''}>
+                    <div className="flex items-center gap-3">
+                      <span className={clsx('text-fg-subtle', category.disabled && 'opacity-40')}>
                         {category.icon}
                       </span>
                       <span>{category.label}</span>
@@ -433,16 +442,19 @@ const SettingsPage: React.FC = () => {
 
                   {/* Category items */}
                   {!category.disabled && expandedCategories.has(category.id) && (
-                    <div className="ml-8 mt-1 space-y-1">
+                    <div className="mb-1 ml-5 mt-0.5 space-y-0.5 border-l border-line pl-3">
                       {category.items.map((item) => (
                         <button
                           key={item.id}
+                          type="button"
                           onClick={() => navigate(item.path)}
-                          className={`w-full text-left px-3 py-2 text-sm rounded-lg transition-colors ${
+                          aria-current={activeItemId === item.id ? 'page' : undefined}
+                          className={clsx(
+                            'w-full rounded-lg px-3 py-1.5 text-left text-sm transition-colors',
                             activeItemId === item.id
-                              ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 font-medium'
-                              : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'
-                          }`}
+                              ? 'bg-accent-soft font-medium text-accent-soft-fg'
+                              : 'text-fg-muted hover:bg-surface-hover hover:text-fg',
+                          )}
                         >
                           {item.label}
                         </button>
@@ -456,9 +468,9 @@ const SettingsPage: React.FC = () => {
         </div>
 
         {/* Content area */}
-        <div className="flex-1 min-w-0">
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6 h-full overflow-y-auto">
-            {renderContent()}
+        <div className="min-w-0 flex-1">
+          <div className="card p-6">
+            <Suspense fallback={<PageFallback />}>{renderContent()}</Suspense>
           </div>
         </div>
       </div>
@@ -466,13 +478,11 @@ const SettingsPage: React.FC = () => {
       {/* Toast notification */}
       {toast.show && (
         <div
-          className={`fixed bottom-4 right-4 px-4 py-3 rounded-lg shadow-lg transform transition-all duration-300 ${
-            toast.type === 'success'
-              ? 'bg-green-500 text-white'
-              : toast.type === 'error'
-              ? 'bg-red-500 text-white'
-              : 'bg-blue-500 text-white'
-          }`}
+          role="status"
+          className={clsx(
+            'fixed bottom-4 right-4 z-50 rounded-lg px-4 py-3 text-sm font-medium text-white shadow-lg transition-all duration-300',
+            toast.type === 'success' ? 'bg-success-600' : toast.type === 'error' ? 'bg-danger-600' : 'bg-info-600',
+          )}
         >
           {toast.message}
         </div>

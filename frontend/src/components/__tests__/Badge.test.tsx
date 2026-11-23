@@ -10,8 +10,8 @@ describe('Badge', () => {
 
   it('applies the tone classes', () => {
     render(<Badge tone="amber">SKILL</Badge>);
-    expect(screen.getByText('SKILL').className).toContain('bg-amber-100');
-    expect(screen.getByText('SKILL').className).toContain('dark:text-amber-300');
+    expect(screen.getByText('SKILL').className).toContain('bg-warning-100');
+    expect(screen.getByText('SKILL').className).toContain('dark:text-warning-300');
   });
 
   it('defaults to a pill shape and supports square', () => {
@@ -24,7 +24,7 @@ describe('Badge', () => {
 
   it('adds a border when bordered', () => {
     render(<Badge tone="teal" bordered>VIRTUAL</Badge>);
-    expect(screen.getByText('VIRTUAL').className).toContain('border-teal-200');
+    expect(screen.getByText('VIRTUAL').className).toContain('border-virtual-200');
   });
 
   it('passes through a title', () => {

@@ -989,6 +989,70 @@ class TestCaBundle:
             url_guard.validate_forward_proxy_config()  # must not raise
 
 
+_IGNORED_PROXY_WARNING: str = "ignore it and connect direct"
+
+
+class TestProxyEnvIgnoredWarning:
+    """The guarded clients read HTTP(S)_PROXY only when the flag is on.
+
+    The bare clients they replaced honored the variables through httpx's
+    trust_env, so a deployment that set HTTPS_PROXY alone loses its proxy
+    silently. Startup says so.
+    """
+
+    @pytest.mark.parametrize("name", ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"])
+    def test_warns_when_a_proxy_variable_is_set_and_the_flag_is_unset(self, caplog, name):
+        with (
+            patch.dict("os.environ", {name: PROXY_URL}, clear=True),
+            caplog.at_level("WARNING"),
+        ):
+            url_guard.validate_forward_proxy_config()
+
+        warnings = [r.message for r in caplog.records if _IGNORED_PROXY_WARNING in r.message]
+        assert len(warnings) == 1
+        assert name in warnings[0]
+
+    def test_warns_when_the_flag_is_explicitly_false(self, caplog):
+        env = _proxy_env(enabled="false")
+        with patch.dict("os.environ", env, clear=True), caplog.at_level("WARNING"):
+            url_guard.validate_forward_proxy_config()
+
+        assert any(_IGNORED_PROXY_WARNING in r.message for r in caplog.records)
+
+    def test_the_warning_does_not_log_the_proxy_url(self, caplog):
+        """A proxy URL can carry basic-auth userinfo."""
+        secret_url = "http://user:s3cret-pass@corp-proxy.internal:3128"
+        env = _proxy_env(enabled=None, http_proxy=secret_url, https_proxy=secret_url)
+        with patch.dict("os.environ", env, clear=True), caplog.at_level("WARNING"):
+            url_guard.validate_forward_proxy_config()
+
+        assert not any("s3cret-pass" in r.getMessage() for r in caplog.records)
+
+    def test_no_warning_when_the_flag_is_on(self, caplog):
+        env = _proxy_env(
+            no_proxy="169.254.169.254,169.254.170.2,169.254.170.23",
+        )
+        with patch.dict("os.environ", env, clear=True), caplog.at_level("WARNING"):
+            url_guard.validate_forward_proxy_config()
+
+        assert not any(_IGNORED_PROXY_WARNING in r.message for r in caplog.records)
+
+    def test_no_warning_when_no_proxy_variable_is_set(self, caplog):
+        with patch.dict("os.environ", {}, clear=True), caplog.at_level("WARNING"):
+            url_guard.validate_forward_proxy_config()
+
+        assert not any(_IGNORED_PROXY_WARNING in r.message for r in caplog.records)
+
+    def test_flag_on_without_a_proxy_logs_only_the_existing_warning(self, caplog):
+        env = _proxy_env(http_proxy=None, https_proxy=None)
+        with patch.dict("os.environ", env, clear=True), caplog.at_level("WARNING"):
+            url_guard.validate_forward_proxy_config()
+
+        messages = [r.message for r in caplog.records]
+        assert not any(_IGNORED_PROXY_WARNING in m for m in messages)
+        assert any("neither HTTP_PROXY nor HTTPS_PROXY" in m for m in messages)
+
+
 # ---------------------------------------------------------------------------
 # The PLAIN egress client (issue #1834).
 #

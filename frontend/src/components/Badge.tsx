@@ -28,22 +28,22 @@ export type BadgeTone =
 
 const TONE_CLASSES: Record<BadgeTone, string> = {
   gray: 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300',
-  blue: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300',
-  cyan: 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300',
-  teal: 'bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-300',
-  green: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300',
+  blue: 'bg-info-100 text-info-700 dark:bg-info-900/30 dark:text-info-300',
+  cyan: 'bg-agent-100 text-agent-700 dark:bg-agent-900/30 dark:text-agent-300',
+  teal: 'bg-virtual-100 text-virtual-700 dark:bg-virtual-900/30 dark:text-virtual-300',
+  green: 'bg-success-100 text-success-700 dark:bg-success-900/30 dark:text-success-300',
   emerald:
-    'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300',
-  amber: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300',
+    'bg-success-100 text-success-700 dark:bg-success-900/30 dark:text-success-300',
+  amber: 'bg-warning-100 text-warning-700 dark:bg-warning-900/30 dark:text-warning-300',
   yellow:
-    'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-300',
-  red: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300',
+    'bg-warning-100 text-warning-700 dark:bg-warning-900/30 dark:text-warning-300',
+  red: 'bg-danger-100 text-danger-700 dark:bg-danger-900/30 dark:text-danger-300',
   purple:
     'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300',
   violet:
-    'bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300',
+    'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300',
   indigo:
-    'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300',
+    'bg-info-100 text-info-700 dark:bg-info-900/30 dark:text-info-300',
 };
 
 interface BadgeProps {
@@ -59,17 +59,17 @@ interface BadgeProps {
 
 const BORDER_CLASSES: Record<BadgeTone, string> = {
   gray: 'border border-gray-200 dark:border-gray-600',
-  blue: 'border border-blue-200 dark:border-blue-600',
-  cyan: 'border border-cyan-200 dark:border-cyan-600',
-  teal: 'border border-teal-200 dark:border-teal-600',
-  green: 'border border-green-200 dark:border-green-700',
-  emerald: 'border border-emerald-200 dark:border-emerald-600',
-  amber: 'border border-amber-200 dark:border-amber-600',
-  yellow: 'border border-yellow-200 dark:border-yellow-600',
-  red: 'border border-red-200 dark:border-red-600',
+  blue: 'border border-info-200 dark:border-info-600',
+  cyan: 'border border-agent-200 dark:border-agent-600',
+  teal: 'border border-virtual-200 dark:border-virtual-600',
+  green: 'border border-success-200 dark:border-success-700',
+  emerald: 'border border-success-200 dark:border-success-600',
+  amber: 'border border-warning-200 dark:border-warning-600',
+  yellow: 'border border-warning-200 dark:border-warning-600',
+  red: 'border border-danger-200 dark:border-danger-600',
   purple: 'border border-purple-200 dark:border-purple-600',
-  violet: 'border border-violet-200 dark:border-violet-600',
-  indigo: 'border border-indigo-200 dark:border-indigo-600',
+  violet: 'border border-purple-200 dark:border-purple-600',
+  indigo: 'border border-info-200 dark:border-info-600',
 };
 
 /**

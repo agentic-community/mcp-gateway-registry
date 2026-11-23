@@ -55,6 +55,37 @@ class TestResolveTreeApi:
         assert ref == "main"
         assert skill_dir == "example"
 
+    def test_commit_pinned_raw_url(self):
+        """A raw URL pinned to a commit resolves the tree at that commit."""
+        sha = "079cb9e4a37af120f8e2bc5d12ed89286f2a4af6"
+        url = (
+            f"https://raw.githubusercontent.com/aarora79/my-ai-assets/{sha}/skills/writing/SKILL.md"
+        )
+        result = _resolve_tree_api(url)
+        assert result is not None
+        tree_url, project, ref, skill_dir = result
+        assert tree_url == (
+            f"https://api.github.com/repos/aarora79/my-ai-assets/git/trees/{sha}?recursive=1"
+        )
+        assert project == "aarora79/my-ai-assets"
+        assert ref == sha
+        assert skill_dir == "skills/writing"
+
+    def test_commit_pinned_blob_url(self):
+        """A blob permalink pinned to a commit resolves the same tree."""
+        sha = "079cb9e4a37af120f8e2bc5d12ed89286f2a4af6"
+        url = f"https://github.com/o/r/blob/{sha}/skills/writing/SKILL.md"
+        result = _resolve_tree_api(url)
+        assert result is not None
+        _, _, ref, skill_dir = result
+        assert ref == sha
+        assert skill_dir == "skills/writing"
+
+    def test_raw_url_with_short_hex_segment_returns_none(self):
+        """A raw path without refs/heads or a full SHA is not a recognised layout."""
+        url = "https://raw.githubusercontent.com/o/r/079cb9e/skills/writing/SKILL.md"
+        assert _resolve_tree_api(url) is None
+
     def test_skill_at_repo_root_yields_empty_skill_dir(self):
         url = "https://github.com/foo/bar/blob/main/SKILL.md"
         result = _resolve_tree_api(url)

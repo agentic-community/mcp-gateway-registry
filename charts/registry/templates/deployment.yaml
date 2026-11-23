@@ -48,6 +48,15 @@
     {{- fail "registry.caBundle.mountPath must not be empty" }}
   {{- end }}
 {{- end }}
+{{- /* branding needs a ConfigMap to mount and a directory to mount it at. */ -}}
+{{- if .Values.branding.enabled }}
+  {{- if not .Values.branding.existingConfigMap }}
+    {{- fail "registry.branding.enabled is true but branding.existingConfigMap is not set. Create a ConfigMap holding the branding files (for example: kubectl create configmap registry-branding --from-file=./branding/) and name it here." }}
+  {{- end }}
+  {{- if not .Values.branding.mountPath }}
+    {{- fail "registry.branding.mountPath must not be empty" }}
+  {{- end }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -186,6 +195,21 @@ spec:
               value: {{ .Values.app.mcpToolsListFilterEnabled | toString | quote }}
             - name: TOOL_FILTER_AUDIT_LOG_LEVEL
               value: {{ .Values.app.toolFilterAuditLogLevel | default "INFO" | quote }}
+            # Health checks and tool list refresh (issue #2050). No `default`
+            # here: values.yaml supplies them, and sprig's default would turn an
+            # operator's false or 0 into the default instead of passing it on.
+            - name: HEALTH_CHECK_INTERVAL_SECONDS
+              value: {{ .Values.app.healthCheckIntervalSeconds | toString | quote }}
+            - name: TOOL_REFRESH_ENABLED
+              value: {{ .Values.app.toolRefreshEnabled | toString | quote }}
+            - name: TOOL_REFRESH_EVERY_CYCLES
+              value: {{ .Values.app.toolRefreshEveryCycles | toString | quote }}
+            - name: TOOL_FETCH_MAX_CONCURRENCY
+              value: {{ .Values.app.toolFetchMaxConcurrency | toString | quote }}
+            # Tool access listing (issue #2102). The registry rejects any value
+            # other than none or owned at startup.
+            - name: TOOL_ACCESS_OWNER_VIEW
+              value: {{ .Values.app.toolAccessOwnerView | default "none" | quote }}
             # DCR scope-allowlist alignment
             - name: MCP_ADVERTISED_SCOPES
               value: {{ .Values.app.mcpAdvertisedScopes | default "" | quote }}
@@ -197,9 +221,9 @@ spec:
             # location is commented out -> requests 405). The cloud metadata
             # address is never permitted regardless of these values.
             - name: SSRF_ALLOWED_HOSTS
-              value: {{ .Values.app.ssrfAllowedHosts | default "" | quote }}
+              value: {{ .Values.global.ssrfAllowedHosts | default .Values.app.ssrfAllowedHosts | default "" | quote }}
             - name: SSRF_ALLOWED_CIDRS
-              value: {{ .Values.app.ssrfAllowedCidrs | default "" | quote }}
+              value: {{ .Values.global.ssrfAllowedCidrs | default .Values.app.ssrfAllowedCidrs | default "" | quote }}
             - name: CIMD_PUBLISHER_ENABLED
               value: {{ .Values.app.cimdPublisherEnabled | default false | toString | quote }}
             - name: CIMD_CACHE_TTL
@@ -398,7 +422,7 @@ spec:
             - name: GATEWAY_CANONICAL_NAMESPACE_ENABLED
               value: {{ .Values.app.gatewayCanonicalNamespaceEnabled | default false | toString | quote }}
             - name: GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS
-              value: {{ .Values.app.gatewayProxyAllowPrivateTargets | default false | toString | quote }}
+              value: {{ or .Values.global.gatewayProxyAllowPrivateTargets .Values.app.gatewayProxyAllowPrivateTargets | default false | toString | quote }}
             - name: GATEWAY_GENERIC_CLIENT_MAX_BODY_SIZE
               value: {{ .Values.app.gatewayGenericClientMaxBodySize | default "1m" | quote }}
             - name: GATEWAY_PROXY_PREFIX
@@ -527,14 +551,55 @@ spec:
               {{- else }}
               value: ""
               {{- end }}
+            # OpenAPI MCP servers (issue #2022). The seven settings always
+            # render; the sync secret renders only when the feature is on, and
+            # only through secretKeyRef.
+            - name: OPENAPI_MCP_ENABLED
+              value: {{ .Values.app.openapiMcpEnabled | toString | quote }}
+            - name: OPENAPI_MCP_INTERNAL_URL
+              value: {{ .Values.app.openapiMcpInternalUrl | quote }}
+            - name: OPENAPI_MCP_MAX_SERVERS
+              value: {{ .Values.app.openapiMcpMaxServers | int64 | toString | quote }}
+            - name: OPENAPI_MCP_MAX_TARGETS_PER_SERVER
+              value: {{ .Values.app.openapiMcpMaxTargetsPerServer | int64 | toString | quote }}
+            - name: OPENAPI_MCP_MAX_TOOLS_PER_TARGET
+              value: {{ .Values.app.openapiMcpMaxToolsPerTarget | int64 | toString | quote }}
+            - name: OPENAPI_MCP_SPEC_MAX_BYTES
+              value: {{ .Values.app.openapiMcpSpecMaxBytes | int64 | toString | quote }}
+            - name: OPENAPI_MCP_RECONCILE_INTERVAL_SECONDS
+              value: {{ .Values.app.openapiMcpReconcileIntervalSeconds | int64 | toString | quote }}
+            {{- if .Values.app.openapiMcpEnabled }}
+            - name: OPENAPI_MCP_SYNC_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "registry.openapiMcpSyncSecretName" . }}
+                  key: OPENAPI_MCP_SYNC_SECRET
+            {{- end }}
+            # UI branding folder (manifest.json, theme.css, logos, fonts). Points
+            # the registry at the mounted ConfigMap; rendered only when enabled,
+            # so the image default (/app/branding) applies otherwise.
+            {{- if .Values.branding.enabled }}
+            - name: UI_BRANDING_DIR
+              value: {{ .Values.branding.mountPath | quote }}
+            {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-          {{- if .Values.caBundle.enabled }}
+          {{- if or .Values.caBundle.enabled .Values.branding.enabled }}
           volumeMounts:
+            {{- if .Values.caBundle.enabled }}
             - name: egress-forward-proxy-ca
               mountPath: {{ .Values.caBundle.mountPath | quote }}
               readOnly: true
+            {{- end }}
+            {{- if .Values.branding.enabled }}
+            # Whole ConfigMap as a directory, never subPath: subPath mounts do
+            # not receive ConfigMap updates, and branding edits must go live
+            # without a pod restart.
+            - name: ui-branding
+              mountPath: {{ .Values.branding.mountPath | quote }}
+              readOnly: true
+            {{- end }}
           {{- end }}
           livenessProbe:
             httpGet:
@@ -552,8 +617,9 @@ spec:
             periodSeconds: 5
             timeoutSeconds: 3
             failureThreshold: 3
-      {{- if .Values.caBundle.enabled }}
+      {{- if or .Values.caBundle.enabled .Values.branding.enabled }}
       volumes:
+        {{- if .Values.caBundle.enabled }}
         - name: egress-forward-proxy-ca
           {{- if .Values.caBundle.existingSecret }}
           secret:
@@ -568,4 +634,11 @@ spec:
               - key: {{ .Values.caBundle.key | quote }}
                 path: {{ .Values.caBundle.key | quote }}
           {{- end }}
+        {{- end }}
+        {{- if .Values.branding.enabled }}
+        # No items: list, so every data and binaryData key becomes a file.
+        - name: ui-branding
+          configMap:
+            name: {{ .Values.branding.existingConfigMap | quote }}
+        {{- end }}
       {{- end }}

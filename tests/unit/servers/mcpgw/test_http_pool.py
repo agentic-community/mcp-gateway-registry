@@ -287,6 +287,78 @@ async def test_ipv6_wrappers_embedding_metadata_are_denied(wrapper):
     assert http_pool._ip_denial_reason(ipaddress.ip_address(wrapper)) is not None
 
 
+_ISTIO_RANGE = (ipaddress.ip_network("240.240.0.0/16"),)
+
+
+async def test_reserved_inside_operator_cidr_is_allowed():
+    # #2018: Istio auto-allocates ServiceEntry VIPs from 240.240.0.0/16 (reserved).
+    ip = ipaddress.ip_address("240.240.0.1")
+    assert http_pool._ip_denial_reason(ip, _ISTIO_RANGE) is None
+
+
+async def test_reserved_outside_operator_cidr_is_denied():
+    ip = ipaddress.ip_address("240.1.0.1")
+    assert http_pool._ip_denial_reason(ip, _ISTIO_RANGE) == "reserved"
+
+
+@pytest.mark.parametrize(
+    "address",
+    ["64:ff9b:1::a9fe:a9fe", "::ffff:0:a9fe:a9fe", "::1:a9fe:a9fe", "100::1", "4000::1"],
+)
+async def test_reserved_ipv6_never_relaxed_by_broad_cidr(address, monkeypatch):
+    # A broad ::/0 entry must not open reserved IPv6 that hides IMDS.
+    monkeypatch.setenv("SSRF_ALLOWED_CIDRS", "0.0.0.0/0,::/0")
+    with pytest.raises(http_pool.EgressTargetError):
+        http_pool._validated_ip("h", address)
+
+
+async def test_limited_broadcast_never_relaxed():
+    net = (ipaddress.ip_network("0.0.0.0/0"),)
+    assert http_pool._ip_denial_reason(ipaddress.ip_address("255.255.255.255"), net) == "reserved"
+
+
+@pytest.mark.parametrize("address", ["::169.254.169.254", "::a9fe:a9fe", "::10.0.0.1"])
+async def test_ipv4_compatible_never_relaxed_by_operator_cidr(address):
+    net = (ipaddress.ip_network("::/8"),)
+    assert http_pool._ip_denial_reason(ipaddress.ip_address(address), net) is not None
+
+
+@pytest.mark.parametrize(
+    ("address", "cidr"),
+    [
+        ("169.254.169.254", "0.0.0.0/0"),
+        ("169.254.10.10", "169.254.0.0/16"),
+        ("224.0.0.1", "224.0.0.0/4"),
+        ("0.0.0.0", "0.0.0.0/0"),
+        ("fe80::1", "::/0"),
+    ],
+)
+async def test_hard_denied_addresses_ignore_operator_cidr(address, cidr):
+    net = (ipaddress.ip_network(cidr),)
+    assert http_pool._ip_denial_reason(ipaddress.ip_address(address), net) is not None
+
+
+async def test_operator_reserved_cidrs_read_from_env(monkeypatch):
+    monkeypatch.setenv("SSRF_ALLOWED_CIDRS", " 240.240.0.0/16 , not-a-cidr ,")
+    assert http_pool._operator_reserved_cidrs() == _ISTIO_RANGE
+
+
+async def test_operator_reserved_cidrs_empty_by_default(monkeypatch):
+    monkeypatch.delenv("SSRF_ALLOWED_CIDRS", raising=False)
+    assert http_pool._operator_reserved_cidrs() == ()
+
+
+async def test_validated_ip_honours_env_cidr(monkeypatch):
+    monkeypatch.setenv("SSRF_ALLOWED_CIDRS", "240.240.0.0/16")
+    assert http_pool._validated_ip("mesh-registry", "240.240.0.1") == "240.240.0.1"
+
+
+async def test_validated_ip_denies_reserved_without_env_cidr(monkeypatch):
+    monkeypatch.delenv("SSRF_ALLOWED_CIDRS", raising=False)
+    with pytest.raises(http_pool.EgressTargetError):
+        http_pool._validated_ip("mesh-registry", "240.240.0.1")
+
+
 def _fake_getaddrinfo(*addresses):
     def _inner(host, port, *args, **kwargs):
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (addr, port)) for addr in addresses]
@@ -925,6 +997,35 @@ async def test_classifier_matches_url_guard_allow_private_profile(address):
 
     ip = ipaddress.ip_address(address)
     assert http_pool._ip_denial_reason(ip) == url_guard._ip_denial_reason(ip, allow_private=True)
+
+
+@pytest.mark.parametrize(
+    "address",
+    [
+        "240.240.0.1",
+        "240.1.0.1",
+        "255.255.255.255",
+        "::169.254.169.254",
+        "169.254.169.254",
+        "224.0.0.1",
+        "10.0.1.5",
+        "203.0.113.10",
+        "64:ff9b:1::a9fe:a9fe",
+        "::ffff:0:a9fe:a9fe",
+        "100::1",
+    ],
+)
+@pytest.mark.parametrize("cidr", ["240.240.0.0/16", "0.0.0.0/0", "::/8", "::/0"])
+async def test_reserved_cidr_relaxation_matches_url_guard(address, cidr):
+    # #2018: an operator SSRF_ALLOWED_CIDRS range must admit the same reserved
+    # addresses in mcpgw as in the registry, and nothing more.
+    from registry.utils import url_guard
+
+    ip = ipaddress.ip_address(address)
+    nets = (ipaddress.ip_network(cidr),)
+    assert http_pool._ip_denial_reason(ip, nets) == url_guard._ip_denial_reason(
+        ip, allow_private=True, reserved_cidrs=nets
+    )
 
 
 async def test_blocked_target_surfaces_as_a_failed_tool_call(monkeypatch):

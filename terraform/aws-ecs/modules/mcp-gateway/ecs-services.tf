@@ -290,10 +290,6 @@ module "ecs_service_auth" {
           value = var.auth0_m2m_client_groups
         },
         {
-          name  = "AUTH0_MANAGEMENT_API_TOKEN"
-          value = var.auth0_management_api_token
-        },
-        {
           name  = "AUTH0_ENABLED"
           value = tostring(var.auth0_enabled)
         },
@@ -335,8 +331,16 @@ module "ecs_service_auth" {
           value = tostring(var.session_cookie_secure)
         },
         {
+          name  = "SESSION_MAX_AGE_SECONDS"
+          value = tostring(var.session_max_age_seconds)
+        },
+        {
           name  = "SESSION_COOKIE_DOMAIN"
           value = var.session_cookie_domain
+        },
+        {
+          name  = "SESSION_COOKIE_HOST_PREFIX"
+          value = tostring(var.session_cookie_host_prefix)
         },
         {
           # Exact-match allowlist of OAuth login/logout redirect URIs
@@ -367,14 +371,6 @@ module "ecs_service_auth" {
           name  = "REGISTRY_STATIC_TOKEN_AUTH_ENABLED"
           value = tostring(var.registry_static_token_auth_enabled)
         },
-        {
-          name  = "REGISTRY_API_TOKEN"
-          value = var.registry_api_token
-        },
-        {
-          name  = "REGISTRY_API_KEYS"
-          value = var.registry_api_keys
-        },
         # M2M direct client registration (issue #851)
         {
           name  = "M2M_DIRECT_REGISTRATION_ENABLED"
@@ -390,28 +386,12 @@ module "ecs_service_auth" {
           value = tostring(var.federation_static_token_auth_enabled)
         },
         {
-          name  = "FEDERATION_STATIC_TOKEN"
-          value = var.federation_static_token
-        },
-        {
-          name  = "FEDERATION_ENCRYPTION_KEY"
-          value = var.federation_encryption_key
-        },
-        {
           name  = "ANS_INTEGRATION_ENABLED"
           value = tostring(var.ans_integration_enabled)
         },
         {
           name  = "ANS_API_ENDPOINT"
           value = var.ans_api_endpoint
-        },
-        {
-          name  = "ANS_API_KEY"
-          value = var.ans_api_key
-        },
-        {
-          name  = "ANS_API_SECRET"
-          value = var.ans_api_secret
         },
         {
           name  = "ANS_API_TIMEOUT_SECONDS"
@@ -662,6 +642,24 @@ module "ecs_service_auth" {
           name  = "EGRESS_HTTP_POOL_CONNECT_RETRIES"
           value = tostring(var.egress_http_pool_connect_retries)
         },
+        # SSRF allowlist for PROXY_PROFILE, which pins the MCP proxy hop and the
+        # generic proxy. Same variables as the registry, whose health check and
+        # registration guard use the same profile, so a private upstream that
+        # passes there passes here. An operator CIDR may also admit a reserved
+        # IPv4 address (e.g. Istio 240.240.0.0/16, #2018). Metadata and
+        # workload-credential endpoints stay blocked regardless.
+        {
+          name  = "SSRF_ALLOWED_HOSTS"
+          value = var.ssrf_allowed_hosts
+        },
+        {
+          name  = "SSRF_ALLOWED_CIDRS"
+          value = var.ssrf_allowed_cidrs
+        },
+        {
+          name  = "GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS"
+          value = tostring(var.gateway_proxy_allow_private_targets)
+        },
         # Forward-proxy egress for the SSRF-guarded clients (issue #1832). OFF by
         # default. HTTP_PROXY / HTTPS_PROXY / NO_PROXY are passed through the
         # *_extra_env variables, not here, because they are standard environment
@@ -702,18 +700,20 @@ module "ecs_service_auth" {
         {
           name  = "EGRESS_OBO_CACHE_EXPIRY_SKEW_SECONDS"
           value = tostring(var.egress_obo_cache_expiry_skew_seconds)
+        },
+        # OpenAPI MCP servers (issue #2022). The mcp-proxy hop forwards
+        # per-user-credential calls to the openapi-mcp container. The auth
+        # server never receives OPENAPI_MCP_SYNC_SECRET: the registry signs
+        # the per-user credential envelope.
+        {
+          name  = "OPENAPI_MCP_ENABLED"
+          value = tostring(var.openapi_mcp_enabled)
+        },
+        {
+          name  = "OPENAPI_MCP_INTERNAL_URL"
+          value = local.openapi_mcp_internal_url
         }
         ],
-        # PR #947: MongoDB connection string override (plain-text variant).
-        # Only emitted when var.mongodb_connection_string is non-empty and a
-        # Secrets Manager ARN was not provided. When empty, the registry
-        # falls back to the DOCUMENTDB_* env vars above.
-        var.mongodb_connection_string != "" && var.mongodb_connection_string_secret_arn == "" ? [
-          {
-            name  = "MONGODB_CONNECTION_STRING"
-            value = var.mongodb_connection_string
-          }
-        ] : [],
         # Extra environment variables from user (Issue #1000)
         var.auth_server_extra_env
       )
@@ -753,6 +753,16 @@ module "ecs_service_auth" {
             valueFrom = var.mongodb_connection_string_secret_arn
           }
         ] : [],
+        # Operator-supplied credentials, including the plain-text
+        # mongodb_connection_string, which secrets.tf stores in Secrets Manager
+        # rather than placing in the task definition. Empty values inject
+        # nothing.
+        [
+          for name in local.auth_server_container_secret_names : {
+            name      = name
+            valueFrom = aws_secretsmanager_secret.container_secret[name].arn
+          } if contains(local.container_secret_names, name)
+        ],
         var.entra_enabled ? [
           {
             name      = "ENTRA_CLIENT_SECRET"
@@ -972,10 +982,16 @@ module "ecs_service_registry" {
 
   # Task roles
   create_task_exec_iam_role = true
-  task_exec_iam_role_policies = {
-    SecretsManagerAccess = aws_iam_policy.ecs_secrets_access.arn
-    EcsExecTaskExecution = aws_iam_policy.ecs_exec_task_execution.arn
-  }
+  task_exec_iam_role_policies = merge(
+    {
+      SecretsManagerAccess = aws_iam_policy.ecs_secrets_access.arn
+      EcsExecTaskExecution = aws_iam_policy.ecs_exec_task_execution.arn
+    },
+    # OpenAPI MCP sync secret (issue #2022): registry and openapi-mcp only.
+    var.openapi_mcp_enabled ? {
+      OpenapiMcpSyncSecret = aws_iam_policy.openapi_mcp_sync_secret_access[0].arn
+    } : {}
+  )
   create_tasks_iam_role = true
   tasks_iam_role_policies = merge(
     {
@@ -1219,10 +1235,6 @@ module "ecs_service_registry" {
           name  = "AUTH0_M2M_CLIENT_GROUPS"
           value = var.auth0_m2m_client_groups
         },
-        {
-          name  = "AUTH0_MANAGEMENT_API_TOKEN"
-          value = var.auth0_management_api_token
-        },
         # PingFederate configuration
         {
           name  = "PINGFEDERATE_ENABLED"
@@ -1347,8 +1359,16 @@ module "ecs_service_registry" {
           value = tostring(var.session_cookie_secure)
         },
         {
+          name  = "SESSION_MAX_AGE_SECONDS"
+          value = tostring(var.session_max_age_seconds)
+        },
+        {
           name  = "SESSION_COOKIE_DOMAIN"
           value = var.session_cookie_domain
+        },
+        {
+          name  = "SESSION_COOKIE_HOST_PREFIX"
+          value = tostring(var.session_cookie_host_prefix)
         },
         {
           name  = "TRUSTED_PROXY_HOPS"
@@ -1507,14 +1527,6 @@ module "ecs_service_registry" {
           name  = "FEDERATION_STATIC_TOKEN_AUTH_ENABLED"
           value = tostring(var.federation_static_token_auth_enabled)
         },
-        {
-          name  = "FEDERATION_STATIC_TOKEN"
-          value = var.federation_static_token
-        },
-        {
-          name  = "FEDERATION_ENCRYPTION_KEY"
-          value = var.federation_encryption_key
-        },
         # AWS Agent Registry federation configuration
         {
           name  = "AWS_REGISTRY_FEDERATION_ENABLED"
@@ -1527,14 +1539,6 @@ module "ecs_service_registry" {
         {
           name  = "ANS_API_ENDPOINT"
           value = var.ans_api_endpoint
-        },
-        {
-          name  = "ANS_API_KEY"
-          value = var.ans_api_key
-        },
-        {
-          name  = "ANS_API_SECRET"
-          value = var.ans_api_secret
         },
         {
           name  = "ANS_API_TIMEOUT_SECONDS"
@@ -1593,6 +1597,27 @@ module "ecs_service_registry" {
           name  = "MCP_TOOLS_LIST_FILTER_ENABLED"
           value = tostring(var.mcp_tools_list_filter_enabled)
         },
+        # Health checks and tool list refresh (issue #2050)
+        {
+          name  = "HEALTH_CHECK_INTERVAL_SECONDS"
+          value = tostring(var.health_check_interval_seconds)
+        },
+        {
+          name  = "TOOL_REFRESH_ENABLED"
+          value = tostring(var.tool_refresh_enabled)
+        },
+        {
+          name  = "TOOL_ACCESS_OWNER_VIEW"
+          value = var.tool_access_owner_view
+        },
+        {
+          name  = "TOOL_REFRESH_EVERY_CYCLES"
+          value = tostring(var.tool_refresh_every_cycles)
+        },
+        {
+          name  = "TOOL_FETCH_MAX_CONCURRENCY"
+          value = tostring(var.tool_fetch_max_concurrency)
+        },
         {
           name  = "TOOL_FILTER_AUDIT_LOG_LEVEL"
           value = var.tool_filter_audit_log_level
@@ -1622,6 +1647,36 @@ module "ecs_service_registry" {
         {
           name  = "MAX_CUSTOM_TYPES"
           value = tostring(var.max_custom_types)
+        },
+        # OpenAPI MCP servers (issue #2022). OPENAPI_MCP_SYNC_SECRET is injected
+        # via secrets/valueFrom below, never here.
+        {
+          name  = "OPENAPI_MCP_ENABLED"
+          value = tostring(var.openapi_mcp_enabled)
+        },
+        {
+          name  = "OPENAPI_MCP_INTERNAL_URL"
+          value = local.openapi_mcp_internal_url
+        },
+        {
+          name  = "OPENAPI_MCP_MAX_SERVERS"
+          value = tostring(var.openapi_mcp_max_servers)
+        },
+        {
+          name  = "OPENAPI_MCP_MAX_TARGETS_PER_SERVER"
+          value = tostring(var.openapi_mcp_max_targets_per_server)
+        },
+        {
+          name  = "OPENAPI_MCP_MAX_TOOLS_PER_TARGET"
+          value = tostring(var.openapi_mcp_max_tools_per_target)
+        },
+        {
+          name  = "OPENAPI_MCP_SPEC_MAX_BYTES"
+          value = tostring(var.openapi_mcp_spec_max_bytes)
+        },
+        {
+          name  = "OPENAPI_MCP_RECONCILE_INTERVAL_SECONDS"
+          value = tostring(var.openapi_mcp_reconcile_interval_seconds)
         },
         # Update check (admin "newer release available" banner)
         {
@@ -1774,14 +1829,6 @@ module "ecs_service_registry" {
           value = tostring(var.registry_static_token_auth_enabled)
         },
         {
-          name  = "REGISTRY_API_TOKEN"
-          value = var.registry_api_token
-        },
-        {
-          name  = "REGISTRY_API_KEYS"
-          value = var.registry_api_keys
-        },
-        {
           name  = "MAX_TOKENS_PER_USER_PER_HOUR"
           value = tostring(var.max_tokens_per_user_per_hour)
         },
@@ -1808,18 +1855,10 @@ module "ecs_service_registry" {
           value = var.registration_webhook_auth_header
         },
         {
-          name  = "REGISTRATION_WEBHOOK_AUTH_TOKEN"
-          value = var.registration_webhook_auth_token
-        },
-        {
           name  = "REGISTRATION_WEBHOOK_TIMEOUT_SECONDS"
           value = tostring(var.registration_webhook_timeout_seconds)
         },
         # Lifecycle workflow webhooks (issue #1330)
-        {
-          name  = "REGISTRATION_WEBHOOK_SIGNING_SECRET"
-          value = var.registration_webhook_signing_secret
-        },
         {
           name  = "REGISTRATION_ENFORCED_STATUS"
           value = var.registration_enforced_status
@@ -1876,10 +1915,6 @@ module "ecs_service_registry" {
           value = var.registration_gate_auth_type
         },
         {
-          name  = "REGISTRATION_GATE_AUTH_CREDENTIAL"
-          value = var.registration_gate_auth_credential
-        },
-        {
           name  = "REGISTRATION_GATE_AUTH_HEADER_NAME"
           value = var.registration_gate_auth_header_name
         },
@@ -1898,10 +1933,6 @@ module "ecs_service_registry" {
         {
           name  = "REGISTRATION_GATE_OAUTH2_CLIENT_ID"
           value = var.registration_gate_oauth2_client_id
-        },
-        {
-          name  = "REGISTRATION_GATE_OAUTH2_CLIENT_SECRET"
-          value = var.registration_gate_oauth2_client_secret
         },
         {
           name  = "REGISTRATION_GATE_OAUTH2_SCOPE"
@@ -1982,20 +2013,12 @@ module "ecs_service_registry" {
         },
         # GitHub private repo auth (SKILL.md fetching)
         {
-          name  = "GITHUB_PAT"
-          value = var.github_pat
-        },
-        {
           name  = "GITHUB_APP_ID"
           value = var.github_app_id
         },
         {
           name  = "GITHUB_APP_INSTALLATION_ID"
           value = var.github_app_installation_id
-        },
-        {
-          name  = "GITHUB_APP_PRIVATE_KEY"
-          value = var.github_app_private_key
         },
         {
           name  = "GITHUB_EXTRA_HOSTS"
@@ -2120,16 +2143,6 @@ module "ecs_service_registry" {
           value = "true"
         },
         ],
-        # PR #947: MongoDB connection string override (plain-text variant).
-        # Only emitted when var.mongodb_connection_string is non-empty and a
-        # Secrets Manager ARN was not provided. When empty, the registry
-        # falls back to the DOCUMENTDB_* env vars above.
-        var.mongodb_connection_string != "" && var.mongodb_connection_string_secret_arn == "" ? [
-          {
-            name  = "MONGODB_CONNECTION_STRING"
-            value = var.mongodb_connection_string
-          }
-        ] : [],
         # Feature #1471: RUM snippet served as /rum.js (plain-text variant).
         # Only emitted when var.registry_rum_snippet_b64 is non-empty and a
         # Secrets Manager ARN was not provided. When empty, RUM is disabled.
@@ -2146,6 +2159,15 @@ module "ecs_service_registry" {
           {
             name  = "RUM_ALLOWED_HOSTS"
             value = var.registry_rum_allowed_hosts
+          }
+        ] : [],
+        # Runtime UI branding archive (base64 .tar.gz), extracted into
+        # /app/branding by the registry entrypoint. Only emitted when set, so
+        # a default deployment keeps the stock branding.
+        var.ui_branding_archive_b64 != "" ? [
+          {
+            name  = "UI_BRANDING_ARCHIVE_B64"
+            value = var.ui_branding_archive_b64
           }
         ] : [],
         # Issue #1819: extra embeddings request headers. Empty list when the
@@ -2203,6 +2225,16 @@ module "ecs_service_registry" {
             valueFrom = var.mongodb_connection_string_secret_arn
           }
         ] : [],
+        # Operator-supplied credentials, including the plain-text
+        # mongodb_connection_string, which secrets.tf stores in Secrets Manager
+        # rather than placing in the task definition. Empty values inject
+        # nothing.
+        [
+          for name in local.registry_container_secret_names : {
+            name      = name
+            valueFrom = aws_secretsmanager_secret.container_secret[name].arn
+          } if contains(local.container_secret_names, name)
+        ],
         # Feature #1471: RUM snippet served as /rum.js (Secrets Manager variant).
         # Preferred when the snippet contains a vendor token (avoids plain text
         # in state). The operator supplies the ARN of their own secret.
@@ -2276,6 +2308,13 @@ module "ecs_service_registry" {
           {
             name      = "METRICS_API_KEY"
             valueFrom = aws_secretsmanager_secret.metrics_api_key[0].arn
+          }
+        ] : [],
+        # OpenAPI MCP sync secret (issue #2022), shared with the openapi-mcp task.
+        var.openapi_mcp_enabled ? [
+          {
+            name      = "OPENAPI_MCP_SYNC_SECRET"
+            valueFrom = aws_secretsmanager_secret.openapi_mcp_sync_secret[0].arn
           }
         ] : []
       )
@@ -2743,6 +2782,12 @@ module "ecs_service_mcpgw" {
         {
           name  = "EGRESS_HTTP_POOL_CONNECT_RETRIES"
           value = tostring(var.egress_http_pool_connect_retries)
+        },
+        # SSRF guard: an operator CIDR may admit a reserved address (e.g. Istio
+        # ServiceEntry VIPs in 240.240.0.0/16). Same value as the registry. #2018
+        {
+          name  = "SSRF_ALLOWED_CIDRS"
+          value = var.ssrf_allowed_cidrs
         }
         ],
         # Extra environment variables from user (Issue #1000)
@@ -2841,6 +2886,253 @@ module "ecs_service_mcpgw" {
 
   tags = local.common_tags
 
+}
+
+
+# ECS Service: openapi-mcp (issue #2022, opt-in via openapi_mcp_enabled)
+#
+# Serves REST APIs described by OpenAPI specs as MCP servers. The registry pushes
+# each server's state to this task, and nginx inside the registry container
+# proxies MCP traffic to it, so the only ingress is from the registry security
+# group. It runs as a single task: Service Connect hides replicas behind one
+# name, and every replica would need every push (openapi_mcp_replicas is
+# validated to 1).
+#
+# Memory: a load test of 10 servers x 10 targets (one 4.4 MB spec) peaked at
+# 293 MiB (2026-11-13). That plus 50% is about 440 MiB; 1024 MiB is the smallest
+# Fargate size for 0.5 vCPU, which spec conversion (CPU-bound) needs.
+module "ecs_service_openapi_mcp" {
+  #checkov:skip=CKV_TF_1:Module version is pinned via version constraint
+  source  = "terraform-aws-modules/ecs/aws//modules/service"
+  version = "~> 6.0"
+  count   = var.openapi_mcp_enabled ? 1 : 0
+
+  name          = "${local.name_prefix}-openapi-mcp"
+  cluster_arn   = var.ecs_cluster_arn
+  cpu           = "512"
+  memory        = "1024"
+  desired_count = var.openapi_mcp_replicas
+
+  # One task only, so no autoscaling.
+  enable_autoscaling = false
+
+  # Stop the old task before starting the new one. The module defaults (200%
+  # max, 66% min healthy) run two tasks during a deploy, and Service Connect
+  # would split registry pushes and /health polls between them, so one task
+  # serves stale tools. Matches the Helm chart's Recreate strategy.
+  deployment_maximum_percent         = 100
+  deployment_minimum_healthy_percent = 0
+
+  enable_execute_command = true
+
+  requires_compatibilities = ["FARGATE", "EC2"]
+  capacity_provider_strategy = {
+    FARGATE = {
+      capacity_provider = "FARGATE"
+      weight            = 100
+      base              = 1
+    }
+  }
+
+  # The execution role reads only the sync secret. The task role carries no
+  # Secrets Manager grant: the container calls third-party APIs, not AWS.
+  create_task_exec_iam_role = true
+  task_exec_iam_role_policies = {
+    OpenapiMcpSyncSecret = aws_iam_policy.openapi_mcp_sync_secret_access[0].arn
+    EcsExecTaskExecution = aws_iam_policy.ecs_exec_task_execution.arn
+  }
+  create_tasks_iam_role = true
+  tasks_iam_role_policies = {
+    EcsExecTask = aws_iam_policy.ecs_exec_task.arn
+  }
+
+  service_connect_configuration = {
+    namespace = aws_service_discovery_private_dns_namespace.mcp.arn
+    service = [{
+      client_alias = {
+        port     = local.openapi_mcp_port
+        dns_name = "openapi-mcp"
+      }
+      port_name      = "openapi-mcp"
+      discovery_name = "openapi-mcp"
+    }]
+  }
+
+  container_definitions = {
+    openapi-mcp = {
+      cpu                    = 512
+      memory                 = 1024
+      essential              = true
+      image                  = var.openapi_mcp_image_uri
+      versionConsistency     = "disabled"
+      readonlyRootFilesystem = false
+
+      # The empty lists below are what ECS stores for this container. With a
+      # linuxParameters block present the provider compares the definition
+      # strictly, so leaving them unset made every plan replace the task
+      # definition and restart the service.
+      linuxParameters = {
+        capabilities = {
+          add  = []
+          drop = ["ALL"]
+        }
+      }
+      mountPoints    = []
+      volumesFrom    = []
+      systemControls = []
+
+      portMappings = [
+        {
+          name          = "openapi-mcp"
+          containerPort = local.openapi_mcp_port
+          # ECS stores hostPort equal to containerPort in awsvpc mode; see the
+          # note on linuxParameters above.
+          hostPort = local.openapi_mcp_port
+          protocol = "tcp"
+        }
+      ]
+
+      environment = concat([
+        {
+          name  = "HOST"
+          value = var.bind_host
+        },
+        {
+          name  = "PORT"
+          value = tostring(local.openapi_mcp_port)
+        },
+        {
+          name  = "OPENAPI_MCP_BACKEND_TIMEOUT_SECONDS"
+          value = tostring(var.openapi_mcp_backend_timeout_seconds)
+        },
+        {
+          name  = "OPENAPI_MCP_MAX_RESPONSE_BYTES"
+          value = tostring(var.openapi_mcp_max_response_bytes)
+        },
+        {
+          name  = "OPENAPI_MCP_CONVERSION_TIMEOUT_SECONDS"
+          value = tostring(var.openapi_mcp_conversion_timeout_seconds)
+        },
+        # Application logs (docs/logging-standard.md), the same four settings
+        # the mcpgw task gets. Read by servers/openapi-mcp/logging_setup.py.
+        {
+          name  = "APP_LOG_DIR"
+          value = var.app_log_dir
+        },
+        {
+          name  = "APP_LOG_FILE_FORMAT"
+          value = var.app_log_file_format
+        },
+        {
+          name  = "APP_LOG_CONSOLE_FORMAT"
+          value = var.app_log_console_format
+        },
+        {
+          name  = "APP_LOG_LEVEL"
+          value = var.app_log_level
+        },
+        # SSRF guard: the same values the registry gets, so the guard in this
+        # container applies the registry's PROXY_PROFILE policy unchanged.
+        {
+          name  = "SSRF_ALLOWED_HOSTS"
+          value = var.ssrf_allowed_hosts
+        },
+        {
+          name  = "SSRF_ALLOWED_CIDRS"
+          value = var.ssrf_allowed_cidrs
+        },
+        {
+          name  = "GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS"
+          value = tostring(var.gateway_proxy_allow_private_targets)
+        },
+        {
+          name  = "GITHUB_EXTRA_HOSTS"
+          value = var.github_extra_hosts
+        },
+        {
+          name  = "EGRESS_OAUTH_TRUSTED_IDP_HOSTS"
+          value = var.egress_oauth_trusted_idp_hosts
+        },
+        {
+          name  = "EGRESS_HTTP_POOL_MAX_CONNECTIONS"
+          value = tostring(var.egress_http_pool_max_connections)
+        },
+        {
+          name  = "EGRESS_HTTP_POOL_MAX_KEEPALIVE"
+          value = tostring(var.egress_http_pool_max_keepalive)
+        },
+        {
+          name  = "EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS"
+          value = tostring(var.egress_http_pool_keepalive_expiry_seconds)
+        },
+        {
+          name  = "EGRESS_HTTP_POOL_CONNECT_RETRIES"
+          value = tostring(var.egress_http_pool_connect_retries)
+        },
+        # Forward-proxy egress (issue #1832). HTTP_PROXY / HTTPS_PROXY / NO_PROXY
+        # are copied from registry_extra_env by local.openapi_mcp_forward_proxy_env.
+        {
+          name  = "EGRESS_FORWARD_PROXY_ENABLED"
+          value = tostring(var.egress_forward_proxy_enabled)
+        },
+        {
+          name  = "EGRESS_FORWARD_PROXY_CA_BUNDLE"
+          value = var.egress_forward_proxy_ca_bundle
+        }
+        ],
+        local.openapi_mcp_forward_proxy_env,
+        var.openapi_mcp_extra_env
+      )
+
+      # The sync secret comes from Secrets Manager, never from environment.
+      secrets = [
+        {
+          name      = "OPENAPI_MCP_SYNC_SECRET"
+          valueFrom = aws_secretsmanager_secret.openapi_mcp_sync_secret[0].arn
+        }
+      ]
+
+      enable_cloudwatch_logging              = true
+      cloudwatch_log_group_name              = "/ecs/${local.name_prefix}-openapi-mcp"
+      cloudwatch_log_group_retention_in_days = 30
+
+      healthCheck = {
+        command     = ["CMD-SHELL", "curl -fsS http://127.0.0.1:${local.openapi_mcp_port}/health || exit 1"]
+        interval    = 30
+        timeout     = 5
+        retries     = 3
+        startPeriod = 30
+      }
+    }
+  }
+
+  subnet_ids = var.private_subnet_ids
+  security_group_ingress_rules = {
+    registry = {
+      description                  = "openapi-mcp from the registry (sync pushes and nginx MCP proxy)"
+      from_port                    = local.openapi_mcp_port
+      to_port                      = local.openapi_mcp_port
+      ip_protocol                  = "tcp"
+      referenced_security_group_id = module.ecs_service_registry.security_group_id
+    }
+    auth_server = {
+      description                  = "openapi-mcp from the auth server (mcp-proxy hop for per-user credentials)"
+      from_port                    = local.openapi_mcp_port
+      to_port                      = local.openapi_mcp_port
+      ip_protocol                  = "tcp"
+      referenced_security_group_id = module.ecs_service_auth.security_group_id
+    }
+  }
+  # Egress to any address: the container calls operator-registered REST APIs.
+  # The SSRF guard inside the container decides which destinations are allowed.
+  security_group_egress_rules = {
+    all = {
+      ip_protocol = "-1"
+      cidr_ipv4   = "0.0.0.0/0"
+    }
+  }
+
+  tags = local.common_tags
 }
 
 

@@ -1,7 +1,7 @@
 import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import AuditEventDetail from '../AuditEventDetail';
-import { AuditEvent } from '../AuditLogTable';
+import type { AuditEvent } from '../../types/audit';
 
 // The durable identity claims reach the browser on two record
 // shapes: nested under `identity` for the registry_api / mcp_access streams, and

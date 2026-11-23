@@ -12,6 +12,7 @@ from typing import (
 )
 
 from ..auth.tool_filter import filter_tools_for_user
+from ..core.mcp_apps import model_visible_tools
 from ..repositories.factory import get_server_repository
 from ..repositories.interfaces import ServerRepositoryBase
 from ..schemas.virtual_server_models import ToolCatalogEntry
@@ -114,7 +115,9 @@ class ToolCatalogService:
             # SAME helper the server-listing / server-tool paths use, so the
             # catalog cannot expose tools from a server the caller lacks scope
             # for. Fails closed (omits the server) on any access uncertainty.
-            if not user_can_access_server_from_doc(path, server_name, user_context):
+            if not user_can_access_server_from_doc(
+                path, server_name, user_context, honor_view_all=True
+            ):
                 logger.debug("Filtering out server %s: caller lacks server access", path)
                 continue
 
@@ -124,7 +127,10 @@ class ToolCatalogService:
             # names outside that set. filter_tools_for_user fails closed
             # (returns [] on a missing/empty allowlist) and passes through for
             # admin / wildcard callers.
-            raw_tools = server_info.get("tool_list", [])
+            # The catalog feeds the virtual-server tool picker, and a virtual
+            # server's tools/list is read by the model. A tool that only an MCP
+            # App page may call must not be offered there.
+            raw_tools = model_visible_tools(server_info.get("tool_list", []))
             tool_list = filter_tools_for_user(
                 server_name=server_name,
                 tools=raw_tools,

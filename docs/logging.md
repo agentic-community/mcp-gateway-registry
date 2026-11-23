@@ -65,6 +65,10 @@ instead.
 Adding `registry.audit.records` to `APP_LOG_EXCLUDED_LOGGERS` is neither needed
 nor sufficient: that setting filters only the MongoDB handler.
 
+### Request lines without query strings
+
+The registry and the auth server log every outbound `httpx` request (`HTTP Request: GET <url> "HTTP/1.1 200 OK"`) and every inbound request in uvicorn's access log (`"GET /path HTTP/1.1" 200`). Both lines omit the query string. A query string can carry a credential: the registry's logout call passes the user's ID token to the auth server as `id_token_hint`, and an OAuth callback receives `code` and `state` (#2027). The URL in an `httpx` line keeps its scheme, host, port and path, and drops the userinfo, query string and fragment, through the shared `redact_url` helper. The nginx access logs are separate and unchanged.
+
 ## Configuration Parameters
 
 All parameters use the `APP_LOG_` prefix. The centralized (MongoDB) storage parameters use `APP_LOG_CENTRALIZED_`.

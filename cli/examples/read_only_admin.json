@@ -1,0 +1,11 @@
+{
+  "scope_name": "registry-read-only-admin",
+  "scope_type": "server_scope",
+  "description": "Read-only admin: sees every MCP server, virtual server, agent, skill and custom entity record, including private and group-restricted ones. No writes, no gateway tool access, no Settings pages; backend URLs and credentials stay hidden.",
+  "group_mappings": ["registry-read-only-admin"],
+  "server_access": [],
+  "ui_permissions": {
+    "view_all": ["all"]
+  },
+  "create_in_idp": true
+}

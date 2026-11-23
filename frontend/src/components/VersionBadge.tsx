@@ -52,8 +52,8 @@ const VersionBadge: React.FC<VersionBadgeProps> = ({
       className={`
         inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded
         ${hasMultipleVersions
-          ? 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-900/30 dark:text-indigo-300 dark:hover:bg-indigo-900/50 cursor-pointer'
-          : 'bg-gray-50 text-gray-600 dark:bg-gray-800 dark:text-gray-400 cursor-default'
+          ? 'bg-info-50 text-info-700 hover:bg-info-100 dark:bg-info-900/30 dark:text-info-300 dark:hover:bg-info-900/50 cursor-pointer'
+          : 'bg-gray-500/10 text-fg-muted cursor-default'
         }
         transition-colors duration-200
       `}

@@ -132,7 +132,7 @@ const RateLimitGroupsEditor: React.FC<RateLimitGroupsEditorProps> = ({
     return (
       <div className="flex flex-wrap gap-1 items-center">
         {isQuarantined && (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300">
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-danger-100 dark:bg-danger-900/30 text-danger-700 dark:text-danger-300">
             <NoSymbolIcon className="h-3 w-3" />
             quarantined
           </span>
@@ -140,17 +140,17 @@ const RateLimitGroupsEditor: React.FC<RateLimitGroupsEditorProps> = ({
         {rateChips.map((g) => (
           <span
             key={g}
-            className="inline-block px-2 py-0.5 text-xs rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300"
+            className="inline-block px-2 py-0.5 text-xs rounded-full bg-info-100 dark:bg-info-900/30 text-info-700 dark:text-info-300"
           >
             {g}
           </span>
         ))}
         {rateChips.length === 0 && !isQuarantined && (
-          <span className="text-gray-400 text-xs">{'—'}</span>
+          <span className="text-fg-subtle text-xs">{'—'}</span>
         )}
         <button
           onClick={() => setEditing(true)}
-          className="ml-2 p-1 text-gray-400 hover:text-blue-600 dark:hover:text-blue-400"
+          className="ml-2 p-1 text-fg-subtle hover:text-accent-text"
           title="Edit rate-limit groups"
         >
           <PencilIcon className="h-3.5 w-3.5" />
@@ -161,8 +161,8 @@ const RateLimitGroupsEditor: React.FC<RateLimitGroupsEditorProps> = ({
             disabled={isQuarantining}
             className={`p-1 disabled:opacity-50 ${
               isQuarantined
-                ? 'text-red-500 hover:text-red-700 dark:hover:text-red-300'
-                : 'text-gray-400 hover:text-red-600 dark:hover:text-red-400'
+                ? 'text-danger-500 hover:text-danger-700 dark:hover:text-danger-300'
+                : 'text-fg-subtle hover:text-danger-600 dark:hover:text-danger-400'
             }`}
             title={
               isQuarantined
@@ -183,20 +183,20 @@ const RateLimitGroupsEditor: React.FC<RateLimitGroupsEditorProps> = ({
         {Array.from(selected).map((g) => (
           <span
             key={g}
-            className="inline-flex items-center px-2 py-1 text-xs bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded-full"
+            className="inline-flex items-center px-2 py-1 text-xs bg-info-100 dark:bg-info-900/30 text-info-700 dark:text-info-300 rounded-full"
           >
             {g}
             <button
               type="button"
               onClick={() => removeGroup(g)}
-              className="ml-1 hover:text-blue-900 dark:hover:text-blue-100"
+              className="ml-1 hover:text-info-900 dark:hover:text-info-100"
             >
               <XMarkIcon className="h-3 w-3" />
             </button>
           </span>
         ))}
         {selected.size === 0 && (
-          <span className="text-xs text-gray-400 italic">No rate-limit groups</span>
+          <span className="text-xs text-fg-subtle italic">No rate-limit groups</span>
         )}
       </div>
 
@@ -217,14 +217,14 @@ const RateLimitGroupsEditor: React.FC<RateLimitGroupsEditorProps> = ({
         <button
           onClick={handleSave}
           disabled={isSaving}
-          className="flex items-center px-3 py-1 text-xs text-white bg-blue-600 rounded hover:bg-blue-700 disabled:opacity-50"
+          className="btn-primary gap-1 px-3 py-1 text-xs"
         >
-          <CheckIcon className="h-3 w-3 mr-1" />
+          <CheckIcon className="h-3 w-3" />
           {isSaving ? 'Saving...' : 'Save'}
         </button>
         <button
           onClick={() => setEditing(false)}
-          className="px-3 py-1 text-xs text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200"
+          className="btn-ghost px-3 py-1 text-xs"
         >
           Cancel
         </button>

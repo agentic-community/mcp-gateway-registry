@@ -378,6 +378,19 @@ push_image() {
     }
 
     log_success "Pushed $ecr_uri_latest"
+
+    # Also push the immutable version tag, so a deployment can pin a known build
+    # (openapi_mcp_image_uri in Terraform rejects :latest).
+    local ecr_uri_version="${ECR_REGISTRY}/${repo_name}:${BUILD_VERSION}"
+    docker tag "$repo_name:latest" "$ecr_uri_version" || {
+        log_error "Failed to tag image with version $BUILD_VERSION"
+        return 1
+    }
+    docker push "$ecr_uri_version" || {
+        log_error "Failed to push $ecr_uri_version"
+        return 1
+    }
+    log_success "Pushed $ecr_uri_version"
 }
 
 # Process images

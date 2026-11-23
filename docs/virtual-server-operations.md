@@ -241,7 +241,7 @@ uv run python api/registry_management.py \
 
 ## Scope-Based Access Control
 
-Virtual servers support fine-grained access control through scopes. A virtual server is configured in scope definitions like a regular MCP server, using its path (e.g., `/virtual/scoped-tools`) as the server identifier. Callers also need a grant for each backing server the virtual server maps: a backing server the caller lacks is omitted from that caller's lists, and calling its tools returns 403.
+Virtual servers support fine-grained access control through scopes. A virtual server is configured in scope definitions like a regular MCP server, using its path (e.g., `/virtual/scoped-tools`) as the server identifier. Callers also need a grant for each backing server the virtual server maps: a backing server the caller lacks is omitted from that caller's lists, and calling its tools returns 403. A caller who lacks the grant for every backing server gets an empty list from `tools/list`, `prompts/list`, `resources/list` and `resources/templates/list`, not an error.
 
 For comprehensive documentation on how access control works, see [Virtual MCP Server Access Control](scopes.md#virtual-mcp-server-access-control) in the Fine-Grained Access Control documentation.
 
@@ -299,6 +299,16 @@ The test script creates:
 - A regular user for UI testing
 
 See [test_virtual_server_scopes_e2e.sh](../tests/integration/test_virtual_server_scopes_e2e.sh) for details.
+
+## How a Virtual Server Answers Discovery
+
+When a client connects, the virtual router answers `tools/list` by asking each backing server for its list. These rules keep a connect fast when a virtual server maps many backends, and keep it working when one of them is down (issue #2079).
+
+- The router advertises `tools`. It advertises `resources` only when a mapped tool opens an MCP App page, because the client fetches that page with `resources/read`. `resources/list`, `resources/templates/list` and `resources/read` go only to the backing servers that have a mapped MCP App tool. The router does not advertise `prompts`, so a client does not ask every backend for prompts the virtual server does not curate. It still answers `prompts/list`, from every backing server, if a client sends it.
+- With `TOOL_REFRESH_ENABLED=true`, the router answers `tools/list` for each backing server from the tool list the registry stores, after checking the caller's grant for that server. It sends nothing to the backend, so the answer no longer depends on the backend's latency. The registry refreshes the stored list on a schedule (see [Tool list refresh](tool-list-refresh.md)), so a changed description or schema shows up within one refresh period. With the setting off, which is the default, the router asks each backend as before.
+- A backing server with egress authentication, and the bundled registry tools server, are always asked live, because their list can depend on the caller's credential. A backing server with an MCP App tool is asked live too: the stored list keeps a tool's title, annotations and output schema, but not its `_meta`, which holds the app's `ui://` page, or its `execution` field. Answered from the stored list, such a tool reached the client without its page, so the app never opened (fixed in 1.38.2).
+- The router keeps each backing server's list for 60 seconds per user, and checks the caller's grant for that server on every use. A backing server whose list fetch failed is skipped for 10 seconds, and its stored tools are listed in the meantime.
+- A virtual server leaves out a backing server that needs a credential the router cannot send: a server registered with a registry-level credential (`auth_scheme` other than `none`), or one whose health check reports `healthy-auth-expired`. Listing it would show tools that fail when called. A backing server with egress authentication stays in, because the gateway supplies each user's credential.
 
 ## Web UI Alternative
 

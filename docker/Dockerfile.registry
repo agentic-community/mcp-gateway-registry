@@ -173,6 +173,9 @@ COPY --from=frontend-builder --chown=appuser:appuser /app/frontend/build /app/fr
 # Only chown directories that are created here (not covered by COPY --chown).
 # /app/logs is still created for audit logs (see settings.audit_log_path).
 # Application logs now go to /var/log/containers/ai-registry per issue #987.
+# /app/branding is the default UI branding folder (UI_BRANDING_DIR). It ships
+# empty; operators mount a folder over it or the entrypoint extracts
+# UI_BRANDING_ARCHIVE_B64 into it, so appuser must own it.
 #
 # The `sed` rewrites the nginx pid path at image-build time to a directory the
 # non-root appuser can write to. Doing this here (instead of in the entrypoint)
@@ -184,6 +187,7 @@ RUN mkdir -p /app/logs && \
     mkdir -p /app/certs && \
     mkdir -p /app/config && \
     mkdir -p /app/security_scans /app/skill_security_scans /app/agent_security_scans && \
+    mkdir -p /app/branding && \
     mkdir -p /etc/nginx/lua/virtual_mappings && \
     rm -f /etc/nginx/sites-enabled/default /etc/nginx/sites-available/default && \
     mkdir -p /var/lib/nginx/body /var/lib/nginx/proxy /var/lib/nginx/fastcgi /var/lib/nginx/uwsgi /var/lib/nginx/scgi && \
@@ -191,7 +195,7 @@ RUN mkdir -p /app/logs && \
     mkdir -p /var/log/containers/ai-registry && \
     mkdir -p /run/nginx && \
     sed -i 's|pid /run/nginx.pid;|pid /run/nginx/nginx.pid;|' /etc/nginx/nginx.conf && \
-    chown -R appuser:appuser /app/logs /app/certs /app/config /app/security_scans /app/skill_security_scans /app/agent_security_scans /etc/nginx /var/log/nginx /var/log/containers/ai-registry /var/lib/nginx /run/nginx
+    chown -R appuser:appuser /app/logs /app/certs /app/config /app/branding /app/security_scans /app/skill_security_scans /app/agent_security_scans /etc/nginx /var/log/nginx /var/log/containers/ai-registry /var/lib/nginx /run/nginx
 
 # Expose ports for nginx (HTTP/HTTPS on high ports for non-root) and registry
 EXPOSE 8080 8443 7860

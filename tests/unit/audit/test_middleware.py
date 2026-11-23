@@ -8,12 +8,17 @@ import tempfile
 from unittest.mock import MagicMock
 
 import pytest
+from starlette.datastructures import Headers
 
 from registry.audit import AuditLogger, AuditMiddleware
 
 
 class MockRequest:
-    """Mock FastAPI Request object."""
+    """Mock FastAPI Request object.
+
+    ``cookies`` travel in the ``cookie`` header, which the session cookie
+    reader parses; ``scope`` holds its per-request cache.
+    """
 
     def __init__(
         self, path="/api/test", method="GET", headers=None, cookies=None, client_host="127.0.0.1"
@@ -21,8 +26,11 @@ class MockRequest:
         self.url = MagicMock()
         self.url.path = path
         self.method = method
-        self._headers = headers or {}
-        self._cookies = cookies or {}
+        header_dict = dict(headers or {})
+        if cookies:
+            header_dict["cookie"] = "; ".join(f"{k}={v}" for k, v in cookies.items())
+        self._headers = Headers(header_dict)
+        self.scope = {}
         self.client = MagicMock()
         self.client.host = client_host
         self.state = MagicMock()
@@ -33,10 +41,6 @@ class MockRequest:
     @property
     def headers(self):
         return self._headers
-
-    @property
-    def cookies(self):
-        return self._cookies
 
 
 class TestShouldLog:

@@ -1,5 +1,6 @@
 import React from 'react';
 import { FIELD, LABEL } from './formClasses';
+import { isDcrEgressProvider } from '../../utils/egressAuth';
 
 /**
  * The subset of server-form state this block reads/writes. Both the register
@@ -58,34 +59,54 @@ const DiscoveryIdentityFields: React.FC<Props> = ({ values, onChange, editing, f
         <label className={LABEL}>Provider</label>
         <select
           value={values.oauth_discovery_provider}
-          onChange={(e) => onChange({ oauth_discovery_provider: e.target.value })}
+          onChange={(e) => {
+            const provider = e.target.value;
+            // A DCR provider takes no typed client: clear any to keep a stale one out.
+            const clear = isDcrEgressProvider(provider)
+              ? { oauth_discovery_client_id: '', oauth_discovery_client_secret: '' }
+              : {};
+            onChange({ oauth_discovery_provider: provider, ...clear });
+          }}
           className={FIELD}
         >
+          {/* atlassian-rovo has no client an operator can type in: the backend
+              reuses the client the server's per-user egress save registered, and
+              answers 400 until that egress config exists. */}
           <option value="">Select…</option>
           <option value="github">GitHub</option>
           <option value="google">Google</option>
           <option value="atlassian">Atlassian</option>
+          <option value="atlassian-rovo">Atlassian Rovo (reuses the egress client)</option>
           <option value="microsoft">Microsoft</option>
           <option value="slack">Slack</option>
           <option value="custom">Custom (OAuth 2.1)</option>
         </select>
       </div>
+      {isDcrEgressProvider(values.oauth_discovery_provider) && (
+        <p className="text-xs text-gray-500 dark:text-gray-400">
+          Uses the client the gateway registered when this server&apos;s per-user
+          egress configuration was saved with the same provider. Save that first.
+        </p>
+      )}
       {values.oauth_discovery_provider && (
         <>
-          <div>
-            <label className={LABEL}>Client ID</label>
-            <input
-              type="text"
-              value={values.oauth_discovery_client_id}
-              onChange={(e) => onChange({ oauth_discovery_client_id: e.target.value })}
-              className={FIELD}
-            />
-          </div>
-          {/* A public client (custom provider, token auth 'none') has no secret
-              by design — hide the field so nothing stale is sent. */}
+          {!isDcrEgressProvider(values.oauth_discovery_provider) && (
+            <div>
+              <label className={LABEL}>Client ID</label>
+              <input
+                type="text"
+                value={values.oauth_discovery_client_id}
+                onChange={(e) => onChange({ oauth_discovery_client_id: e.target.value })}
+                className={FIELD}
+              />
+            </div>
+          )}
+          {/* A public client (custom provider with token auth 'none', or a DCR
+              provider) has no secret by design. Hide the field so nothing stale is sent. */}
           {!(
-            values.oauth_discovery_provider === 'custom' &&
-            values.oauth_discovery_custom_token_auth_style === 'none'
+            (values.oauth_discovery_provider === 'custom' &&
+              values.oauth_discovery_custom_token_auth_style === 'none') ||
+            isDcrEgressProvider(values.oauth_discovery_provider)
           ) && (
             <div>
               <label className={LABEL}>Client Secret</label>
@@ -105,7 +126,11 @@ const DiscoveryIdentityFields: React.FC<Props> = ({ values, onChange, editing, f
               type="text"
               value={values.oauth_discovery_scopes}
               onChange={(e) => onChange({ oauth_discovery_scopes: e.target.value })}
-              placeholder="repo, read:user"
+              placeholder={
+                isDcrEgressProvider(values.oauth_discovery_provider)
+                  ? 'leave blank for the provider default scopes'
+                  : 'repo, read:user'
+              }
               className={FIELD}
             />
           </div>

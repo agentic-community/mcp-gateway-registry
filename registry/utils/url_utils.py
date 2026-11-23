@@ -18,6 +18,32 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# A full git commit SHA (SHA-1). A GitHub permalink pins a file to one of these.
+# Raw content hosts serve a commit only at /{owner}/{repo}/{sha}/..., never under
+# /refs/heads/{sha}/..., which exists for branch names alone.
+GIT_COMMIT_SHA_PATTERN: str = r"[0-9a-fA-F]{40}"
+_GIT_COMMIT_SHA_RE = re.compile(rf"^{GIT_COMMIT_SHA_PATTERN}$")
+
+
+def _raw_ref_segment(
+    ref: str,
+) -> str:
+    """Return the raw-URL path segment for a blob URL's ref.
+
+    A full commit SHA is used as-is. Anything else is treated as a branch and
+    kept in the ``refs/heads/{ref}`` form, so raw URLs already stored for
+    branch-based skills do not change.
+
+    Args:
+        ref: The ref from a ``/blob/{ref}/`` URL (branch name or commit SHA).
+
+    Returns:
+        ``ref`` for a commit SHA, else ``refs/heads/{ref}``.
+    """
+    if _GIT_COMMIT_SHA_RE.match(ref):
+        return ref
+    return f"refs/heads/{ref}"
+
 
 def _is_github_hostname(
     hostname: str,
@@ -111,6 +137,8 @@ def _translate_github_url_to_raw(
           -> raw.githubusercontent.com/owner/repo/refs/heads/main/path/SKILL.md
         - github.mycompany.com/owner/repo/blob/main/path/SKILL.md
           -> raw.github.mycompany.com/owner/repo/refs/heads/main/path/SKILL.md
+        - github.com/owner/repo/blob/{40-char commit sha}/path/SKILL.md
+          -> raw.githubusercontent.com/owner/repo/{sha}/path/SKILL.md
 
     Args:
         url: GitHub URL to translate
@@ -122,7 +150,7 @@ def _translate_github_url_to_raw(
     hostname = parsed.hostname or ""
     path = parsed.path
 
-    # Pattern: /owner/repo/blob/branch/path/to/file
+    # Pattern: /owner/repo/blob/{branch or commit sha}/path/to/file
     blob_pattern = re.compile(r"^/([^/]+)/([^/]+)/blob/([^/]+)/(.+)$")
     match = blob_pattern.match(path)
 
@@ -131,22 +159,21 @@ def _translate_github_url_to_raw(
         logger.debug(f"URL path doesn't match blob pattern, returning as-is: {redact_url(url)}")
         return url
 
-    owner, repo, branch, file_path = match.groups()
+    owner, repo, ref, file_path = match.groups()
+    ref_segment = _raw_ref_segment(ref)
 
     # Construct raw URL based on hostname type
     hostname_lower = hostname.lower()
 
     if hostname_lower == "github.com":
         # Public GitHub: use raw.githubusercontent.com
-        raw_url = (
-            f"https://raw.githubusercontent.com/{owner}/{repo}/refs/heads/{branch}/{file_path}"
-        )
+        raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/{ref_segment}/{file_path}"
     else:
         # Enterprise GitHub: prepend 'raw.' to hostname
         # If hostname already starts with something, replace it
         # e.g., github.mycompany.com -> raw.github.mycompany.com
         raw_hostname = f"raw.{hostname_lower}"
-        raw_url = f"https://{raw_hostname}/{owner}/{repo}/refs/heads/{branch}/{file_path}"
+        raw_url = f"https://{raw_hostname}/{owner}/{repo}/{ref_segment}/{file_path}"
 
     logger.debug(f"Translated GitHub URL: {redact_url(url)} -> {redact_url(raw_url)}")
     return raw_url

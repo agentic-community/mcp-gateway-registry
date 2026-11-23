@@ -43,6 +43,7 @@ from registry.api.log_routes import router as log_router
 from registry.api.m2m_management_routes import router as m2m_management_router
 from registry.api.management_routes import router as management_router
 from registry.api.okta_m2m_routes import router as okta_m2m_router
+from registry.api.openapi_server_routes import router as openapi_server_router
 from registry.api.peer_management_routes import router as peer_management_router
 from registry.api.public_record_routes import router as public_record_router
 from registry.api.rate_limit_routes import router as rate_limit_router
@@ -53,6 +54,7 @@ from registry.api.server_routes import router as servers_router
 from registry.api.skill_routes import router as skill_router
 from registry.api.system_routes import router as system_router
 from registry.api.system_routes import set_server_start_time
+from registry.api.tool_access_routes import router as tool_access_router
 from registry.api.virtual_server_routes import router as virtual_server_router
 from registry.api.wellknown_routes import cimd_router
 from registry.api.wellknown_routes import router as wellknown_router
@@ -63,12 +65,14 @@ from registry.audit.routes import router as audit_router
 from registry.audit.service import enforce_durable_audit_sink
 
 # Import auth dependencies
+from registry.auth.asset_permissions import can_view_all
 from registry.auth.dependencies import (
     nginx_proxied_auth,
 )
 
 # Import domain routers
 from registry.auth.routes import router as auth_router
+from registry.auth.session_cookie import SessionCookieIsolationMiddleware
 
 # Import core configuration
 from registry.core.aws_credential_posture import log_aws_credential_posture
@@ -77,6 +81,7 @@ from registry.core.config import (
     RegistryMode,
     _print_config_warning_banner,
     _validate_mode_combination,
+    apply_openapi_mcp_mode_gate,
     log_tab_visibility_warnings,
     print_a2a_reverse_proxy_mode_banner,
     print_embeddings_extra_headers_inert_banner,
@@ -107,6 +112,14 @@ from registry.services.scanner_llm_analyzer import (
 
 # Import services for initialization
 from registry.services.server_service import server_service
+from registry.utils.branding_files import (
+    BRANDING_PATH_SEGMENT,
+    DEFAULT_BRANDING_FILES,
+    BrandingFileRefusedError,
+    branding_content_type,
+    branding_response_headers,
+    read_branding_file,
+)
 
 # Server start time tracking moved to registry/api/system_routes.py
 # Setup logging using shared module (RotatingFileHandler + optional MongoDB)
@@ -948,6 +961,14 @@ async def lifespan(app: FastAPI):
 
         await nginx_reload_scheduler.start()
 
+        # OpenAPI MCP servers (issue #2022): keep the container in step.
+        from registry.services import openapi_mcp_reconciler
+
+        if settings.openapi_mcp_enabled:
+            await openapi_mcp_reconciler.start()
+        else:
+            await openapi_mcp_reconciler.warn_if_disabled_with_records()
+
         logger.info("All services initialized successfully!")
 
         # Initialize and send anonymous startup telemetry (opt-out: MCP_TELEMETRY_DISABLED=1)
@@ -1008,6 +1029,10 @@ async def lifespan(app: FastAPI):
         from registry.core.nginx_service import nginx_reload_scheduler
 
         await nginx_reload_scheduler.stop()
+
+        from registry.services import openapi_mcp_reconciler
+
+        await openapi_mcp_reconciler.stop()
 
         # Shutdown services gracefully
         await health_service.shutdown()
@@ -1227,6 +1252,19 @@ if settings.audit_log_enabled:
         log_static_assets=settings.audit_log_static_assets,
     )
 
+# Added last, so it is the outermost of the registry's own middleware and runs
+# before the audit middleware and every other registry component that could
+# read cookies. OpenTelemetry's ASGI middleware, added by instrument_app above
+# or by the opentelemetry-instrument wrapper, wraps the whole stack and runs
+# before it, so OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_REQUEST must
+# never list Cookie: OTel would record the raw session cookie. This middleware
+# reads the session cookie once through the shared reader, caches the result in
+# the scope, and removes the session cookie from the Cookie header fields passed
+# on, so a handler that reads it any other way than request_session_cookie gets
+# nothing. When it refused a duplicated session cookie, it also adds the expiry
+# of both session cookie variants to whatever response the request gets.
+app.add_middleware(SessionCookieIsolationMiddleware)
+
 # Register API routers with /api prefix
 app.include_router(system_router, tags=["System"])  # /api/version, /api/stats
 app.include_router(auth_router, prefix="/api/auth", tags=["Authentication"])
@@ -1244,6 +1282,10 @@ app.include_router(federation_router, prefix="/api", tags=["federation"])
 app.include_router(skill_router, prefix="/api", tags=["skills"])
 app.include_router(config_router, prefix="/api/config", tags=["config"])
 app.include_router(virtual_server_router, prefix="/api", tags=["virtual-servers"])
+app.include_router(tool_access_router, prefix="/api", tags=["tool-access"])
+if apply_openapi_mcp_mode_gate(settings):
+    app.include_router(openapi_server_router, prefix="/api", tags=["openapi-servers"])
+    logger.info("OpenAPI MCP servers enabled; registered /api/openapi-servers routes")
 if settings.custom_entity_types_enabled:
     app.include_router(custom_type_router, prefix="/api", tags=["custom-types"])
     app.include_router(custom_entity_router, prefix="/api", tags=["custom-entities"])
@@ -1412,6 +1454,11 @@ async def get_current_user(user_context: dict[str, Any] = Depends(nginx_proxied_
         "groups": user_context.get("groups", []),
         "can_modify_servers": user_context.get("can_modify_servers", False),
         "is_admin": user_context.get("is_admin", False),
+        # Read-only admin (issue #2099): sees every asset, changes nothing.
+        "view_all": can_view_all(user_context),
+        # Tool access listing (issue #2102): whether owners who are not admins
+        # see their own servers' tools, so the UI can show or hide the links.
+        "tool_access_owner_view": settings.tool_access_owner_view == "owned",
         "ui_permissions": ui_permissions,
         "accessible_servers": user_context.get("accessible_servers", []),
         "accessible_services": user_context.get("accessible_services", []),
@@ -1482,6 +1529,7 @@ def _build_cached_index_html() -> str | None:
     html_content = html_content.replace('="/static/', f'="{prefix}/static/')
     html_content = html_content.replace('="/favicon.ico"', f'="{prefix}/favicon.ico"')
     html_content = html_content.replace('="/rum.js"', f'="{prefix}/rum.js"')
+    html_content = html_content.replace('="/branding/', f'="{prefix}/branding/')
 
     # Inject <base> tag if not already present (for React Router relative links)
     if "<base" not in html_content:
@@ -1511,6 +1559,59 @@ async def serve_rum_js():
             headers=headers,
         )
     return FileResponse(rum_path, media_type="application/javascript", headers=headers)
+
+
+# Static UI assets, not an API: kept out of the OpenAPI schema (api/openapi.json).
+@app.api_route(
+    f"/{BRANDING_PATH_SEGMENT}/{{name:path}}",
+    methods=["GET", "HEAD"],
+    include_in_schema=False,
+)
+def serve_branding_file(
+    name: str,
+) -> Response:
+    """Serve a runtime UI branding file from the branding folder.
+
+    Registered unconditionally (like /rum.js) so the route exists whether or
+    not the React build is present, and before the SPA catch-all so a
+    /branding/... request never falls through to index.html. Public: the login
+    page needs the logo and theme before anyone signs in.
+
+    The ``path`` converter captures everything under /branding/ so names with
+    a slash are rejected here with a 404 instead of reaching the SPA. Files are
+    read from disk on every request (never cached in memory), so an edited
+    ConfigMap shows up without a restart. The handler is sync so FastAPI runs
+    the file read in its threadpool rather than on the event loop.
+
+    Args:
+        name: Requested file name; must be a bare allowed branding file name.
+
+    Returns:
+        The file, or the built-in default for a missing manifest.json or
+        theme.css.
+
+    Raises:
+        HTTPException: 404 for a disallowed name, a missing file without a
+            default, or a file that is refused (escapes the folder, too
+            large, not a regular file, changed while being opened).
+    """
+    content_type = branding_content_type(name)
+    if content_type is None:
+        raise HTTPException(status_code=404)
+
+    headers = branding_response_headers(content_type)
+    try:
+        content = read_branding_file(settings.branding_dir, name)
+    except FileNotFoundError:
+        default_content = DEFAULT_BRANDING_FILES.get(name)
+        if default_content is None:
+            raise HTTPException(status_code=404) from None
+        return Response(content=default_content, media_type=content_type, headers=headers)
+    except BrandingFileRefusedError as e:
+        logger.warning("Branding: refusing to serve %s: %s", name, e)
+        raise HTTPException(status_code=404) from None
+
+    return Response(content=content, media_type=content_type, headers=headers)
 
 
 GATEWAY_PROXY_DISABLED_BODY: dict[str, str] = {

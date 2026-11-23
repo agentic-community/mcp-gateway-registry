@@ -42,7 +42,11 @@ from registry.egress_auth.browser_binding import (
     set_consent_cookie,
 )
 from registry.egress_auth.factory import get_egress_auth_service
-from registry.egress_auth.service import EgressAuthError, vault_principal
+from registry.egress_auth.service import (
+    EgressAuthError,
+    EgressClientNotRegistered,
+    vault_principal,
+)
 from registry.services.server_service import server_service
 
 logger = logging.getLogger(__name__)
@@ -100,9 +104,9 @@ async def _optional_session(request: Request) -> dict | None:
     """Read the browser's gateway session, or None so /connect can bounce to login.
 
     Resolved by ``browser_session_context`` from the session cookie alone (a
-    bearer or internal token names no browser). A session store or scope lookup
-    that fails reads as None too, so it bounces to login, and the login round
-    trip retries it."""
+    bearer or internal token names no browser). A session cookie sent more than
+    once reads as None, so it bounces to login too, and so does a session store
+    or scope lookup that fails: the login round trip retries it."""
     try:
         return await browser_session_context(request)
     except Exception as exc:
@@ -304,6 +308,11 @@ async def egress_connect(
                 "error_description": "server versions are not available",
             },
             status_code=503,
+        )
+    except EgressClientNotRegistered as exc:
+        return JSONResponse(
+            {"error": "invalid_request", "error_description": str(exc)},
+            status_code=400,
         )
     except EgressAuthError as exc:
         # build_consent_url validates the client secret before redirecting, so a
