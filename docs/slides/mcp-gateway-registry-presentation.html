@@ -564,7 +564,7 @@
                     <a class="link-btn" href="https://github.com/agentic-community/mcp-gateway-registry" target="_blank">GitHub Repository</a>
                     <a class="link-btn outline" href="https://catalog.us-east-1.prod.workshops.aws/workshops/0c3265a6-1a4a-467b-ae56-e4d019184b0e/en-US" target="_blank" style="margin-left: clamp(0.4rem, 1vw, 0.75rem);">AWS Workshop</a>
                 </div>
-                <p class="reveal" style="margin-top: var(--content-gap); font-size: var(--small-size); color: #94a3b8;">Last updated: October 26, 2026</p>
+                <p class="reveal" style="margin-top: var(--content-gap); font-size: var(--small-size); color: #94a3b8;">Last updated: November 23, 2026</p>
             </div>
         </div>
         <div class="slide-number">1 / 29</div>
@@ -880,6 +880,40 @@
         <div class="slide-number"></div>
     </section>
 
+    <section class="slide" data-slide="openapi-mcp">
+        <div class="slide-content">
+            <div class="content-wrapper">
+                <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                    <h2 class="reveal" style="margin: 0;">REST APIs as <span class="accent">MCP Servers</span></h2>
+                    <span class="reveal tag tag-green" style="white-space: nowrap; margin-left: 1rem; margin-top: 0.25rem;">SHIPPED &middot; 1.39.0</span>
+                </div>
+                <p class="reveal" style="color: #4a5568; font-size: var(--small-size); margin-top: var(--element-gap); margin-bottom: var(--element-gap);">Give agents a REST API without writing an MCP server. An admin adds an OpenAPI 3.x spec, by URL or upload, with the API's base URL and a credential. Every operation in the spec becomes a tool, and agents reach it through the gateway with the same login and access rules as any other MCP server.</p>
+
+                <div class="reveal" style="max-width: min(90vw, 760px); margin: 0 auto var(--element-gap);"><svg viewBox='0 0 760 236' style='width: 100%; height: auto;' role='img' aria-label='Set up once: an admin adds an OpenAPI spec in the registry, which checks it and pushes signed state to the openapi-mcp container. Every call: an agent calls the gateway, which checks its token and scopes and forwards to openapi-mcp, which calls the REST API with the shared or per-user key.' xmlns='http://www.w3.org/2000/svg'><defs><marker id='dgOas' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='6' markerHeight='6' orient='auto-start-reverse'><path d='M0 0L10 5L0 10z' fill='#52615f'/></marker></defs><text x='10' y='13' font-size='11' font-weight='700' letter-spacing='0.06em' fill='#0f766e'>SET UP ONCE</text><text x='10' y='143' font-size='11' font-weight='700' letter-spacing='0.06em' fill='#0f766e'>EVERY CALL</text><rect x='10' y='22' width='130' height='70' rx='7' fill='#ffffff' stroke='#52615f' stroke-width='1.25'/><text x='75' y='46' text-anchor='middle' font-size='15' font-weight='600' fill='#1d2b2a'>Admin</text><text x='75' y='66' text-anchor='middle' font-size='11.5' fill='#52615f'>OpenAPI 3.x spec</text><text x='75' y='82' text-anchor='middle' font-size='11.5' fill='#52615f'>URL or upload</text><rect x='190' y='22' width='165' height='70' rx='7' fill='#ffffff' stroke='#52615f' stroke-width='1.25'/><text x='272' y='46' text-anchor='middle' font-size='15' font-weight='600' fill='#1d2b2a'>Registry</text><text x='272' y='66' text-anchor='middle' font-size='11.5' fill='#52615f'>checks URLs, spec, dry run</text><text x='272' y='82' text-anchor='middle' font-size='11.5' fill='#52615f'>stores the key encrypted</text><rect x='420' y='22' width='140' height='200' rx='7' fill='#0f766e' fill-opacity='0.12' stroke='#0f766e' stroke-width='2'/><text x='490' y='87' text-anchor='middle' font-size='15' font-weight='600' fill='#1d2b2a'>openapi-mcp</text><text x='490' y='107' text-anchor='middle' font-size='11.5' fill='#52615f'>each operation</text><text x='490' y='123' text-anchor='middle' font-size='11.5' fill='#52615f'>becomes a tool</text><text x='490' y='139' text-anchor='middle' font-size='11.5' fill='#52615f'></text><text x='490' y='155' text-anchor='middle' font-size='11.5' fill='#52615f'>only MCP headers</text><text x='490' y='171' text-anchor='middle' font-size='11.5' fill='#52615f'>reach the API</text><rect x='620' y='22' width='130' height='70' rx='7' fill='#ffffff' stroke='#52615f' stroke-width='1.25' stroke-dasharray='4 3'/><text x='685' y='46' text-anchor='middle' font-size='15' font-weight='600' fill='#1d2b2a'>Reconciler</text><text x='685' y='66' text-anchor='middle' font-size='11.5' fill='#52615f'>repairs the copy</text><text x='685' y='82' text-anchor='middle' font-size='11.5' fill='#52615f'>every 60 s</text><rect x='10' y='152' width='130' height='70' rx='7' fill='#ffffff' stroke='#52615f' stroke-width='1.25'/><text x='75' y='176' text-anchor='middle' font-size='15' font-weight='600' fill='#1d2b2a'>Agent</text><text x='75' y='196' text-anchor='middle' font-size='11.5' fill='#52615f'>Claude Code, Codex,</text><text x='75' y='212' text-anchor='middle' font-size='11.5' fill='#52615f'>any MCP client</text><rect x='190' y='152' width='165' height='70' rx='7' fill='#ffffff' stroke='#52615f' stroke-width='1.25'/><text x='272' y='176' text-anchor='middle' font-size='15' font-weight='600' fill='#1d2b2a'>Gateway</text><text x='272' y='196' text-anchor='middle' font-size='11.5' fill='#52615f'>token, scopes, audit</text><text x='272' y='212' text-anchor='middle' font-size='11.5' fill='#52615f'>adds per-user keys</text><rect x='620' y='152' width='130' height='70' rx='7' fill='#ffffff' stroke='#52615f' stroke-width='1.25'/><text x='685' y='176' text-anchor='middle' font-size='15' font-weight='600' fill='#1d2b2a'>REST API</text><text x='685' y='196' text-anchor='middle' font-size='11.5' fill='#52615f'>shared or</text><text x='685' y='212' text-anchor='middle' font-size='11.5' fill='#52615f'>per-user key</text><path d='M140 57H188' fill='none' stroke='#52615f' stroke-width='1.25' marker-end='url(#dgOas)'/><path d='M355 57H418' fill='none' stroke='#52615f' stroke-width='1.25' marker-end='url(#dgOas)'/><text x='386' y='50' text-anchor='middle' font-size='10.5' fill='#52615f'>signed push</text><path d='M620 57H562' fill='none' stroke='#52615f' stroke-width='1.25' stroke-dasharray='4 3' marker-end='url(#dgOas)'/><path d='M140 187H188' fill='none' stroke='#52615f' stroke-width='1.25' marker-end='url(#dgOas)'/><path d='M355 187H418' fill='none' stroke='#52615f' stroke-width='1.25' marker-end='url(#dgOas)'/><text x='386' y='180' text-anchor='middle' font-size='10.5' fill='#52615f'>MCP call</text><path d='M560 187H618' fill='none' stroke='#52615f' stroke-width='1.25' marker-end='url(#dgOas)'/><text x='589' y='180' text-anchor='middle' font-size='10.5' fill='#52615f'>HTTPS</text></svg></div>
+
+                <div class="reveal" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: clamp(0.5rem, 1.5vw, 1rem);">
+                    <div class="feature-card">
+                        <h3 class="accent">Shared or per-user keys</h3>
+                        <p>One key the admin enters for everyone, or a key each user adds for themselves. Per-user keys live in the egress vault, are bound to the API's base URL, and reach the container only for the call that uses them.</p>
+                    </div>
+                    <div class="feature-card blue">
+                        <h3 class="accent-secondary">Checked before it serves</h3>
+                        <p>A target is admitted only after its URLs pass the egress guard, the spec parses within size and tool limits, and a dry-run conversion succeeds. Only MCP headers reach the backend, and an echoed credential is redacted.</p>
+                    </div>
+                    <div class="feature-card teal">
+                        <h3 style="color: #64748b;">Managed like everything else</h3>
+                        <p>Create servers and targets from the UI, the API or the CLI. The registry holds all state and repairs the container's copy at startup and every minute.</p>
+                    </div>
+                </div>
+
+                <div class="highlight-box reveal" style="margin-top: var(--element-gap);">
+                    <p style="margin: 0; font-size: var(--body-size); font-weight: 600; color: #1e293b;">Off by default: set <code style="font-size: var(--small-size);">OPENAPI_MCP_ENABLED=true</code>. Works on Docker Compose, Terraform on ECS, and Helm.</p>
+                </div>
+            </div>
+        </div>
+        <div class="slide-number"></div>
+    </section>
+
 <section class="slide" data-slide="5">
         <div class="slide-content">
             <div class="content-wrapper">
@@ -887,11 +921,11 @@
                 <div class="pipeline-grid reveal" style="grid-template-columns: repeat(3, 1fr);">
                     <div class="feature-card">
                         <h3 class="accent">Multi-Provider IAM</h3>
-                        <p>Keycloak, Microsoft Entra ID, Okta, Auth0, and AWS Cognito with harmonized management API.</p>
+                        <p>Keycloak, Microsoft Entra ID, Okta, Auth0, Amazon Cognito, and PingFederate with harmonized management API.</p>
                     </div>
                     <div class="feature-card blue">
                         <h3 class="accent-secondary">Fine-Grained Access</h3>
-                        <p>Scopes define which servers, methods, tools, and agents each user or service account can access.</p>
+                        <p>Scopes define which servers, methods, tools, and agents each user or service account can access. Read-only admins see everything and change nothing, and a listing shows which groups can call each tool.</p>
                     </div>
                     <div class="feature-card teal">
                         <h3 style="color: #64748b;">Security Scanning</h3>
@@ -1532,52 +1566,44 @@
         <div class="slide-content">
             <div class="content-wrapper">
                 <h2 class="reveal">Where We Are <span class="accent">Today</span></h2>
-                <p class="reveal" style="text-align: center; color: #4a5568; font-size: var(--small-size); margin-bottom: var(--element-gap);"><strong>As of September 2026.</strong> The capabilities that matter, tagged by the release that shipped them. Every one is in a tagged, documented release on GitHub.</p>
+                <p class="reveal" style="text-align: center; color: #4a5568; font-size: var(--small-size); margin-bottom: var(--element-gap);"><strong>As of November 2026.</strong> The capabilities that matter, tagged by the release that shipped them. Every one is in a tagged, documented release on GitHub.</p>
                 <div class="timeline reveal">
                     <div class="timeline-item" style="display: flex; align-items: baseline; gap: clamp(0.3rem, 0.8vw, 0.6rem);">
-                        <span class="tag tag-gray" style="flex: 0 0 clamp(4rem, 6vw, 5.4rem); text-align: center; white-space: nowrap;">1.24.4</span>
-                        <span style="flex: 1 1 auto;"><span class="tl-title">A registry for any AI asset.</span> <span class="tl-desc">Custom entity types with their own schema, hybrid (RRF) semantic search, and native OpenTelemetry metrics.</span></span>
+                        <span class="tag tag-gray" style="flex: 0 0 clamp(4rem, 6vw, 5.4rem); text-align: center; white-space: nowrap;">1.24</span>
+                        <span style="flex: 1 1 auto;"><span class="tl-title">A registry for any AI asset, deployed your way.</span> <span class="tl-desc">Custom entity types, hybrid semantic search and OpenTelemetry metrics, on Docker Compose, ECS, or Helm on EKS, with six identity providers.</span></span>
                     </div>
                     <div class="timeline-item" style="display: flex; align-items: baseline; gap: clamp(0.3rem, 0.8vw, 0.6rem);">
-                        <span class="tag tag-gray" style="flex: 0 0 clamp(4rem, 6vw, 5.4rem); text-align: center; white-space: nowrap;">1.24.5-7</span>
-                        <span style="flex: 1 1 auto;"><span class="tl-title">Deploy it your way.</span> <span class="tl-desc">Docker Compose, Terraform on ECS, CDK, and Helm on EKS, with six identity providers to choose from.</span></span>
+                        <span class="tag tag-gray" style="flex: 0 0 clamp(4rem, 6vw, 5.4rem); text-align: center; white-space: nowrap;">1.25</span>
+                        <span style="flex: 1 1 auto;"><span class="tl-title">ARD v1.0 and one-command OAuth.</span> <span class="tl-desc">Vendor-neutral catalogs across registries, and Claude Code, Codex CLI, Kiro and Claude.ai Connectors attach with no manual token handling.</span></span>
                     </div>
                     <div class="timeline-item" style="display: flex; align-items: baseline; gap: clamp(0.3rem, 0.8vw, 0.6rem);">
-                        <span class="tag tag-gray" style="flex: 0 0 clamp(4rem, 6vw, 5.4rem); text-align: center; white-space: nowrap;">1.25.0</span>
-                        <span style="flex: 1 1 auto;"><span class="tl-title">Agentic Resource Discovery (ARD v1.0).</span> <span class="tl-desc">Publish, search, and ingest asset catalogs across registries, vendor neutral.</span></span>
+                        <span class="tag tag-gray" style="flex: 0 0 clamp(4rem, 6vw, 5.4rem); text-align: center; white-space: nowrap;">1.26-27</span>
+                        <span style="flex: 1 1 auto;"><span class="tl-title">Per-user identity on egress.</span> <span class="tl-desc">A credential vault for each user's own GitHub, Slack or Atlassian account, OBO to call internal servers as the real user, A2A routing and rate limiting.</span></span>
                     </div>
                     <div class="timeline-item" style="display: flex; align-items: baseline; gap: clamp(0.3rem, 0.8vw, 0.6rem);">
-                        <span class="tag tag-gray" style="flex: 0 0 clamp(4rem, 6vw, 5.4rem); text-align: center; white-space: nowrap;">1.25.0</span>
-                        <span style="flex: 1 1 auto;"><span class="tl-title">One-command OAuth for coding assistants.</span> <span class="tl-desc">Claude Code, Codex CLI, Kiro, and Claude.ai Connectors attach with no manual token handling.</span></span>
+                        <span class="tag tag-gray" style="flex: 0 0 clamp(4rem, 6vw, 5.4rem); text-align: center; white-space: nowrap;">1.28-31</span>
+                        <span style="flex: 1 1 auto;"><span class="tl-title">One gateway for any resource.</span> <span class="tl-desc">Model inference, MCP servers, A2A agents and REST endpoints behind one token, one fail-closed egress guard, and tool-level blocking.</span></span>
                     </div>
                     <div class="timeline-item" style="display: flex; align-items: baseline; gap: clamp(0.3rem, 0.8vw, 0.6rem);">
-                        <span class="tag tag-gray" style="flex: 0 0 clamp(4rem, 6vw, 5.4rem); text-align: center; white-space: nowrap;">1.26.0</span>
-                        <span style="flex: 1 1 auto;"><span class="tl-title">Per-user egress credential vault.</span> <span class="tl-desc">Each user connects their own GitHub, Slack, or Atlassian account once; the gateway vaults it and injects it on egress.</span></span>
+                        <span class="tag tag-gray" style="flex: 0 0 clamp(4rem, 6vw, 5.4rem); text-align: center; white-space: nowrap;">1.33-36</span>
+                        <span style="flex: 1 1 auto;"><span class="tl-title">Credentials through virtual servers.</span> <span class="tl-desc">Virtual servers broker each user's credentials to every backend, Keycloak gains OBO token exchange, and agents call the tools that search finds.</span></span>
                     </div>
                     <div class="timeline-item" style="display: flex; align-items: baseline; gap: clamp(0.3rem, 0.8vw, 0.6rem);">
-                        <span class="tag tag-gray" style="flex: 0 0 clamp(4rem, 6vw, 5.4rem); text-align: center; white-space: nowrap;">1.27.0</span>
-                        <span style="flex: 1 1 auto;"><span class="tl-title">A2A routing, OBO, and rate limiting.</span> <span class="tl-desc">Inter-agent traffic gets per-call access control, backends are called as the real user, and limits are identity and target aware.</span></span>
+                        <span class="tag tag-gray" style="flex: 0 0 clamp(4rem, 6vw, 5.4rem); text-align: center; white-space: nowrap;">1.37.0</span>
+                        <span style="flex: 1 1 auto;"><span class="tl-title">MCP 2026-07-28.</span> <span class="tl-desc">Support for the latest MCP specification, hardened session cookies, and UI branding.</span></span>
                     </div>
                     <div class="timeline-item" style="display: flex; align-items: baseline; gap: clamp(0.3rem, 0.8vw, 0.6rem);">
-                        <span class="tag tag-gray" style="flex: 0 0 clamp(4rem, 6vw, 5.4rem); text-align: center; white-space: nowrap;">1.28-29</span>
-                        <span style="flex: 1 1 auto;"><span class="tl-title">One fail-closed egress guard.</span> <span class="tl-desc">Every outbound fetch runs through the same SSRF guard, credentials are bound to the exact validated destination, and token lifetimes are operator-tunable.</span></span>
+                        <span class="tag tag-gray" style="flex: 0 0 clamp(4rem, 6vw, 5.4rem); text-align: center; white-space: nowrap;">1.38</span>
+                        <span style="flex: 1 1 auto;"><span class="tl-title">MCP Apps and richer tool metadata.</span> <span class="tl-desc">Interactive MCP App pages open in Claude through the gateway and through virtual servers; tool annotations are stored, and tool lists refresh when a server changes them.</span></span>
                     </div>
                     <div class="timeline-item" style="display: flex; align-items: baseline; gap: clamp(0.3rem, 0.8vw, 0.6rem);">
-                        <span class="tag tag-gray" style="flex: 0 0 clamp(4rem, 6vw, 5.4rem); text-align: center; white-space: nowrap;">1.30.0</span>
-                        <span style="flex: 1 1 auto;"><span class="tl-title">One gateway for any resource.</span> <span class="tl-desc">Model inference, MCP servers, A2A agents, and REST endpoints behind one token and one URL shape.</span></span>
-                    </div>
-                    <div class="timeline-item" style="display: flex; align-items: baseline; gap: clamp(0.3rem, 0.8vw, 0.6rem);">
-                        <span class="tag tag-gray" style="flex: 0 0 clamp(4rem, 6vw, 5.4rem); text-align: center; white-space: nowrap;">1.31.0</span>
-                        <span style="flex: 1 1 auto;"><span class="tl-title">Backend identity and tool-level security.</span> <span class="tl-desc">The registry onboards servers that demand OAuth before they answer, blocks a flagged tool instead of the whole server, and cuts search latency from 641ms to 86ms with graded relevance scores.</span></span>
+                        <span class="tag tag-gray" style="flex: 0 0 clamp(4rem, 6vw, 5.4rem); text-align: center; white-space: nowrap;">1.39.0</span>
+                        <span style="flex: 1 1 auto;"><span class="tl-title">REST APIs as MCP servers.</span> <span class="tl-desc">Turn an OpenAPI spec into an MCP server with no code. Also new: read-only admins, and a listing of which groups can see and call each tool.</span></span>
                     </div>
                 </div>
-                <div class="highlight-box reveal" style="margin-top: var(--element-gap);">
-                    <p style="margin: 0; font-size: var(--body-size); font-weight: 600; color: #1e293b;">One governed front door for every AI resource, with per-user identity end to end.</p>
-                </div>
-
                 <div class="reveal" style="margin-top: var(--element-gap); background: #1a1a1a; border-left: 6px solid #991b1b; padding: clamp(0.5rem, 1.2vh, 0.9rem) clamp(0.75rem, 1.8vw, 1.4rem);">
                     <p style="margin: 0; font-size: var(--body-size); font-weight: 700; color: #ffffff;">Security has been our single biggest investment over the last six months, and it never stops</p>
-                    <p style="margin: clamp(0.2rem, 0.5vh, 0.4rem) 0 0 0; font-size: var(--small-size); color: #cbd5e0; line-height: 1.5;">One fail-closed SSRF and egress guard on every outbound fetch. Shared CSRF protection on state-changing routes. Token-free response projection with per-caller redaction on every read path. Hardened OAuth: redirect allowlist, audience enforcement, nonce plus PKCE. Weak and default credentials rejected at every signing entrypoint. A durable, attributable audit trail. Around <strong>80 hardening changes since March 2026</strong>, and this work runs continuously in the background, alongside the feature releases above rather than instead of them.</p>
+                    <p style="margin: clamp(0.2rem, 0.5vh, 0.4rem) 0 0 0; font-size: var(--small-size); color: #cbd5e0; line-height: 1.5;">One fail-closed SSRF and egress guard on every outbound fetch. Shared CSRF protection on state-changing routes. Token-free response projection with per-caller redaction on every read path. Hardened OAuth: redirect allowlist, audience enforcement, nonce plus PKCE. Every MCP backend connection pinned to the address the guard validated. Weak and default credentials rejected at every signing entrypoint. A durable, attributable audit trail. Nearly <strong>100 hardening changes since March 2026</strong>, and the work continues alongside every feature release.</p>
                 </div>
             </div>
         </div>
@@ -1588,31 +1614,31 @@
         <div class="slide-content">
             <div class="content-wrapper">
                 <h2 class="reveal">Where We're <span class="accent">Going</span></h2>
-                <p class="reveal" style="text-align: center; color: #4a5568; font-size: var(--small-size); margin-bottom: var(--element-gap);"><strong>As of September 2026, and subject to change.</strong> Themes, not dates. Each one is tracked in the open on GitHub.</p>
+                <p class="reveal" style="text-align: center; color: #4a5568; font-size: var(--small-size); margin-bottom: var(--element-gap);"><strong>As of November 2026, and subject to change.</strong> Themes, not dates. Each one is tracked in the open on GitHub.</p>
                 <div class="timeline reveal" style="max-width: min(92vw, 900px); margin: 0 auto;">
                     <div class="timeline-item upcoming">
-                        <div class="tl-title">Registry Copilot</div>
-                        <div class="tl-desc">An embedded chat panel that answers "how do I" and "which asset does X" against the live catalog, then an agent builder: describe the agent you want, get the registry assets that fulfill it plus a deployable spec (YAML AgentSpec and an Amazon Bedrock AgentCore harness).</div>
+                        <div class="tl-title">Frictionless identity for coding assistants</div>
+                        <div class="tl-desc">Next release (1.40.0): Keycloak moves to a current image, and the realm gains policies for CIMD and DCR clients, so a coding assistant registers itself under rules the operator sets. Then ID-JAG (RFC 8693 token exchange), so the assistant, the enterprise identity provider and the gateway connect with no per-client registration on any IdP.</div>
                     </div>
                     <div class="timeline-item upcoming">
-                        <div class="tl-title">Frictionless identity for coding assistants</div>
-                        <div class="tl-desc">The registry publishes its own Client ID Metadata Document (CIMD) as of 1.31.0, shipping disabled. Next is the identity-provider half plus ID-JAG (RFC 8693 token exchange), so a coding assistant, the enterprise identity provider, and this gateway connect with the least friction on every IdP, with no per-client registration to maintain on either side.</div>
+                        <div class="tl-title">Build agents from the registry, in your own assistant</div>
+                        <div class="tl-desc">Instead of a chat agent run inside the registry, the registry's MCP server gives your assistant (Claude Code, Codex, Goose) what it needs to build an agent from registry assets: gateway URLs, tool schemas, scopes and an Amazon Bedrock AgentCore harness, plus a skill that walks it through.</div>
+                    </div>
+                    <div class="timeline-item upcoming">
+                        <div class="tl-title">Skills at enterprise scale</div>
+                        <div class="tl-desc">Skill updates refetch content when the source changes instead of disabling the skill, SKILL.md frontmatter is validated on register and update, and agent permissions can follow tags.</div>
                     </div>
                     <div class="timeline-item upcoming">
                         <div class="tl-title">Scale and latency</div>
-                        <div class="tl-desc">Moving the performance-intensive pieces to Go, starting with the auth validation hop that runs on every single request, with the Python path kept as the fallback. Pooled connections on the egress hot path landed in 1.31.0. Still to come: native text indexes for the keyword half of hybrid search.</div>
+                        <div class="tl-desc">A Go fast path for the auth validation hop that runs on every request, with the Python path as the fallback, and native text indexes for the keyword half of hybrid search.</div>
                     </div>
                     <div class="timeline-item upcoming">
-                        <div class="tl-title">Federation with SaaS agent catalogs</div>
-                        <div class="tl-desc">We federate with the Workday Agent System of Record (ASOR) today. Next: Salesforce, SAP, and other vendor catalogs, with ARD as the common mechanism, so enterprise agents discover vendor-hosted agents and tools without a bespoke integration per vendor.</div>
-                    </div>
-                    <div class="timeline-item upcoming">
-                        <div class="tl-title">Machine identities (SPIFFE)</div>
-                        <div class="tl-desc">Workload identity for agents and for the gateway's own hops: short-lived attested SVIDs issued by SPIRE or an Athenz-style issuer, instead of long-lived shared secrets that leak and never rotate.</div>
+                        <div class="tl-title">Federation and machine identity</div>
+                        <div class="tl-desc">Salesforce, SAP and other vendor catalogs through ARD, alongside the Workday ASOR federation we run today. Workload identity (SPIFFE) for agents and the gateway's own hops, and an optional Istio service mesh for the Helm stack.</div>
                     </div>
                 </div>
                 <div class="highlight-box reveal" style="margin-top: var(--element-gap);">
-                    <p style="margin: 0; font-size: var(--small-size); color: #1e293b;">This roadmap sits <strong>on top of our usual biweekly releases</strong>, which carry bug fixes, the small features customers ask for, and community contributed enhancements. 1.31.0 shipped the week of September 21, 2026; the next one is <strong>1.32.0</strong>.</p>
+                    <p style="margin: 0; font-size: var(--small-size); color: #1e293b;">This roadmap sits <strong>on top of our usual biweekly releases</strong>, which carry bug fixes, the small features customers ask for, and community contributed enhancements. 1.39.0 shipped on November 23, 2026; the next one is <strong>1.40.0</strong>.</p>
                 </div>
                 <div class="reveal" style="margin-top: var(--element-gap); text-align: center;">
                     <a href="https://github.com/agentic-community/mcp-gateway-registry/issues/new" target="_blank" rel="noopener" style="font-size: var(--small-size); color: #1a1a1a; text-decoration: none; border-bottom: 1px solid #1a1a1a; padding-bottom: 2px; font-weight: 600;">We build in the open, tell us what you need &rarr;</a>
@@ -1632,19 +1658,19 @@
                 <!-- Metric cards row -->
                 <div class="results-grid reveal" style="max-width: min(95vw, 900px); margin: 0 auto; grid-template-columns: repeat(4, 1fr);">
                     <div class="result-card">
-                        <div class="number">936</div>
+                        <div class="number">1,055</div>
                         <div class="label">GitHub Stars</div>
                     </div>
                     <div class="result-card" style="border-top-color: #475569;">
-                        <div class="number" style="color: #475569;">62</div>
+                        <div class="number" style="color: #475569;">81</div>
                         <div class="label">Contributors</div>
                     </div>
                     <div class="result-card" style="border-top-color: #64748b;">
-                        <div class="number" style="color: #64748b;">239</div>
+                        <div class="number" style="color: #64748b;">262</div>
                         <div class="label">Forks</div>
                     </div>
                     <div class="result-card" style="border-top-color: #94a3b8;">
-                        <div class="number" style="color: #94a3b8;">2,300</div>
+                        <div class="number" style="color: #94a3b8;">3,123</div>
                         <div class="label">Lifetime Deployments</div>
                     </div>
                 </div>
@@ -1661,103 +1687,112 @@
                         <line x1="90.0" y1="20.0" x2="740.0" y2="20.0" stroke="#e2e8f0" stroke-width="0.5" stroke-dasharray="4"/>
 
                         <text x="85" y="184.0" text-anchor="end" fill="#94a3b8" font-size="10">0</text>
-                        <text x="85" y="144.0" text-anchor="end" fill="#94a3b8" font-size="10">250</text>
-                        <text x="85" y="104.0" text-anchor="end" fill="#94a3b8" font-size="10">500</text>
-                        <text x="85" y="64.0" text-anchor="end" fill="#94a3b8" font-size="10">750</text>
-                        <text x="85" y="24.0" text-anchor="end" fill="#94a3b8" font-size="10">1000</text>
+                        <text x="85" y="144.0" text-anchor="end" fill="#94a3b8" font-size="10">300</text>
+                        <text x="85" y="104.0" text-anchor="end" fill="#94a3b8" font-size="10">600</text>
+                        <text x="85" y="64.0" text-anchor="end" fill="#94a3b8" font-size="10">900</text>
+                        <text x="85" y="24.0" text-anchor="end" fill="#94a3b8" font-size="10">1200</text>
 
                         <polygon points="
-                            90.0,174.7
-                            133.3,164.3
-                            176.7,160.2
-                            220.0,154.1
-                            263.3,141.8
-                            306.7,131.2
-                            350.0,123.2
-                            393.3,114.6
-                            436.7,107.4
-                            480.0,96.0
-                            523.3,81.6
-                            566.7,73.6
-                            610.0,59.5
-                            653.3,46.9
-                            696.7,37.6
-                            740.0,30.2
+                            90.0,175.6
+                            128.2,166.9
+                            166.5,163.5
+                            204.7,158.4
+                            242.9,148.1
+                            281.2,139.3
+                            319.4,132.7
+                            357.6,125.6
+                            395.9,119.6
+                            434.1,110.1
+                            472.4,98.1
+                            510.6,91.6
+                            548.8,80.0
+                            587.1,69.5
+                            625.3,61.7
+                            663.5,53.7
+                            701.8,43.1
+                            740.0,39.3
                             740.0,180
                             90.0,180
                         " fill="#1a1a1a" opacity="0.06"/>
 
                         <polyline points="
-                            90.0,174.7
-                            133.3,164.3
-                            176.7,160.2
-                            220.0,154.1
-                            263.3,141.8
-                            306.7,131.2
-                            350.0,123.2
-                            393.3,114.6
-                            436.7,107.4
-                            480.0,96.0
-                            523.3,81.6
-                            566.7,73.6
-                            610.0,59.5
-                            653.3,46.9
-                            696.7,37.6
-                            740.0,30.2
+                            90.0,175.6
+                            128.2,166.9
+                            166.5,163.5
+                            204.7,158.4
+                            242.9,148.1
+                            281.2,139.3
+                            319.4,132.7
+                            357.6,125.6
+                            395.9,119.6
+                            434.1,110.1
+                            472.4,98.1
+                            510.6,91.6
+                            548.8,80.0
+                            587.1,69.5
+                            625.3,61.7
+                            663.5,53.7
+                            701.8,43.1
+                            740.0,39.3
                         " fill="none" stroke="#1a1a1a" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
 
-                        <circle cx="90.0" cy="174.7" r="3.5" fill="#1a1a1a"/>
-                        <circle cx="133.3" cy="164.3" r="3.5" fill="#1a1a1a"/>
-                        <circle cx="176.7" cy="160.2" r="3.5" fill="#1a1a1a"/>
-                        <circle cx="220.0" cy="154.1" r="3.5" fill="#1a1a1a"/>
-                        <circle cx="263.3" cy="141.8" r="3.5" fill="#1a1a1a"/>
-                        <circle cx="306.7" cy="131.2" r="3.5" fill="#1a1a1a"/>
-                        <circle cx="350.0" cy="123.2" r="3.5" fill="#1a1a1a"/>
-                        <circle cx="393.3" cy="114.6" r="3.5" fill="#1a1a1a"/>
-                        <circle cx="436.7" cy="107.4" r="3.5" fill="#1a1a1a"/>
-                        <circle cx="480.0" cy="96.0" r="3.5" fill="#1a1a1a"/>
-                        <circle cx="523.3" cy="81.6" r="3.5" fill="#1a1a1a"/>
-                        <circle cx="566.7" cy="73.6" r="3.5" fill="#1a1a1a"/>
-                        <circle cx="610.0" cy="59.5" r="3.5" fill="#1a1a1a"/>
-                        <circle cx="653.3" cy="46.9" r="3.5" fill="#1a1a1a"/>
-                        <circle cx="696.7" cy="37.6" r="3.5" fill="#1a1a1a"/>
-                        <circle cx="740.0" cy="30.2" r="3.5" fill="#475569"/>
+                        <circle cx="90.0" cy="175.6" r="3.5" fill="#1a1a1a"/>
+                        <circle cx="128.2" cy="166.9" r="3.5" fill="#1a1a1a"/>
+                        <circle cx="166.5" cy="163.5" r="3.5" fill="#1a1a1a"/>
+                        <circle cx="204.7" cy="158.4" r="3.5" fill="#1a1a1a"/>
+                        <circle cx="242.9" cy="148.1" r="3.5" fill="#1a1a1a"/>
+                        <circle cx="281.2" cy="139.3" r="3.5" fill="#1a1a1a"/>
+                        <circle cx="319.4" cy="132.7" r="3.5" fill="#1a1a1a"/>
+                        <circle cx="357.6" cy="125.6" r="3.5" fill="#1a1a1a"/>
+                        <circle cx="395.9" cy="119.6" r="3.5" fill="#1a1a1a"/>
+                        <circle cx="434.1" cy="110.1" r="3.5" fill="#1a1a1a"/>
+                        <circle cx="472.4" cy="98.1" r="3.5" fill="#1a1a1a"/>
+                        <circle cx="510.6" cy="91.6" r="3.5" fill="#1a1a1a"/>
+                        <circle cx="548.8" cy="80.0" r="3.5" fill="#1a1a1a"/>
+                        <circle cx="587.1" cy="69.5" r="3.5" fill="#1a1a1a"/>
+                        <circle cx="625.3" cy="61.7" r="3.5" fill="#1a1a1a"/>
+                        <circle cx="663.5" cy="53.7" r="3.5" fill="#1a1a1a"/>
+                        <circle cx="701.8" cy="43.1" r="3.5" fill="#1a1a1a"/>
+                        <circle cx="740.0" cy="39.3" r="3.5" fill="#475569"/>
 
-                        <text x="90.0" y="168.7" text-anchor="middle" fill="#4a5568" font-size="9" font-weight="600">33</text>
-                        <text x="220.0" y="148.1" text-anchor="middle" fill="#4a5568" font-size="9" font-weight="600">162</text>
-                        <text x="350.0" y="117.2" text-anchor="middle" fill="#4a5568" font-size="9" font-weight="600">355</text>
-                        <text x="480.0" y="90.0" text-anchor="middle" fill="#4a5568" font-size="9" font-weight="600">525</text>
-                        <text x="610.0" y="53.5" text-anchor="middle" fill="#4a5568" font-size="9" font-weight="600">753</text>
-                        <text x="740.0" y="24.2" text-anchor="middle" fill="#1a1a1a" font-size="10" font-weight="700">936</text>
+                        <text x="90.0" y="169.6" text-anchor="middle" fill="#4a5568" font-size="9" font-weight="600">33</text>
+                        <text x="204.7" y="152.4" text-anchor="middle" fill="#4a5568" font-size="9" font-weight="600">162</text>
+                        <text x="319.4" y="126.7" text-anchor="middle" fill="#4a5568" font-size="9" font-weight="600">355</text>
+                        <text x="434.1" y="104.1" text-anchor="middle" fill="#4a5568" font-size="9" font-weight="600">524</text>
+                        <text x="548.8" y="74.0" text-anchor="middle" fill="#4a5568" font-size="9" font-weight="600">750</text>
+                        <text x="663.5" y="47.7" text-anchor="middle" fill="#4a5568" font-size="9" font-weight="600">947</text>
+                        <text x="740.0" y="33.3" text-anchor="middle" fill="#1a1a1a" font-size="10" font-weight="700">1,055</text>
 
                         <text x="90.0" y="196" text-anchor="middle" fill="#94a3b8" font-size="9">Jun</text>
-                        <text x="133.3" y="196" text-anchor="middle" fill="#94a3b8" font-size="9">Jul</text>
-                        <text x="176.7" y="196" text-anchor="middle" fill="#94a3b8" font-size="9">Aug</text>
-                        <text x="220.0" y="196" text-anchor="middle" fill="#94a3b8" font-size="9">Sep</text>
-                        <text x="263.3" y="196" text-anchor="middle" fill="#94a3b8" font-size="9">Oct</text>
-                        <text x="306.7" y="196" text-anchor="middle" fill="#94a3b8" font-size="9">Nov</text>
-                        <text x="350.0" y="196" text-anchor="middle" fill="#94a3b8" font-size="9">Dec</text>
-                        <text x="393.3" y="196" text-anchor="middle" fill="#94a3b8" font-size="9">Jan</text>
-                        <text x="436.7" y="196" text-anchor="middle" fill="#94a3b8" font-size="9">Feb</text>
-                        <text x="480.0" y="196" text-anchor="middle" fill="#94a3b8" font-size="9">Mar</text>
-                        <text x="523.3" y="196" text-anchor="middle" fill="#94a3b8" font-size="9">Apr</text>
-                        <text x="566.7" y="196" text-anchor="middle" fill="#94a3b8" font-size="9">May</text>
-                        <text x="610.0" y="196" text-anchor="middle" fill="#94a3b8" font-size="9">Jun</text>
-                        <text x="653.3" y="196" text-anchor="middle" fill="#94a3b8" font-size="9">Jul</text>
-                        <text x="696.7" y="196" text-anchor="middle" fill="#94a3b8" font-size="9">Aug</text>
-                        <text x="740.0" y="196" text-anchor="middle" fill="#94a3b8" font-size="9">Sep</text>
+                        <text x="128.2" y="196" text-anchor="middle" fill="#94a3b8" font-size="9">Jul</text>
+                        <text x="166.5" y="196" text-anchor="middle" fill="#94a3b8" font-size="9">Aug</text>
+                        <text x="204.7" y="196" text-anchor="middle" fill="#94a3b8" font-size="9">Sep</text>
+                        <text x="242.9" y="196" text-anchor="middle" fill="#94a3b8" font-size="9">Oct</text>
+                        <text x="281.2" y="196" text-anchor="middle" fill="#94a3b8" font-size="9">Nov</text>
+                        <text x="319.4" y="196" text-anchor="middle" fill="#94a3b8" font-size="9">Dec</text>
+                        <text x="357.6" y="196" text-anchor="middle" fill="#94a3b8" font-size="9">Jan</text>
+                        <text x="395.9" y="196" text-anchor="middle" fill="#94a3b8" font-size="9">Feb</text>
+                        <text x="434.1" y="196" text-anchor="middle" fill="#94a3b8" font-size="9">Mar</text>
+                        <text x="472.4" y="196" text-anchor="middle" fill="#94a3b8" font-size="9">Apr</text>
+                        <text x="510.6" y="196" text-anchor="middle" fill="#94a3b8" font-size="9">May</text>
+                        <text x="548.8" y="196" text-anchor="middle" fill="#94a3b8" font-size="9">Jun</text>
+                        <text x="587.1" y="196" text-anchor="middle" fill="#94a3b8" font-size="9">Jul</text>
+                        <text x="625.3" y="196" text-anchor="middle" fill="#94a3b8" font-size="9">Aug</text>
+                        <text x="663.5" y="196" text-anchor="middle" fill="#94a3b8" font-size="9">Sep</text>
+                        <text x="701.8" y="196" text-anchor="middle" fill="#94a3b8" font-size="9">Oct</text>
+                        <text x="740.0" y="196" text-anchor="middle" fill="#94a3b8" font-size="9">Nov</text>
 
-                        <text x="220.0" y="210" text-anchor="middle" fill="#64748b" font-size="9" font-weight="600">2025</text>
-                        <text x="566.7" y="210" text-anchor="middle" fill="#64748b" font-size="9" font-weight="600">2026</text>
+                        <text x="204.7" y="210" text-anchor="middle" fill="#64748b" font-size="9" font-weight="600">2025</text>
+                        <text x="548.8" y="210" text-anchor="middle" fill="#64748b" font-size="9" font-weight="600">2026</text>
                     </svg>
                 </div>
 
                 <!-- Additional stats row -->
                 <div class="reveal" style="display: flex; justify-content: center; gap: clamp(1rem, 3vw, 2.5rem); flex-wrap: wrap; margin-top: var(--content-gap); font-size: var(--small-size); color: #4a5568;">
-                    <div style="text-align: center;"><span style="font-weight: 700; color: #1a1a1a; font-size: var(--body-size);">973</span><br/>Merged PRs</div>
-                    <div style="text-align: center;"><span style="font-weight: 700; color: #1a1a1a; font-size: var(--body-size);">535</span><br/>Issues Closed</div>
-                    <div style="text-align: center;"><span style="font-weight: 700; color: #1a1a1a; font-size: var(--body-size);">35</span><br/>Releases</div>
-                    <div style="text-align: center;"><span style="font-weight: 700; color: #1a1a1a; font-size: var(--body-size);">27.0%</span><br/>Customers running 3+ days</div>
+                    <div style="text-align: center;"><span style="font-weight: 700; color: #1a1a1a; font-size: var(--body-size);">1,190</span><br/>Merged PRs</div>
+                    <div style="text-align: center;"><span style="font-weight: 700; color: #1a1a1a; font-size: var(--body-size);">623</span><br/>Issues Closed</div>
+                    <div style="text-align: center;"><span style="font-weight: 700; color: #1a1a1a; font-size: var(--body-size);">47</span><br/>Releases</div>
+                    <div style="text-align: center;"><span style="font-weight: 700; color: #1a1a1a; font-size: var(--body-size);">795</span><br/>Customer instances running 3+ days</div>
                     <div style="text-align: center;"><span style="font-weight: 700; color: #1a1a1a; font-size: var(--body-size);">ECS &asymp; K8s &asymp; Docker</span><br/>among active customers</div>
                 </div>
 
