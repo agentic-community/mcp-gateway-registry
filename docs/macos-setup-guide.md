@@ -804,9 +804,8 @@ podman machine start
 lsof -i :8080
 
 # Option 1: Stop conflicting service
-# Option 2: Edit docker-compose.podman.yml to use different ports
-nano docker-compose.podman.yml
-# Change "8080:80" to "8081:80"
+# Option 2: Move the gateway to another port in .env
+echo 'REGISTRY_HTTP_HOST_PORT=8081' >> .env
 ```
 
 **Issue: Permission denied on volumes**

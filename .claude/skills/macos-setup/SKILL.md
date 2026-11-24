@@ -123,8 +123,14 @@ For every phase below, apply this rule:
 **Announce:** "Checking prerequisites..."
 
 ```bash
-echo "=== Docker ==="
-docker --version 2>/dev/null && docker ps >/dev/null 2>&1 && echo "DOCKER_OK" || echo "DOCKER_FAIL"
+echo "=== Container runtime ==="
+if docker --version >/dev/null 2>&1 && docker ps >/dev/null 2>&1; then
+    echo "DOCKER_OK"
+elif podman info >/dev/null 2>&1 && podman compose version >/dev/null 2>&1; then
+    echo "PODMAN_OK"
+else
+    echo "DOCKER_FAIL"
+fi
 
 echo "=== Python (>=3.14 required by pyproject.toml) ==="
 # Ask uv, not PATH. Phase 5 runs `uv sync`, which resolves its own managed
@@ -168,7 +174,9 @@ For any failed check, display the install instructions:
 | JQ_FAIL | `brew install jq` |
 | GETTEXT_FAIL | `brew install gettext` |
 
-**Do not proceed if Docker or git fail.** Python, uv, Node.js, jq, and gettext must also be present before continuing. Ask the user to install missing tools and retry.
+**On `PODMAN_OK`, use the Podman runtime for the rest of the setup.** Replace `docker compose` with `podman compose -f docker-compose.podman.yml`, `docker` with `podman`, the gateway URL `http://localhost` with `http://localhost:8080`, and Keycloak `http://localhost:8080` with `http://localhost:18080`. Run Phase 13 with `./build_and_run.sh --podman`.
+
+**Do not proceed if no container runtime or git is available.** Python, uv, Node.js, jq, and gettext must also be present before continuing. Ask the user to install missing tools and retry.
 
 **Do not proceed on `PYTHON_TOO_OLD`.** With no >=3.14 interpreter available to `uv`, Phase 5 fails four phases later with `No interpreter found for Python >=3.14`, an error that names `uv` rather than the unmet prerequisite. Resolve it here: run `uv python install 3.14`, then re-run the Python check and confirm `PYTHON_OK` before continuing.
 
@@ -670,7 +678,7 @@ Script: [`build_and_run.sh`](https://github.com/agentic-community/mcp-gateway-re
 cd "${INSTALL_DIR}"
 chmod +x build_and_run.sh
 
-# Build from source (no --prebuilt flag)
+# Build from source (no --prebuilt flag). On PODMAN_OK, add --podman.
 ./build_and_run.sh
 echo "build_and_run.sh exit code: $?"
 ```

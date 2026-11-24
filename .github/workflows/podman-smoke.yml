@@ -1,0 +1,85 @@
+name: Podman Deployment Smoke Test
+
+on:
+  pull_request:
+    paths:
+      - 'build_and_run.sh'
+      - 'docker-compose.podman.yml'
+      - 'scripts/podman-setup.sh'
+      - 'scripts/prepare-log-dirs.sh'
+      - 'scripts/init-mongodb-ce.py'
+      - '.github/workflows/podman-smoke.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rootless-podman:
+    name: "Rootless Podman deployment"
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Start the rootless Podman socket
+        run: |
+          systemctl --user start podman.socket
+          echo "DOCKER_HOST=unix://${XDG_RUNTIME_DIR}/podman/podman.sock" >> "$GITHUB_ENV"
+          podman info --format '{{.Host.Security.Rootless}}'
+          podman compose version
+
+      - name: Create a test environment
+        run: |
+          umask 077
+          cp .env.example .env
+          python3 - <<'PY'
+          import re
+          import secrets
+
+          names = [
+              "KEYCLOAK_ADMIN_PASSWORD",
+              "KEYCLOAK_DB_PASSWORD",
+              "GRAFANA_ADMIN_PASSWORD",
+              "INITIAL_ADMIN_PASSWORD",
+          ]
+          content = open(".env").read()
+          for name in names:
+              value = secrets.token_hex(24)
+              print(f"::add-mask::{value}")
+              content = re.sub(rf"^{name}=.*$", f"{name}={value}", content, flags=re.M)
+          open(".env", "w").write(content)
+          PY
+          mkdir -p "${HOME}/mcp-gateway/models"
+
+      - name: Deploy with Podman
+        run: ./build_and_run.sh --podman < /dev/null
+
+      - name: Verify the deployment
+        run: |
+          curl -fsS --retry 40 --retry-delay 3 --retry-all-errors -o /dev/null http://localhost:8080/health
+          location="$(curl -s -o /dev/null -w '%{redirect_url}' http://localhost:8080/oauth2/login/keycloak)"
+          case "$location" in
+            http://localhost:18080/*redirect_uri=http%3A%2F%2Flocalhost%3A8080*) ;;
+            *) echo "Unexpected login redirect host or callback"; exit 1 ;;
+          esac
+          if podman exec mcp-mongodb mongosh --quiet mcp_registry --eval 'db.getCollectionNames()' >/dev/null 2>&1; then
+            echo "MongoDB accepted an unauthenticated query"
+            exit 1
+          fi
+
+      - name: Show service state on failure
+        if: failure()
+        run: |
+          podman ps -a --format '{{.Names}} {{.Status}}'
+          for service in mcp-mongodb-init mcp-gateway-registry-auth-server-1 mcp-gateway-registry-registry-1; do
+            echo "--- ${service}"
+            podman logs --tail 40 "$service" 2>&1 || true
+          done

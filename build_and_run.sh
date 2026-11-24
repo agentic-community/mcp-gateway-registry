@@ -129,6 +129,32 @@ else
     fi
 fi
 
+# Verify the selected runtime can run compose before doing any other work.
+USE_PODMAN_RUNTIME=false
+if [[ "$COMPOSE_CMD" == "podman compose" ]]; then
+    USE_PODMAN_RUNTIME=true
+fi
+if ! $COMPOSE_CMD version &> /dev/null; then
+    log "ERROR: '$COMPOSE_CMD' is not available"
+    if [ "$USE_PODMAN_RUNTIME" = true ]; then
+        log "Install a compose provider (macOS: brew install docker-compose) and start"
+        log "the VM with: podman machine start"
+    else
+        log "Please install Docker Compose v2: https://docs.docker.com/compose/install/"
+    fi
+    exit 1
+fi
+if [ "$USE_PODMAN_RUNTIME" = true ] && ! podman info &> /dev/null; then
+    log "ERROR: Podman is installed but not running. Start it with: podman machine start"
+    exit 1
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ "$USE_PODMAN_RUNTIME" = true ]; then
+    # shellcheck source=scripts/podman-setup.sh
+    . "${SCRIPT_DIR}/scripts/podman-setup.sh"
+fi
+
 # Append DHI override file if --dhi flag is set
 if [ "$USE_DHI" = true ]; then
     if [ ! -f "$DHI_COMPOSE_FILE" ]; then
@@ -233,11 +259,101 @@ if [ "${OPENAPI_MCP_ENABLED:-false}" = "true" ]; then
     log "OPENAPI_MCP_ENABLED=true: adding compose profile openapi-mcp"
 fi
 
-# Check if docker compose is installed
-if ! docker compose version &> /dev/null; then
-    log "ERROR: docker compose is not available"
-    log "Please install Docker Compose v2: https://docs.docker.com/compose/install/"
-    exit 1
+# Remove lines matching a pattern from .env. mktemp creates the replacement with
+# mode 600, so rewriting the file cannot widen access to the secrets inside it.
+_remove_env_lines() {
+    local pattern="$1"
+    local tmp_file
+    tmp_file="$(mktemp .env.tmp.XXXXXX)"
+    grep -vE "$pattern" .env > "$tmp_file" || [ $? -eq 1 ] || {
+        rm -f "$tmp_file"
+        handle_error "Failed to update .env"
+    }
+    mv "$tmp_file" .env
+}
+
+# Ensure a required secret is present in .env, generating a strong value when it
+# is missing or set to an empty (optionally quoted) placeholder. An
+# operator-provided value is always left untouched.
+#
+# This replaces five near-identical blocks that used `sed -i '/re/d'` to strip an
+# empty line before appending. That is NOT portable: BSD/macOS sed treats the
+# argument after -i as a mandatory backup suffix, so `sed -i '/re/d' file`
+# consumes the script as the suffix and fails with "unescaped newline". The old
+# code hid that failure behind `2>/dev/null || true`, so on macOS the empty line
+# survived, the freshly generated value was appended *below* it, and the first
+# (empty) assignment won -- e.g. the auth_server then crashed on a
+# required-but-empty AUTH_SERVER_NGINX_MARKER_SECRET. grep-based rewrite behaves
+# identically on GNU and BSD userlands.
+#
+# Usage: ensure_secret VAR_NAME <hex-bytes>
+ensure_secret() {
+    local var_name="$1"
+    local hex_bytes="$2"
+
+    if grep -qE "^${var_name}=.+" .env && ! grep -qE "^${var_name}=\"\"$" .env; then
+        log "${var_name} already exists in .env"
+        return 0
+    fi
+
+    log "Generating ${var_name}..."
+    local value
+    value=$(python3 -c "import secrets; print(secrets.token_hex(${hex_bytes}))") \
+        || handle_error "Failed to generate ${var_name}"
+
+    # Drop any existing empty/quoted-empty assignment, then append the real one.
+    _remove_env_lines "^${var_name}=(\"\")?$"
+    echo "${var_name}=${value}" >> .env
+    log "${var_name} added to .env"
+}
+
+# SECRET_KEY: registry/auth-server session signing secret.
+ensure_secret SECRET_KEY 32
+
+# AUTH_SERVER_NGINX_MARKER_SECRET: required by both auth_server and registry, it
+# guards all internal-token minting (registry API, mcp-proxy, generic proxy; a
+# direct :8888 /validate with a forged routing header cannot obtain a token
+# without it). Must be identical across both services: a mismatch 401s every
+# registry API request.
+ensure_secret AUTH_SERVER_NGINX_MARKER_SECRET 32
+
+# DOCUMENTDB_PASSWORD: the local MongoDB container runs with --auth and creates
+# its root user from this value on first boot, so it must never be a weak default
+# like "admin". NOTE: this only helps a first-time install. If MongoDB was
+# already initialized with a different password (existing data volume), set
+# DOCUMENTDB_PASSWORD to that value or recreate the mongodb-data volume.
+ensure_secret DOCUMENTDB_PASSWORD 24
+
+# METRICS_KEY_PEPPER: the metrics-service peppers stored API-key hashes with this
+# value and refuses to start unless it is present and high-entropy. NOTE:
+# rotating this value invalidates all existing API-key hashes -- re-issue metrics
+# API keys after changing it.
+ensure_secret METRICS_KEY_PEPPER 32
+
+# OPENBAO_TOKEN: the dev OpenBao container is auto-unsealed with this root token
+# and the registry authenticates to it with the same value, so the compose stack
+# requires it (${OPENBAO_TOKEN:?}) and refuses to start without one -- reaching
+# :8200 with a known token grants root access to every stored egress credential.
+ensure_secret OPENBAO_TOKEN 32
+
+# Podman defaults to an admin root user for the authenticated MongoDB.
+if [ "$USE_PODMAN_RUNTIME" = true ] && ! grep -qE '^DOCUMENTDB_USERNAME=.+' .env; then
+    _remove_env_lines '^DOCUMENTDB_USERNAME='
+    echo "DOCUMENTDB_USERNAME=admin" >> .env
+    log "DOCUMENTDB_USERNAME set to admin in .env"
+fi
+
+if [ "$USE_PODMAN_RUNTIME" = true ]; then
+    podman_apply_url_defaults || handle_error "Failed to set Podman URLs in .env"
+fi
+
+# Reload generated values so every compose command below can resolve them.
+set -a
+source .env
+set +a
+
+if [ "$USE_PODMAN_RUNTIME" = true ]; then
+    podman_check_ports || exit 1
 fi
 
 # Stop and remove existing services if they exist. The openapi-mcp profile is
@@ -249,6 +365,10 @@ log "Stopping existing services (if any)..."
 COMPOSE_PROFILES="${COMPOSE_PROFILES:+${COMPOSE_PROFILES},}openapi-mcp" \
     $COMPOSE_CMD $COMPOSE_FILES down --remove-orphans || log "No existing services to stop"
 log "Existing services stopped"
+
+if [ "$USE_PODMAN_RUNTIME" = true ]; then
+    podman_migrate_mongodb_auth || handle_error "MongoDB auth upgrade failed"
+fi
 
 # Clean up any root-owned directories from previous Docker runs
 log "Checking for root-owned directories from previous Docker runs..."
@@ -350,70 +470,6 @@ else
     log "  - $SSL_DIR/private/privkey.pem"
 fi
 
-# Ensure a required secret is present in .env, generating a strong value when it
-# is missing or set to an empty (optionally quoted) placeholder. An
-# operator-provided value is always left untouched.
-#
-# This replaces five near-identical blocks that used `sed -i '/re/d'` to strip an
-# empty line before appending. That is NOT portable: BSD/macOS sed treats the
-# argument after -i as a mandatory backup suffix, so `sed -i '/re/d' file`
-# consumes the script as the suffix and fails with "unescaped newline". The old
-# code hid that failure behind `2>/dev/null || true`, so on macOS the empty line
-# survived, the freshly generated value was appended *below* it, and the first
-# (empty) assignment won -- e.g. the auth_server then crashed on a
-# required-but-empty AUTH_SERVER_NGINX_MARKER_SECRET. grep-based rewrite behaves
-# identically on GNU and BSD userlands.
-#
-# Usage: ensure_secret VAR_NAME <hex-bytes>
-ensure_secret() {
-    local var_name="$1"
-    local hex_bytes="$2"
-
-    if grep -qE "^${var_name}=.+" .env && ! grep -qE "^${var_name}=\"\"$" .env; then
-        log "${var_name} already exists in .env"
-        return 0
-    fi
-
-    log "Generating ${var_name}..."
-    local value
-    value=$(python3 -c "import secrets; print(secrets.token_hex(${hex_bytes}))") \
-        || handle_error "Failed to generate ${var_name}"
-
-    # Drop any existing empty/quoted-empty assignment, then append the real one.
-    grep -vE "^${var_name}=(\"\")?$" .env > .env.tmp && mv .env.tmp .env
-    echo "${var_name}=${value}" >> .env
-    log "${var_name} added to .env"
-}
-
-# SECRET_KEY: registry/auth-server session signing secret.
-ensure_secret SECRET_KEY 32
-
-# AUTH_SERVER_NGINX_MARKER_SECRET: required by both auth_server and registry, it
-# guards all internal-token minting (registry API, mcp-proxy, generic proxy; a
-# direct :8888 /validate with a forged routing header cannot obtain a token
-# without it). Must be identical across both services: a mismatch 401s every
-# registry API request.
-ensure_secret AUTH_SERVER_NGINX_MARKER_SECRET 32
-
-# DOCUMENTDB_PASSWORD: the local MongoDB container runs with --auth and creates
-# its root user from this value on first boot, so it must never be a weak default
-# like "admin". NOTE: this only helps a first-time install. If MongoDB was
-# already initialized with a different password (existing data volume), set
-# DOCUMENTDB_PASSWORD to that value or recreate the mongodb-data volume.
-ensure_secret DOCUMENTDB_PASSWORD 24
-
-# METRICS_KEY_PEPPER: the metrics-service peppers stored API-key hashes with this
-# value and refuses to start unless it is present and high-entropy. NOTE:
-# rotating this value invalidates all existing API-key hashes -- re-issue metrics
-# API keys after changing it.
-ensure_secret METRICS_KEY_PEPPER 32
-
-# OPENBAO_TOKEN: the dev OpenBao container is auto-unsealed with this root token
-# and the registry authenticates to it with the same value, so the compose stack
-# requires it (${OPENBAO_TOKEN:?}) and refuses to start without one -- reaching
-# :8200 with a known token grants root access to every stored egress credential.
-ensure_secret OPENBAO_TOKEN 32
-
 # Validate required environment variables
 log "Validating required environment variables..."
 source .env
@@ -469,8 +525,9 @@ fi
 
 # Prepare host log directory used by registry, auth-server, and mcpgw
 # containers. See scripts/prepare-log-dirs.sh for details (Issue #987).
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [ -x "${SCRIPT_DIR}/scripts/prepare-log-dirs.sh" ]; then
+if [ "$USE_PODMAN_RUNTIME" = true ]; then
+    podman_prepare_log_dir || handle_error "Failed to prepare the Podman log directory"
+elif [ -x "${SCRIPT_DIR}/scripts/prepare-log-dirs.sh" ]; then
     log "Preparing host log directory (/var/log/containers/ai-registry)..."
     "${SCRIPT_DIR}/scripts/prepare-log-dirs.sh" || handle_error "Failed to prepare host log directory"
 else
@@ -668,13 +725,13 @@ if $COMPOSE_CMD $COMPOSE_FILES config --services 2>/dev/null | grep -q "^metrics
             NEW_TOKEN="mcp_metrics_$(openssl rand -hex 16)"
 
             # Remove any existing line for this variable
-            sed -i "/^$ENV_VAR_NAME=/d" .env 2>/dev/null || true
+            _remove_env_lines "^${ENV_VAR_NAME}="
 
             # Add new token
             echo "$ENV_VAR_NAME=$NEW_TOKEN" >> .env
-            log "Generated new $service token: ${NEW_TOKEN:0:20}..."
+            log "Generated new $service metrics token"
         else
-            log "Using existing $service token: ${CURRENT_VALUE:0:20}..."
+            log "Using existing $service metrics token"
         fi
     done
 
@@ -698,22 +755,39 @@ $COMPOSE_CMD $COMPOSE_FILES ps
 # Verify key services are running
 log "Verifying services are healthy..."
 
-# Check registry service
-if curl -f http://localhost:7860/health &>/dev/null; then
+if [ "$USE_PODMAN_RUNTIME" = true ]; then
+    GATEWAY_URL="http://localhost:${REGISTRY_HTTP_HOST_PORT:-8080}"
+    AUTH_HEALTH_URL="http://localhost:${AUTH_SERVER_HOST_PORT:-8888}/health"
+else
+    GATEWAY_URL="http://localhost"
+    AUTH_HEALTH_URL="http://localhost:8888/health"
+fi
+
+# Check registry service through the nginx front door. The registry loads its
+# embedding model before nginx can reach it, so allow it time to start.
+GATEWAY_WAIT_ATTEMPTS=60
+GATEWAY_WAIT_SECONDS=3
+gateway_attempt=0
+until curl -f -s -m 5 -o /dev/null "${GATEWAY_URL}/health"; do
+    gateway_attempt=$((gateway_attempt + 1))
+    [ "$gateway_attempt" -ge "$GATEWAY_WAIT_ATTEMPTS" ] && break
+    sleep "$GATEWAY_WAIT_SECONDS"
+done
+if curl -f -s -m 5 -o /dev/null "${GATEWAY_URL}/health"; then
     log "Registry service is healthy"
 else
     log "WARNING: Registry service may still be starting up..."
 fi
 
 # Check auth service
-if curl -f http://localhost:8888/health &>/dev/null; then
+if curl -f "$AUTH_HEALTH_URL" &>/dev/null; then
     log "Auth service is healthy"
 else
     log "WARNING: Auth service may still be starting up..."
 fi
 
 # Check nginx is responding
-if curl -f http://localhost:80 &>/dev/null || curl -k -f https://localhost:443 &>/dev/null; then
+if curl -f "$GATEWAY_URL" &>/dev/null; then
     log "Nginx is responding"
 else
     log "WARNING: Nginx may still be starting up..."
@@ -741,9 +815,8 @@ log ""
 # Display correct URLs based on container engine
 if [[ "$COMPOSE_CMD" == "podman compose" ]]; then
     log "Services are available at:"
-    log "  - Main interface: http://localhost:8080 or https://localhost:8443"
-    log "  - Registry API: http://localhost:7860"
-    log "  - Auth service: http://localhost:8888"
+    log "  - Main interface: ${GATEWAY_URL}"
+    log "  - Auth service: http://localhost:${AUTH_SERVER_HOST_PORT:-8888}"
     log "  - Current Time MCP: http://localhost:8000"
     log "  - Real Server Fake Tools MCP: http://localhost:8002"
     log "  - MCP Gateway MCP: http://localhost:8003"
@@ -763,8 +836,11 @@ log "To stop services: $COMPOSE_CMD $COMPOSE_FILES down"
 log ""
 
 # Ask if user wants to follow logs
-read -p "Do you want to follow the logs? (y/n): " -n 1 -r
-echo
+REPLY="n"
+if [ -t 0 ]; then
+    read -p "Do you want to follow the logs? (y/n): " -n 1 -r
+    echo
+fi
 if [[ $REPLY =~ ^[Yy]$ ]]; then
     log "Following container logs (press Ctrl+C to stop following logs without stopping the services):"
     echo "---------- CONTAINER LOGS ----------"

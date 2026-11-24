@@ -453,14 +453,19 @@ def test_compose_front_door_still_published(
     compose_file = repo_root / compose_filename
     content = compose_file.read_text()
 
-    assert "80:8080" in content, f"{compose_filename}: front-door 80:8080 mapping missing"
-    assert "443:8443" in content, f"{compose_filename}: front-door 443:8443 mapping missing"
+    # Rootless Podman cannot bind ports below 1024, so its file uses unprivileged defaults.
+    is_podman = compose_filename == "docker-compose.podman.yml"
+    http_mapping = "${REGISTRY_HTTP_HOST_PORT:-8080}:8080" if is_podman else "80:8080"
+    https_mapping = "${REGISTRY_HTTPS_HOST_PORT:-8443}:8443" if is_podman else "443:8443"
+
+    assert http_mapping in content, f"{compose_filename}: front-door {http_mapping} missing"
+    assert https_mapping in content, f"{compose_filename}: front-door {https_mapping} missing"
     # The front door must NOT carry a loopback prefix.
-    assert f"{LOOPBACK_BIND_PREFIX}80:8080" not in content, (
-        f"{compose_filename}: front-door 80:8080 must stay on all interfaces, not loopback"
+    assert f"{LOOPBACK_BIND_PREFIX}{http_mapping}" not in content, (
+        f"{compose_filename}: front-door {http_mapping} must stay on all interfaces, not loopback"
     )
-    assert f"{LOOPBACK_BIND_PREFIX}443:8443" not in content, (
-        f"{compose_filename}: front-door 443:8443 must stay on all interfaces, not loopback"
+    assert f"{LOOPBACK_BIND_PREFIX}{https_mapping}" not in content, (
+        f"{compose_filename}: front-door {https_mapping} must stay on all interfaces, not loopback"
     )
 
 
