@@ -12,6 +12,28 @@
 ./build_and_run.sh --prebuilt --podman
 ```
 
+## What the Deployment Script Handles
+
+`./build_and_run.sh --podman` needs Podman, a running Podman machine, and a Compose provider (`brew install docker-compose`). It does not need Docker. The script:
+
+- checks the runtime and host ports before it stops any service
+- switches the Docker URLs from `.env.example` to their Podman ports
+- prepares the log directory inside the Podman VM, including its SELinux label
+- adds a MongoDB root user to data volumes created before authentication was on
+
+If another service uses a port, set `REGISTRY_HTTP_HOST_PORT`, `REGISTRY_HTTPS_HOST_PORT` or `AUTH_SERVER_HOST_PORT` in `.env`.
+
+If image builds fail while downloading packages and the VM has no IPv6 route, add `build: { network: host }` for the failing services in `docker-compose.override.yml`.
+
+If `uv sync` cannot build `yara-python` against OpenSSL 4 headers, point it at OpenSSL 3:
+
+```bash
+CFLAGS=-I/opt/homebrew/opt/openssl@3/include \
+CPPFLAGS=-I/opt/homebrew/opt/openssl@3/include \
+LDFLAGS=-L/opt/homebrew/opt/openssl@3/lib \
+uv sync --frozen
+```
+
 ## The Problem
 
 ### Architecture Mismatch

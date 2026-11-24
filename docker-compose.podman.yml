@@ -435,8 +435,9 @@ services:
       - INTERNAL_TOKEN_TTL_SECONDS=${INTERNAL_TOKEN_TTL_SECONDS:-30}
       - INTERNAL_TOKEN_LEEWAY_SECONDS=${INTERNAL_TOKEN_LEEWAY_SECONDS:-5}
     ports:
-      - "80:8080"   # Map host 80 to container 8080 (non-root nginx)
-      - "443:8443"  # Map host 443 to container 8443 (non-root nginx)
+      # Rootless Podman cannot bind ports below 1024, so the defaults are unprivileged.
+      - "${REGISTRY_HTTP_HOST_PORT:-8080}:8080"
+      - "${REGISTRY_HTTPS_HOST_PORT:-8443}:8443"
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -529,6 +530,8 @@ services:
         BUILD_VERSION: ${BUILD_VERSION:-1.0.0}
     environment:
       - REGISTRY_URL=${REGISTRY_URL}
+      # Browser-facing URL for OAuth callbacks: the nginx front door on this stack.
+      - AUTH_SERVER_EXTERNAL_URL=${AUTH_SERVER_EXTERNAL_URL:-http://localhost:8080}
       # Request-source trust (audit client IP + OAuth external-URL host allowlist)
       - TRUSTED_PROXY_HOPS=${TRUSTED_PROXY_HOPS:-1}
       - TRUSTED_EXTERNAL_HOSTS=${TRUSTED_EXTERNAL_HOSTS:-}
@@ -757,7 +760,7 @@ services:
     ports:
       # Loopback-only: normal traffic goes through the nginx front door; direct
       # port is for host health checks / tests only.
-      - "${HOST_BIND_IP:-127.0.0.1}:8888:8888"
+      - "${HOST_BIND_IP:-127.0.0.1}:${AUTH_SERVER_HOST_PORT:-8888}:8888"
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -908,11 +911,13 @@ services:
 
   # SQLite container for metrics database
   metrics-db:
-    # Pinned (not :latest) so rebuilds are reproducible.
-    image: alpine:3.21
+    # Same non-root (UID 1000) image as the Docker stack, so this helper and
+    # metrics-service can both write the shared SQLite volume.
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.metrics-db
     volumes:
       - metrics-db-data:/var/lib/sqlite
-    command: ["sh", "-c", "apk add --no-cache sqlite && mkdir -p /var/lib/sqlite && sqlite3 /var/lib/sqlite/metrics.db 'CREATE TABLE IF NOT EXISTS _health (id INTEGER);' && tail -f /dev/null"]
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -1097,15 +1102,38 @@ services:
 
   # MongoDB Community Edition 8.2 (alternative to DocumentDB for local development)
   # Vector search is implemented in application code (see search_repository.py)
-  # Runs without authentication for local development simplicity. The published
-  # port is bound to 127.0.0.1 (loopback) so the unauthenticated database is
-  # reachable only from the local host, never from other machines on the
-  # network. For a network-exposed / production MongoDB, use the --prebuilt
-  # variant (authenticated + keyfile) or an external managed DocumentDB.
+  # Authentication is enabled (--auth): the root user is created on first boot
+  # from DOCUMENTDB_USERNAME/DOCUMENTDB_PASSWORD, which must be set (no default).
+  # build_and_run.sh adds that user to a data volume created before auth was on.
+  # The published port is bound to loopback (see HOST_BIND_IP below).
+  mongodb-keyfile-init:
+    image: alpine:3.21
+    container_name: mcp-mongodb-keyfile-init
+    volumes:
+      - mongodb-keyfile:/keyfile
+    # Uses only busybox tools, so it needs no package download or network access.
+    command: >
+      sh -c "
+      if [ ! -f /keyfile/replica.key ]; then
+        umask 077;
+        head -c 756 /dev/urandom | base64 > /keyfile/replica.key;
+        chmod 400 /keyfile/replica.key;
+        chown 999:999 /keyfile/replica.key;
+        echo 'Keyfile generated';
+      else
+        echo 'Keyfile already exists';
+      fi
+      "
+    network_mode: none
+    restart: "no"
+
   mongodb:
     image: mongo:8.2
     container_name: mcp-mongodb
-    command: mongod --replSet rs0 --bind_ip 127.0.0.1,mongodb
+    command: mongod --replSet rs0 --bind_ip 127.0.0.1,mongodb --auth --keyFile /keyfile/replica.key
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${DOCUMENTDB_USERNAME:?set DOCUMENTDB_USERNAME in .env}
+      - MONGO_INITDB_ROOT_PASSWORD=${DOCUMENTDB_PASSWORD:?set DOCUMENTDB_PASSWORD in .env}
     ports:
       # Loopback-only: host tools (mongosh, tests) reach it via localhost, but it
       # is never exposed on other interfaces. Set HOST_BIND_IP=0.0.0.0 to override.
@@ -1113,6 +1141,7 @@ services:
     volumes:
       - mongodb-data:/data/db
       - mongodb-config:/data/configdb
+      - mongodb-keyfile:/keyfile:ro
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -1122,8 +1151,12 @@ services:
       - SETGID   # Required by gosu to switch to mongodb group at startup
       - CHOWN    # Required by entrypoint to fix /data/db ownership
       - DAC_OVERRIDE  # Required by entrypoint to read /data/db before chown
+    depends_on:
+      mongodb-keyfile-init:
+        condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      # ping needs no authentication, which keeps the password off process argv.
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
       interval: 60s
       timeout: 5s
       retries: 5
@@ -1141,17 +1174,17 @@ services:
       - DOCUMENTDB_HOST=mongodb
       - DOCUMENTDB_PORT=27017
       - DOCUMENTDB_DATABASE=${DOCUMENTDB_DATABASE:-mcp_registry}
-      # The paired mongodb service in this file runs WITHOUT authentication, so
-      # these must default to empty (not admin/admin) -- init-mongodb-ce.py only
-      # builds a SCRAM auth string when a username is set, and authenticating
-      # against a no-user Mongo fails. Leave blank for the no-auth local setup.
-      - DOCUMENTDB_USERNAME=${DOCUMENTDB_USERNAME:-}
-      - DOCUMENTDB_PASSWORD=${DOCUMENTDB_PASSWORD:-}
+      # Required (no default): must match the root user MongoDB was initialized with.
+      - DOCUMENTDB_USERNAME=${DOCUMENTDB_USERNAME:?set DOCUMENTDB_USERNAME in .env}
+      - DOCUMENTDB_PASSWORD=${DOCUMENTDB_PASSWORD:?set DOCUMENTDB_PASSWORD in .env}
       - DOCUMENTDB_NAMESPACE=${DOCUMENTDB_NAMESPACE:-default}
       - ENTRA_GROUP_ADMIN_ID=${ENTRA_GROUP_ADMIN_ID:-}
     volumes:
       - ./scripts/init-mongodb-ce.py:/app/scripts/init-mongodb-ce.py:ro
       - ./scripts/registry-admins.json:/app/scripts/registry-admins.json:ro
+      - ./scripts/mcp-registry-admin.json:/app/scripts/mcp-registry-admin.json:ro
+      - ./scripts/mcp-servers-unrestricted-read.json:/app/scripts/mcp-servers-unrestricted-read.json:ro
+      - ./scripts/mcp-servers-unrestricted-execute.json:/app/scripts/mcp-servers-unrestricted-execute.json:ro
       - ./scripts/federation-service.json:/app/scripts/federation-service.json:ro
     command: >
       sh -c "
@@ -1168,6 +1201,7 @@ volumes:
   grafana-data:
   mongodb-data:
   mongodb-config:
+  mongodb-keyfile:
   pingfederate-data:
 
 networks:

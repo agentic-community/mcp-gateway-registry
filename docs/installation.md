@@ -110,7 +110,7 @@ hf download sentence-transformers/all-MiniLM-L6-v2 --local-dir ${HOME}/mcp-gatew
 # 6. Configure environment - edit .env with your passwords
 nano .env
 # Set: KEYCLOAK_ADMIN_PASSWORD, INITIAL_ADMIN_PASSWORD (must match), KEYCLOAK_DB_PASSWORD
-# For Podman: Set KEYCLOAK_URL=http://localhost:18080
+# On Podman, build_and_run.sh sets the browser-facing URLs for you
 
 # Generate SECRET_KEY
 SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_urlsafe(64))")
@@ -329,7 +329,7 @@ cd mcp-gateway-registry
 # Configure environment
 cp .env.example .env
 nano .env  # Configure required values
-# Important: Set KEYCLOAK_URL=http://localhost:18080 for Podman
+# build_and_run.sh sets the browser-facing URLs for Podman
 
 # Deploy with Podman (explicit)
 ./build_and_run.sh --prebuilt --podman
@@ -379,9 +379,10 @@ open http://localhost
 
 The deployment uses `docker-compose.podman.yml` when using Podman, which:
 
-1. **Remaps privileged ports**: Maps container ports 80→8080 and 443→8443 on the host
+1. **Uses unprivileged ports**: Publishes the gateway on ports 8080 and 8443
 2. **Adds SELinux labels**: Adds `:z` mount options for SELinux compatibility (Linux)
 3. **Maintains compatibility**: All internal service-to-service communication unchanged
+4. **Requires MongoDB authentication**: `build_and_run.sh` adds a root user to a data volume created before authentication was on, and keeps your data
 
 ### Troubleshooting Podman
 
@@ -410,7 +411,8 @@ podman machine start
 lsof -i :8080
 lsof -i :8443
 
-# Stop conflicting services or use different ports by editing docker-compose.podman.yml
+# Stop the conflicting service, or set REGISTRY_HTTP_HOST_PORT,
+# REGISTRY_HTTPS_HOST_PORT or AUTH_SERVER_HOST_PORT in .env
 ```
 
 **Issue: Podman compose command not found**

@@ -132,6 +132,9 @@ Internal and external URLs for the auth server, plus internal JWT signing.
 
 | Parameter | Docker (`.env`) | Terraform (`.tfvars`) | Helm (`values.yaml`) | Purpose |
 |-----------|-----------------|-----------------------|----------------------|---------|
+| Podman gateway HTTP port | `REGISTRY_HTTP_HOST_PORT` | N/A | N/A | Host port for the gateway on Podman. Default `8080`. |
+| Podman gateway HTTPS port | `REGISTRY_HTTPS_HOST_PORT` | N/A | N/A | Host port for HTTPS on Podman. Default `8443`. |
+| Podman auth server port | `AUTH_SERVER_HOST_PORT` | N/A | N/A | Host port for direct auth server checks on Podman. Default `8888`. |
 | Auth server internal URL | `AUTH_SERVER_URL` | — (constructed by module) | `registry.app.authServerUrl` | Server-to-server URL inside the container network. |
 | Auth server external URL | `AUTH_SERVER_EXTERNAL_URL` | — (from domain config) | `auth-server.app.externalUrl` | Public URL for browser redirects. Its origin is also accepted as the `Origin` of an MCP request signed in with the browser session cookie. |
 | Internal JWT issuer | (constant in code) | — | `auth-server.app.jwtIssuer` | `iss` claim on internal service JWTs. |
