@@ -7840,6 +7840,115 @@ class TestFederationTokenRotationStrength:
             assert server_module.FEDERATION_STATIC_TOKEN_AUTH_ENABLED is True
 
 
+class TestFederationTokenAudit:
+    """Every federation-token admin call lands in the durable audit store."""
+
+    _ADMIN = "a" * 40
+    _STRONG = "f" * 40
+
+    def _call(self, headers: dict, body: object):
+        import auth_server.server as server_module
+
+        audit_logger = MagicMock()
+        audit_logger.log_event = AsyncMock()
+        client = TestClient(server_module.app)
+        with (
+            patch.object(server_module, "REGISTRY_API_TOKEN", self._ADMIN),
+            patch.object(server_module, "FEDERATION_STATIC_TOKEN", ""),
+            patch.object(server_module, "FEDERATION_STATIC_TOKEN_AUTH_ENABLED", False),
+            patch.object(server_module, "emit_audit_event") as emit,
+            patch.object(server_module, "get_audit_logger", return_value=audit_logger),
+        ):
+            response = client.post("/admin/federation-token", headers=headers, json=body)
+        assert emit.call_count == 1
+        record = emit.call_args.args[0]
+        audit_logger.log_event.assert_awaited_once_with(record)
+        return response, record
+
+    @pytest.mark.parametrize(
+        ("body", "action", "enabled"),
+        [({"new_token": "f" * 40}, "rotate", True), ({}, "revoke", False)],
+    )
+    def test_change_is_recorded_durably_without_token_material(self, body, action, enabled):
+        response, record = self._call({"Authorization": f"Bearer {self._ADMIN}"}, body)
+
+        assert response.status_code == 200
+        assert record.log_type == "registry_api_access"
+        assert record.action.operation == action
+        assert record.action.metadata["outcome"] == "success"
+        assert record.action.metadata["static_token_auth_enabled"] is enabled
+        assert record.identity.username == "registry_api_token"
+        assert record.authorization.decision == "ALLOW"
+        assert record.response.status_code == 200
+        assert self._STRONG not in record.model_dump_json()
+        assert self._ADMIN not in record.model_dump_json()
+
+    @pytest.mark.parametrize(
+        ("headers", "status", "reason"),
+        [
+            ({}, 401, "missing_bearer"),
+            ({"Authorization": "Bearer wrong"}, 403, "invalid_admin_token"),
+        ],
+    )
+    def test_denied_attempt_is_recorded(self, headers, status, reason):
+        response, record = self._call(headers, {})
+
+        assert response.status_code == status
+        assert record.identity.username == "anonymous"
+        assert record.authorization.decision == "DENY"
+        assert record.action.metadata["outcome"] == "denied"
+        assert record.action.metadata["reason"] == reason
+
+    def test_client_ip_is_the_socket_peer_not_a_caller_header(self):
+        """nginx never fronts this route, so X-Real-IP is whatever the caller sent."""
+        response, record = self._call(
+            {"X-Real-IP": "203.0.113.7", "X-Forwarded-For": "203.0.113.8"}, {}
+        )
+
+        assert response.status_code == 401
+        assert record.request.client_ip == "testclient"
+        assert "203.0.113" not in record.model_dump_json()
+
+    def test_weak_rotation_is_recorded_as_rejected(self):
+        response, record = self._call(
+            {"Authorization": f"Bearer {self._ADMIN}"}, {"new_token": "short"}
+        )
+
+        assert response.status_code == 400
+        assert record.action.operation == "rotate"
+        assert record.action.metadata["outcome"] == "rejected"
+        assert record.action.metadata["reason"] == "weak_token"
+
+    @pytest.mark.parametrize("body", [["not", "an", "object"], "text"])
+    def test_non_object_body_is_rejected_and_recorded(self, body):
+        """An authenticated caller's malformed body was an unaudited 500."""
+        response, record = self._call({"Authorization": f"Bearer {self._ADMIN}"}, body)
+
+        assert response.status_code == 400
+        assert record.action.metadata["reason"] == "invalid_body"
+
+    def test_durable_write_failure_does_not_fail_the_request(self):
+        import auth_server.server as server_module
+
+        audit_logger = MagicMock()
+        audit_logger.log_event = AsyncMock(side_effect=RuntimeError("db down"))
+        client = TestClient(server_module.app)
+        with (
+            patch.object(server_module, "REGISTRY_API_TOKEN", self._ADMIN),
+            patch.object(server_module, "FEDERATION_STATIC_TOKEN", ""),
+            patch.object(server_module, "FEDERATION_STATIC_TOKEN_AUTH_ENABLED", False),
+            patch.object(server_module, "emit_audit_event"),
+            patch.object(server_module, "get_audit_logger", return_value=audit_logger),
+        ):
+            response = client.post(
+                "/admin/federation-token",
+                headers={"Authorization": f"Bearer {self._ADMIN}"},
+                json={},
+            )
+
+        assert response.status_code == 200
+
+
 class TestEntraLogoutQueryStringGuard:
     """Entra logout must not breach the logout-URL length limit (AADSTS90015).
 

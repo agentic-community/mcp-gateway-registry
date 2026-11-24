@@ -96,7 +96,27 @@ def mock_service() -> MagicMock:
 
 
 @pytest.fixture
-def client_admin(mock_settings, admin_user_context, mock_service):
+def admin_population():
+    """Mock the admin population read by the last-admin guard.
+
+    Default: the client under test plus a human admin, so mutations pass.
+    Tests set ``.return_value`` to make the client the sole admin.
+    """
+    identities = AsyncMock(
+        return_value=[frozenset({"test-client-id"}), frozenset({"admin"})],
+    )
+    with (
+        patch(
+            "registry.services.admin_safety.resolve_admin_group_names",
+            new=AsyncMock(return_value={"mcp-registry-admin"}),
+        ),
+        patch("registry.services.admin_safety.list_admin_identities", new=identities),
+    ):
+        yield identities
+
+
+@pytest.fixture
+def client_admin(mock_settings, admin_user_context, mock_service, admin_population):
     from registry.main import app
 
     _override_auth(admin_user_context)
@@ -354,6 +374,52 @@ class TestPatchM2MClient:
 
         assert response.status_code == 403
 
+    @pytest.mark.parametrize(
+        "body",
+        [{"groups": []}, {"groups": ["readers"]}, {"enabled": False}, {"enabled": None}],
+    )
+    def test_demoting_last_admin_returns_409(self, client_admin, admin_population, body):
+        client, service = client_admin
+        admin_population.return_value = [frozenset({"test-client-id"})]
+
+        response = client.patch("/api/iam/m2m-clients/test-client-id", json=body)
+
+        assert response.status_code == 409
+        service.patch.assert_not_called()
+
+    def test_demoting_non_last_admin_is_allowed(self, client_admin, sample_client):
+        client, service = client_admin
+        service.patch.return_value = sample_client
+
+        response = client.patch("/api/iam/m2m-clients/test-client-id", json={"groups": []})
+
+        assert response.status_code == 200
+
+    def test_patch_keeping_admin_group_skips_population_read(
+        self, client_admin, admin_population, sample_client
+    ):
+        client, service = client_admin
+        admin_population.return_value = [frozenset({"test-client-id"})]
+        service.patch.return_value = sample_client
+
+        response = client.patch(
+            "/api/iam/m2m-clients/test-client-id",
+            json={"groups": ["mcp-registry-admin"], "description": "d"},
+        )
+
+        assert response.status_code == 200
+
+    def test_description_only_patch_of_last_admin_is_allowed(
+        self, client_admin, admin_population, sample_client
+    ):
+        client, service = client_admin
+        admin_population.return_value = [frozenset({"test-client-id"})]
+        service.patch.return_value = sample_client
+
+        response = client.patch("/api/iam/m2m-clients/test-client-id", json={"description": "new"})
+
+        assert response.status_code == 200
+
 
 @pytest.mark.unit
 @pytest.mark.api
@@ -390,3 +456,23 @@ class TestDeleteM2MClient:
         response = client.delete("/api/iam/m2m-clients/sync-id")
 
         assert response.status_code == 403
+
+    def test_deleting_last_admin_returns_409(self, client_admin, admin_population):
+        client, service = client_admin
+        admin_population.return_value = [frozenset({"test-client-id"})]
+
+        response = client.delete("/api/iam/m2m-clients/test-client-id")
+
+        assert response.status_code == 409
+        service.delete.assert_not_called()
+
+    def test_delete_fails_closed_when_population_unknown(self, client_admin, admin_population):
+        from registry.services.admin_safety import AdminSafetyError
+
+        client, service = client_admin
+        admin_population.side_effect = AdminSafetyError(503, "unknown")
+
+        response = client.delete("/api/iam/m2m-clients/test-client-id")
+
+        assert response.status_code == 503
+        service.delete.assert_not_called()

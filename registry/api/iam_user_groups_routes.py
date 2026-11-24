@@ -19,6 +19,7 @@ from typing import Annotated
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
+from registry.api._admin_grant_audit import audit_admin_grant
 from registry.audit.context import set_audit_action
 from registry.auth.csrf import verify_csrf_token_flexible
 from registry.auth.dependencies import nginx_proxied_auth
@@ -30,6 +31,8 @@ from registry.schemas.idp_user_group import (
     PingFederateUserCreateRequest,
     UserGroupListResponse,
 )
+from registry.services import admin_safety
+from registry.services.admin_safety import AdminSafetyError
 from registry.services.user_group_management_service import (
     UserGroupConflict,
     UserGroupManagementService,
@@ -297,6 +300,9 @@ async def create_user_group(
         resource_id=payload.username,
         description=f"Created user-group record for {payload.username}",
     )
+    # The record confers groups only when the auth server reads this store.
+    if result.enabled and admin_safety.user_group_fallback_active():
+        await audit_admin_grant(request, payload.username, result.groups, "create", _RESOURCE_TYPE)
     return result
 
 
@@ -357,6 +363,14 @@ async def patch_user_group(
 ) -> IdPUserGroup:
     """Update fields of an existing user-group record (admin only)."""
     _require_admin(user_context)
+    # The record confers groups only when the auth server reads this store.
+    if admin_safety.user_group_fallback_active():
+        try:
+            await admin_safety.assert_record_patch_keeps_admin(
+                username, payload.model_dump(exclude_unset=True)
+            )
+        except AdminSafetyError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     service = await _get_service()
     try:
         result = await service.update_user_group(username, payload)
@@ -372,6 +386,13 @@ async def patch_user_group(
         resource_id=username,
         description=f"Updated user-group record for {username}",
     )
+    patched = payload.model_dump(exclude_unset=True)
+    if (
+        ("groups" in patched or "enabled" in patched)
+        and result.enabled
+        and admin_safety.user_group_fallback_active()
+    ):
+        await audit_admin_grant(request, username, result.groups, "update", _RESOURCE_TYPE)
     return result
 
 
@@ -384,6 +405,12 @@ async def delete_user_group(
 ) -> None:
     """Delete a user-group fallback record (admin only)."""
     _require_admin(user_context)
+    # The record confers groups only when the auth server reads this store.
+    if admin_safety.user_group_fallback_active():
+        try:
+            await admin_safety.assert_not_last_admin(username)
+        except AdminSafetyError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     service = await _get_service()
     try:
         await service.delete_user_group(username)

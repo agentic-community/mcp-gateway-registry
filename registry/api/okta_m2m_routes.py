@@ -7,8 +7,10 @@ and managing their group mappings.
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
+from registry.api._admin_grant_audit import audit_admin_grant
+from registry.audit.context import set_audit_action
 from registry.auth.csrf import verify_csrf_token_flexible
 from registry.auth.dependencies import nginx_proxied_auth
 from registry.repositories.documentdb.client import get_documentdb_client
@@ -18,6 +20,8 @@ from registry.schemas.okta_m2m_client import (
     OktaSyncRequest,
     OktaSyncResponse,
 )
+from registry.services import admin_safety
+from registry.services.admin_safety import AdminSafetyError
 from registry.services.okta_m2m_sync import get_okta_m2m_sync
 
 logging.basicConfig(
@@ -184,6 +188,7 @@ async def get_client_groups(
 async def update_client_groups(
     client_id: str,
     payload: OktaM2MClientUpdate,
+    request: Request,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
     _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ):
@@ -195,6 +200,7 @@ async def update_client_groups(
     Args:
         client_id: Okta client ID
         payload: Update payload with new groups
+        request: Request, for the audit record
         user_context: Authenticated user context
 
 
@@ -205,6 +211,10 @@ async def update_client_groups(
         HTTPException: If user is not admin or update fails
     """
     _require_admin(user_context)
+    try:
+        await admin_safety.would_remove_last_admin_via_groups(client_id, payload.groups)
+    except AdminSafetyError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
     db = await get_documentdb_client()
     okta_sync = get_okta_m2m_sync(db)
@@ -223,6 +233,15 @@ async def update_client_groups(
                 detail=f"Client {client_id} not found",
             )
 
+        set_audit_action(
+            request,
+            "update",
+            "m2m_client",
+            resource_id=client_id,
+            description=f"Updated Okta M2M client {client_id} groups",
+            metadata={"groups": payload.groups},
+        )
+        await audit_admin_grant(request, client_id, payload.groups, "update", "m2m_client")
         return {
             "client_id": client_id,
             "groups": payload.groups,

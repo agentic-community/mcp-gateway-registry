@@ -462,9 +462,10 @@ async def _subject_is_admin(
     Uses the SAME predicate as the request-time ``is_admin`` check: resolve the
     subject's rate-limit-independent authz groups -> scopes -> ui_permissions, and
     apply ``_user_is_admin`` (admin == a MUTATING ui action granted to ``all``).
-    This is deliberately NOT the broader privileged-write predicate used by the
-    last-admin guard: a read-only ``list_service: ["all"]`` grant (e.g. the
-    public-mcp-users group) must NOT count as admin here.
+    This is deliberately NOT the broader privileged-write predicate: a read-only
+    ``list_service: ["all"]`` grant (e.g. the public-mcp-users group) must NOT
+    count as admin here. The last-admin guard (``admin_safety``) uses the same
+    ``_user_is_admin`` rule.
 
     Raises HTTPException(503) if group resolution fails, so the caller can fail
     closed (refuse the quarantine) rather than proceed on an unverifiable picture.

@@ -66,6 +66,14 @@ Query parameters with sensitive names (token, password, key, secret, api_key, et
 
 Logged for every REST API request to the Registry.
 
+The auth server writes the same record type for each call to its
+`POST /admin/federation-token` endpoint, which rotates or revokes the
+federation static token. Denied attempts are recorded too. These records
+carry `identity.username` `registry_api_token` (`anonymous` when denied),
+`action.resource_type` `federation`, and the outcome and reason in
+`action.metadata`. Because nginx does not front that endpoint,
+`request.client_ip` is the direct socket peer, never a forwarded header.
+
 ```json
 {
   "timestamp": "2026-02-06T10:30:00.000Z",

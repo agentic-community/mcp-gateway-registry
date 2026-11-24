@@ -216,3 +216,110 @@ class TestImportGroupReservedWildcard:
 
         assert result is True
         mock_collection.replace_one.assert_awaited_once()
+
+
+# The bootstrap admin scope (scripts/registry-admins.json) carries these rules.
+_STORED_ADMIN_RULES = [
+    {"server": "*", "methods": ["all"], "tools": ["all"]},
+    {"server": "*", "methods": ["http:*"], "tools": []},
+    {"agent": "*", "actions": ["list_agents"]},
+]
+
+
+class TestImportGroupKeepsStoredWildcard:
+    """A whole-document rewrite may keep a wildcard rule the document already holds."""
+
+    @pytest.fixture
+    def stored_admin_scope(self, mock_collection):
+        mock_collection.find_one = AsyncMock(return_value={"server_access": _STORED_ADMIN_RULES})
+        mock_collection.replace_one.return_value = MagicMock(upserted_id=None)
+        return mock_collection
+
+    @pytest.mark.asyncio
+    async def test_carrying_the_stored_rules_forward_imports(self, repo, stored_admin_scope):
+        """A description-only PATCH carries server_access forward verbatim."""
+        result = await repo.import_group(
+            group_name="registry-admins",
+            server_access=list(_STORED_ADMIN_RULES),
+            allow_privileged=True,
+        )
+
+        assert result is True
+        stored_admin_scope.replace_one.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_ui_round_trip_with_reordered_and_dropped_empty_fields_imports(
+        self, repo, stored_admin_scope
+    ):
+        """The UI omits an empty tools list and may reorder methods."""
+        server_access = [
+            {"server": "*", "methods": ["all"], "tools": ["all"]},
+            {"server": "*", "methods": ["http:*"]},
+        ]
+
+        result = await repo.import_group(
+            group_name="registry-admins", server_access=server_access, allow_privileged=True
+        )
+
+        assert result is True
+
+    @pytest.mark.parametrize(
+        "server_rule",
+        [
+            # Broadens the methods of a stored wildcard rule.
+            {"server": "*", "methods": ["all", "http:*"], "tools": []},
+            # A wildcard rule the document does not hold.
+            {"server": "all", "methods": ["tools/list"], "tools": ["*"]},
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_changed_or_new_wildcard_rule_refused(
+        self, repo, stored_admin_scope, server_rule
+    ):
+        result = await repo.import_group(
+            group_name="registry-admins",
+            server_access=[*_STORED_ADMIN_RULES, server_rule],
+            allow_privileged=True,
+        )
+
+        assert result is False
+        stored_admin_scope.replace_one.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_wildcard_cannot_move_to_another_scope(self, repo, mock_collection):
+        """Another scope's stored wildcard does not license this one."""
+        mock_collection.find_one = AsyncMock(return_value=None)
+
+        result = await repo.import_group(
+            group_name="team-a",
+            server_access=[{"server": "*", "methods": ["all"], "tools": ["all"]}],
+            allow_privileged=True,
+        )
+
+        assert result is False
+        mock_collection.find_one.assert_awaited_once_with({"_id": "team-a"}, {"server_access": 1})
+        mock_collection.replace_one.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_unreadable_stored_document_refuses(self, repo, mock_collection):
+        mock_collection.find_one = AsyncMock(side_effect=RuntimeError("db down"))
+
+        result = await repo.import_group(
+            group_name="registry-admins",
+            server_access=list(_STORED_ADMIN_RULES),
+            allow_privileged=True,
+        )
+
+        assert result is False
+        mock_collection.replace_one.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_stored_empty_server_rule_is_still_refused(self, repo, mock_collection):
+        """An empty server rule renders as `location /`; storing it never licenses it."""
+        rule = {"server": "", "methods": ["tools/list"], "tools": ["*"]}
+        mock_collection.find_one = AsyncMock(return_value={"server_access": [rule]})
+
+        result = await repo.import_group(group_name="legacy", server_access=[rule])
+
+        assert result is False
+        mock_collection.replace_one.assert_not_called()

@@ -13,6 +13,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
+from registry.api._admin_grant_audit import audit_admin_grant
 from registry.audit.context import set_audit_action
 from registry.auth.csrf import verify_csrf_token_flexible
 from registry.auth.dependencies import nginx_proxied_auth
@@ -26,6 +27,8 @@ from registry.schemas.idp_m2m_client import (
     IdPM2MClientPatch,
     M2MClientListResponse,
 )
+from registry.services import admin_safety
+from registry.services.admin_safety import AdminSafetyError
 from registry.services.m2m_management_service import (
     M2MClientConflict,
     M2MClientImmutable,
@@ -94,6 +97,8 @@ async def create_m2m_client(
         resource_id=payload.client_id,
         description=f"Created M2M client {payload.client_name}",
     )
+    if result.enabled:
+        await audit_admin_grant(request, payload.client_id, result.groups, "create", _RESOURCE_TYPE)
     m2m_management_requests_total.labels(operation="create", outcome="success").inc()
     return result
 
@@ -151,6 +156,13 @@ async def patch_m2m_client(
 ) -> IdPM2MClient:
     """Update fields of an existing manual M2M client (admin only)."""
     _require_admin(user_context, operation="patch")
+    try:
+        await admin_safety.assert_record_patch_keeps_admin(
+            client_id, payload.model_dump(exclude_unset=True)
+        )
+    except AdminSafetyError as exc:
+        m2m_management_requests_total.labels(operation="patch", outcome="admin_safety").inc()
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     service = await _get_service()
     try:
         result = await service.patch(client_id, payload)
@@ -176,6 +188,9 @@ async def patch_m2m_client(
         resource_id=client_id,
         description=f"Updated M2M client {client_id}",
     )
+    patched = payload.model_dump(exclude_unset=True)
+    if ("groups" in patched or "enabled" in patched) and result.enabled:
+        await audit_admin_grant(request, client_id, result.groups, "update", _RESOURCE_TYPE)
     m2m_management_requests_total.labels(operation="patch", outcome="success").inc()
     return result
 
@@ -189,6 +204,11 @@ async def delete_m2m_client(
 ) -> None:
     """Delete a manual M2M client (admin only)."""
     _require_admin(user_context, operation="delete")
+    try:
+        await admin_safety.assert_not_last_admin(client_id)
+    except AdminSafetyError as exc:
+        m2m_management_requests_total.labels(operation="delete", outcome="admin_safety").inc()
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     service = await _get_service()
     try:
         await service.delete(client_id)

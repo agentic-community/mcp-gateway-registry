@@ -31,6 +31,7 @@ from ..services import admin_safety, scope_service
 from ..services.admin_safety import AdminSafetyError
 from ..utils.iam_errors import IdPForbiddenError, IdPNotFoundError
 from ..utils.iam_manager import get_iam_manager
+from ._admin_grant_audit import audit_admin_grant
 
 logger = logging.getLogger(__name__)
 
@@ -149,6 +150,76 @@ def _normalize_agent_paths_in_scope_config(
     return agent_access, ui_permissions
 
 
+def _scope_config_for_create(
+    payload: GroupCreateRequest,
+) -> tuple[list, dict, list]:
+    """Return the normalized (server_access, ui_permissions, agent_access) to create.
+
+    ScopeConfig fields default to None (so PATCH can tell omitted from
+    provided); for a create, None means empty.
+    """
+    server_access: list = []
+    ui_permissions: dict = {}
+    agent_access: list = []
+    if payload.scope_config is not None:
+        if payload.scope_config.server_access is not None:
+            server_access = [
+                rule.model_dump(exclude_unset=True) for rule in payload.scope_config.server_access
+            ]
+        if payload.scope_config.ui_permissions is not None:
+            ui_permissions = payload.scope_config.ui_permissions
+        if payload.scope_config.agent_access is not None:
+            agent_access = payload.scope_config.agent_access
+
+    # Normalize agent paths to ensure they have leading slashes
+    agent_access, ui_permissions = _normalize_agent_paths_in_scope_config(
+        agent_access, ui_permissions
+    )
+    return server_access, ui_permissions or {}, agent_access or []
+
+
+def _scope_config_for_update(
+    payload: GroupUpdateRequest,
+    existing_group: dict,
+    group_name: str,
+) -> tuple[list, dict, list, list]:
+    """Return the (server_access, ui_permissions, group_mappings, agent_access) to store.
+
+    ScopeConfig fields default to None, so an omitted field means "preserve
+    the stored value" while a provided field replaces it. import_group
+    rewrites the whole document, so every omitted field must be carried
+    forward here or it is wiped (critical for group_mappings, which holds
+    Entra Object IDs, and for the grants in ui_permissions).
+    """
+    server_access = None
+    ui_permissions = None
+    group_mappings = None
+    agent_access = None
+    if payload.scope_config is not None:
+        if payload.scope_config.server_access is not None:
+            server_access = [
+                rule.model_dump(exclude_unset=True) for rule in payload.scope_config.server_access
+            ]
+        ui_permissions = payload.scope_config.ui_permissions
+        group_mappings = payload.scope_config.group_mappings
+        agent_access = payload.scope_config.agent_access
+
+    if group_mappings is None:
+        group_mappings = existing_group.get("group_mappings", [group_name])
+    if agent_access is None:
+        agent_access = existing_group.get("agent_access", [])
+    if ui_permissions is None:
+        ui_permissions = existing_group.get("ui_permissions", {})
+    if server_access is None:
+        server_access = existing_group.get("server_access", [])
+
+    # Normalize agent paths to ensure they have leading slashes
+    agent_access, ui_permissions = _normalize_agent_paths_in_scope_config(
+        agent_access, ui_permissions
+    )
+    return server_access, ui_permissions, group_mappings, agent_access
+
+
 def _require_admin(user_context: dict) -> None:
     """
     Verify user has admin permissions.
@@ -173,50 +244,6 @@ def _admin_safety_http(exc: AdminSafetyError) -> HTTPException:
     the operator sees exactly why the intra-admin safety check refused.
     """
     return HTTPException(status_code=exc.status_code, detail=exc.detail)
-
-
-async def _audit_admin_grant(
-    request: Request,
-    username: str,
-    desired_groups: list[str] | None,
-    operation: str,
-) -> None:
-    """Emit a distinct audit event when an operation grants admin-tier access.
-
-    A generic user create/update audit entry does not distinguish a routine
-    group change from a privilege escalation to administrator. This records a
-    dedicated event whenever the resulting group set confers admin so the grant
-    is independently traceable.
-
-    Never fails the operation: an audit-derivation error is logged and
-    swallowed (the primary mutation and its own audit entry are unaffected).
-    """
-    try:
-        if await admin_safety.desired_groups_grant_admin(desired_groups):
-            logger.warning(
-                "admin_grant username=%s operation=%s: account granted "
-                "administrator-tier group membership",
-                username,
-                operation,
-            )
-            set_audit_action(
-                request,
-                operation=operation,
-                resource_type="user",
-                resource_id=username,
-                description=(f"Granted administrator-tier group membership to '{username}'"),
-                metadata={"admin_grant": True},
-            )
-    except AdminSafetyError as exc:
-        # Could not determine whether this is an admin grant. Do not block the
-        # (already-completed) mutation, but log loudly so the gap is visible.
-        logger.error(
-            "admin_grant audit could not be evaluated for username=%s: %s",
-            username,
-            exc.detail,
-        )
-    except Exception:  # pragma: no cover - defensive
-        logger.exception("admin_grant audit evaluation failed for username=%s", username)
 
 
 @router.get("/iam/users", response_model=UserListResponse)
@@ -348,7 +375,7 @@ async def management_create_m2m_user(
     except Exception as exc:
         raise _translate_iam_error(exc) from exc
 
-    await _audit_admin_grant(request, payload.name, payload.groups, operation="create")
+    await audit_admin_grant(request, payload.name, payload.groups, operation="create")
 
     return result
 
@@ -381,7 +408,7 @@ async def management_create_human_user(
     except Exception as exc:
         raise _translate_iam_error(exc) from exc
 
-    await _audit_admin_grant(
+    await audit_admin_grant(
         request,
         user_doc.get("username", payload.username),
         user_doc.get("groups", payload.groups),
@@ -549,7 +576,7 @@ async def management_update_user_groups(
 
             logger.info(f"Updated M2M account {username}: added {added}, removed {removed}")
 
-            await _audit_admin_grant(request, username, new_groups, operation="update")
+            await audit_admin_grant(request, username, new_groups, operation="update")
 
             return UpdateUserGroupsResponse(
                 username=username,
@@ -591,7 +618,7 @@ async def management_update_user_groups(
             ) from exc
         raise _translate_iam_error(exc) from exc
 
-    await _audit_admin_grant(
+    await audit_admin_grant(
         request, username, result.get("groups", payload.groups), operation="update"
     )
 
@@ -730,6 +757,17 @@ async def management_create_group(
         result = {}
         group_mapping_id = payload.name  # default for local-only groups
 
+        # The scope write below upserts, so a create that names an existing
+        # scope replaces it. Check it cannot strip the last admin before
+        # touching the IdP.
+        server_access, ui_permissions, agent_access = _scope_config_for_create(payload)
+        try:
+            await admin_safety.assert_scope_update_keeps_an_admin(
+                payload.name, ui_permissions, [group_mapping_id]
+            )
+        except AdminSafetyError as exc:
+            raise _admin_safety_http(exc) from exc
+
         # Step 1: Create group in identity provider (only if requested)
         if create_in_idp:
             result = await iam.create_group(
@@ -756,27 +794,6 @@ async def management_create_group(
             )
 
         # Step 2: Create in MongoDB scopes collection (always).
-        # ScopeConfig fields default to None (so PATCH can distinguish
-        # omitted from provided); for create, None means empty.
-        server_access = []
-        ui_permissions = {}
-        agent_access = []
-        if payload.scope_config is not None:
-            if payload.scope_config.server_access is not None:
-                server_access = [
-                    rule.model_dump(exclude_unset=True)
-                    for rule in payload.scope_config.server_access
-                ]
-            if payload.scope_config.ui_permissions is not None:
-                ui_permissions = payload.scope_config.ui_permissions
-            if payload.scope_config.agent_access is not None:
-                agent_access = payload.scope_config.agent_access
-
-        # Normalize agent paths to ensure they have leading slashes
-        agent_access, ui_permissions = _normalize_agent_paths_in_scope_config(
-            agent_access, ui_permissions
-        )
-
         import_success = await scope_service.import_group(
             scope_name=payload.name,
             description=payload.description or "",
@@ -878,6 +895,14 @@ async def management_delete_group(
         is_idp_managed = True
         if existing_group is not None:
             is_idp_managed = bool(existing_group.get("is_idp_managed", True))
+
+        # Refuse a delete that removes the last admin, before the IdP call.
+        try:
+            await admin_safety.assert_scope_delete_keeps_an_admin(
+                group_name, idp_group_removed=is_idp_managed
+            )
+        except AdminSafetyError as exc:
+            raise _admin_safety_http(exc) from exc
 
         if is_idp_managed:
             try:
@@ -1041,7 +1066,20 @@ async def management_update_group(
 
         is_idp_managed = bool(existing_group.get("is_idp_managed", True))
 
-        # Step 2: Update group in identity provider (description only),
+        # Step 2: Build the document the write will store and refuse one
+        # that strips the last admin-conferring grant, BEFORE any IdP change,
+        # so a refusal leaves the IdP and the scope store in step.
+        server_access, ui_permissions, group_mappings, agent_access = _scope_config_for_update(
+            payload, existing_group, group_name
+        )
+        try:
+            await admin_safety.assert_scope_update_keeps_an_admin(
+                group_name, ui_permissions, group_mappings
+            )
+        except AdminSafetyError as exc:
+            raise _admin_safety_http(exc) from exc
+
+        # Step 3: Update group in identity provider (description only),
         # gated on is_idp_managed. Catch typed IdP errors as non-fatal.
         if payload.description is not None and is_idp_managed:
             try:
@@ -1082,40 +1120,7 @@ async def management_update_group(
                 idp_skip_reason=skip_reason,
             )
 
-        # Step 3: Update in MongoDB scopes collection
-        # Extract server_access, ui_permissions, and agent_access from scope_config
-        server_access = None
-        ui_permissions = None
-        group_mappings = None
-        agent_access = None
-
-        if payload.scope_config is not None:
-            # ScopeConfig fields default to None, so an omitted field means
-            # "preserve existing values" (critical for group_mappings, which
-            # holds Entra Object IDs) while a provided field replaces them.
-            if payload.scope_config.server_access is not None:
-                server_access = [
-                    rule.model_dump(exclude_unset=True)
-                    for rule in payload.scope_config.server_access
-                ]
-            ui_permissions = payload.scope_config.ui_permissions
-            group_mappings = payload.scope_config.group_mappings
-            agent_access = payload.scope_config.agent_access
-
-        # Preserve existing group_mappings if not provided in payload
-        # This is critical for Entra ID where group_mappings contains Object IDs
-        if group_mappings is None:
-            group_mappings = existing_group.get("group_mappings", [group_name])
-
-        # Preserve existing agent_access if not provided in payload
-        if agent_access is None:
-            agent_access = existing_group.get("agent_access", [])
-
-        # Normalize agent paths to ensure they have leading slashes
-        agent_access, ui_permissions = _normalize_agent_paths_in_scope_config(
-            agent_access, ui_permissions
-        )
-
+        # Step 4: Update in MongoDB scopes collection.
         # Use import_group to update the scope data.
         # Preserve is_idp_managed across edits (import_group replaces the whole doc).
         import_success = await scope_service.import_group(
@@ -1146,7 +1151,8 @@ async def management_update_group(
                 detail=(
                     f"Scope '{group_name}' was not updated: the scope service "
                     "refused the configuration. Wildcard server_access entries "
-                    '(server: "*" or "all") cannot be saved here; grant '
+                    '(server: "*" or "all") cannot be added here (a group may '
+                    "keep one it already has, unchanged); grant "
                     'broad UI visibility via ui_permissions ("all") instead.'
                 ),
             )
