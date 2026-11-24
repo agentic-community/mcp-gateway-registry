@@ -2124,6 +2124,11 @@ async def get_obo_identifier_uris(
     plus ``obo_exchange`` / the 3LO ``oauth_user`` ingress leg on any provider,
     and every enabled **virtual** server (its ``/virtual/<id>/mcp`` connection URL
     is an ingress login endpoint exactly like a registered server's).
+    With ``PER_SERVER_PRM_ALL_PROVIDERS`` on, every **enabled** server on every
+    provider is listed; a disabled server is left out because its per-server PRM
+    route 404s (the list comes from the same predicate the route uses, see
+    ``server_serves_per_server_prm``). With the setting off, the historical
+    gating applies unchanged.
     On Entra, every one of those URLs must be present in the gateway app's
     ``identifierUris`` list. This endpoint returns the exact set so the operator
     can keep Entra in sync as servers are added/removed -- the registry side is
@@ -2132,16 +2137,17 @@ async def get_obo_identifier_uris(
     NOT gated on egress being enabled: on an Entra ingress-only deployment
     (egress off -- the default) plain servers still need per-server App ID URIs,
     and the operator needs this list to register them. Available whenever a
-    per-server PRM is advertised, i.e. on Entra OR when egress auth is enabled;
-    otherwise (lenient IdP + egress off, no per-server PRMs) it returns an empty
-    list rather than 404, so the caller always gets a definitive answer.
+    per-server PRM is advertised, i.e. on Entra, when egress auth is enabled, or
+    when ``PER_SERVER_PRM_ALL_PROVIDERS`` is on; otherwise (lenient IdP + egress
+    off, no per-server PRMs) it returns an empty list rather than 404, so the
+    caller always gets a definitive answer.
 
     Admin only. Returns ``{"identifier_uris": [...], "count": N}``.
     """
     _require_admin(user_context)
 
     from registry.api.wellknown_routes import (
-        server_needs_per_server_prm,
+        server_serves_per_server_prm,
         virtual_server_needs_per_server_prm,
     )
     from registry.auth.oauth_metadata import build_per_server_resource_url
@@ -2151,7 +2157,7 @@ async def get_obo_identifier_uris(
     servers = await server_service.get_all_servers(include_inactive=True)
     uris: list[str] = []
     for path, info in (servers or {}).items():
-        if not server_needs_per_server_prm((info or {}).get("egress_auth_mode")):
+        if not server_serves_per_server_prm(info):
             continue
         append_mcp = info.get("append_mcp_path") is not False
         uris.append(
