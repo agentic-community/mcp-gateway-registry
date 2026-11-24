@@ -180,6 +180,27 @@ def test_client_regular(mock_settings, mock_auth_regular, mock_iam_manager):
         yield client, mock_iam_manager
 
 
+# An unrelated admin scope, so the scope-rewrite guard sees a real admin
+# population instead of the {} the repository returns when no database is
+# reachable (which the guard now refuses with 503).
+_UNRELATED_ADMIN_CATALOGUE: dict[str, Any] = {
+    "registry-admins": {
+        "ui_scopes": {"register_service": ["all"]},
+        "mappings": ["registry-admins"],
+    },
+}
+
+
+@pytest.fixture
+def unrelated_admin_catalogue():
+    """Serve the admin-safety guard a catalogue with one unrelated admin scope."""
+    with patch(
+        "registry.services.admin_safety.scope_service.list_groups",
+        new=AsyncMock(return_value=_UNRELATED_ADMIN_CATALOGUE),
+    ):
+        yield
+
+
 # =============================================================================
 # TEST GET /management/iam/users - List Users
 # =============================================================================
@@ -642,7 +663,7 @@ class TestManagementUpdateUserGroupsSafety:
                 new=AsyncMock(return_value=True),
             ) as mock_grant,
             patch(
-                "registry.api.management_routes.set_audit_action",
+                "registry.api._admin_grant_audit.set_audit_action",
             ) as mock_audit,
         ):
             response = client.patch(
@@ -689,7 +710,7 @@ class TestManagementUpdateUserGroupsSafety:
                 new=AsyncMock(return_value=False),
             ),
             patch(
-                "registry.api.management_routes.set_audit_action",
+                "registry.api._admin_grant_audit.set_audit_action",
             ) as mock_audit,
         ):
             response = client.patch(
@@ -820,6 +841,7 @@ class TestManagementListGroups:
 
 @pytest.mark.unit
 @pytest.mark.api
+@pytest.mark.usefixtures("unrelated_admin_catalogue")
 class TestManagementCreateGroup:
     """Tests for POST /management/iam/groups endpoint."""
 
@@ -1069,6 +1091,7 @@ class TestManagementCreateGroup:
 
 @pytest.mark.unit
 @pytest.mark.api
+@pytest.mark.usefixtures("unrelated_admin_catalogue")
 class TestManagementCreateGroupCreateInIdp:
     """Tests for create_in_idp flag handling in group creation."""
 
@@ -1218,6 +1241,7 @@ class TestManagementCreateGroupCreateInIdp:
 
 @pytest.mark.unit
 @pytest.mark.api
+@pytest.mark.usefixtures("unrelated_admin_catalogue")
 class TestManagementDeleteGroupLocalOnly:
     """Tests for deleting groups that only exist in MongoDB (local-only)."""
 
@@ -1273,6 +1297,7 @@ class TestManagementDeleteGroupLocalOnly:
 
 @pytest.mark.unit
 @pytest.mark.api
+@pytest.mark.usefixtures("unrelated_admin_catalogue")
 class TestManagementDeleteGroup:
     """Tests for DELETE /management/iam/groups/{group_name} endpoint."""
 
@@ -1560,6 +1585,7 @@ class TestAgentWildcardNormalization:
 
 @pytest.mark.unit
 @pytest.mark.api
+@pytest.mark.usefixtures("unrelated_admin_catalogue")
 class TestScopeMutationsTriggerAuthReload:
     """Create/update/delete via /iam/groups reload the auth server (#1494)."""
 
@@ -1785,6 +1811,7 @@ class TestScopeMutationsTriggerAuthReload:
 
 @pytest.mark.unit
 @pytest.mark.api
+@pytest.mark.usefixtures("unrelated_admin_catalogue")
 class TestScopeConfigValidation:
     """Typed ScopeConfig on the IAM group endpoints (#1494)."""
 
@@ -1888,6 +1915,7 @@ class TestScopeConfigValidation:
             "is_idp_managed": False,
             "group_mappings": ["12345678-entra-object-id"],
             "agent_access": ["/kept-agent"],
+            "server_access": [{"server": "kept", "methods": ["tools/list"]}],
         }
 
         with (
@@ -1916,5 +1944,267 @@ class TestScopeConfigValidation:
         kwargs = mock_import.await_args.kwargs
         assert kwargs["group_mappings"] == ["12345678-entra-object-id"]
         assert kwargs["agent_access"] == ["/kept-agent"]
-        assert kwargs["server_access"] is None  # omitted -> preserved downstream
+        assert kwargs["server_access"] == [{"server": "kept", "methods": ["tools/list"]}]
         assert kwargs["ui_permissions"] == {"list_service": ["api"]}
+
+    def test_description_only_patch_keeps_permissions(self, test_client_admin):
+        """A PATCH without scope_config must not wipe ui_permissions/server_access."""
+        client, _ = test_client_admin
+        existing = {
+            "scope_name": "registry-admins",
+            "description": "old",
+            "is_idp_managed": False,
+            "group_mappings": ["registry-admins"],
+            "agent_access": [],
+            "server_access": [{"server": "api", "methods": ["all"]}],
+            "ui_permissions": {"register_service": ["all"], "list_service": ["all"]},
+        }
+
+        with (
+            patch(
+                "registry.api.management_routes.scope_service.get_group",
+                new_callable=AsyncMock,
+                return_value=existing,
+            ),
+            patch(
+                "registry.api.management_routes.scope_service.import_group",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_import,
+            patch(
+                "registry.api.management_routes.scope_service.trigger_auth_server_reload",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "registry.services.admin_safety.scope_service.list_groups",
+                new=AsyncMock(
+                    return_value={
+                        "registry-admins": {
+                            "ui_scopes": {"register_service": ["all"]},
+                            "mappings": ["registry-admins"],
+                        }
+                    }
+                ),
+            ),
+        ):
+            response = client.patch(
+                "/api/management/iam/groups/registry-admins",
+                json={"description": "typo fix"},
+            )
+
+        assert response.status_code == 200
+        kwargs = mock_import.await_args.kwargs
+        assert kwargs["ui_permissions"] == {"register_service": ["all"], "list_service": ["all"]}
+        assert kwargs["server_access"] == [{"server": "api", "methods": ["all"]}]
+
+    @pytest.mark.parametrize("other_admin", [False, True])
+    def test_stripping_admin_grant_refused_only_for_last_admin(
+        self, test_client_admin, other_admin
+    ):
+        """Removing the last admin-conferring grant is refused with 409."""
+        client, _ = test_client_admin
+        existing = {
+            "scope_name": "registry-admins",
+            "is_idp_managed": False,
+            "group_mappings": ["registry-admins"],
+            "ui_permissions": {"register_service": ["all"]},
+        }
+        catalogue = {
+            "registry-admins": {
+                "ui_scopes": {"register_service": ["all"]},
+                "mappings": ["registry-admins"],
+            },
+            "ops-admins": {"ui_scopes": {"delete_service": ["all"]}, "mappings": ["ops"]},
+        }
+        users = [{"username": "alice", "groups": ["registry-admins"]}]
+        if other_admin:
+            users.append({"username": "bob", "groups": ["ops"]})
+        iam = MagicMock()
+        iam.list_users = AsyncMock(return_value=users)
+
+        with (
+            patch(
+                "registry.api.management_routes.scope_service.get_group",
+                new_callable=AsyncMock,
+                return_value=existing,
+            ),
+            patch(
+                "registry.api.management_routes.scope_service.import_group",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_import,
+            patch(
+                "registry.api.management_routes.scope_service.trigger_auth_server_reload",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "registry.services.admin_safety.scope_service.list_groups",
+                new=AsyncMock(return_value=catalogue),
+            ),
+            patch("registry.services.admin_safety.get_iam_manager", return_value=iam),
+            patch(
+                "registry.services.admin_safety._m2m_admin_identities",
+                new=AsyncMock(return_value=[]),
+            ),
+        ):
+            response = client.patch(
+                "/api/management/iam/groups/registry-admins",
+                json={"scope_config": {"ui_permissions": {"list_service": ["all"]}}},
+            )
+
+        if other_admin:
+            assert response.status_code == 200
+            mock_import.assert_awaited_once()
+        else:
+            assert response.status_code == 409
+            mock_import.assert_not_awaited()
+
+    def test_refused_patch_leaves_the_idp_description_unchanged(self, test_client_admin):
+        """The guard runs before the IdP call, so a 409 changes nothing anywhere."""
+        client, mock_iam = test_client_admin
+        mock_iam.update_group = AsyncMock(return_value={})
+        existing = {
+            "scope_name": "registry-admins",
+            "is_idp_managed": True,
+            "group_mappings": ["registry-admins"],
+            "ui_permissions": {"register_service": ["all"]},
+        }
+        p1, p2, p3 = _last_admin_guard_patches(
+            [{"username": "alice", "groups": ["registry-admins"]}]
+        )
+        with (
+            p1,
+            p2,
+            p3,
+            patch(
+                "registry.api.management_routes.scope_service.get_group",
+                new_callable=AsyncMock,
+                return_value=existing,
+            ),
+            patch(
+                "registry.api.management_routes.scope_service.import_group",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_import,
+        ):
+            response = client.patch(
+                "/api/management/iam/groups/registry-admins",
+                json={
+                    "description": "renamed",
+                    "scope_config": {"ui_permissions": {"list_service": ["all"]}},
+                },
+            )
+
+        assert response.status_code == 409
+        mock_iam.update_group.assert_not_awaited()
+        mock_import.assert_not_awaited()
+
+
+_ONLY_ADMIN_CATALOGUE: dict[str, Any] = {
+    "registry-admins": {
+        "ui_scopes": {"register_service": ["all"]},
+        "mappings": ["registry-admins"],
+    },
+}
+
+
+def _last_admin_guard_patches(users: list[dict[str, Any]]):
+    """Patch the admin-safety reads: one admin scope, ``users`` as the IdP listing."""
+    iam = MagicMock()
+    iam.list_users = AsyncMock(return_value=users)
+    return (
+        patch(
+            "registry.services.admin_safety.scope_service.list_groups",
+            new=AsyncMock(return_value=_ONLY_ADMIN_CATALOGUE),
+        ),
+        patch("registry.services.admin_safety.get_iam_manager", return_value=iam),
+        patch(
+            "registry.services.admin_safety._m2m_admin_identities",
+            new=AsyncMock(return_value=[]),
+        ),
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.api
+class TestGroupCreateAndDeleteGuardLastAdmin:
+    """POST and DELETE /iam/groups cannot remove the last administrator."""
+
+    ALICE_ONLY = [{"username": "alice", "groups": ["registry-admins"]}]
+
+    def test_create_over_existing_admin_scope_is_refused(self, test_client_admin):
+        """A create upserts, so naming the admin scope would wipe its grant."""
+        client, mock_iam = test_client_admin
+        p1, p2, p3 = _last_admin_guard_patches(self.ALICE_ONLY)
+        with (
+            p1,
+            p2,
+            p3,
+            patch(
+                "registry.api.management_routes.scope_service.import_group",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_import,
+        ):
+            response = client.post(
+                "/api/management/iam/groups",
+                json={"name": "registry-admins", "scope_config": {"create_in_idp": True}},
+            )
+
+        assert response.status_code == 409
+        mock_import.assert_not_awaited()
+        mock_iam.create_group.assert_not_called()
+
+    def test_create_of_a_new_group_skips_population_read(self, test_client_admin):
+        """A brand-new non-admin group loses no admin name and is not refused."""
+        client, _ = test_client_admin
+        identities = AsyncMock()
+        with (
+            patch(
+                "registry.services.admin_safety.scope_service.list_groups",
+                new=AsyncMock(return_value=_ONLY_ADMIN_CATALOGUE),
+            ),
+            patch("registry.services.admin_safety.list_admin_identities", new=identities),
+            patch(
+                "registry.api.management_routes.scope_service.import_group",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "registry.api.management_routes.scope_service.trigger_auth_server_reload",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+        ):
+            response = client.post("/api/management/iam/groups", json={"name": "new-team"})
+
+        assert response.status_code == 200
+        identities.assert_not_awaited()
+
+    def test_delete_of_the_only_admin_scope_is_refused(self, test_client_admin):
+        """Neither the IdP group nor the scope document is deleted."""
+        client, mock_iam = test_client_admin
+        mock_iam.delete_group = AsyncMock(return_value=True)
+        p1, p2, p3 = _last_admin_guard_patches(self.ALICE_ONLY)
+        with (
+            p1,
+            p2,
+            p3,
+            patch(
+                "registry.api.management_routes.scope_service.get_group",
+                new_callable=AsyncMock,
+                return_value={"scope_name": "registry-admins", "is_idp_managed": True},
+            ),
+            patch(
+                "registry.api.management_routes.scope_service.delete_group",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_delete,
+        ):
+            response = client.delete("/api/management/iam/groups/registry-admins")
+
+        assert response.status_code == 409
+        mock_iam.delete_group.assert_not_awaited()
+        mock_delete.assert_not_awaited()

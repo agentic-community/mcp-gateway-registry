@@ -51,11 +51,13 @@ from ..schemas.server_update_models import (
     ServerCardPatch,
     ServerUpdateRequest,
 )
+from ..services import admin_safety
 from ..services._asset_id import (
     InvalidAssetIdError,
     check_caller_supplied_id_allowed,
     resolve_asset_id,
 )
+from ..services.admin_safety import AdminSafetyError
 from ..services.canonical_export import redact_backend_urls, to_canonical
 from ..services.lifecycle_events import (
     EnforcedStatusError,
@@ -6195,6 +6197,15 @@ async def _delete_group_impl(
                 detail=f"Cannot delete system group '{group_name}'. Use force=true to override.",
             )
 
+    # Applies with force=true too: force overrides the system-group list, not
+    # the last-admin guard.
+    try:
+        await admin_safety.assert_scope_delete_keeps_an_admin(
+            group_name, idp_group_removed=delete_from_idp
+        )
+    except AdminSafetyError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
     try:
         # Delete from scopes (file or OpenSearch)
         scopes_success = await delete_group(group_name, remove_from_mappings=True)
@@ -6488,6 +6499,18 @@ async def import_group_definition(
             f"API import group request from user '{user_context.get('username') if user_context else 'unknown'}' "
             f"for group '{scope_name}'"
         )
+
+        # import_group replaces the whole document, so re-importing an
+        # existing scope can strip its admin grant. When omitted, the stored
+        # group_mappings default to [scope_name].
+        try:
+            await admin_safety.assert_scope_update_keeps_an_admin(
+                scope_name,
+                ui_permissions,
+                group_mappings if group_mappings is not None else [scope_name],
+            )
+        except AdminSafetyError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
         # Import group definition. This route is admin-only (see _require_admin
         # above); allow_privileged satisfies the service- and repository-layer

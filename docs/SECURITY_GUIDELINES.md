@@ -628,10 +628,27 @@ sanitizer that isn't called) is equivalent to no check.
   response status and marker, never from an inbound client header.
 - **Protect the admin population from lockout and self-harm.** Admin user-mgmt
   must refuse self-deletion, refuse removing/demoting the LAST admin (count
-  remaining admins first, fail closed if the population can't be enumerated), and
-  emit a distinct audit event on any admin-tier grant. Derive "who is admin" from
-  the SAME privileged-scope rule the request-time check uses, not a separate
-  notion.
+  remaining admins first, fail closed if the population can't be enumerated),
+  and emit a distinct audit event on any admin-tier grant, on every route that
+  sets a principal's groups (users, all M2M routes, user-group records), through
+  the shared `registry/api/_admin_grant_audit.py`. Derive "who is admin" from
+  the SAME rule the request-time check uses (`_user_is_admin`), not the broader
+  privileged-write predicate and not a separate notion. Guard EVERY route that
+  can remove admin status: user delete and group update, M2M client delete and
+  group/enabled PATCH (generic, Okta and Auth0), user-group fallback-store PATCH
+  and DELETE, and every scope write that can drop an admin-conferring
+  `ui_permissions` grant or mapping: PATCH, delete (both routes, `force`
+  included), and create and import, which upsert over an existing scope.
+  Deleting the IdP group too removes its name from every member, so count it as
+  dropped from other scopes' mappings. Fail closed when the scope catalogue
+  shows no admin-conferring scope at all: the repository returns `{}` on a read
+  error, and an empty "before" set makes every change look harmless. A PATCH
+  over a whole-document replace must re-read and carry forward every omitted
+  field, or a description-only edit wipes the grants. A sink guard on that
+  replace must then accept a carried-forward value the document already holds
+  (compare it to the stored rule, never just its name), or every partial edit of
+  such a document fails. Count every group source the auth server reads
+  (`idp_m2m_clients`, `idp_user_groups`) and skip disabled records.
 - **A config/secrets export must be deny-by-default for sensitive values.** An
   admin "export configuration" endpoint that can emit secrets (SECRET_KEY, IdP
   client secrets, DB passwords, API keys) concentrates the whole system's
@@ -1106,7 +1123,11 @@ surface.
   the shared `get_client_ip()` (`registry/utils/request_utils.py`): prefer nginx's
   `X-Real-IP`, else the `TRUSTED_PROXY_HOPS`-th entry counted from the RIGHT (the
   hop a trusted proxy appended), else the direct socket peer; validate every
-  candidate as a well-formed IP and fail toward the peer. Separately, the ASGI
+  candidate as a well-formed IP and fail toward the peer. `X-Real-IP` is
+  trustworthy only because nginx overwrites it: on a route nginx never proxies
+  (the auth server's `POST /admin/federation-token`, reached directly on its
+  own port) it holds whatever the caller sent, so attribute those calls by the
+  socket peer (`request.client.host`) instead. Separately, the ASGI
   server's own forwarded-header trust must be scoped to the actual upstream:
   launch uvicorn with `--forwarded-allow-ips` set to the real peer (loopback
   `127.0.0.1,::1` when nginx sits in the same pod/container), **never `*`**. With

@@ -3440,11 +3440,17 @@ class TestServersGroupsAdminGate:
         test_client_admin,
     ):
         """Admin import reaches the service layer (no 403)."""
-        with patch(
-            "registry.services.scope_service.import_group",
-            new_callable=AsyncMock,
-            return_value=True,
-        ) as mock_import:
+        with (
+            patch(
+                "registry.services.admin_safety.scope_service.list_groups",
+                new=AsyncMock(return_value=_ONE_ADMIN_SCOPE),
+            ),
+            patch(
+                "registry.services.scope_service.import_group",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_import,
+        ):
             response = test_client_admin.post(
                 "/api/servers/groups/import",
                 json={"scope_name": "legit-group", "create_in_idp": False},
@@ -3452,6 +3458,74 @@ class TestServersGroupsAdminGate:
 
         assert response.status_code != 403
         mock_import.assert_called_once()
+
+
+_ONE_ADMIN_SCOPE: dict[str, Any] = {
+    "registry-admins": {
+        "ui_scopes": {"register_service": ["all"]},
+        "mappings": ["registry-admins"],
+    },
+}
+
+
+class TestServersGroupsGuardLastAdmin:
+    """Group import and delete on /api/servers/groups cannot remove the last admin."""
+
+    @pytest.fixture
+    def only_alice_is_admin(self):
+        """One admin scope, held only by alice."""
+        iam = MagicMock()
+        iam.list_users = AsyncMock(
+            return_value=[{"username": "alice", "groups": ["registry-admins"]}]
+        )
+        with (
+            patch(
+                "registry.services.admin_safety.scope_service.list_groups",
+                new=AsyncMock(return_value=_ONE_ADMIN_SCOPE),
+            ),
+            patch("registry.services.admin_safety.get_iam_manager", return_value=iam),
+            patch(
+                "registry.services.admin_safety._m2m_admin_identities",
+                new=AsyncMock(return_value=[]),
+            ),
+        ):
+            yield
+
+    def test_reimport_stripping_the_admin_grant_is_refused(
+        self,
+        test_client_admin,
+        only_alice_is_admin,
+    ):
+        """import_group replaces the whole document, so this would demote alice."""
+        with patch(
+            "registry.services.scope_service.import_group", new_callable=AsyncMock
+        ) as mock_import:
+            response = test_client_admin.post(
+                "/api/servers/groups/import",
+                json={"scope_name": "registry-admins", "create_in_idp": False},
+            )
+
+        assert response.status_code == 409
+        mock_import.assert_not_called()
+
+    @pytest.mark.parametrize("force", ["false", "true"])
+    def test_delete_of_the_only_admin_scope_is_refused(
+        self,
+        test_client_admin,
+        only_alice_is_admin,
+        force,
+    ):
+        """force overrides the system-group list, never the last-admin guard."""
+        with patch(
+            "registry.services.scope_service.delete_group", new_callable=AsyncMock
+        ) as mock_delete:
+            response = test_client_admin.post(
+                "/api/servers/groups/delete",
+                data={"group_name": "registry-admins", "force": force},
+            )
+
+        assert response.status_code == 409
+        mock_delete.assert_not_called()
 
 
 class TestToggleApiAuthorization:

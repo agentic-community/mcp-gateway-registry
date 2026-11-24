@@ -207,6 +207,42 @@ curl -H "Authorization: Bearer $TOKEN" "https://registry.example.com/api/servers
 
 **Note**: Deleting an M2M account immediately invalidates all tokens issued to it.
 
+## Administrator Lockout Protection
+
+The registry refuses any change that would leave it with no administrator.
+An administrator is an account whose groups map to a scope granting a
+management action (one starting with `register_`, `modify_`, `toggle_`,
+`delete_`, `publish_` or `create_`) on `all`. Read-only grants such as
+`list_service: ["all"]` do not make an account an administrator.
+
+The check covers every change that can remove administrator access:
+
+- Deleting a user, or changing a user's groups. You also cannot delete your
+  own account.
+- Deleting an M2M account, or changing its groups or its `enabled` flag,
+  including through the Okta and Auth0 M2M group endpoints.
+- Deleting or changing a user-group record, when the auth server reads the
+  user-group store (PingFederate by default).
+- Deleting, changing, creating or importing a group. A create or import that
+  names an existing group replaces it, so it is checked like a change.
+
+A refused change writes nothing, in the registry or in the IdP:
+
+| Status | Meaning | What to do |
+|--------|---------|------------|
+| `409` | The change would remove the last administrator. | Give another account administrator access, then retry. |
+| `503` | The registry could not count its administrators: the IdP user listing failed, the scope store could not be read, or no administrator was found at all. | Check IdP and database connectivity, then retry. |
+
+Most of these changes need a current administrator count first, so an IdP
+or database outage blocks them with `503` even when the target is not an
+administrator. Deleting an ordinary M2M account during an IdP outage is
+refused this way. A group change that drops no administrator grant, such as
+creating a new team group, does not need the IdP user listing.
+
+Every change that sets an account's groups to include an administrator
+group, whether for a user, an M2M account or a user-group record, is also
+recorded as a separate audit event with `admin_grant: true` in its metadata.
+
 ## Best Practices
 
 ### Group Organization

@@ -55,11 +55,33 @@ class TestGroupsConferAdmin:
 class TestResolveAdminGroupNames:
     """Tests for admin-conferring group resolution from scope docs."""
 
-    async def test_identifies_privileged_scope_name(self):
-        # "readers" grants only scoped (non-"all") access, so it is NOT
-        # admin-conferring. mcp-registry-admin is a privileged scope name.
+    @pytest.mark.parametrize("value", ["all", "wall", {"all": True}])
+    async def test_non_list_grant_is_not_admin(self, value):
+        # get_ui_permissions_for_user reads only list values, so a bare
+        # string grants the user nothing. "all" in "wall" is True, which made
+        # the guard count such a holder as another admin.
         groups = {
-            "mcp-registry-admin": {"ui_scopes": {}, "mappings": []},
+            "registry-admins": {
+                "ui_scopes": {"register_service": ["all"]},
+                "mappings": ["registry-admins"],
+            },
+            "ops": {"ui_scopes": {"register_service": value}, "mappings": ["ops"]},
+        }
+        with patch(
+            "registry.services.admin_safety.scope_service.list_groups",
+            new=AsyncMock(return_value=groups),
+        ):
+            result = await admin_safety.resolve_admin_group_names()
+        assert result == {"registry-admins"}
+
+    async def test_scoped_grant_is_not_admin(self):
+        # "readers" grants only scoped (non-"all") access, so it is NOT
+        # admin-conferring.
+        groups = {
+            "mcp-registry-admin": {
+                "ui_scopes": {"register_service": ["all"]},
+                "mappings": [],
+            },
             "readers": {"ui_scopes": {"list_service": ["some-server"]}, "mappings": []},
         }
         with patch(
@@ -67,9 +89,64 @@ class TestResolveAdminGroupNames:
             new=AsyncMock(return_value=groups),
         ):
             result = await admin_safety.resolve_admin_group_names()
-        assert "mcp-registry-admin" in result
-        # A scoped (non-"all") grant does not confer admin.
-        assert "readers" not in result
+        assert result == {"mcp-registry-admin"}
+
+    async def test_read_only_all_grant_is_not_admin(self):
+        # A read-only "all" grant (the shipped federation-service seed) must
+        # not count as admin, or the last real admin could be removed.
+        groups = {
+            "registry-admins": {
+                "ui_scopes": {"modify_service": ["all"]},
+                "mappings": ["registry-admins"],
+            },
+            "federation-service": {
+                "ui_scopes": {
+                    "list_agents": ["all"],
+                    "get_agent": ["all"],
+                    "list_service": ["all"],
+                    "health_check_service": ["all"],
+                },
+                "mappings": ["federation-service"],
+            },
+        }
+        with patch(
+            "registry.services.admin_safety.scope_service.list_groups",
+            new=AsyncMock(return_value=groups),
+        ):
+            result = await admin_safety.resolve_admin_group_names()
+        assert result == {"registry-admins"}
+
+    async def test_non_conferring_mutating_all_grant_is_not_admin(self):
+        # Skill and per-type entity scopes are excluded by the request-time rule.
+        groups = {
+            "admins": {"ui_scopes": {"register_service": ["all"]}, "mappings": []},
+            "skill-managers": {
+                "ui_scopes": {"publish_skill": ["all"], "create_dataset_entity": ["all"]},
+                "mappings": [],
+            },
+        }
+        with patch(
+            "registry.services.admin_safety.scope_service.list_groups",
+            new=AsyncMock(return_value=groups),
+        ):
+            result = await admin_safety.resolve_admin_group_names()
+        assert result == {"admins"}
+
+    async def test_privileged_name_without_admin_grant_is_not_admin(self):
+        # Mirrors _user_is_admin: the name alone confers nothing at request time.
+        groups = {
+            "mcp-servers-unrestricted/read": {
+                "ui_scopes": {"list_service": ["all"]},
+                "mappings": [],
+            },
+            "admins": {"ui_scopes": {"delete_service": ["all"]}, "mappings": []},
+        }
+        with patch(
+            "registry.services.admin_safety.scope_service.list_groups",
+            new=AsyncMock(return_value=groups),
+        ):
+            result = await admin_safety.resolve_admin_group_names()
+        assert result == {"admins"}
 
     async def test_identifies_admin_via_ui_permissions(self):
         groups = {
@@ -292,6 +369,319 @@ class TestListAdminIdentities:
         assert exc.value.status_code == 503
 
 
+def _mongo_by_collection_mock(docs_by_name):
+    """Like _mongo_m2m_mock, but each collection name yields its own docs."""
+
+    def _collection(name):
+        cursor = MagicMock()
+        cursor.to_list = AsyncMock(return_value=docs_by_name.get(name, []))
+        collection = MagicMock()
+        collection.find = MagicMock(return_value=cursor)
+        return collection
+
+    db = MagicMock()
+    db.__getitem__ = MagicMock(side_effect=_collection)
+    return AsyncMock(return_value=db)
+
+
+@pytest.mark.asyncio
+class TestGroupStoreAdmins:
+    """Admins from idp_user_groups, disabled records, and IdPs with no listing."""
+
+    def _patches(self, users_mock, docs_by_name, fallback_active=True):
+        return (
+            patch(
+                "registry.services.admin_safety.resolve_admin_group_names",
+                new=AsyncMock(return_value={"mcp-registry-admin"}),
+            ),
+            patch("registry.services.admin_safety.get_iam_manager", return_value=users_mock),
+            patch(
+                "registry.repositories.documentdb.client.get_documentdb_client",
+                new=_mongo_by_collection_mock(docs_by_name),
+            ),
+            patch(
+                "registry.services.admin_safety.user_group_fallback_active",
+                return_value=fallback_active,
+            ),
+        )
+
+    async def test_idp_without_listing_uses_user_group_store(self):
+        # PingFederate: list_users raises NotImplementedError; admins live in
+        # idp_user_groups. Must not 503, and disabled records are skipped.
+        iam = MagicMock()
+        iam.list_users = AsyncMock(side_effect=NotImplementedError("pf"))
+        docs = {
+            "idp_user_groups": [
+                {"username": "pf-admin", "groups": ["mcp-registry-admin"]},
+                {"username": "gone", "groups": ["mcp-registry-admin"], "enabled": False},
+                {"username": "reader", "groups": ["readers"]},
+            ]
+        }
+        p1, p2, p3, p4 = self._patches(iam, docs)
+        with p1, p2, p3, p4:
+            admins = await admin_safety.list_admin_identities()
+        assert admins == [frozenset({"pf-admin"})]
+
+    async def test_user_in_both_sources_counts_once(self):
+        users = [{"username": "Admin1", "groups": ["mcp-registry-admin"]}]
+        docs = {"idp_user_groups": [{"username": "admin1", "groups": ["mcp-registry-admin"]}]}
+        p1, p2, p3, p4 = self._patches(_iam_mock(users), docs)
+        with p1, p2, p3, p4:
+            admins = await admin_safety.list_admin_identities()
+        assert admins == [frozenset({"admin1"})]
+
+    async def test_user_group_store_ignored_when_fallback_inactive(self):
+        users = [{"username": "admin1", "groups": ["mcp-registry-admin"]}]
+        docs = {"idp_user_groups": [{"username": "x", "groups": ["mcp-registry-admin"]}]}
+        p1, p2, p3, p4 = self._patches(_iam_mock(users), docs, fallback_active=False)
+        with p1, p2, p3, p4:
+            admins = await admin_safety.list_admin_identities()
+        assert admins == [frozenset({"admin1"})]
+
+    async def test_disabled_m2m_admin_is_not_counted(self):
+        users = [{"username": "admin1", "groups": ["mcp-registry-admin"]}]
+        docs = {
+            "idp_m2m_clients": [
+                {"client_id": "svc", "name": "svc", "groups": ["mcp-registry-admin"]},
+                {
+                    "client_id": "off",
+                    "name": "off",
+                    "groups": ["mcp-registry-admin"],
+                    "enabled": False,
+                },
+            ]
+        }
+        p1, p2, p3, p4 = self._patches(_iam_mock(users), docs)
+        with p1, p2, p3, p4:
+            admins = await admin_safety.list_admin_identities()
+        assert set(admins) == {frozenset({"admin1"}), frozenset({"svc"})}
+
+
+@pytest.mark.asyncio
+class TestAssertScopeUpdateKeepsAnAdmin:
+    """Scope rewrites that drop an admin-conferring grant or mapping."""
+
+    CATALOGUE = {
+        "registry-admins": {
+            "ui_scopes": {"register_service": ["all"]},
+            "mappings": ["idp-admins"],
+        },
+    }
+
+    async def test_unchanged_admin_grant_skips_population_read(self):
+        identities = AsyncMock()
+        with (
+            patch(
+                "registry.services.admin_safety.scope_service.list_groups",
+                new=AsyncMock(return_value=self.CATALOGUE),
+            ),
+            patch("registry.services.admin_safety.list_admin_identities", new=identities),
+        ):
+            await admin_safety.assert_scope_update_keeps_an_admin(
+                "registry-admins", {"register_service": ["all"]}, ["idp-admins"]
+            )
+        identities.assert_not_awaited()
+
+    async def test_dropping_the_only_admin_grant_is_refused(self):
+        with (
+            patch(
+                "registry.services.admin_safety.scope_service.list_groups",
+                new=AsyncMock(return_value=self.CATALOGUE),
+            ),
+            patch(
+                "registry.services.admin_safety.list_admin_identities",
+                new=AsyncMock(return_value=[frozenset({"alice"})]),
+            ),
+        ):
+            with pytest.raises(AdminSafetyError) as exc:
+                await admin_safety.assert_scope_update_keeps_an_admin(
+                    "registry-admins", {"list_service": ["all"]}, ["idp-admins"]
+                )
+        assert exc.value.status_code == 409
+
+    async def test_dropping_the_admin_mapping_is_refused_when_nobody_remains(self):
+        users = [{"username": "alice", "groups": ["idp-admins"]}]
+        with (
+            patch(
+                "registry.services.admin_safety.scope_service.list_groups",
+                new=AsyncMock(return_value=self.CATALOGUE),
+            ),
+            patch(
+                "registry.services.admin_safety.list_admin_identities",
+                new=AsyncMock(return_value=[frozenset({"alice"})]),
+            ),
+            patch(
+                "registry.services.admin_safety.get_iam_manager",
+                return_value=_iam_mock(users),
+            ),
+            patch(
+                "registry.services.admin_safety._m2m_admin_identities",
+                new=AsyncMock(return_value=[]),
+            ),
+        ):
+            with pytest.raises(AdminSafetyError) as exc:
+                await admin_safety.assert_scope_update_keeps_an_admin(
+                    "registry-admins", {"register_service": ["all"]}, ["renamed-group"]
+                )
+        assert exc.value.status_code == 409
+
+    async def test_fails_closed_when_population_unknown(self):
+        with (
+            patch(
+                "registry.services.admin_safety.scope_service.list_groups",
+                new=AsyncMock(return_value=self.CATALOGUE),
+            ),
+            patch(
+                "registry.services.admin_safety.list_admin_identities",
+                new=AsyncMock(side_effect=AdminSafetyError(503, "unknown")),
+            ),
+        ):
+            with pytest.raises(AdminSafetyError) as exc:
+                await admin_safety.assert_scope_update_keeps_an_admin(
+                    "registry-admins", {}, ["idp-admins"]
+                )
+        assert exc.value.status_code == 503
+
+    @pytest.mark.parametrize(
+        "catalogue",
+        [
+            {},
+            {"readers": {"ui_scopes": {"list_service": ["all"]}, "mappings": ["readers"]}},
+        ],
+    )
+    async def test_fails_closed_when_catalogue_has_no_admin_scope(self, catalogue):
+        with patch(
+            "registry.services.admin_safety.scope_service.list_groups",
+            new=AsyncMock(return_value=catalogue),
+        ):
+            with pytest.raises(AdminSafetyError) as exc:
+                await admin_safety.assert_scope_update_keeps_an_admin("registry-admins", {}, [])
+        assert exc.value.status_code == 503
+
+
+@pytest.mark.asyncio
+class TestAssertScopeDeleteKeepsAnAdmin:
+    """Scope deletes that drop an admin-conferring scope or IdP group."""
+
+    CATALOGUE = {
+        "registry-admins": {
+            "ui_scopes": {"register_service": ["all"]},
+            "mappings": ["idp-admins"],
+        },
+        "idp-admins": {"ui_scopes": {"list_service": ["all"]}, "mappings": ["idp-admins"]},
+        "ops-admins": {"ui_scopes": {"delete_service": ["all"]}, "mappings": ["ops"]},
+    }
+
+    def _patches(self, users):
+        return (
+            patch(
+                "registry.services.admin_safety.scope_service.list_groups",
+                new=AsyncMock(return_value=self.CATALOGUE),
+            ),
+            patch(
+                "registry.services.admin_safety.get_iam_manager",
+                return_value=_iam_mock(users),
+            ),
+            patch(
+                "registry.services.admin_safety._m2m_admin_identities",
+                new=AsyncMock(return_value=[]),
+            ),
+        )
+
+    async def test_deleting_the_only_admins_scope_is_refused(self):
+        p1, p2, p3 = self._patches([{"username": "alice", "groups": ["idp-admins"]}])
+        with p1, p2, p3:
+            with pytest.raises(AdminSafetyError) as exc:
+                await admin_safety.assert_scope_delete_keeps_an_admin(
+                    "registry-admins", idp_group_removed=False
+                )
+        assert exc.value.status_code == 409
+        assert "delete" in exc.value.detail
+
+    async def test_deleting_an_admin_scope_is_allowed_when_another_admin_remains(self):
+        users = [
+            {"username": "alice", "groups": ["idp-admins"]},
+            {"username": "bob", "groups": ["ops"]},
+        ]
+        p1, p2, p3 = self._patches(users)
+        with p1, p2, p3:
+            await admin_safety.assert_scope_delete_keeps_an_admin(
+                "registry-admins", idp_group_removed=True
+            )
+
+    async def test_deleting_a_non_admin_scope_skips_population_read(self):
+        identities = AsyncMock()
+        with (
+            patch(
+                "registry.services.admin_safety.scope_service.list_groups",
+                new=AsyncMock(return_value=self.CATALOGUE),
+            ),
+            patch("registry.services.admin_safety.list_admin_identities", new=identities),
+        ):
+            await admin_safety.assert_scope_delete_keeps_an_admin(
+                "idp-admins", idp_group_removed=False
+            )
+        identities.assert_not_awaited()
+
+    async def test_deleting_the_idp_group_drops_its_mapping_in_other_scopes(self):
+        # "idp-admins" confers nothing itself, but registry-admins maps it.
+        # Deleting the IdP group removes alice's membership, so alice stops
+        # being an admin even though the registry-admins scope stays.
+        p1, p2, p3 = self._patches([{"username": "alice", "groups": ["idp-admins"]}])
+        with p1, p2, p3:
+            with pytest.raises(AdminSafetyError) as exc:
+                await admin_safety.assert_scope_delete_keeps_an_admin(
+                    "idp-admins", idp_group_removed=True
+                )
+        assert exc.value.status_code == 409
+
+    async def test_fails_closed_on_empty_catalogue(self):
+        with patch(
+            "registry.services.admin_safety.scope_service.list_groups",
+            new=AsyncMock(return_value={}),
+        ):
+            with pytest.raises(AdminSafetyError) as exc:
+                await admin_safety.assert_scope_delete_keeps_an_admin(
+                    "registry-admins", idp_group_removed=True
+                )
+        assert exc.value.status_code == 503
+
+
+@pytest.mark.asyncio
+class TestAssertRecordPatchKeepsAdmin:
+    """PATCH bodies for the M2M and user-group record stores."""
+
+    @pytest.mark.parametrize(
+        "fields",
+        [{"groups": []}, {"groups": None}, {"enabled": False}, {"enabled": None}],
+    )
+    async def test_demoting_body_is_checked(self, fields):
+        with patch(
+            "registry.services.admin_safety.would_remove_last_admin_via_groups",
+            new=AsyncMock(),
+        ) as guard:
+            await admin_safety.assert_record_patch_keeps_admin("t", fields)
+        guard.assert_awaited_once_with("t", [])
+
+    async def test_new_groups_are_passed_through(self):
+        with patch(
+            "registry.services.admin_safety.would_remove_last_admin_via_groups",
+            new=AsyncMock(),
+        ) as guard:
+            await admin_safety.assert_record_patch_keeps_admin(
+                "t", {"enabled": True, "groups": ["readers"]}
+            )
+        guard.assert_awaited_once_with("t", ["readers"])
+
+    async def test_body_without_groups_or_enabled_is_not_checked(self):
+        with patch(
+            "registry.services.admin_safety.would_remove_last_admin_via_groups",
+            new=AsyncMock(),
+        ) as guard:
+            await admin_safety.assert_record_patch_keeps_admin("t", {"description": "d"})
+        guard.assert_not_awaited()
+
+
 @pytest.mark.asyncio
 class TestAssertNotLastAdmin:
     """Tests for the last-admin deletion guard."""
@@ -328,6 +718,35 @@ class TestAssertNotLastAdmin:
         ):
             with pytest.raises(AdminSafetyError):
                 await admin_safety.assert_not_last_admin("admin1")
+
+    async def test_read_only_all_holder_does_not_keep_last_admin_deletable(self):
+        # End to end: a federation-service principal (read-only "all") is not
+        # "another admin", so deleting the only real admin is refused.
+        groups = {
+            "registry-admins": {"ui_scopes": {"modify_service": ["all"]}, "mappings": []},
+            "federation-service": {"ui_scopes": {"list_service": ["all"]}, "mappings": []},
+        }
+        users = [
+            {"username": "admin1", "groups": ["registry-admins"]},
+            {"username": "fed-bot", "groups": ["federation-service"]},
+        ]
+        with (
+            patch(
+                "registry.services.admin_safety.scope_service.list_groups",
+                new=AsyncMock(return_value=groups),
+            ),
+            patch(
+                "registry.services.admin_safety.get_iam_manager",
+                return_value=_iam_mock(users),
+            ),
+            patch(
+                "registry.repositories.documentdb.client.get_documentdb_client",
+                new=_mongo_m2m_mock([]),
+            ),
+        ):
+            with pytest.raises(AdminSafetyError) as exc:
+                await admin_safety.assert_not_last_admin("admin1")
+        assert exc.value.status_code == 409
 
     async def test_rejects_last_admin_deleted_by_either_m2m_key(self):
         # The sole admin is ONE M2M client whose alias-set carries both client_id

@@ -1,5 +1,6 @@
 """DocumentDB-based repository for authorization scopes storage."""
 
+import json
 import logging
 import re
 from datetime import datetime
@@ -182,6 +183,76 @@ def _server_access_has_invalid_server_rule(
         # promote to a wildcard.
         normalized = str(rule.get("server") or "").strip("/").lower()
         if not normalized or normalized in _RESERVED_SERVER_PATH_NAMES:
+            return True
+    return False
+
+
+def _as_str_list(
+    value: Any,
+) -> list[str]:
+    """Return ``value`` as a list of strings (None -> [], bare value -> [value])."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    return [str(value)]
+
+
+def _canonical_server_rule(
+    rule: dict[str, Any],
+) -> str:
+    """Return an order-insensitive identity for a server rule.
+
+    Two rules with the same identity grant the same access: the server name
+    is normalized the way the sink guard compares it, and ``methods`` and
+    ``tools`` are compared as sets. A missing ``tools`` equals ``[]`` (the
+    resolver treats both as an empty allowlist), so a UI round trip that
+    drops an empty list still matches.
+    """
+    extra = {key: value for key, value in rule.items() if key not in ("server", "methods", "tools")}
+    return json.dumps(
+        {
+            "server": str(rule.get("server") or "").strip("/").lower(),
+            "methods": sorted(_as_str_list(rule.get("methods"))),
+            "tools": sorted(_as_str_list(rule.get("tools"))),
+            "extra": extra,
+        },
+        sort_keys=True,
+        default=str,
+    )
+
+
+def _server_access_adds_invalid_server_rule(
+    server_access: list[dict[str, Any]] | None,
+    stored_server_access: list[dict[str, Any]] | None,
+) -> bool:
+    """Return True if ``server_access`` brings in a reserved or empty server rule.
+
+    An empty server rule is refused outright, as in
+    :func:`_server_access_has_invalid_server_rule`. A reserved-wildcard rule
+    (``server: "*"`` / ``"all"``) is refused unless the stored document
+    already holds the identical rule (see :func:`_canonical_server_rule`).
+    That lets a whole-document rewrite keep the bootstrap admin scope's
+    wildcard (``scripts/registry-admins.json``) while still refusing to add a
+    wildcard, move one to another scope, or broaden its methods or tools.
+
+    Args:
+        server_access: The ``server_access`` the write will store.
+        stored_server_access: The ``server_access`` stored on the same
+            document today, or None when the document does not exist.
+    """
+    kept = {
+        _canonical_server_rule(rule)
+        for rule in _flatten_server_access(stored_server_access or [])
+        if isinstance(rule, dict) and "server" in rule
+    }
+    for rule in _flatten_server_access(server_access or []):
+        if not isinstance(rule, dict) or "server" not in rule:
+            continue
+        normalized = str(rule.get("server") or "").strip("/").lower()
+        if not normalized:
+            return True
+        if normalized in _RESERVED_SERVER_PATH_NAMES and _canonical_server_rule(rule) not in kept:
             return True
     return False
 
@@ -1053,6 +1124,26 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
             )
             return False
 
+    async def _stored_server_access(
+        self,
+        collection: AsyncIOMotorCollection,
+        group_name: str,
+    ) -> list[dict[str, Any]]:
+        """Return the ``server_access`` stored on ``group_name`` today, or [].
+
+        A missing or unreadable document yields [], so the caller refuses
+        every wildcard rule (fail closed).
+        """
+        try:
+            doc = await collection.find_one({"_id": group_name}, {"server_access": 1})
+        except Exception as e:
+            logger.error(f"Could not read stored server_access for '{group_name}': {e}")
+            return []
+        if not isinstance(doc, dict):
+            return []
+        stored = doc.get("server_access")
+        return stored if isinstance(stored, list) else []
+
     async def import_group(
         self,
         group_name: str,
@@ -1105,17 +1196,21 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
             # add_server_scope, import_group writes server_access directly, so
             # it needs its own check. A server rule named "all"/"*" (cross-server
             # wildcard) or "" (renders as a gateway-wide `location /`, issue
-            # #1501) is never legitimate, so this is refused unconditionally --
-            # an admin cannot opt into it either. Fail closed (return False + log).
-            if _server_access_has_invalid_server_rule(server_access):
-                logger.error(
-                    f"Refusing to import group '{group_name}': server_access "
-                    "contains a reserved wildcard ('all'/'*') or empty server "
-                    "name that would grant cross-server access or hijack the gateway"
-                )
-                return False
-
+            # #1501) is never ADDED here, and an admin cannot opt into it either.
+            # The one exception: this document already holds the identical
+            # wildcard rule (the bootstrap admin scope does), because a
+            # whole-document rewrite must be able to keep it. Fail closed
+            # (return False + log).
             collection = await self._get_collection()
+            if _server_access_has_invalid_server_rule(server_access):
+                stored = await self._stored_server_access(collection, group_name)
+                if _server_access_adds_invalid_server_rule(server_access, stored):
+                    logger.error(
+                        f"Refusing to import group '{group_name}': server_access "
+                        "adds a reserved wildcard ('all'/'*') or empty server "
+                        "name that would grant cross-server access or hijack the gateway"
+                    )
+                    return False
 
             # Set defaults
             if server_access is None:

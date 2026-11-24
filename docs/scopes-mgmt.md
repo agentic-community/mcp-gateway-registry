@@ -426,12 +426,14 @@ Validation errors (for example, an unknown `ui_permissions` key or a
 `server_access` entry missing its `server` name) are rejected with a
 field-level message surfaced in the UI, rather than being silently dropped.
 
-**Limitation:** scopes whose `server_access` contains a wildcard server
-(`"*"` or `"all"`) cannot be created from the UI or the API — the scope
-service unconditionally refuses them and the API returns an actionable
-`400`. Grant broad UI visibility through `ui_permissions` (`"all"`) instead;
-invocation-level wildcard scopes must be seeded through database
-initialization (see [Bootstrap Admin Scope](#bootstrap-admin-scope)).
+**Limitation:** a `server_access` rule with a wildcard server (`"*"` or
+`"all"`) cannot be added from the UI or the API. The scope service refuses
+it and the API returns an actionable `400`. A scope that already holds one,
+such as the [Bootstrap Admin Scope](#bootstrap-admin-scope), can still be
+edited, as long as each wildcard rule is kept unchanged: same server, same
+methods, same tools. Grant broad UI visibility through `ui_permissions`
+(`"all"`) instead; invocation-level wildcard scopes must be seeded through
+database initialization.
 
 ### Using the CLI
 

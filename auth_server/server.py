@@ -24,7 +24,7 @@ from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from functools import lru_cache, wraps
 from pathlib import Path
 from string import Template
@@ -112,6 +112,7 @@ from pydantic import (
 
 sys.path.insert(0, "/app")
 # Import MCP audit logging components
+from registry.audit import models as audit_models
 from registry.audit.mcp_logger import MCPLogger
 from registry.audit.models import Identity, MCPServer, TokenMintAuditRecord
 from registry.audit.request_id import new_audit_request_id, sanitize_correlation_id
@@ -5816,17 +5817,100 @@ async def get_auth_config():
         }
 
 
+_FEDERATION_TOKEN_ADMIN_PATH: str = "/admin/federation-token"
+
+
+async def _audit_federation_token_admin(
+    request: Request,
+    started: float,
+    action: str,
+    status_code: int,
+    reason: str | None = None,
+) -> None:
+    """Record a POST /admin/federation-token attempt in the durable audit store.
+
+    The route authenticates the shared REGISTRY_API_TOKEN, not a person, so the
+    record names that credential class. nginx never proxies this route: callers
+    reach the auth server's port directly, so ``X-Real-IP`` and
+    ``X-Forwarded-For`` hold whatever the caller sent. The client IP is
+    therefore the socket peer, which uvicorn rewrites only for a peer listed in
+    ``--forwarded-allow-ips``. Never records token material.
+
+    Written like the token-mint record: the operator audit stream plus the
+    audit collection. A failure is logged and counted, never raised.
+
+    Args:
+        request: The incoming request.
+        started: ``time.perf_counter()`` when the handler began.
+        action: ``rotate``, ``revoke``, or ``unknown`` before authentication.
+        status_code: The HTTP status the handler returns.
+        reason: Why the call was denied or rejected, if it was.
+    """
+    authenticated = status_code not in (401, 403)
+    outcome = "success" if status_code < 400 else ("rejected" if authenticated else "denied")
+    try:
+        record = audit_models.RegistryApiAccessRecord(
+            timestamp=datetime.now(UTC),
+            request_id=new_audit_request_id(),
+            identity=audit_models.Identity(
+                username="registry_api_token" if authenticated else "anonymous",
+                auth_method="registry_api_token" if authenticated else "anonymous",
+                is_admin=authenticated,
+                credential_type=(
+                    "bearer_token" if request.headers.get("Authorization") else "none"
+                ),
+            ),
+            request=audit_models.Request(
+                method=request.method,
+                path=_FEDERATION_TOKEN_ADMIN_PATH,
+                client_ip=request.client.host if request.client else "unknown",
+                user_agent=request.headers.get("User-Agent"),
+            ),
+            response=audit_models.Response(
+                status_code=status_code,
+                duration_ms=(time.perf_counter() - started) * 1000,
+            ),
+            action=audit_models.Action(
+                operation=action,
+                resource_type="federation",
+                resource_id="federation_static_token",
+                description=f"Federation static token {action}: {outcome}",
+                metadata={
+                    "outcome": outcome,
+                    "reason": reason,
+                    "static_token_auth_enabled": FEDERATION_STATIC_TOKEN_AUTH_ENABLED,
+                },
+            ),
+            authorization=audit_models.Authorization(
+                decision="ALLOW" if authenticated else "DENY",
+                required_permission="registry_api_token",
+            ),
+        )
+        emit_audit_event(record)
+
+        audit_logger = get_audit_logger()
+        if audit_logger is not None:
+            await audit_logger.log_event(record)
+    except Exception:
+        audit_integrity_degraded_total.add(1, {"reason": "record_dropped"})
+        logger.warning("Failed to emit federation-token audit record", exc_info=True)
+
+
 @app.post("/admin/federation-token")
 async def manage_federation_token(request: Request):
     """Revoke or rotate federation static token at runtime.
 
     Requires the admin static token (REGISTRY_API_TOKEN) for authentication.
+    Every attempt, including denied ones, is recorded in the audit store.
     """
     global FEDERATION_STATIC_TOKEN, FEDERATION_STATIC_TOKEN_AUTH_ENABLED
+
+    started = time.perf_counter()
 
     # Authenticate with admin token
     authorization = request.headers.get("Authorization", "")
     if not authorization.startswith("Bearer "):
+        await _audit_federation_token_admin(request, started, "unknown", 401, "missing_bearer")
         return JSONResponse(
             content={"detail": "Bearer token required"},
             status_code=401,
@@ -5834,12 +5918,22 @@ async def manage_federation_token(request: Request):
 
     bearer_token = authorization[len("Bearer ") :].strip()
     if not REGISTRY_API_TOKEN or not hmac.compare_digest(bearer_token, REGISTRY_API_TOKEN):
+        await _audit_federation_token_admin(request, started, "unknown", 403, "invalid_admin_token")
         return JSONResponse(
             content={"detail": "Admin token required"},
             status_code=403,
         )
 
-    body = await request.json()
+    try:
+        body = await request.json()
+    except ValueError:
+        body = None
+    if not isinstance(body, dict):
+        await _audit_federation_token_admin(request, started, "unknown", 400, "invalid_body")
+        return JSONResponse(
+            content={"detail": "Request body must be a JSON object"},
+            status_code=400,
+        )
     new_token = body.get("new_token")
 
     # A rotated token arms the same privileged static credential as startup, so
@@ -5856,6 +5950,7 @@ async def manage_federation_token(request: Request):
                 required=True,
             )
         except RuntimeError as e:
+            await _audit_federation_token_admin(request, started, "rotate", 400, "weak_token")
             return JSONResponse(
                 content={
                     "detail": (
@@ -5870,6 +5965,7 @@ async def manage_federation_token(request: Request):
         FEDERATION_STATIC_TOKEN = new_token
         FEDERATION_STATIC_TOKEN_AUTH_ENABLED = True
         logger.info("Federation static token rotated via admin API")
+        await _audit_federation_token_admin(request, started, "rotate", 200)
         return {
             "action": "rotated",
             "message": (
@@ -5882,6 +5978,7 @@ async def manage_federation_token(request: Request):
         FEDERATION_STATIC_TOKEN = ""  # nosec B105 - Intentional token revocation, clearing the variable
         FEDERATION_STATIC_TOKEN_AUTH_ENABLED = False
         logger.info("Federation static token revoked via admin API")
+        await _audit_federation_token_admin(request, started, "revoke", 200)
         return {
             "action": "revoked",
             "message": (
