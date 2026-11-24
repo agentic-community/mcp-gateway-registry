@@ -39,12 +39,12 @@ A user needs `resources/read` in the methods their scope grants for the server. 
 
 ## What the registry shows
 
-The health check connects to each server declaring `io.modelcontextprotocol/ui`, so a server that follows the spec lists its UI tools to the registry as it would to a host. For each tool that points at a page, the registry stores two fields in the tool list:
+The health check connects to each server declaring `io.modelcontextprotocol/ui`, so a server that follows the spec lists its UI tools to the registry as it would to a host. Discovery stores each optional field only when the server supplies it:
 
 | Field | Meaning |
 |---|---|
 | `ui_resource_uri` | The `ui://` address of the page. The registry keeps it only if it starts with `ui://` and is at most 2,048 characters. |
-| `ui_visibility` | Who may call the tool: `model`, `app`, or both. The spec default is both. |
+| `ui_visibility` | Who may call the tool: `model`, `app`, or both. An absent field uses both audiences. A malformed explicit value or a list with no valid audience grants neither. |
 
 The registry keeps nothing else from the tool's `_meta`. The server-level field `num_mcp_app_tools` counts the tools that have a page. It appears in `GET /api/servers`, in `GET /api/server_details/<path>`, and in `registry_management.py server-get`. When the response includes the tool list, the count covers only the tools the caller can see. With `include_tools=false` it is the count the health check stored.
 
@@ -54,9 +54,15 @@ Semantic search returns `ui_resource_uri` on each tool result and on each server
 
 A tool whose `ui_visibility` is `["app"]` exists for its page to call, and the spec says the model must not see it. The registry leaves these tools out of the search index and the virtual-server tool picker, and rejects a virtual-server mapping to one, because each of these feeds what a model reads. The tools modal on the server card still lists them, marked APP ONLY.
 
+An app-only callable can omit a page address because an existing page calls it. Its audience still excludes the model. For servers that opt into listing stored tools before consent, the gateway preserves validated `_meta.ui.resourceUri` and explicit `_meta.ui.visibility`, including an empty list. Per-tool grants still apply.
+
 In the UI, a server with at least one such tool shows an **MCP APP** badge on its card. In the card's tool list, each tool with a page shows MCP APP, and a tool that only the page may call also shows APP ONLY.
 
-The health check rewrites the stored tool list when the set of UI tools changes, even if the tool count stays the same. A server registered before this feature gets its fields on its next health check.
+Background discovery and the live tools endpoint save changes to page addresses and visibility even when the tool count stays the same. They compare the same client-visible projection, including the presence of optional metadata. Each refresh writes only discovery fields and the derived page count, then indexes a fresh credential-free read. Concurrent edits to registration settings survive.
+
+If the registration changes during a live tools fetch, the endpoint rejects the stale write with HTTP 409. A new request can fetch tools for the current registration.
+
+Catalog refresh events invalidate pending list reads. Cards and sidebar counts update from the trailing read together; refresh callers wait for that read. Changing registry configuration or leaving the page cancels the old requests.
 
 ## Connecting from Claude
 

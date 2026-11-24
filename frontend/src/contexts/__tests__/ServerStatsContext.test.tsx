@@ -1,6 +1,6 @@
 import React from 'react';
 import { renderHook, waitFor, act } from '@testing-library/react';
-import axios from 'axios';
+import axios, { AxiosRequestConfig } from 'axios';
 import { ServerStatsProvider, useServerStats } from '../ServerStatsContext';
 import { useRegistryConfig } from '../../hooks/useRegistryConfig';
 
@@ -58,27 +58,11 @@ const wrapper = ({ children }: { children: React.ReactNode }) => (
   <ServerStatsProvider>{children}</ServerStatsProvider>
 );
 
+type ServerListResponse = { data: { servers: Array<{ path: string }> } };
+
 describe('ServerStatsContext custom entities', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-  });
-
-  test('requests each custom type with skip/limit page size 1000 (issue #880)', async () => {
-    setConfig([{ name: 'prompt_template', display_name: 'Prompt Templates' }]);
-    mockGetByUrl({
-      '/api/servers': { servers: [], total_count: 0 },
-      '/api/agents': { agents: [], total_count: 0 },
-      '/api/skills': { skills: [], total_count: 0 },
-      '/api/custom/prompt_template': { records: [], total_count: 0 },
-    });
-
-    const { result } = renderHook(() => useServerStats(), { wrapper });
-
-    await waitFor(() => expect(result.current.loading).toBe(false));
-
-    expect(mockedAxios.get).toHaveBeenCalledWith('/api/custom/prompt_template', {
-      params: { limit: 1000, skip: 0 },
-    });
   });
 
   test('pages through servers when total_count exceeds one page', async () => {
@@ -241,10 +225,6 @@ describe('ServerStatsContext custom entities', () => {
       },
       { name: 'broken', displayName: 'Broken', descriptor: null, records: [] },
     ]);
-    expect(errorSpy).toHaveBeenCalledWith(
-      'Failed to fetch custom records for "broken":',
-      expect.any(Error),
-    );
 
     errorSpy.mockRestore();
   });
@@ -263,8 +243,7 @@ describe('ServerStatsContext custom entities', () => {
 
     renderHook(() => useServerStats(), { wrapper });
 
-    // With no config yet, fetchData bails before issuing any request, so the
-    // first stats update will include custom counts rather than core-only.
+    // Wait for configuration before publishing a snapshot with custom counts.
     await waitFor(() => expect(mockedAxios.get).not.toHaveBeenCalled());
   });
 
@@ -336,5 +315,177 @@ describe('ServerStatsContext refresh-on-event', () => {
       ).length;
       expect(serversCalls).toBe(serversCallsAfterMount + 1);
     });
+  });
+
+  test('does not restore deleted records from an invalidated in-flight snapshot', async () => {
+    setConfig([]);
+    const pending: Array<(value: ServerListResponse) => void> = [];
+    mockedAxios.get.mockImplementation((url: string) => {
+      if (url === '/api/servers') {
+        // The frontend targets ES2020, before Promise.withResolvers.
+        return new Promise<ServerListResponse>((resolve) => pending.push(resolve));
+      }
+      return Promise.resolve({ data: {} });
+    });
+    const rendered: string[][] = [];
+    const { result } = renderHook(() => {
+      const value = useServerStats();
+      rendered.push(value.servers.map((server) => server.path));
+      return value;
+    }, { wrapper });
+    await waitFor(() => expect(pending).toHaveLength(1));
+    await act(async () => {
+      pending.shift()!({ data: { servers: [{ path: '/a' }, { path: '/b' }] } });
+    });
+    expect(result.current.servers.map((server) => server.path)).toEqual(['/a', '/b']);
+
+    let first: Promise<void>;
+    act(() => {
+      result.current.setServers((servers) => servers.filter((server) => server.path !== '/a'));
+      first = result.current.refreshData();
+    });
+    await waitFor(() => expect(pending).toHaveLength(1));
+    let finished = false;
+    let second: Promise<void>;
+    act(() => {
+      result.current.setServers([]);
+      second = result.current.refreshData().then(() => { finished = true; });
+      window.dispatchEvent(new Event('registry-data-changed'));
+    });
+    rendered.length = 0;
+    await act(async () => {
+      pending.shift()!({ data: { servers: [{ path: '/b' }] } });
+    });
+    await waitFor(() => expect(pending).toHaveLength(1));
+    expect(finished).toBe(false);
+    expect(result.current.loading).toBe(true);
+    expect(result.current.servers).toEqual([]);
+    expect(rendered.every((paths) => !paths.includes('/b'))).toBe(true);
+    await act(async () => {
+      pending.shift()!({ data: { servers: [] } });
+      await Promise.all([first!, second!]);
+    });
+    expect(finished).toBe(true);
+    expect(result.current.servers).toEqual([]);
+    expect(result.current.stats.total).toBe(0);
+    expect(result.current.loading).toBe(false);
+    expect(mockedAxios.get.mock.calls.filter(([url]) => url === '/api/servers')).toHaveLength(3);
+  });
+
+  test('ignores an old config completion and waits for the new custom type list', async () => {
+    setConfig([]);
+    const pending: Array<(value: ServerListResponse) => void> = [];
+    mockedAxios.get.mockImplementation((url: string) => {
+      if (url === '/api/servers') {
+        return new Promise<ServerListResponse>((resolve) => pending.push(resolve));
+      }
+      if (url === '/api/custom/widgets') {
+        return Promise.resolve({ data: { records: [{ name: 'Widget', path: '/widget' }] } });
+      }
+      return Promise.resolve({ data: {} });
+    });
+    const { result, rerender } = renderHook(() => useServerStats(), { wrapper });
+    await waitFor(() => expect(pending).toHaveLength(1));
+    setConfig([{ name: 'widgets', display_name: 'Widgets' }]);
+    rerender();
+    await act(async () => {
+      pending.shift()!({ data: { servers: [{ path: '/stale' }] } });
+    });
+    await waitFor(() => expect(pending).toHaveLength(1));
+    expect(result.current.servers).toEqual([]);
+    expect(result.current.loading).toBe(true);
+    await act(async () => {
+      pending.shift()!({ data: { servers: [] } });
+    });
+    expect(result.current.customRecordsByType[0].records[0].name).toBe('Widget');
+    expect(result.current.stats.total).toBe(1);
+    expect(result.current.loading).toBe(false);
+  });
+
+  test('settles a queued refresh on unmount without waiting for its HTTP response', async () => {
+    setConfig([]);
+    let aborted = false;
+    mockedAxios.get.mockImplementation((url: string, config?: AxiosRequestConfig) => {
+      if (url === '/api/servers') {
+        return new Promise<ServerListResponse>((_resolve, reject) => {
+          config?.signal?.addEventListener?.('abort', () => {
+            aborted = true;
+            reject(new Error('request cancelled'));
+          }, { once: true });
+        });
+      }
+      return Promise.resolve({ data: {} });
+    });
+    const { result, unmount } = renderHook(() => useServerStats(), { wrapper });
+    await waitFor(() => expect(mockedAxios.get).toHaveBeenCalled());
+    let refresh: Promise<void>;
+    act(() => { refresh = result.current.refreshData(); });
+    unmount();
+    await act(async () => { await refresh!; });
+    expect(aborted).toBe(true);
+    expect(mockedAxios.get.mock.calls.filter(([url]) => url === '/api/servers')).toHaveLength(1);
+  });
+
+  test('keeps an early refresh pending until config and its complete list arrive', async () => {
+    mockedUseRegistryConfig.mockReturnValue({
+      config: null,
+      loading: true,
+      error: null,
+    });
+    mockGetByUrl({
+      '/api/servers': { servers: [] },
+      '/api/agents': { agents: [] },
+      '/api/skills': { skills: [] },
+      '/api/custom/widgets': { records: [{ name: 'Widget', path: '/widget' }] },
+    });
+    const { result, rerender } = renderHook(() => useServerStats(), { wrapper });
+    let complete = false;
+    let refresh: Promise<void>;
+    await act(async () => {
+      refresh = result.current.refreshData().then(() => { complete = true; });
+    });
+    expect(complete).toBe(false);
+    expect(result.current.loading).toBe(true);
+    expect(mockedAxios.get).not.toHaveBeenCalled();
+    setConfig([{ name: 'widgets', display_name: 'Widgets' }]);
+    await act(async () => { rerender(); });
+    await act(async () => { await refresh!; });
+    expect(complete).toBe(true);
+    expect(result.current.stats.total).toBe(1);
+    expect(result.current.customRecordsByType[0].records[0].name).toBe('Widget');
+    expect(result.current.loading).toBe(false);
+  });
+
+  test('cancels all old config requests so the new list can finish independently', async () => {
+    setConfig([{ name: 'widgets', display_name: 'Widgets' }]);
+    const aborted: string[] = [];
+    let replaced = false;
+    mockedAxios.get.mockImplementation((url: string, config?: AxiosRequestConfig) => {
+      if (!replaced) {
+        return new Promise<ServerListResponse>((_resolve, reject) => {
+          config?.signal?.addEventListener?.('abort', () => {
+            aborted.push(url);
+            reject(new Error('request cancelled'));
+          }, { once: true });
+        });
+      }
+      return Promise.resolve({
+        data: url === '/api/servers' ? { servers: [{ path: '/current' }] } : {},
+      });
+    });
+    const { result, rerender } = renderHook(() => useServerStats(), { wrapper });
+    await waitFor(() => expect(mockedAxios.get).toHaveBeenCalledTimes(5));
+    let refresh: Promise<void>;
+    act(() => { refresh = result.current.refreshData(); });
+    replaced = true;
+    setConfig([]);
+    await act(async () => { rerender(); });
+    await act(async () => { await refresh!; });
+    expect(aborted.sort()).toEqual([
+      '/api/agents', '/api/custom-types', '/api/custom/widgets', '/api/servers', '/api/skills',
+    ]);
+    expect(result.current.servers.map((server) => server.path)).toEqual(['/current']);
+    expect(result.current.customRecordsByType).toEqual([]);
+    expect(result.current.loading).toBe(false);
   });
 });

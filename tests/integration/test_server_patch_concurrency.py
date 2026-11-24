@@ -11,6 +11,7 @@ unreachable.
 """
 
 import uuid
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -207,3 +208,94 @@ class TestRevisionGuardedWrite:
         variant = await col.find_one({"_id": variant_path})
         assert variant["description"] == "initial"
         assert variant["server_name"] == "variant occupant"
+
+
+class TestServiceFieldScope:
+    @pytest.mark.parametrize("revision", [None, "stale", "current"])
+    async def test_scoped_metadata_keeps_new_target_credentials_and_revision(self, repo, revision):
+        from registry.services.server_service import ServerService
+
+        col = await repo._get_collection()
+        path = _path("service-target-race")
+        card = {**_card(), "is_proxied": True, "is_enabled": False}
+        await col.insert_one({"_id": path, **card})
+        repo._created.append(path)
+        stale = await repo.get(path)
+        replacement = {
+            "proxy_pass_url": "https://new.example/mcp",
+            "proxy_resolved_ips": ["93.184.216.34"],
+            "proxy_target_host": "new.example",
+            "proxy_disabled_reason": "operator hold",
+            "custom_headers_encrypted": "ENC::new-target-credential",
+            "custom_header_names": ["X-Api-Key"],
+            "updated_at": "2030-01-01T00:00:00",
+        }
+        await col.update_one({"_id": path}, {"$set": replacement})
+        service = ServerService.__new__(ServerService)
+        service._repo = repo
+        service._search_repo = AsyncMock()
+        expected_revision = {
+            None: None,
+            "stale": stale["updated_at"],
+            "current": replacement["updated_at"],
+        }[revision]
+
+        result = await service.update_server(
+            path,
+            {**stale, "description": "metadata edit"},
+            updated_fields=["description"],
+            expected_updated_at=expected_revision,
+        )
+
+        assert result is (revision != "stale")
+        stored = await col.find_one({"_id": path})
+        assert stored["description"] == ("initial" if revision == "stale" else "metadata edit")
+        for key, value in replacement.items():
+            if key != "updated_at":
+                assert stored[key] == value
+
+    async def test_background_discovery_keeps_concurrent_repoint(self, repo):
+        from registry.health.service import HealthMonitoringService
+        from registry.services.server_service import ServerService
+
+        col = await repo._get_collection()
+        path = _path("discovery-target-race")
+        card = {**_card(), "is_proxied": True, "is_enabled": False}
+        await col.insert_one({"_id": path, **card})
+        repo._created.append(path)
+        service = ServerService.__new__(ServerService)
+        service._repo = repo
+        service._search_repo = AsyncMock()
+        original_get = service.get_server_info
+        replacement = {
+            "proxy_pass_url": "https://new.example/mcp",
+            "proxy_resolved_ips": ["93.184.216.34"],
+            "proxy_target_host": "new.example",
+            "proxy_disabled_reason": "operator hold",
+            "custom_headers_encrypted": "ENC::new-target-credential",
+            "custom_header_names": ["X-Api-Key"],
+        }
+        read_count = 0
+
+        async def read_then_repoint(requested_path, **kwargs):
+            nonlocal read_count
+            snapshot = await original_get(requested_path, **kwargs)
+            read_count += 1
+            if read_count == 1:
+                await col.update_one({"_id": path}, {"$set": replacement})
+            return snapshot
+
+        health = HealthMonitoringService()
+        health.broadcast_health_update = AsyncMock()
+        discovered = [{"name": "search", "ui_resource_uri": "ui://page/v2"}]
+        with (
+            patch.object(service, "get_server_info", side_effect=read_then_repoint),
+            patch("registry.services.server_service.server_service", service),
+        ):
+            result = await health._save_discovered_tools(path, discovered, None)
+
+        assert result == "changed"
+        stored = await col.find_one({"_id": path})
+        assert stored["tool_list"] == discovered
+        for key, value in replacement.items():
+            assert stored[key] == value

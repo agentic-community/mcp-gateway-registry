@@ -10,7 +10,6 @@ from registry.core.mcp_apps import (
     MCP_APPS_MIME_TYPE,
     count_mcp_app_tools,
     is_model_visible,
-    mcp_app_signature,
     model_visible_tools,
     stored_ui_resource_uri,
     tool_ui_fields,
@@ -45,12 +44,6 @@ class TestToolUiFields:
             "ui_resource_uri": "ui://budget/view.html",
             "ui_visibility": ["app"],
         }
-
-    def test_defaults_visibility_to_model_and_app(self):
-        """A missing visibility list gets the spec default."""
-        tool = _tool({"ui": {"resourceUri": "ui://budget/view.html"}})
-
-        assert tool_ui_fields(tool)["ui_visibility"] == ["model", "app"]
 
     def test_drops_unknown_visibility_values(self):
         """Values the spec does not define are removed."""
@@ -87,14 +80,26 @@ class TestToolUiFields:
 
     def test_does_not_store_other_meta_keys(self):
         """Only the two validated fields leave the backend's _meta."""
-        tool = _tool({"ui": {"resourceUri": "ui://a/b", "csp": {"connectDomains": ["x"]}}})
+        tool = _tool({"ui": {"resourceUri": "ui://a/b", "visibility": ["app"], "csp": {}}})
 
         assert set(tool_ui_fields(tool)) == {"ui_resource_uri", "ui_visibility"}
 
+    @pytest.mark.parametrize("visibility", [["app"], [], ["unknown"]])
+    def test_discovery_keeps_restricted_audience_without_page(self, visibility):
+        fields = tool_ui_fields(_tool({"ui": {"visibility": visibility}}, name="save"))
+        assert is_model_visible({"name": "save", **fields}) is False
+
+    @pytest.mark.parametrize("ui", [{"resourceUri": "ui://page/v1"}, {"visibility": []}])
+    def test_discovery_preserves_optional_audience_presence(self, ui):
+        from registry.utils.tool_schema import stored_tool_to_mcp
+
+        details = _extract_tool_details([_tool({"ui": ui})])[0]
+        assert stored_tool_to_mcp(details)["_meta"]["ui"] == ui
+
 
 @pytest.mark.unit
-class TestCountAndSignature:
-    """Tests for count_mcp_app_tools and mcp_app_signature."""
+class TestCount:
+    """Tests for count_mcp_app_tools."""
 
     def test_counts_only_valid_ui_tools(self):
         """Tools without a page, or with a caller-supplied bad address, do not count."""
@@ -110,22 +115,6 @@ class TestCountAndSignature:
     def test_count_handles_none(self):
         """A server with no stored tool list counts zero."""
         assert count_mcp_app_tools(None) == 0
-
-    def test_signature_ignores_order(self):
-        """Two lists with the same UI tools in a different order match."""
-        first = [
-            {"name": "a", "ui_resource_uri": "ui://x/a", "ui_visibility": ["model"]},
-            {"name": "b", "ui_resource_uri": "ui://x/b", "ui_visibility": ["app"]},
-        ]
-
-        assert mcp_app_signature(first) == mcp_app_signature(list(reversed(first)))
-
-    def test_signature_changes_when_tool_gains_page(self):
-        """Adding a page to an existing tool changes the signature."""
-        before = [{"name": "a"}]
-        after = [{"name": "a", "ui_resource_uri": "ui://x/a", "ui_visibility": ["model"]}]
-
-        assert mcp_app_signature(before) != mcp_app_signature(after)
 
 
 @pytest.mark.unit
@@ -144,11 +133,27 @@ class TestModelVisibility:
 
         assert is_model_visible(tool) is True
 
-    def test_visibility_without_a_valid_page_is_ignored(self):
-        """A caller-supplied ui_visibility on a tool with no valid page does not hide it."""
-        assert is_model_visible({"name": "x", "ui_visibility": ["app"]}) is True
-        bad_uri = {"name": "y", "ui_resource_uri": "https://x", "ui_visibility": ["app"]}
-        assert is_model_visible(bad_uri) is True
+    @pytest.mark.parametrize("visibility", [None, "app", {"model": True}])
+    def test_malformed_explicit_visibility_excludes_model(self, visibility):
+        meta = {"ui": {"visibility": visibility}}
+        discovered = tool_ui_fields(_tool(meta))
+        assert discovered == {"ui_visibility": []}
+        assert not is_model_visible(discovered)
+        assert not is_model_visible({"_meta": meta})
+        assert not is_model_visible({"ui_visibility": visibility})
+
+    @pytest.mark.parametrize(
+        "tool",
+        [
+            {"name": "save", "ui_visibility": ["app"]},
+            {"name": "save", "_meta": {"ui": {"visibility": ["app"]}}},
+            {"name": "save", "ui_resource_uri": "https://invalid", "ui_visibility": ["app"]},
+            {"name": "save", "ui_visibility": []},
+            {"name": "save", "_meta": {"ui": {"visibility": ["unknown"]}}},
+        ],
+    )
+    def test_restricted_audience_without_page_stays_hidden(self, tool):
+        assert model_visible_tools([tool, {"name": "open"}]) == [{"name": "open"}]
 
     def test_page_with_missing_visibility_is_visible(self):
         """No ui_visibility means the spec default, model and app."""

@@ -88,6 +88,20 @@ class TestIndexServerMcpApps:
         assert by_name["plain"]["ui_resource_uri"] is None
         assert by_name["forged"]["ui_resource_uri"] is None
 
+    @pytest.mark.asyncio
+    async def test_raw_app_metadata_keeps_model_page_and_hides_app_callable(self):
+        server = {
+            "server_name": "Budget",
+            "tool_list": [
+                {"name": "open", "_meta": {"ui": {"resourceUri": "ui://page/v2"}}},
+                {"name": "save", "_meta": {"ui": {"visibility": ["app"]}}},
+            ],
+        }
+        stored = await _index(server)
+        assert [tool["name"] for tool in stored["tools"]] == ["open"]
+        assert stored["tools"][0]["ui_resource_uri"] == "ui://page/v2"
+        assert "save" not in stored["text_for_embedding"]
+
 
 @pytest.mark.unit
 class TestMcpAppsContentHash:

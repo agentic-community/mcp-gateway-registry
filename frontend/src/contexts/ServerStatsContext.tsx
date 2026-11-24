@@ -158,15 +158,31 @@ export const ServerStatsProvider: React.FC<ServerStatsProviderProps> = ({ childr
   // Get registry config to determine which features are enabled
   const { config: registryConfig } = useRegistryConfig();
 
-  // Coalesce overlapping refreshes into a single in-flight fetch. Several
-  // mutation flows call refreshData() directly AND dispatch
-  // 'registry-data-changed' (handled below), and that event can also arrive
-  // from a sibling component mid-fetch. Without this guard those would issue
-  // duplicate parallel list fetches; here a concurrent caller reuses the
-  // promise already in flight.
+  // Invalidate reads that started before a mutation. All callers await the
+  // trailing read so cards and sidebar counts use the same fresh snapshot.
   const inFlightRef = useRef<Promise<void> | null>(null);
+  const requestedRef = useRef(0);
+  const mountedRef = useRef(false);
+  const configRef = useRef(registryConfig);
+  configRef.current = registryConfig;
+  const configReadyRef = useRef<(() => void) | null>(null);
+  const controllerRef = useRef<AbortController | null>(null);
 
-  const _fetchDataImpl = useCallback(async () => {
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      requestedRef.current += 1;
+      configReadyRef.current?.();
+      controllerRef.current?.abort();
+    };
+  }, []);
+
+  const _fetchDataImpl = useCallback(async (revision: number, signal: AbortSignal) => {
+    const isCurrent = () => mountedRef.current
+      && requestedRef.current === revision
+      && configRef.current === registryConfig
+      && !signal.aborted;
     try {
       setLoading(true);
       setError(null);
@@ -189,6 +205,7 @@ export const ServerStatsProvider: React.FC<ServerStatsProviderProps> = ({ childr
             url: '/api/servers',
             itemsKey: 'servers',
             params: { include_tools: false },
+            axiosConfig: { signal },
           }).catch(() => [] as any[]),
         );
       } else {
@@ -200,6 +217,7 @@ export const ServerStatsProvider: React.FC<ServerStatsProviderProps> = ({ childr
           fetchAllPages({
             url: '/api/agents',
             itemsKey: 'agents',
+            axiosConfig: { signal },
           }).catch(() => [] as any[]),
         );
       } else {
@@ -213,6 +231,7 @@ export const ServerStatsProvider: React.FC<ServerStatsProviderProps> = ({ childr
             url: '/api/skills',
             itemsKey: 'skills',
             params: { include_disabled: true },
+            axiosConfig: { signal },
           }).catch(() => [] as any[]),
         );
       } else {
@@ -232,7 +251,9 @@ export const ServerStatsProvider: React.FC<ServerStatsProviderProps> = ({ childr
           itemsKey: 'records',
           pageSize: CUSTOM_ENTITY_PAGE_SIZE,
           offsetParam: 'skip',
+          axiosConfig: { signal },
         }).catch((err) => {
+          if (signal.aborted) return [] as CustomEntityRecord[];
           // Treat as zero records so one stale type doesn't blank the sidebar.
           // Log so a real failure (auth, 422, 5xx) is visible rather than
           // silently zeroed out.
@@ -245,8 +266,9 @@ export const ServerStatsProvider: React.FC<ServerStatsProviderProps> = ({ childr
       // empty list — sections then render via the per-tab descriptor fetch.
       const descriptorsPromise = customTypes.length
         ? axios
-            .get('/api/custom-types')
+            .get('/api/custom-types', { signal })
             .catch((err) => {
+              if (signal.aborted) return { data: { custom_types: [] } };
               console.error('Failed to fetch custom type descriptors:', err);
               return { data: { custom_types: [] } };
             })
@@ -257,6 +279,7 @@ export const ServerStatsProvider: React.FC<ServerStatsProviderProps> = ({ childr
         Promise.all(customPromises),
         descriptorsPromise,
       ]);
+      if (!isCurrent()) return;
       const [serversList, agentsList, skillsList] = coreLists;
 
       const descriptorsByName = new Map<string, CustomTypeDescriptor>(
@@ -422,49 +445,58 @@ export const ServerStatsProvider: React.FC<ServerStatsProviderProps> = ({ childr
       };
       setStats(newStats);
     } catch (err: any) {
+      if (!isCurrent()) return;
       console.error('Failed to fetch data:', err);
       setError(err.response?.data?.detail || 'Failed to fetch data');
       setServers([]);
       setAgents([]);
       setCustomRecordsByType([]);
       setStats({ total: 0, enabled: 0, disabled: 0, withIssues: 0 });
-    } finally {
-      setLoading(false);
     }
   }, [registryConfig]);
 
-  const fetchData = useCallback(async () => {
-    // Wait for registry config before fetching. Without it we don't yet know
-    // which custom types exist, so computing stats now would show a core-only
-    // total that visibly jumps when the custom counts arrive a moment later.
-    if (!registryConfig) {
-      return;
-    }
-    // Reuse an in-flight fetch so a direct refreshData() call and the
-    // 'registry-data-changed' event it is paired with collapse into one.
-    if (inFlightRef.current) {
-      return inFlightRef.current;
-    }
-    const run = _fetchDataImpl();
+  const fetchImplRef = useRef(_fetchDataImpl);
+  fetchImplRef.current = _fetchDataImpl;
+
+  const fetchData = useCallback((): Promise<void> => {
+    requestedRef.current += 1;
+    controllerRef.current?.abort();
+    if (!mountedRef.current) return Promise.resolve();
+    if (inFlightRef.current) return inFlightRef.current;
+
+    // Install the promise before starting requests. Synchronous invalidations
+    // share this microtask and require only one read.
+    const run = Promise.resolve().then(async () => {
+      try {
+        while (mountedRef.current) {
+          if (!configRef.current) {
+            await new Promise<void>((resolve) => { configReadyRef.current = resolve; });
+            configReadyRef.current = null;
+            continue;
+          }
+          const revision = requestedRef.current;
+          const config = configRef.current;
+          const controller = new AbortController();
+          controllerRef.current = controller;
+          await fetchImplRef.current(revision, controller.signal);
+          controllerRef.current = null;
+          if (requestedRef.current === revision && configRef.current === config) break;
+        }
+      } finally {
+        inFlightRef.current = null;
+        if (mountedRef.current && configRef.current) setLoading(false);
+      }
+    });
     inFlightRef.current = run;
-    try {
-      await run;
-    } finally {
-      inFlightRef.current = null;
-    }
-  }, [registryConfig, _fetchDataImpl]);
+    return run;
+  }, []);
 
   useEffect(() => {
-    fetchData();
-  }, [fetchData]);
-
-  // Keep a ref to the latest fetchData so the event listener below always
-  // calls the current closure (which captures the current registryConfig)
-  // without having to re-subscribe every time fetchData is re-created.
-  const fetchDataRef = useRef(fetchData);
-  useEffect(() => {
-    fetchDataRef.current = fetchData;
-  }, [fetchData]);
+    if (!registryConfig) setLoading(true);
+    configReadyRef.current?.();
+    void fetchData();
+    return () => controllerRef.current?.abort();
+  }, [registryConfig, fetchData]);
 
   // Keep the shared stats/servers/agents/custom-records in sync after ANY
   // mutation. Several flows (notably skill create/edit/delete/toggle) refresh
@@ -473,15 +505,15 @@ export const ServerStatsProvider: React.FC<ServerStatsProviderProps> = ({ childr
   // manual page refresh. Every mutation handler already dispatches the
   // 'registry-data-changed' event (the same signal Layout uses to refresh the
   // tag list), so listening for it here is the single place that keeps this
-  // shared source consistent. fetchData itself no-ops until registryConfig is
-  // available, so an early event cannot trigger a core-only count flash.
+  // shared source consistent. Early events wait for registryConfig, avoiding
+  // a core-only count flash.
   useEffect(() => {
     const handleDataChanged = () => {
-      void fetchDataRef.current();
+      void fetchData();
     };
     window.addEventListener('registry-data-changed', handleDataChanged);
     return () => window.removeEventListener('registry-data-changed', handleDataChanged);
-  }, []);
+  }, [fetchData]);
 
   const value: ServerStatsContextType = {
     stats,

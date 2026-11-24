@@ -18,6 +18,7 @@ Mapped to testing.md sections 1.1.1 through 1.1.12 plus 5.3.
 
 from __future__ import annotations
 
+import copy
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -173,6 +174,95 @@ class TestGetServiceToolsEndpoint:
         assert result["cached"] is False
         names = [t["name"] for t in result["tools"]]
         assert names == ["current_time_by_timezone"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("repoint", [False, True])
+    async def test_ui_refresh_preserves_concurrent_settings_and_updates_search(
+        self, current_time_server_info, repoint
+    ):
+        from fastapi import HTTPException
+
+        from registry.api.server_routes import get_service_tools
+        from registry.services.server_service import ServerService
+        from registry.utils.tool_list_hash import tool_list_hash
+
+        stored = copy.deepcopy(current_time_server_info)
+        stored["updated_at"] = "initial-revision"
+        stored["tool_list"][0].update(
+            ui_resource_uri="ui://page/v1", ui_visibility=["model", "app"]
+        )
+        stored["egress_oauth"] = {"client_secret": "old-secret"}
+        repo = AsyncMock()
+
+        async def get_card(*args, **kwargs):
+            return copy.deepcopy(stored)
+
+        async def save_card(path, data, **kwargs):
+            if kwargs.get("expected_updated_at") != stored["updated_at"]:
+                return False
+            stored.update(copy.deepcopy(data))
+            return True
+
+        repo.get.side_effect = get_card
+        repo.update.side_effect = save_card
+        repo.get_state.return_value = False
+        service = ServerService.__new__(ServerService)
+        service._repo = repo
+        service.user_can_access_server_path = AsyncMock(return_value=True)
+        service.is_service_enabled = AsyncMock(return_value=True)
+
+        async def fetch_tools(url, info):
+            # The administrator changes independent fields while the fetch is pending.
+            stored["description"] = "Edited during discovery"
+            stored["egress_oauth"] = {"client_secret": "new-secret"}
+            stored["tool_overrides"] = {"current_time_utc": {"blocked": True}}
+            stored["mcp_server_version"] = "2.0.0"
+            stored["versions"] = [{"version": "v2", "is_default": True}]
+            if repoint:
+                stored["proxy_pass_url"] = "https://replacement.example.com/mcp"
+                stored["updated_at"] = "repointed-revision"
+            tools = copy.deepcopy(info["tool_list"])
+            tools[0].update(ui_resource_uri="ui://page/v2", ui_visibility=["app"])
+            return tools
+
+        mcp = AsyncMock()
+        mcp.get_tools_from_server_with_server_info.side_effect = fetch_tools
+        search = AsyncMock()
+        service._search_repo = search
+        with (
+            patch("registry.api.server_routes.server_service", service),
+            patch("registry.core.mcp_client.mcp_client_service", mcp),
+            patch(
+                "registry.api.server_routes.annotate_blocked_tools",
+                side_effect=lambda path, tools: tools,
+            ),
+        ):
+            if repoint:
+                with pytest.raises(HTTPException) as excinfo:
+                    await get_service_tools("current_time", RESTRICTED_CONTEXT)
+                assert excinfo.value.status_code == 409
+                assert stored["tool_list"][0]["ui_resource_uri"] == "ui://page/v1"
+                search.index_server.assert_not_awaited()
+                return
+            result = await get_service_tools("current_time", RESTRICTED_CONTEXT)
+
+        assert result["cached"] is False
+        assert [tool["name"] for tool in result["tools"]] == ["current_time_by_timezone"]
+        assert stored["tool_list"][0]["ui_resource_uri"] == "ui://page/v2"
+        assert stored["tool_list"][0]["ui_visibility"] == ["app"]
+        assert stored["description"] == "Edited during discovery"
+        assert stored["egress_oauth"] == {"client_secret": "new-secret"}
+        assert stored["tool_overrides"] == {"current_time_utc": {"blocked": True}}
+        assert stored["mcp_server_version"] == "2.0.0"
+        assert stored["versions"] == [{"version": "v2", "is_default": True}]
+        assert stored["num_mcp_app_tools"] == 1
+        assert stored["tool_list_hash"] == tool_list_hash(stored["tool_list"])
+        indexed = search.index_server.await_args.args[1]
+        assert indexed["tool_list"][0]["ui_resource_uri"] == "ui://page/v2"
+        assert indexed["description"] == "Edited during discovery"
+        assert indexed["mcp_server_version"] == "2.0.0"
+        assert indexed["num_mcp_app_tools"] == 1
+        assert "client_secret" not in indexed.get("egress_oauth", {})
 
     @pytest.mark.asyncio
     async def test_get_tools_service_path_unauthorized_server_returns_403(

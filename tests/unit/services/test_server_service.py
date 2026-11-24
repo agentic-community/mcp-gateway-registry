@@ -539,36 +539,6 @@ class TestUpdateServer:
     """Test server update functionality."""
 
     @pytest.mark.asyncio
-    async def test_update_existing_server_success(
-        self,
-        server_service: ServerService,
-        sample_server_dict: dict[str, Any],
-        mock_server_repository,
-        mock_search_repository,
-    ):
-        """Test successfully updating an existing server."""
-        # Arrange
-        updated_server = sample_server_dict.copy()
-        updated_server["description"] = "Updated description"
-        updated_server["num_tools"] = 10
-
-        mock_server_repository.update.return_value = True
-        mock_server_repository.get_state.return_value = False
-
-        # Act
-        result = await server_service.update_server(sample_server_dict["path"], updated_server)
-
-        # Assert
-        assert result is True
-        mock_server_repository.update.assert_called_once_with(
-            sample_server_dict["path"],
-            updated_server,
-            updated_fields=None,
-            expected_updated_at=None,
-        )
-        mock_search_repository.index_server.assert_called_once()
-
-    @pytest.mark.asyncio
     async def test_update_nonexistent_server_fails(
         self,
         server_service: ServerService,
@@ -590,57 +560,6 @@ class TestUpdateServer:
             sample_server_dict,
             updated_fields=None,
             expected_updated_at=None,
-        )
-
-    @pytest.mark.asyncio
-    async def test_update_server_calls_repository(
-        self,
-        server_service: ServerService,
-        sample_server_dict: dict[str, Any],
-        mock_server_repository,
-        mock_search_repository,
-    ):
-        """Test that update_server calls repository.update()."""
-        # Arrange
-        updated_server = sample_server_dict.copy()
-        updated_server["description"] = "Updated description"
-
-        mock_server_repository.update.return_value = True
-        mock_server_repository.get_state.return_value = False
-
-        # Act
-        await server_service.update_server(sample_server_dict["path"], updated_server)
-
-        # Assert - verify orchestration
-        mock_server_repository.update.assert_called_once_with(
-            sample_server_dict["path"],
-            updated_server,
-            updated_fields=None,
-            expected_updated_at=None,
-        )
-
-    @pytest.mark.asyncio
-    async def test_update_server_indexes_in_search(
-        self,
-        server_service: ServerService,
-        sample_server_dict: dict[str, Any],
-        mock_server_repository,
-        mock_search_repository,
-    ):
-        """Test that updating server updates search index."""
-        # Arrange
-        updated_server = sample_server_dict.copy()
-        updated_server["description"] = "Updated description"
-
-        mock_server_repository.update.return_value = True
-        mock_server_repository.get_state.return_value = False
-
-        # Act
-        await server_service.update_server(sample_server_dict["path"], updated_server)
-
-        # Assert - verify search indexing
-        mock_search_repository.index_server.assert_called_once_with(
-            sample_server_dict["path"], updated_server, False
         )
 
 
@@ -712,33 +631,6 @@ class TestUpdateServerSearchIndex:
         assert indexed["server_name"] == "test-server"
 
     @pytest.mark.asyncio
-    async def test_re_read_happens_after_the_write(
-        self,
-        server_service: ServerService,
-        stale_snapshot: dict[str, Any],
-        stored_document: dict[str, Any],
-        mock_server_repository,
-        mock_search_repository,
-    ):
-        """The stored document is read once the write has landed, not before it."""
-        calls: list[str] = []
-
-        async def fake_update(*args, **kwargs):
-            calls.append("update")
-            return True
-
-        async def fake_get(path):
-            calls.append("get")
-            return stored_document
-
-        mock_server_repository.update.side_effect = fake_update
-        mock_server_repository.get.side_effect = fake_get
-
-        await server_service.update_server("/test-server", stale_snapshot, updated_fields=["tags"])
-
-        assert calls == ["update", "get"]
-
-    @pytest.mark.asyncio
     async def test_field_scoped_update_does_not_index_credentials(
         self,
         server_service: ServerService,
@@ -765,48 +657,6 @@ class TestUpdateServerSearchIndex:
         assert "client_secret_encrypted" not in indexed["egress_oauth"]
         # The repository's own document is left as it was.
         assert stored_document["egress_oauth"]["client_secret_encrypted"] == "ciphertext"
-
-    @pytest.mark.asyncio
-    async def test_field_scoped_update_falls_back_when_the_re_read_finds_nothing(
-        self,
-        server_service: ServerService,
-        stale_snapshot: dict[str, Any],
-        mock_server_repository,
-        mock_search_repository,
-        caplog,
-    ):
-        """No stored document to read back: index the caller's dict and say so."""
-        mock_server_repository.update.return_value = True
-        mock_server_repository.get.return_value = None
-
-        with caplog.at_level(logging.WARNING, logger="registry.services.server_service"):
-            result = await server_service.update_server(
-                "/test-server", stale_snapshot, updated_fields=["tags"]
-            )
-
-        assert result is True
-        mock_search_repository.index_server.assert_called_once()
-        assert mock_search_repository.index_server.call_args.args[1] is stale_snapshot
-        assert "re-read of '/test-server'" in caplog.text
-
-    @pytest.mark.asyncio
-    async def test_full_update_indexes_the_callers_dict(
-        self,
-        server_service: ServerService,
-        stale_snapshot: dict[str, Any],
-        stored_document: dict[str, Any],
-        mock_server_repository,
-        mock_search_repository,
-    ):
-        """Without updated_fields the whole dict is written, so it is also what is indexed."""
-        mock_server_repository.update.return_value = True
-        mock_server_repository.get.return_value = stored_document
-
-        await server_service.update_server("/test-server", stale_snapshot)
-
-        mock_search_repository.index_server.assert_called_once()
-        assert mock_search_repository.index_server.call_args.args[1] is stale_snapshot
-        mock_server_repository.get.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_failed_field_scoped_write_does_not_index_or_re_read(

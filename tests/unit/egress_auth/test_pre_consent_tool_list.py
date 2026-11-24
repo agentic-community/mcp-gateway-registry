@@ -177,6 +177,43 @@ class TestPreConsentToolListHelper:
             assert routes._pre_consent_tool_list(server, server, True, True) is None
         assert "has no stored tool_list" in caplog.text
 
+    def test_pre_consent_app_tools_keep_audiences_and_page(self):
+        from registry.core.mcp_apps import is_model_visible
+
+        server = _server(
+            tool_list=[
+                {"name": "save", "ui_resource_uri": "ui://page/v1", "ui_visibility": ["app"]},
+                {
+                    "name": "open",
+                    "ui_resource_uri": "ui://page/v1",
+                    "ui_visibility": ["model", "app"],
+                },
+                {"name": "blocked", "ui_visibility": ["app"]},
+            ],
+            tool_overrides={"blocked": {"blocked": True}},
+        )
+        tools = routes._pre_consent_tool_list(server, server, True, True)
+        assert [tool["name"] for tool in tools] == ["save", "open"]
+        assert tools[0]["_meta"]["ui"] == {"resourceUri": "ui://page/v1", "visibility": ["app"]}
+        assert is_model_visible(tools[0]) is False
+        assert tools[1]["_meta"]["ui"] == {
+            "resourceUri": "ui://page/v1",
+            "visibility": ["model", "app"],
+        }
+
+    def test_invalid_page_does_not_expose_app_only_callable(self):
+        server = _server(
+            tool_list=[
+                {
+                    "name": "save",
+                    "ui_resource_uri": "https://invalid.example",
+                    "ui_visibility": ["app", "unknown"],
+                },
+            ]
+        )
+        tools = routes._pre_consent_tool_list(server, server, True, True)
+        assert tools[0]["_meta"]["ui"] == {"visibility": ["app"]}
+
 
 class TestVendEndpoint:
     """The list rides only on a consent miss that asked for it."""
