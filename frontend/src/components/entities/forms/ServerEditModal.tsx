@@ -434,7 +434,7 @@ const ServerEditModal: React.FC<ServerEditModalProps> = ({
                       returns the connect instructions.
                     </p>
                     {form.egress_list_tools_before_consent && form.num_tools === 0 && (
-                      <p className="text-xs text-amber-700 dark:text-amber-400 mt-1">
+                      <p className="text-xs text-warning-700 dark:text-warning-400 mt-1">
                         This server has no stored tools yet, so users will still see only the
                         connect step. Add a tool list at registration or designate a discovery
                         identity.

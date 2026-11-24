@@ -103,7 +103,7 @@ function _writeStorage(key: string, value: string | null): void {
 
 function _savedPreference(): ModePreference | null {
   const saved = _readStorage(MODE_STORAGE_KEY);
-  return saved === 'light' || saved === 'dark' ? saved : null;
+  return saved === 'light' || saved === 'dark' || saved === 'system' ? saved : null;
 }
 
 
@@ -188,11 +188,9 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
   }, [highContrast]);
 
   const setPreference = useCallback((next: ModePreference) => {
-    // Only an explicit mode is persisted, so a system-following session never
-    // masquerades as a saved preference.
-    const explicit = next === 'system' ? null : next;
-    _writeStorage(MODE_STORAGE_KEY, explicit);
-    setSavedPreference(explicit);
+    // An explicit System choice overrides the deployment default too.
+    _writeStorage(MODE_STORAGE_KEY, next);
+    setSavedPreference(next);
   }, []);
 
   const toggleTheme = useCallback(() => {
