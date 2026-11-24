@@ -154,11 +154,9 @@ global:
   # also fronted by the registry pod's in-cluster nginx reverse proxy.
   ingress:
     inboundCidrs: # optional comma separated list of allowed inbound CIDR ranges
-    # Optional ALB ssl-policy applied to the HTTPS listener. Leave empty to
-    # let the AWS Load Balancer Controller use its own default
-    # (ELBSecurityPolicy-2016-08). Set a modern policy such as
-    # ELBSecurityPolicy-TLS-1-2-Ext-2018-06 when clients require newer TLS.
-    sslPolicy:
+    # Require TLS 1.3 on the ALB HTTPS listener. Set to "" to use the
+    # AWS Load Balancer Controller's default policy.
+    sslPolicy: ELBSecurityPolicy-TLS13-1-3-2021-06
     # Default ALB scheme applied to every ingress in the stack. Stack-level
     # override of each subchart's own global.ingress.scheme. Individual
     # ingresses can still override via <subchart>.ingress.scheme for cases
