@@ -88,6 +88,10 @@ These credentials are used by the sync service to query the Auth0 Management API
 
 Fetch all M2M applications from Auth0 and store in MongoDB.
 
+New clients start with `enabled: true`, whether Auth0 marks them as first-party or non-first-party. Auth0's `is_first_party` setting controls consent behavior, not whether the registry enables a client.
+
+Sync preserves the existing `enabled` value in both `idp_m2m_clients` and `auth0_m2m_clients`, including when `force_full_sync` is `true`. If one collection lacks the client, sync creates that record with the other record's enablement. Sync sets enablement only on insert, so an update cannot undo an operator's concurrent disable.
+
 **Request:**
 ```http
 POST /api/iam/auth0/m2m/sync
@@ -275,6 +279,12 @@ These groups are assigned during sync and can be overridden via the API.
 1. Verify groups are mapped to scopes in `group_to_scope_mappings` collection
 2. Check auth-server includes "auth0" in provider list (line 1557 in server.py)
 3. Ensure `AUTH_PROVIDER=auth0` in environment variables
+
+### First-Party Client Remains Disabled After Sync
+
+Earlier sync versions set `enabled: false` for Auth0 first-party clients. Sync now preserves those values because it cannot distinguish the old bug from an operator's disable.
+
+Review each affected client's access and disable history before restoring access. For a client you approve, set `enabled: true` on its records in both `idp_m2m_clients` and `auth0_m2m_clients`. Keep intentional disables. A full sync does not re-enable disabled records.
 
 ## MongoDB Queries
 
