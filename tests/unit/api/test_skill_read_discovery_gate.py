@@ -123,6 +123,17 @@ class TestSkillReadDiscoveryGate:
         ctx = _ctx(username="bob", groups=["secret-group"], list_skills=["all"])
         assert _user_can_access_skill(skill, ctx) is True
 
+    def test_group_skill_matches_full_path_allowed_group(self):
+        """``/secret-group`` in allowed_groups matches session group ``secret-group``."""
+        skill = _skill(
+            name="my-skill",
+            visibility=VisibilityEnum.GROUP,
+            owner="alice",
+            groups=["/secret-group"],
+        )
+        ctx = _ctx(username="bob", groups=["secret-group"], list_skills=["all"])
+        assert _user_can_access_skill(skill, ctx) is True
+
     def test_admin_bypasses_gate(self):
         """Admin reads any skill regardless of ui_permissions."""
         skill = _skill(visibility=VisibilityEnum.PRIVATE, owner="someone-else")

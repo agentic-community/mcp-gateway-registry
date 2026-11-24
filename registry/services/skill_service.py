@@ -51,6 +51,7 @@ from ..schemas.skill_models import (
     SkillResourceManifest,
     VisibilityEnum,
 )
+from ..utils.group_names import groups_intersect
 from ..utils.path_utils import normalize_skill_path
 from ..utils.url_guard import (
     guarded_async_client,
@@ -1711,7 +1712,7 @@ class SkillService:
                 if skill.owner == username:
                     filtered.append(skill)
             elif skill.visibility == VisibilityEnum.GROUP:
-                if user_groups & set(skill.allowed_groups):
+                if groups_intersect(user_groups, skill.allowed_groups):
                     filtered.append(skill)
 
         return filtered

@@ -83,6 +83,7 @@ from ..services.visibility import (
     redact_scan_result_for_non_admin,
 )
 from ..services.webhook_service import send_registration_webhook
+from ..utils.group_names import groups_intersect
 from ..utils.metadata import (
     flatten_metadata_to_text,
     parse_and_validate_metadata_fields,
@@ -1124,8 +1125,7 @@ def _filter_agents_by_access(
             continue
 
         if agent.visibility == "group-restricted":
-            agent_groups = set(agent.allowed_groups)
-            if agent_groups & user_groups:
+            if groups_intersect(user_groups, agent.allowed_groups):
                 accessible.append(agent)
             continue
 

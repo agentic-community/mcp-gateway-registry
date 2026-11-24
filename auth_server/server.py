@@ -165,6 +165,7 @@ from registry.egress_auth.session_vault_user import session_vault_user_id
 # Configure logging using shared module (RotatingFileHandler + optional MongoDB)
 from registry.exceptions import UrlValidationError
 from registry.repositories.factory import get_scope_repository, get_server_repository
+from registry.utils.group_names import normalize_group_name, normalize_group_names
 from registry.utils.logging_setup import setup_logging as _setup_logging
 from registry.utils.request_utils import get_client_ip
 from registry.utils.url_guard import (
@@ -2332,9 +2333,14 @@ async def map_groups_to_scopes(groups: list[str]) -> list[str]:
         logger.debug(f"Mapped {len(groups)} groups to scopes: {scopes}")
     except Exception as e:
         logger.error(f"Error querying group mappings from DocumentDB: {e}", exc_info=True)
-        # Fall back to in-memory config if DocumentDB query fails
-        group_mappings = SCOPES_CONFIG.get("group_mappings", {})
-        for group in groups:
+        # Fall back to in-memory config if DocumentDB query fails. Compare on
+        # the canonical group name, as the repository path does (issue #1689).
+        # Merge rather than overwrite: "team" and "/team" can both be keys and
+        # must contribute their scopes together.
+        group_mappings: dict[str, list[str]] = {}
+        for name, mapped in SCOPES_CONFIG.get("group_mappings", {}).items():
+            group_mappings.setdefault(normalize_group_name(name), []).extend(mapped)
+        for group in normalize_group_names(groups):
             if group in group_mappings:
                 group_scopes = group_mappings[group]
                 scopes.extend(group_scopes)
@@ -6142,7 +6148,12 @@ async def _reconcile_context_against_session(
     session_group_set = set(session_groups)
 
     # A body may not claim any privileged group the session does not hold.
-    forged_privileged = (set(body_groups) & _A2A_ADMIN_MARKERS) - session_group_set
+    # Both sides are compared in canonical form: scope lookup treats
+    # "/registry-admins" as "registry-admins" (issue #1689), so an exact match
+    # would let a slashed spelling past this check.
+    forged_privileged = (set(normalize_group_names(body_groups)) & _A2A_ADMIN_MARKERS) - set(
+        normalize_group_names(session_groups)
+    )
     if forged_privileged:
         logger.warning(
             "Refusing token mint: request claimed privileged group(s) %s not held by session for '%s'",

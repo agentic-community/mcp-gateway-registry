@@ -88,6 +88,31 @@ class TestSessionReconciliation:
         assert exc.value.status_code == 403
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "claimed", ["/registry-admins", "registry-admins/", "/mcp-registry-admin"]
+    )
+    async def test_forged_slashed_privileged_group_rejected(self, claimed):
+        """A slashed spelling of an admin group is still a forged privileged claim."""
+        ctx = {"groups": [claimed], "scopes": [], "session_id": "s1"}
+        session = {"username": "alice", "groups": ["developers"]}
+        with patch("session_store.resolve_session", AsyncMock(return_value=session)):
+            with pytest.raises(HTTPException) as exc:
+                await _reconcile_context_against_session(ctx)
+        assert exc.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_slashed_privileged_claim_accepted_when_session_holds_it(self):
+        """The session stores ``registry-admins``; a ``/registry-admins`` claim is not forged."""
+        ctx = {"groups": ["/registry-admins"], "scopes": [], "session_id": "s1"}
+        session = {"username": "alice", "groups": ["registry-admins"]}
+        with (
+            patch("session_store.resolve_session", AsyncMock(return_value=session)),
+            patch("auth_server.server.map_groups_to_scopes", AsyncMock(return_value=[])),
+        ):
+            groups, _, _, _ = await _reconcile_context_against_session(ctx)
+        assert "/registry-admins" not in groups
+
+    @pytest.mark.asyncio
     async def test_groups_intersected_with_session(self):
         # Body claims two groups; only the session-held one survives.
         ctx = {

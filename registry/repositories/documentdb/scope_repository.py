@@ -13,6 +13,11 @@ from ...auth.privileged_constants import (
     PRIVILEGED_SCOPE_NAMES,
     is_admin_conferring_action,
 )
+from ...utils.group_names import (
+    group_name_variants,
+    is_lookup_reachable,
+    normalize_group_name,
+)
 from ..interfaces import ScopeRepositoryBase
 from .client import get_collection_name, get_documentdb_client
 
@@ -107,10 +112,15 @@ def _is_privileged_write(
     Returns:
         True if the write requires admin authorization.
     """
-    if group_name in _PRIVILEGED_SCOPE_NAMES:
+    # Compare the canonical form. The privileged set holds unslashed names, so
+    # without this a full-path spelling such as "/registry-admins" misses the
+    # membership test, is accepted as non-privileged, and reaches storage
+    # (issue #1689). Lookups canonicalise the same way, so it would then
+    # resolve for a "/registry-admins" claim exactly like the real thing.
+    if normalize_group_name(group_name) in _PRIVILEGED_SCOPE_NAMES:
         return True
     for mapped in group_mappings or []:
-        if mapped in _PRIVILEGED_SCOPE_NAMES:
+        if normalize_group_name(mapped) in _PRIVILEGED_SCOPE_NAMES:
             return True
     return _grants_admin(ui_permissions)
 
@@ -312,8 +322,12 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
         collection = await self._get_collection()
 
         try:
-            # Find all scope documents where group_mappings array contains this group
-            cursor = collection.find({"group_mappings": keycloak_group})
+            # Match the raw, canonical and "/name" forms so a mapping stored as
+            # "team" matches a claim of "/team" and vice versa (issue #1689).
+            variants = group_name_variants([keycloak_group])
+            if not variants:
+                return []
+            cursor = collection.find({"group_mappings": {"$in": variants}})
             scope_names = [doc["_id"] async for doc in cursor]
 
             logger.debug(
@@ -335,7 +349,9 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
         backed by the ``group_mappings`` index. Returns a de-duplicated,
         order-stable list of scope names.
         """
-        unique = sorted({g for g in groups if g})
+        # Raw, canonical and "/name" form of every group, so a claim of "/team"
+        # matches a mapping stored as "team" and vice versa (issue #1689).
+        unique = group_name_variants(groups)
         if not unique:
             return []
 
@@ -372,7 +388,27 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
         try:
             cursor = collection.find({}, {"group_mappings": 1})
             async for doc in cursor:
-                names.update(doc.get("group_mappings") or [])
+                # Include the canonical form of each stored name so the login
+                # filter's membership test matches a claim in either form
+                # (issue #1689). Only stored values the indexed lookup can
+                # find from the canonical name count: the session keeps the
+                # canonical name, so a group the lookup cannot resolve would
+                # be kept but grant no scope.
+                unreachable = 0
+                for stored in doc.get("group_mappings") or []:
+                    if not is_lookup_reachable(stored):
+                        unreachable += bool(normalize_group_name(stored))
+                        continue
+                    names.add(normalize_group_name(stored))
+                    names.add(stored)
+                if unreachable:
+                    logger.warning(
+                        "Scope '%s' has %d group mapping(s) the scope lookup cannot "
+                        "match (doubled slashes or padding); rewrite them in "
+                        "canonical form",
+                        doc.get("_id"),
+                        unreachable,
+                    )
             logger.debug(f"DocumentDB READ: Found {len(names)} distinct mapped group names")
             return names
         except Exception as e:

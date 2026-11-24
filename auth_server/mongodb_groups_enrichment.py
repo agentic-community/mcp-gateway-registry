@@ -46,6 +46,7 @@ _ENABLED_FILTER: dict[str, Any] = {"enabled": {"$ne": False}}
 # grant is attributable and reviewable. Sourced from the shared single source of
 # truth so this cannot drift from the auth server's admin markers.
 from registry.auth.privileged_constants import ADMIN_GROUP_MARKERS as _PRIVILEGED_GROUPS
+from registry.utils.group_names import normalize_group_name
 
 # Sentinel client_id assigned to self-signed *user* tokens (see the auth
 # server's self-signed validation path). It is not a real M2M client id, so a
@@ -61,11 +62,17 @@ def _audit_privileged_enrichment(
 ) -> None:
     """Emit an audit warning when enrichment grants a privileged group.
 
-    A no-op unless ``added_groups`` intersects :data:`_PRIVILEGED_GROUPS`.
-    Logs the subject and source collection so a privileged grant that came
-    from the mutable enrichment store is attributable during review.
+    A no-op unless ``added_groups`` intersects :data:`_PRIVILEGED_GROUPS`
+    in canonical form. Scope lookup resolves ``/registry-admins`` to the same
+    admin scope as ``registry-admins`` (issue #1689), so the audit decision
+    uses the same identity rule, or a slashed spelling would grant admin
+    without a warning. Logs the subject and source collection so a
+    privileged grant that came from the mutable enrichment store is
+    attributable during review. The log names the marker from
+    :data:`_PRIVILEGED_GROUPS`, never the stored value.
     """
-    privileged = sorted(set(added_groups) & _PRIVILEGED_GROUPS)
+    canonical = {normalize_group_name(group) for group in added_groups}
+    privileged = sorted(canonical & _PRIVILEGED_GROUPS)
     if not privileged:
         return
     logger.warning(

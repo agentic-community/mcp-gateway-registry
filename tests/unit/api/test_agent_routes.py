@@ -453,6 +453,21 @@ class TestFilterAgentsByAccess:
         # Assert
         assert len(result) == 0
 
+    def test_filter_agents_group_restricted_matches_full_path_allowed_group(
+        self, mock_user_context, sample_group_restricted_agent_card
+    ):
+        """An allowed_groups entry of ``/test-group`` matches session group ``test-group``."""
+        # Arrange
+        agent = sample_group_restricted_agent_card.model_copy(
+            update={"allowed_groups": ["/test-group"]}
+        )
+
+        # Act
+        result = _filter_agents_by_access([agent], mock_user_context)
+
+        # Assert
+        assert len(result) == 1
+
     def test_filter_agents_respects_accessible_agents_list(
         self, mock_limited_user_context, sample_agent_card
     ):
