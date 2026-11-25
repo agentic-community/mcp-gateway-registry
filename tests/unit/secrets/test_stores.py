@@ -738,3 +738,270 @@ class TestTransientRetryBudget:
         from registry.secrets.openbao.store import transient_retry_budget_seconds
 
         assert transient_retry_budget_seconds() == pytest.approx(7.5)
+
+
+# --------------------------------------------------------------------------- #
+# A mutation must not start from a version the store already replaced
+# --------------------------------------------------------------------------- #
+
+
+class _LateStaleReadClient:
+    """Wrap a Secrets Manager client so that a stale read comes AFTER the write
+    was verified: following each write of a secret, the first ``fresh_reads``
+    reads see it (write verification passes), then the next ``stale_reads`` reads
+    return what was there before it, version id included (or
+    ResourceNotFoundException when the write created the secret).
+    """
+
+    def __init__(self, client, stale_reads: int, fresh_reads: int = 1) -> None:
+        self._client = client
+        self._stale_reads = stale_reads
+        self._fresh_reads = fresh_reads
+        self._pending: dict[str, list] = {}
+        self.stale_served = 0
+        self.armed = True
+
+    def _current(self, secret_id: str) -> dict | None:
+        try:
+            return self._client.get_secret_value(SecretId=secret_id)
+        except Exception:
+            return None
+
+    def _arm(self, secret_id: str, previous: dict | None) -> None:
+        if self.armed:
+            fresh = [_LateStaleReadClient] * self._fresh_reads
+            self._pending[secret_id] = fresh + [previous] * self._stale_reads
+
+    def put_secret_value(self, **kwargs):
+        previous = self._current(kwargs["SecretId"])
+        response = self._client.put_secret_value(**kwargs)
+        self._arm(kwargs["SecretId"], previous)
+        return response
+
+    def create_secret(self, **kwargs):
+        response = self._client.create_secret(**kwargs)
+        self._arm(kwargs["Name"], None)
+        return response
+
+    def delete_secret(self, **kwargs):
+        previous = self._current(kwargs["SecretId"])
+        response = self._client.delete_secret(**kwargs)
+        if self.armed:
+            # Nothing verifies a delete: the very next read can be the stale one.
+            self._pending[kwargs["SecretId"]] = [previous] * self._stale_reads
+        return response
+
+    def get_secret_value(self, **kwargs):
+        pending = self._pending.get(kwargs["SecretId"])
+        if pending:
+            previous = pending.pop(0)
+            if previous is _LateStaleReadClient:
+                return self._client.get_secret_value(**kwargs)
+            self.stale_served += 1
+            if previous is None:
+                raise ResourceNotFoundException(kwargs["SecretId"])
+            return previous
+        return self._client.get_secret_value(**kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._client, name)
+
+
+class _NoVersionClient:
+    """A client whose reads carry no VersionId."""
+
+    def __init__(self, client) -> None:
+        self._client = client
+
+    def get_secret_value(self, **kwargs):
+        response = dict(self._client.get_secret_value(**kwargs))
+        response.pop("VersionId", None)
+        return response
+
+    def __getattr__(self, name):
+        return getattr(self._client, name)
+
+
+@pytest.mark.unit
+class TestMutationFromStaleRead:
+    PURPOSE = keys.EGRESS_PURPOSE
+
+    @pytest.fixture(autouse=True)
+    def _no_backoff(self, monkeypatch):
+        import registry.secrets.secrets_manager.store as store_mod
+
+        monkeypatch.setattr(store_mod, "_READ_BACK_BACKOFF_BASE", 0)
+        monkeypatch.setattr(store_mod, "_FRESH_READ_BACKOFF_BASE", 0, raising=False)
+
+    @pytest.fixture
+    def aws_client(self):
+        moto = pytest.importorskip("moto")
+        boto3 = pytest.importorskip("boto3")
+        with moto.mock_aws():
+            yield boto3.client("secretsmanager", region_name="us-east-1")
+
+    async def _put(self, store, provider, access):
+        await store.put_token(
+            "oauth2", "alice", provider, f"/{provider}", _token(access), purpose=self.PURPOSE
+        )
+
+    async def _get(self, store, provider):
+        return await store.get_token(
+            "oauth2", "alice", provider, f"/{provider}", purpose=self.PURPOSE
+        )
+
+    async def test_write_for_another_server_does_not_undo_the_previous_write(self, aws_client):
+        """Two refreshes of one principal in a row: the second write reads the root
+        stale, and must not write the first server's rotated token back."""
+        client = _LateStaleReadClient(aws_client, stale_reads=2)
+        client.armed = False
+        store = SecretsManagerStore(client=client, prefix="mcp/egress")
+        await self._put(store, "move", "move-old")
+        await self._put(store, "glpi", "glpi-old")
+        client.armed = True
+
+        await self._put(store, "move", "move-new")
+        await self._put(store, "glpi", "glpi-new")
+
+        client.armed = False
+        client._pending.clear()
+        assert (await self._get(store, "move")).access_token == "move-new"
+        assert (await self._get(store, "glpi")).access_token == "glpi-new"
+        assert client.stale_served > 0
+
+    async def test_write_does_not_bring_back_a_deleted_entry(self, aws_client):
+        client = _LateStaleReadClient(aws_client, stale_reads=2)
+        client.armed = False
+        store = SecretsManagerStore(client=client, prefix="mcp/egress")
+        await self._put(store, "move", "move-old")
+        await self._put(store, "glpi", "glpi-old")
+        client.armed = True
+
+        await store.delete_token("oauth2", "alice", "move", "/move", purpose=self.PURPOSE)
+        await self._put(store, "glpi", "glpi-new")
+
+        client.armed = False
+        client._pending.clear()
+        assert await self._get(store, "move") is None
+        assert (await self._get(store, "glpi")).access_token == "glpi-new"
+
+    async def test_write_does_not_bring_back_the_last_deleted_entry(self, aws_client):
+        """Deleting the only entry deletes the secret: a stale read still returns it."""
+        client = _LateStaleReadClient(aws_client, stale_reads=2)
+        client.armed = False
+        store = SecretsManagerStore(client=client, prefix="mcp/egress")
+        await self._put(store, "move", "move-old")
+        client.armed = True
+
+        await store.delete_token("oauth2", "alice", "move", "/move", purpose=self.PURPOSE)
+        await self._put(store, "glpi", "glpi-new")
+
+        client.armed = False
+        client._pending.clear()
+        assert await self._get(store, "move") is None
+        assert (await self._get(store, "glpi")).access_token == "glpi-new"
+
+    async def test_write_keeps_the_entry_of_a_secret_read_as_not_created_yet(self, aws_client):
+        client = _LateStaleReadClient(aws_client, stale_reads=2)
+        store = SecretsManagerStore(client=client, prefix="mcp/egress")
+
+        await self._put(store, "move", "move-new")
+        await self._put(store, "glpi", "glpi-new")
+
+        client.armed = False
+        client._pending.clear()
+        assert (await self._get(store, "move")).access_token == "move-new"
+        assert (await self._get(store, "glpi")).access_token == "glpi-new"
+
+    async def test_secret_deleted_then_written_again_is_not_taken_for_stale(self, aws_client):
+        store = SecretsManagerStore(client=aws_client, prefix="mcp/egress")
+        await self._put(store, "move", "one")
+        await store.delete_token("oauth2", "alice", "move", "/move", purpose=self.PURPOSE)
+        assert await self._get(store, "move") is None
+        await self._put(store, "move", "two")
+        await store.delete_token("oauth2", "alice", "move", "/move", purpose=self.PURPOSE)
+        assert await self._get(store, "move") is None
+        await self._put(store, "move", "three")
+        assert (await self._get(store, "move")).access_token == "three"
+
+    async def test_read_after_a_write_skips_the_replaced_version(self, aws_client):
+        client = _LateStaleReadClient(aws_client, stale_reads=2)
+        client.armed = False
+        store = SecretsManagerStore(client=client, prefix="mcp/egress")
+        await self._put(store, "move", "move-old")
+        client.armed = True
+
+        await self._put(store, "move", "move-new")
+
+        assert (await self._get(store, "move")).access_token == "move-new"
+        assert client.stale_served == 2
+
+    async def test_read_that_stays_stale_is_not_written_back(self, aws_client):
+        from registry.secrets.interfaces import SecretStoreError
+
+        client = _LateStaleReadClient(aws_client, stale_reads=100)
+        client.armed = False
+        store = SecretsManagerStore(client=client, prefix="mcp/egress")
+        await self._put(store, "move", "move-old")
+        await self._put(store, "glpi", "glpi-old")
+        client.armed = True
+
+        await self._put(store, "move", "move-new")
+        with pytest.raises(SecretStoreError, match="replaced version"):
+            await self._put(store, "glpi", "glpi-new")
+
+        client.armed = False
+        client._pending.clear()
+        assert (await self._get(store, "move")).access_token == "move-new"
+        assert (await self._get(store, "glpi")).access_token == "glpi-old"
+
+    async def test_read_that_stays_stale_is_served_rather_than_failing(self, aws_client):
+        import registry.secrets.secrets_manager.store as store_mod
+
+        client = _LateStaleReadClient(aws_client, stale_reads=100)
+        client.armed = False
+        store = SecretsManagerStore(client=client, prefix="mcp/egress")
+        await self._put(store, "move", "move-old")
+        client.armed = True
+
+        await self._put(store, "move", "move-new")
+
+        assert (await self._get(store, "move")).access_token == "move-old"
+        assert client.stale_served == store_mod._FRESH_READ_ATTEMPTS
+
+    async def test_version_written_by_another_store_is_read_at_once(self, aws_client):
+        """Another replica's write is a newer version, not a replaced one."""
+        client = _LateStaleReadClient(aws_client, stale_reads=0)
+        store = SecretsManagerStore(client=client, prefix="mcp/egress")
+        other = SecretsManagerStore(client=aws_client, prefix="mcp/egress")
+        await self._put(store, "move", "move-old")
+        await self._put(store, "move", "move-new")
+
+        await self._put(other, "glpi", "glpi-other")
+        await self._put(store, "pac", "pac-new")
+
+        assert client.stale_served == 0
+        assert (await self._get(store, "move")).access_token == "move-new"
+        assert (await self._get(store, "glpi")).access_token == "glpi-other"
+        assert (await self._get(store, "pac")).access_token == "pac-new"
+
+    async def test_replaced_versions_are_forgotten_after_their_delay(self, aws_client, monkeypatch):
+        import registry.secrets.secrets_manager.store as store_mod
+
+        store = SecretsManagerStore(client=aws_client, prefix="mcp/egress")
+        await self._put(store, "move", "move-old")
+        await self._put(store, "move", "move-new")
+        assert store._replaced_versions
+
+        monkeypatch.setattr(store_mod, "_REPLACED_VERSION_TTL_SECONDS", -1)
+        assert (await self._get(store, "move")).access_token == "move-new"
+        assert store._replaced_versions == {}
+
+    async def test_client_without_version_ids_behaves_as_before(self, aws_client):
+        store = SecretsManagerStore(client=_NoVersionClient(aws_client), prefix="mcp/egress")
+        await self._put(store, "move", "move-old")
+        await self._put(store, "move", "move-new")
+        await self._put(store, "glpi", "glpi-new")
+
+        assert (await self._get(store, "move")).access_token == "move-new"
+        assert (await self._get(store, "glpi")).access_token == "glpi-new"
