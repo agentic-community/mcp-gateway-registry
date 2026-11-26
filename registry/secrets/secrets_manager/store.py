@@ -40,6 +40,17 @@ _STALE_READ_RETRIES = 3
 # declaring the write failed.
 _READ_BACK_ATTEMPTS = 6
 _READ_BACK_BACKOFF_BASE = 0.1
+# The same stale read can hit the read that starts the NEXT mutation of the
+# principal, after write verification already saw the new version. That mutation
+# writes the whole map back, so it silently undoes the previous write: a token
+# refreshed a moment earlier for another server returns to its rotated value.
+# The store remembers, for a short while, the versions it replaced itself, and
+# re-reads while GetSecretValue still returns one of them (same backoff as above).
+_FRESH_READ_ATTEMPTS = 6
+_FRESH_READ_BACKOFF_BASE = 0.1
+_REPLACED_VERSION_TTL_SECONDS = 60
+# Stands for "the secret does not exist" among the replaced versions.
+_ABSENT_VERSION = ""
 
 
 class _StaleShardError(SecretStoreError):
@@ -102,6 +113,8 @@ class SecretsManagerStore(SecretStoreBase):
         # In-flight non-blocking read-repair migrations (retained so they are
         # not GC'd; awaited by tests).
         self._repair_tasks: set[asyncio.Task] = set()
+        # Per root secret: the versions this store replaced, with the time it did.
+        self._replaced_versions: dict[str, dict[str, float]] = {}
 
     def _secret_name(self, auth_method: str, user_id: str, purpose: str) -> str:
         # Discovery entries live in a SEPARATE document from the principal's own egress
@@ -160,26 +173,36 @@ class SecretsManagerStore(SecretStoreBase):
     # -- raw boto3 helpers (all callers run these in a worker thread) -------- #
 
     def _get_document(self, name: str, required: bool = False) -> dict | None:
+        return self._get_versioned(name, required)[0]
+
+    def _get_versioned(self, name: str, required: bool = False) -> tuple[dict | None, str | None]:
+        """Read a secret and the version id it was read at.
+
+        The version is ``_ABSENT_VERSION`` for a secret that does not exist, and
+        None when the client does not report one.
+        """
         try:
             resp = self._client.get_secret_value(SecretId=name)
         except Exception as exc:
             if type(exc).__name__ == "ResourceNotFoundException":
                 if required:
                     raise SecretStoreError(f"Secrets Manager overflow shard is missing: {name}")
-                return None
+                return None, _ABSENT_VERSION
             raise SecretStoreError(f"Secrets Manager get failed: {exc}") from exc
+        version = resp.get("VersionId")
+        version = version if isinstance(version, str) and version else None
         raw = resp.get("SecretString")
         if not raw:
             if required:
                 raise SecretStoreError(f"Secrets Manager overflow shard is empty: {name}")
-            return {}
+            return {}, version
         try:
             document = json.loads(raw)
         except (TypeError, json.JSONDecodeError) as exc:
             raise SecretStoreError(f"Secrets Manager value is not valid JSON: {name}") from exc
         if not isinstance(document, dict):
             raise SecretStoreError(f"Secrets Manager value is not a JSON object: {name}")
-        return document
+        return document, version
 
     def _put_document(self, name: str, document: dict) -> None:
         payload = self._serialize(document)
@@ -242,6 +265,63 @@ class SecretsManagerStore(SecretStoreBase):
                     )
                 break
         return written
+
+    # -- reads that do not go back in time ----------------------------------- #
+
+    def _mark_replaced(self, root_name: str, version: str | None, now_absent: bool) -> None:
+        """Remember that this store just replaced ``version`` of a root secret."""
+        replaced = self._replaced_versions.setdefault(root_name, {})
+        if now_absent:
+            replaced.pop(_ABSENT_VERSION, None)
+        if version is not None and not (now_absent and version == _ABSENT_VERSION):
+            replaced[version] = asyncio.get_running_loop().time()
+
+    def _was_replaced(self, root_name: str, version: str | None) -> bool:
+        replaced = self._replaced_versions.get(root_name)
+        if not replaced:
+            return False
+        limit = asyncio.get_running_loop().time() - _REPLACED_VERSION_TTL_SECONDS
+        for old in [v for v, at in replaced.items() if at < limit]:
+            del replaced[old]
+        if not replaced:
+            del self._replaced_versions[root_name]
+            return False
+        return version is not None and version in replaced
+
+    async def _read_root(
+        self, root_name: str, for_write: bool = False
+    ) -> tuple[dict | None, str | None]:
+        """Read a principal's root secret, not a version this store already replaced.
+
+        Right after a write, GetSecretValue can return the version that write
+        replaced. Re-read with a short backoff while it does. A mutation must not
+        start from such a read (``for_write``): it raises rather than write the
+        old map back. A plain read returns the last document it got.
+        """
+        document, version = None, None
+        for attempt in range(_FRESH_READ_ATTEMPTS):
+            if attempt:
+                await asyncio.sleep(_FRESH_READ_BACKOFF_BASE * (2 ** (attempt - 1)))
+            document, version = await self._call(self._get_versioned, root_name)
+            if not self._was_replaced(root_name, version):
+                if attempt:
+                    logger.info(
+                        "Secrets Manager read returned a version this store had replaced; "
+                        "settled after %d re-reads",
+                        attempt,
+                    )
+                return document, version
+        if for_write:
+            raise SecretStoreError(
+                "Secrets Manager kept returning a replaced version of the principal "
+                "document; not writing from it"
+            )
+        logger.warning(
+            "Secrets Manager kept returning a version this store had replaced; "
+            "serving it after %d reads",
+            _FRESH_READ_ATTEMPTS,
+        )
+        return document, version
 
     # -- document decoding --------------------------------------------------- #
 
@@ -398,12 +478,19 @@ class SecretsManagerStore(SecretStoreBase):
         entries: dict[str, dict],
         old_root: dict | None,
         lease_state: _LeaseState,
+        base_version: str | None = None,
     ) -> None:
+        """Write ``entries`` as the principal's document.
+
+        ``base_version`` is the version ``old_root`` was read at: once the root is
+        replaced, a read that still returns it is a stale one (see ``_read_root``).
+        """
         old_meta = self._manifest(old_root) if old_root is not None else None
         lease_state.ensure_held()
 
         if not entries:
             await self._call(self._delete_secret, root_name)
+            self._mark_replaced(root_name, base_version, now_absent=True)
             await self._cleanup_generation(root_name, old_meta)
             return
 
@@ -411,6 +498,7 @@ class SecretsManagerStore(SecretStoreBase):
         # keeps rolling upgrades and all current one-secret values compatible.
         if self._payload_size(entries) <= self._target_bytes:
             await self._call(self._put_document, root_name, entries)
+            self._mark_replaced(root_name, base_version, now_absent=False)
             written = await self._read_back(root_name, entries)
             if written != entries:
                 raise SecretStoreError("Secrets Manager inline write verification failed")
@@ -461,6 +549,7 @@ class SecretsManagerStore(SecretStoreBase):
         # Manifest-last is the commit point: readers see either the complete old
         # layout or a fully written and verified new generation.
         await self._call(self._put_document, root_name, manifest)
+        self._mark_replaced(root_name, base_version, now_absent=False)
         written_manifest = await self._read_back(root_name, manifest)
         if written_manifest != manifest:
             raise SecretStoreError("Secrets Manager overflow manifest verification failed")
@@ -468,13 +557,13 @@ class SecretsManagerStore(SecretStoreBase):
 
     async def _mutate(self, root_name: str, key: str, value: dict | None) -> None:
         async with self._mutation_guard(root_name) as lease_state:
-            root = await self._call(self._get_document, root_name)
+            root, version = await self._read_root(root_name, for_write=True)
             entries = await self._load_entries(root_name, root)
             if value is None:
                 entries.pop(key, None)
             else:
                 entries[key] = value
-            await self._commit_entries(root_name, entries, root, lease_state)
+            await self._commit_entries(root_name, entries, root, lease_state, version)
 
     # -- SecretStoreBase ----------------------------------------------------- #
 
@@ -518,7 +607,7 @@ class SecretsManagerStore(SecretStoreBase):
                 )
 
     async def _get_raw_once(self, root_name: str, key: str) -> dict | None:
-        root = await self._call(self._get_document, root_name)
+        root, _ = await self._read_root(root_name)
         if root is None:
             return None
         meta = self._manifest(root)
@@ -600,12 +689,12 @@ class SecretsManagerStore(SecretStoreBase):
         )
         try:
             async with self._mutation_guard(root_name) as lease_state:
-                root = await self._call(self._get_document, root_name)
+                root, version = await self._read_root(root_name, for_write=True)
                 entries = await self._load_entries(root_name, root)
                 if entries.get(key) != expected_plaintext:
                     return  # rewritten/migrated concurrently -> do not clobber
                 entries[key] = encrypted
-                await self._commit_entries(root_name, entries, root, lease_state)
+                await self._commit_entries(root_name, entries, root, lease_state, version)
         except Exception:
             logger.warning(
                 "Secrets Manager read-repair re-encryption failed for a legacy entry",
@@ -625,7 +714,7 @@ class SecretsManagerStore(SecretStoreBase):
         await self._mutate(root_name, keys.map_key(provider, server_path), None)
 
     async def _list_raw_once(self, root_name: str) -> list[tuple[str, str, dict]]:
-        root = await self._call(self._get_document, root_name)
+        root, _ = await self._read_root(root_name)
         entries = await self._load_entries(root_name, root)
         out: list[tuple[str, str, dict]] = []
         for key, raw in entries.items():
