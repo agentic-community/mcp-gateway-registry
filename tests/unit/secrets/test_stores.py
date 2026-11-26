@@ -1005,3 +1005,13 @@ class TestMutationFromStaleRead:
 
         assert (await self._get(store, "move")).access_token == "move-new"
         assert (await self._get(store, "glpi")).access_token == "glpi-new"
+
+    async def test_empty_root_value_reads_as_no_token(self):
+        """A root secret that exists with an empty value holds no entry."""
+
+        class _EmptyValueClient:
+            def get_secret_value(self, **kwargs):
+                return {"SecretString": "", "VersionId": "v-empty"}
+
+        store = SecretsManagerStore(client=_EmptyValueClient(), prefix="mcp/egress")
+        assert await self._get(store, "move") is None
